@@ -38,6 +38,46 @@ describe("customer-shape LiteLLM twin", () => {
     }
   });
 
+  it("streams a vLLM-style governed read call before its follow-up answer", async () => {
+    const twin = await startCustomerShapeLiteLlmTwin();
+    try {
+      twin.planSingleWorkspaceDiscovery();
+      const headers = {
+        "content-type": "application/json",
+        "x-litellm-key": apiKeyHeaderValue("x-litellm-key", CUSTOMER_SHAPE_API_KEY),
+      };
+      const url = `${twin.baseUrl}/chat/completions`;
+      const request = {
+        model: "gemma-4-31b-it",
+        stream: true,
+        messages: [{ role: "user", content: "Discover README.md" }],
+        tools: [{ type: "function", function: { name: "keiko_workspace_discover" } }],
+      };
+      const first = await globalThis.fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(request),
+      });
+      const firstBody = await first.text();
+      expect(firstBody).toContain('"name":"keiko_workspace_discover"');
+      expect(firstBody).toContain('"finish_reason":"tool_calls"');
+      expect(firstBody).not.toContain('"usage"');
+      const second = await globalThis.fetch(url, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          ...request,
+          messages: [...request.messages, { role: "tool", content: "Synthetic result" }],
+        }),
+      });
+      expect(await second.text()).toContain("Synthetic Workbench reply.");
+      expect(twin.requests[0]).toMatchObject({ deliveredToolCall: true });
+      expect(twin.requests[1]).toMatchObject({ sawToolResult: true });
+    } finally {
+      await twin.close();
+    }
+  });
+
   it("does not satisfy current-run request evidence with an earlier run's requests", () => {
     const requests = [
       { stream: true, hasStreamOptions: true },

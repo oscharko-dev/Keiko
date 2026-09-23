@@ -8,25 +8,25 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { performance } from "node:perf_hooks";
 import { chromium, expect } from "@playwright/test";
-import { encodeCodingAppSessionPairingFragment } from "../packages/keiko-contracts/dist/coding-app-session.js";
-import { toolCallingConfigurationFingerprint } from "../packages/keiko-model-gateway/dist/index.js";
-import { mintLauncherPairingAttestation } from "../packages/keiko-server/dist/index.js";
+import { encodeCodingAppSessionPairingFragment } from "../../packages/keiko-contracts/dist/coding-app-session.js";
+import { toolCallingConfigurationFingerprint } from "../../packages/keiko-model-gateway/dist/index.js";
+import { mintLauncherPairingAttestation } from "../../packages/keiko-server/dist/index.js";
 import {
   installIntoWithYarn,
   persistentVendorSeedDir,
   seedThenPack,
   seedVendoredRegistry,
-} from "./installable-package-smoke.mjs";
+} from "../installable-package-smoke.mjs";
 import {
   CUSTOMER_SHAPE_API_KEY,
   CUSTOMER_SHAPE_MODEL,
   CUSTOMER_SHAPE_REPLY,
   startCustomerShapeLiteLlmTwin,
-} from "./lib/customer-shape-litellm-twin.mjs";
+} from "../lib/customer-shape-litellm-twin.mjs";
 import {
   completedTurnEvidence,
   customerShapeRequestEvidence,
-} from "./lib/customer-shape-evidence.mjs";
+} from "../lib/customer-shape-evidence.mjs";
 
 const CSRF = { "X-Keiko-CSRF": "1" };
 const TURN_TIMEOUT_MS = 120_000;
@@ -292,39 +292,46 @@ async function selectAskForApproval(page) {
   await page.getByRole("button", { name: "Close Settings window", exact: true }).click();
 }
 
-async function runTurn(page, repository, scpRepository, pairingSecret, expectFailure) {
+async function startedRunId(responsePromise) {
+  const response = await responsePromise;
+  if (!response.ok()) throw new Error(`coding run start failed (HTTP ${response.status()})`);
+  const startedRun = await response.json();
+  if (typeof startedRun?.runId !== "string" || startedRun.runId.length === 0) {
+    throw new Error("coding run start omitted the run id");
+  }
+  return startedRun.runId;
+}
+
+async function runTurn(page, repository, scpRepository, pairingSecret, phase) {
+  const expectFailure = phase === "failure-proof";
+  const expectToolCall = phase === "tool-proof";
   await pairWorkbench(page, repository, pairingSecret);
   const scpBound = await page.request.post("/api/task-workspaces", {
     headers: CSRF,
     data: {
       root: scpRepository,
-      taskId: expectFailure ? "scp-origin-failure-proof" : "scp-origin-qualification",
+      taskId: `scp-origin-${phase}`,
       baseBranch: "main",
       requestedBy: "customer-shape-lane",
     },
   });
   if (!scpBound.ok()) throw new Error(`scp-like origin binding failed (HTTP ${scpBound.status()})`);
-  await provision(
-    page,
-    repository,
-    expectFailure ? "customer-shape-failure-proof" : "customer-shape-qualification",
-  );
+  await provision(page, repository, `customer-shape-${phase}`);
   await selectAskForApproval(page);
   await page
     .getByLabel("Task instructions")
-    .fill("Reply briefly to confirm that the Workbench is ready.");
+    .fill(
+      expectToolCall
+        ? "Discover README.md in this repository, then briefly confirm the Workbench is ready."
+        : "Reply briefly to confirm that the Workbench is ready.",
+    );
   const started = page.waitForResponse(
     (response) =>
       response.request().method() === "POST" &&
       response.url().endsWith("/api/coding-workbench/runtime/runs"),
   );
   await page.getByRole("button", { name: "Start coding run", exact: true }).click();
-  const startResponse = await started;
-  if (!startResponse.ok())
-    throw new Error(`coding run start failed (HTTP ${startResponse.status()})`);
-  const startedRun = await startResponse.json();
-  if (typeof startedRun?.runId !== "string" || startedRun.runId.length === 0)
-    throw new Error("coding run start omitted the run id");
+  const runId = await startedRunId(started);
   if (expectFailure) {
     await expect(page.getByText(/The model provider rejected this turn/u).first()).toBeVisible({
       timeout: 45_000,
@@ -334,7 +341,7 @@ async function runTurn(page, repository, scpRepository, pairingSecret, expectFai
       timeout: TURN_TIMEOUT_MS,
     });
   }
-  return startedRun.runId;
+  return runId;
 }
 
 function assertGatewayEvidence(twin, firstRequest, lines, runId, expectFailure) {
@@ -364,6 +371,16 @@ function assertGatewayEvidence(twin, firstRequest, lines, runId, expectFailure) 
   if (usage === undefined) throw new Error("answered turn lacks estimated usage evidence");
 }
 
+function assertToolRoundTrip(twin, firstRequest) {
+  const requests = twin.requests.slice(firstRequest);
+  if (!requests.some((request) => request.deliveredToolCall)) {
+    throw new Error("the vLLM-style governed read call was not delivered");
+  }
+  if (!requests.some((request) => request.sawToolResult)) {
+    throw new Error("the governed read result never reached the follow-up model turn");
+  }
+}
+
 async function qualifyInstalled(
   project,
   stateDir,
@@ -371,8 +388,10 @@ async function qualifyInstalled(
   twin,
   repository,
   scpRepository,
-  expectFailure = false,
+  phase = "qualification",
 ) {
+  const expectFailure = phase === "failure-proof";
+  const expectToolCall = phase === "tool-proof";
   const port = await reservePort();
   const pairingSecret = randomBytes(32).toString("hex");
   const cli = lifecycle(project, stateDir, port, configPath, pairingSecret);
@@ -389,15 +408,34 @@ async function qualifyInstalled(
       baseURL: `http://127.0.0.1:${String(port)}`,
       viewport: { width: 1440, height: 1400 },
     });
-    const runId = await runTurn(page, repository, scpRepository, pairingSecret, expectFailure);
+    const runId = await runTurn(page, repository, scpRepository, pairingSecret, phase);
     if (expectFailure) await awaitProjectedTurnFailure(stateDir, runId);
     else await awaitSettledUsage(stateDir, runId);
     const lines = activityLines(stateDir);
     assertGatewayEvidence(twin, firstRequest, lines, runId, expectFailure);
+    if (expectToolCall) assertToolRoundTrip(twin, firstRequest);
     if (expectFailure) assertAnalyzableFailure(project, stateDir, lines, runId);
   } finally {
     await browser?.close();
     if (started) cli("stop");
+  }
+}
+
+async function qualifyGovernedReadTool(project, configPath, twin, repository, scpRepository) {
+  const stateDir = mkdtempSync(join(homedir(), ".keiko-customer-shape-tool-state-"));
+  try {
+    twin.planSingleWorkspaceDiscovery();
+    await qualifyInstalled(
+      project,
+      stateDir,
+      configPath,
+      twin,
+      repository,
+      scpRepository,
+      "tool-proof",
+    );
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
   }
 }
 
@@ -425,6 +463,7 @@ async function main() {
     twin.delayAcceptedStreamingBy(35_000);
     await qualifyInstalled(project, stateDir, configPath, twin, repository, scpRepository);
     twin.delayAcceptedStreamingBy(0);
+    await qualifyGovernedReadTool(project, configPath, twin, repository, scpRepository);
     twin.rejectAllStreaming();
     const failureStateDir = mkdtempSync(join(homedir(), ".keiko-customer-shape-failure-state-"));
     try {
@@ -435,13 +474,13 @@ async function main() {
         twin,
         repository,
         scpRepository,
-        true,
+        "failure-proof",
       );
     } finally {
       rmSync(failureStateDir, { recursive: true, force: true });
     }
     process.stdout.write(
-      `customer-shape qualification ok: staged Yarn install, local LiteLLM twin, visible Workbench reply and typed failure, body-free Activity Log (${Math.round(performance.now() - start)}ms).\n`,
+      `customer-shape qualification ok: staged Yarn install, local LiteLLM twin, visible Workbench reply, governed read-tool round trip, typed failure, body-free Activity Log (${Math.round(performance.now() - start)}ms).\n`,
     );
   } finally {
     await twin.close();

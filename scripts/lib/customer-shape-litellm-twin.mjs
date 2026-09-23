@@ -34,8 +34,9 @@ function writeFrame(response, delta, finishReason = null) {
   );
 }
 
-function answerStream(response, body) {
-  const toolName = forcedToolName(body);
+function answerStream(response, body, plannedTool) {
+  const toolName = plannedTool?.name ?? forcedToolName(body);
+  const toolArguments = plannedTool?.arguments ?? '{"status":"ok"}';
   response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
   writeFrame(response, { role: "assistant", content: null });
   response.write(": ping\n\n");
@@ -51,7 +52,7 @@ function answerStream(response, body) {
       ],
     });
     writeFrame(response, {
-      tool_calls: [{ index: 0, function: { arguments: '{"status":"ok"}' } }],
+      tool_calls: [{ index: 0, function: { arguments: toolArguments } }],
     });
     writeFrame(response, {}, "tool_calls");
   } else {
@@ -59,6 +60,22 @@ function answerStream(response, body) {
     writeFrame(response, {}, "stop");
   }
   response.end("data: [DONE]\n\n");
+}
+
+function plannedWorkspaceDiscovery(body, behavior) {
+  if (!behavior.workspaceDiscoveryPending || forcedToolName(body) !== undefined) return undefined;
+  if (!Array.isArray(body.tools)) return undefined;
+  const offered = body.tools.some((tool) => tool?.function?.name === "keiko_workspace_discover");
+  if (!offered) return undefined;
+  behavior.workspaceDiscoveryPending = false;
+  return {
+    name: "keiko_workspace_discover",
+    arguments: '{"query":"README.md","maxResults":5}',
+  };
+}
+
+function hasToolResult(body) {
+  return Array.isArray(body.messages) && body.messages.some((message) => message?.role === "tool");
 }
 
 function answerBuffered(response, body) {
@@ -101,7 +118,13 @@ async function requestBody(request) {
 async function handleTwinChat(request, response, requests, behavior) {
   try {
     const body = await requestBody(request);
-    requests.push({ stream: body.stream === true, hasStreamOptions: "stream_options" in body });
+    const observed = {
+      stream: body.stream === true,
+      hasStreamOptions: "stream_options" in body,
+      deliveredToolCall: false,
+      sawToolResult: hasToolResult(body),
+    };
+    requests.push(observed);
     if (body.stream === true && ("stream_options" in body || behavior.rejectAllStreams)) {
       sendJson(response, { error: { code: "unsupported_parameter" } }, 400);
       return;
@@ -110,7 +133,9 @@ async function handleTwinChat(request, response, requests, behavior) {
       if (behavior.acceptedStreamDelayMs > 0 && forcedToolName(body) === undefined) {
         await delay(behavior.acceptedStreamDelayMs);
       }
-      answerStream(response, body);
+      const plannedTool = plannedWorkspaceDiscovery(body, behavior);
+      observed.deliveredToolCall = plannedTool !== undefined;
+      answerStream(response, body, plannedTool);
     } else answerBuffered(response, body);
   } catch {
     sendJson(response, { error: { type: "invalid_request_error" } }, 400);
@@ -151,7 +176,11 @@ function handleTwinRequest(request, response, requests, behavior) {
 
 export async function startCustomerShapeLiteLlmTwin() {
   const requests = [];
-  const behavior = { rejectAllStreams: false, acceptedStreamDelayMs: 0 };
+  const behavior = {
+    rejectAllStreams: false,
+    acceptedStreamDelayMs: 0,
+    workspaceDiscoveryPending: false,
+  };
   const server = createServer((request, response) =>
     handleTwinRequest(request, response, requests, behavior),
   );
@@ -169,6 +198,9 @@ export async function startCustomerShapeLiteLlmTwin() {
     },
     delayAcceptedStreamingBy: (milliseconds) => {
       behavior.acceptedStreamDelayMs = milliseconds;
+    },
+    planSingleWorkspaceDiscovery: () => {
+      behavior.workspaceDiscoveryPending = true;
     },
     close: () =>
       new Promise((resolve, reject) =>
