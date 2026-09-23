@@ -12,6 +12,19 @@ const workflowPath = resolve(
   "release.yml",
 );
 const workflow = readFileSync(workflowPath, "utf8");
+const qualifierPath = resolve(
+  import.meta.dirname,
+  "..",
+  "testing",
+  "qualify-coding-workbench-customer-shape.mjs",
+);
+const qualifier = readFileSync(qualifierPath, "utf8");
+
+function runIdLookupGate(source) {
+  return /const analyzedRun = run\(\s*process\.execPath,\s*\[bin, "support", "analyze", bundle, "--correlation-id", runId, "--json"\]/u.test(
+    source,
+  );
+}
 
 function unconditionalStep(step) {
   return (
@@ -76,6 +89,19 @@ function executableGate(source) {
 }
 
 describe("customer-shape publish gate", () => {
+  it("analyzes the failed turn by run id in the installed qualifier", () => {
+    expect(runIdLookupGate(qualifier)).toBe(true);
+  });
+
+  it("rejects a qualifier that analyzes the request twice instead of the run", () => {
+    const weakened = qualifier.replace(
+      '"--correlation-id", runId, "--json"',
+      '"--correlation-id", diagnostic.correlationId, "--json"',
+    );
+    expect(weakened).not.toBe(qualifier);
+    expect(runIdLookupGate(weakened)).toBe(false);
+  });
+
   it("runs the bounded staged Yarn Workbench journey on macOS before npm publication", () => {
     expect(executableGate(workflow)).toBe(true);
   });
