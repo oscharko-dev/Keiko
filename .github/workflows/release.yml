@@ -142,7 +142,7 @@ jobs:
         run: npm run build:packages
       - name: Install Chromium for customer-shape qualification
         timeout-minutes: 10
-        run: npx playwright install --with-deps chromium
+        run: node node_modules/playwright/cli.js install --with-deps chromium
       - name: Run customer-shape qualification
         timeout-minutes: 25
         run: npm run qualify:coding-workbench:customer-shape
