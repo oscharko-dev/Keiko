@@ -2447,8 +2447,8 @@ async function pumpGatewayStream(session: GatewayStreamSession): Promise<void> {
     await streamGatewayResponse(session, chunk.response);
     return;
   }
-  recordSessionOutcome(session, "failed");
-  writeSessionTerminal(session, "error");
+  // A stream without a terminal response must reach the shared diagnostic and turn-event path.
+  throw new ProviderError("provider stream ended without a terminal response", 200);
 }
 
 /** Returns true when the stream may continue with the next chunk. */

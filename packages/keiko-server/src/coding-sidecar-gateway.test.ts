@@ -2542,37 +2542,69 @@ describe("coding-sidecar gateway", () => {
     expect(response.res.destroyed).toBe(true);
   });
 
-  it("reports a stream that ends without a terminal response chunk as an error", async () => {
-    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
-      await Promise.resolve();
-      yield { type: "delta", token: "partial" };
-    };
-    const response = mockResponse({ captureBody: true });
-    const context: RouteContext = {
-      ...authenticatedContext({
-        model: "coding",
-        stream: true,
-        messages: [{ role: "user", content: "truncate" }],
-        tools: modelVisibleTools(),
-      }),
-      res: response.res,
-    };
+  it.each(["empty", "partial"] as const)(
+    "reports a %s stream without a terminal response chunk as one turn error",
+    async (streamKind) => {
+      const sink = captureServerLog("warn");
+      const eventHub = new CodingRuntimeEventHub();
+      const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+      const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        if (streamKind === "partial") yield { type: "delta", token: "partial" };
+      };
+      const response = mockResponse({ captureBody: true });
+      const context: RouteContext = {
+        ...authenticatedContext({
+          model: "coding",
+          stream: true,
+          messages: [{ role: "user", content: "truncate" }],
+          tools: modelVisibleTools(),
+        }),
+        res: response.res,
+        correlationId: "request-truncated",
+      };
 
-    const result = await handleCodingSidecarGatewayChatCompletions(
-      context,
-      runtimeGatewayDeps(
-        () => ({ ok: true, binding: { runId: "run-truncated" } }),
-        undefined,
-        createOpenCodeGatewayReadinessRegistry(),
-        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
-          stream(),
-      ),
-    );
+      const deps = {
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-truncated" } }),
+          undefined,
+          createOpenCodeGatewayReadinessRegistry(),
+          (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+            stream(),
+        ),
+        diagnostics,
+        codingRuntimeEventHub: eventHub,
+        codingRuntimeOrchestrator: {
+          getSnapshot: () => ({ state: "running", revision: 4 }),
+        } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+      } as UiHandlerDeps;
+      const result = await handleCodingSidecarGatewayChatCompletions(context, deps);
 
-    expect(result).toBe(STREAMING);
-    expect(response.body()).toContain('"finish_reason":"error"');
-    expect(response.body()).not.toContain('"finish_reason":"stop"');
-  });
+      expect(result).toBe(STREAMING);
+      expect(response.body()).toContain('"finish_reason":"error"');
+      expect(response.body()).not.toContain('"finish_reason":"stop"');
+      const replay = eventHub.replay("run-truncated");
+      expect(replay.ok && replay.events).toMatchObject([
+        { kind: "runtime-event", eventKind: "failure-redacted", failureCode: "stream-incomplete" },
+      ]);
+      expect(
+        sink.events.filter((event) => event.op === "coding-sidecar.gateway.turn-failed"),
+      ).toHaveLength(1);
+      const records = diagnostics.record.mock.calls
+        .map(([record]) => record)
+        .filter((record) => record.source === "coding-sidecar-gateway.stream");
+      expect(records).toHaveLength(1);
+      expect(records[0]).toMatchObject({
+        correlationId: "request-truncated",
+        parentCorrelationId: "run-truncated",
+        errorClass: "ProviderError",
+        code: "GATEWAY_PROVIDER_ERROR",
+      });
+      expect(records[0]?.frames?.some((frame) => frame.includes("coding-sidecar-gateway"))).toBe(
+        true,
+      );
+    },
+  );
 
   it("destroys the response when the terminal tool-call frame hits backpressure", async () => {
     let returned = false;
@@ -3227,10 +3259,17 @@ describe("coding-sidecar gateway", () => {
 
   it("retains a hard transport cap and body-free rejection before model dispatch", async () => {
     const sink = captureServerLog("warn");
+    const eventHub = new CodingRuntimeEventHub();
     const calls = vi.fn((_request: GatewayRequest) =>
       Promise.resolve(assistantResponse("azure-coding-model")),
     );
-    const deps = depsValue(configValue(provider(), capability()), () => calls);
+    const deps = {
+      ...depsValue(configValue(provider(), capability()), () => calls),
+      codingRuntimeEventHub: eventHub,
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 4 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    } as UiHandlerDeps;
     const result = await handleCodingSidecarGatewayChatCompletions(
       routeContext({ messages: [{ role: "user", content: "private-overflow".repeat(100_000) }] }),
       deps,
@@ -3240,6 +3279,13 @@ describe("coding-sidecar gateway", () => {
     expect(calls).not.toHaveBeenCalled();
     const rejected = sink.events.find((event) => event.op === "coding-sidecar.gateway.rejected");
     expect(rejected?.extra).toMatchObject({ reason: "request-too-large" });
+    const replay = eventHub.replay("run-gateway-test");
+    expect(replay.ok && replay.events).toMatchObject([
+      { kind: "runtime-event", eventKind: "failure-redacted", failureCode: "turn-rejected" },
+    ]);
+    expect(
+      sink.events.filter((event) => event.op === "coding-sidecar.gateway.turn-failed"),
+    ).toHaveLength(1);
     expect(JSON.stringify(sink.events)).not.toContain("private-overflow");
   });
 
