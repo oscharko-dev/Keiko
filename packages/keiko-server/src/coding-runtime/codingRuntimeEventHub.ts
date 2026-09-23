@@ -184,10 +184,10 @@ export class CodingRuntimeEventHub {
     state: CodingWorkbenchRuntimeStateName,
     revision: number,
     failureCode: CodingWorkbenchTurnFailureCode,
-  ): boolean {
+  ): CodingRuntimeEventHubPublishResult | { readonly ok: false; readonly reason: "terminal-run" } {
     const run = this.runs.get(runId);
-    if (run?.terminal === true) return false;
-    const result = this.publish({
+    if (run?.terminal === true) return { ok: false, reason: "terminal-run" };
+    return this.publish({
       schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
       kind: "runtime-event",
       runId,
@@ -196,7 +196,6 @@ export class CodingRuntimeEventHub {
       eventKind: "failure-redacted",
       failureCode,
     });
-    return result.ok;
   }
 
   replay(runId: string, lastEventId?: string): CodingRuntimeEventHubReplay {

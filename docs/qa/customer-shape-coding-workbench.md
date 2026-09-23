@@ -23,7 +23,7 @@ installed-build diagnostic with frames that `keiko support analyze` can find by 
 correlation. The diagnostic links to the run through `parentCorrelationId`;
 `coding-sidecar.gateway.turn-failed` records the closed cause and whether its SSE projection was
 published in the run timeline. If the sidecar already delivered a terminal failure, the gateway's
-additional event is suppressed and the line records `published: false`; the browser proof still
+additional event is suppressed and the line records `publicationReason: terminal-run`; the browser proof still
 requires the failure to be visible. The gate reports duration and no prompt body.
 
 The lane runs before `Publish package`, so a red, absent, or timed-out lane prevents publication.

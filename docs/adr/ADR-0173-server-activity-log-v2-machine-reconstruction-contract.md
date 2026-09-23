@@ -1050,8 +1050,9 @@ contain counts, status, closed reasons, and digests only. The Workbench receives
 `failure-redacted` SSE event with a closed gateway-turn cause while the runtime is still active;
 the event carries no provider response body or customer content. Each gateway turn failure,
 including another failed model request at the same task revision, writes
-`coding-sidecar.gateway.turn-failed` with the closed failure code, run id, revision, state, and
-whether the event hub published it. A revision is a task-state version, not a turn identifier, so
+`coding-sidecar.gateway.turn-failed` with the closed failure code, request correlation, run parent,
+revision, state, and a closed publication reason (published, unavailable hub, terminal run, invalid
+event, exhausted sequence, or capacity pressure). A revision is a task-state version, not a turn identifier, so
 it must not suppress later turn failures.
 On completed buffered and streamed requests, `coding-sidecar.gateway.usage-settled` records the count and
 closed source (`provider-reported`, `streamed-byte-estimate`, or `output-byte-estimate`) beneath

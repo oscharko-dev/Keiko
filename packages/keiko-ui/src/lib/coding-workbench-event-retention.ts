@@ -29,7 +29,10 @@ export function isPinnedCodingWorkbenchRuntimeEvent(
 ): boolean {
   if (event.state === "awaiting-approval" || event.state === "recovery-required") return true;
   if (TERMINAL_STATES.has(event.state)) return true;
-  return event.kind === "runtime-event" && event.eventKind === "permission-requested";
+  return (
+    event.kind === "runtime-event" &&
+    (event.eventKind === "permission-requested" || event.eventKind === "failure-redacted")
+  );
 }
 
 function uniqueByCursor(

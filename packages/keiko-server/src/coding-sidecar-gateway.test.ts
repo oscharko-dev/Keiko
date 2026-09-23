@@ -3577,15 +3577,21 @@ describe("coding sidecar gateway turn failure projection", () => {
   afterEach(resetServerLogger);
 
   it("keeps concurrent failed requests distinct beneath their shared run", async () => {
+    const sink = captureServerLog("warn");
     const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
-    const deps = depsValue(
-      configValue(provider(), capability()),
-      (): (() => Promise<NormalizedResponse>) => (): Promise<NormalizedResponse> =>
-        Promise.reject(new ProviderError("synthetic unavailable", 503)),
-      {},
-      undefined,
-      { diagnostics },
-    );
+    const deps = {
+      ...depsValue(
+        configValue(provider(), capability()),
+        (): (() => Promise<NormalizedResponse>) => (): Promise<NormalizedResponse> =>
+          Promise.reject(new ProviderError("synthetic unavailable", 503)),
+        {},
+        undefined,
+        { diagnostics },
+      ),
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 3 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    } as UiHandlerDeps;
     const contexts = ["request-chat-a", "request-chat-b"].map((correlationId): RouteContext => ({
       ...routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
       correlationId,
@@ -3594,6 +3600,17 @@ describe("coding sidecar gateway turn failure projection", () => {
       contexts.map((context) => handleCodingSidecarGatewayChatCompletions(context, deps)),
     );
     expect(diagnostics.record.mock.calls.map(([record]) => record)).toMatchObject([
+      { correlationId: "request-chat-a", parentCorrelationId: "run-gateway-test" },
+      { correlationId: "request-chat-b", parentCorrelationId: "run-gateway-test" },
+    ]);
+    expect(
+      sink.events
+        .filter((event) => event.op === "coding-sidecar.gateway.turn-failed")
+        .map((event) => ({
+          correlationId: event.correlationId,
+          parentCorrelationId: event.parentCorrelationId,
+        })),
+    ).toEqual([
       { correlationId: "request-chat-a", parentCorrelationId: "run-gateway-test" },
       { correlationId: "request-chat-b", parentCorrelationId: "run-gateway-test" },
     ]);
@@ -3618,8 +3635,36 @@ describe("coding sidecar gateway turn failure projection", () => {
       sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed"),
     ).toMatchObject({
       correlationId: "run-gateway-test",
-      extra: { runId: "run-gateway-test", revision: 4, published: false },
+      extra: {
+        runId: "run-gateway-test",
+        revision: 4,
+        published: false,
+        publicationReason: "event-hub-unavailable",
+      },
     });
+  });
+
+  it("records capacity pressure when a critical turn failure cannot be retained", async () => {
+    const sink = captureServerLog("warn");
+    const eventHub = new CodingRuntimeEventHub({ maxEvents: 1 });
+    eventHub.publishTurnFailure("run-gateway-test", "running", 1, "provider-failed");
+    const deps: UiHandlerDeps = {
+      ...depsValue(
+        configValue(provider(), capability()),
+        () => () => Promise.reject(new ProviderError("synthetic unavailable", 503)),
+      ),
+      codingRuntimeEventHub: eventHub,
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 1 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    };
+    await handleCodingSidecarGatewayChatCompletions(
+      routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
+      deps,
+    );
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed")?.extra,
+    ).toMatchObject({ published: false, publicationReason: "capacity-pressure" });
   });
 
   it.each([

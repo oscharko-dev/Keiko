@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OpenAiAdapter, resetChatCompatibilityMemoForTests } from "./openai-adapter.js";
 import { gatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
@@ -38,6 +38,7 @@ function streamedAnswer(): Response {
 
 describe("OpenAI-compatible chat compatibility", () => {
   beforeEach(resetChatCompatibilityMemoForTests);
+  afterEach(vi.useRealTimers);
 
   it("does not retry a context overflow after the provider has rejected the turn", async () => {
     const bodies: Record<string, unknown>[] = [];
@@ -159,6 +160,54 @@ describe("OpenAI-compatible chat compatibility", () => {
     expect(bodies[1]).not.toHaveProperty("stream_options");
   });
 
+  it("keeps the original read budget across the optional-field retry", async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const adapter = new OpenAiAdapter({
+      requestId: "shared-budget",
+      costClass: "low",
+      fetchImpl: (_url, init): Promise<Response> => {
+        calls += 1;
+        const first = calls === 1;
+        const response = first
+          ? new Response(JSON.stringify({ error: { code: "unsupported_parameter" } }), {
+              status: 400,
+            })
+          : streamedAnswer();
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(
+            () => {
+              resolve(response);
+            },
+            first ? 70 : 40,
+          );
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              reject(new Error(String(init.signal?.reason)));
+            },
+            { once: true },
+          );
+        });
+      },
+    });
+    const consume = async (): Promise<void> => {
+      for await (const _chunk of adapter.callStream(
+        { modelId: CONFIG.modelId, messages: [{ role: "user", content: "Synthetic prompt" }] },
+        CONFIG,
+        { silenceMs: 100, budgetMs: 100 },
+      )) {
+        // The fallback cannot complete outside the original budget.
+      }
+    };
+    const pending = consume();
+    const rejected = expect(pending).rejects.toMatchObject({ code: "GATEWAY_TIMEOUT" });
+    await vi.advanceTimersByTimeAsync(110);
+    await rejected;
+    expect(calls).toBe(2);
+  });
+
   it("retries a strict proxy without optional streaming usage and remembers the accepted shape", async () => {
     const bodies: Record<string, unknown>[] = [];
     const events: ModelGatewayLogEvent[] = [];
@@ -219,5 +268,66 @@ describe("OpenAI-compatible chat compatibility", () => {
       formatActivityLogProofLine(retry),
     );
     expect(JSON.stringify(events)).not.toContain(CONFIG.apiKey);
+  });
+
+  it("does not share the strict-proxy memo across credentials at one endpoint", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const adapter = new OpenAiAdapter({
+      requestId: "credential-scoped",
+      costClass: "low",
+      fetchImpl: (_url, init): Promise<Response> => {
+        const body = requestBody(init);
+        bodies.push(body);
+        return Promise.resolve(
+          "stream_options" in body
+            ? new Response(JSON.stringify({ error: { code: "unsupported_parameter" } }), {
+                status: 400,
+              })
+            : streamedAnswer(),
+        );
+      },
+    });
+    for (const apiKey of ["tenant-a", "tenant-b"]) {
+      for await (const _chunk of adapter.callStream(
+        { modelId: CONFIG.modelId, messages: [{ role: "user", content: "Synthetic prompt" }] },
+        { ...CONFIG, apiKey },
+      )) {
+        // Drain each accepted stream before changing tenant identity.
+      }
+    }
+    expect(bodies).toHaveLength(4);
+    expect(bodies[2]).toHaveProperty("stream_options.include_usage", true);
+  });
+
+  it("reprobes optional usage metadata after the compatibility memo expires", async () => {
+    let now = 0;
+    const bodies: Record<string, unknown>[] = [];
+    const deps = {
+      requestId: "memo-expiry",
+      costClass: "low" as const,
+      now: (): number => now,
+      fetchImpl: (_url: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+        const body = requestBody(init);
+        bodies.push(body);
+        return Promise.resolve(
+          "stream_options" in body
+            ? new Response(JSON.stringify({ error: { code: "unsupported_parameter" } }), {
+                status: 400,
+              })
+            : streamedAnswer(),
+        );
+      },
+    };
+    for (let turn = 0; turn < 2; turn += 1) {
+      for await (const _chunk of new OpenAiAdapter(deps).callStream(
+        { modelId: CONFIG.modelId, messages: [{ role: "user", content: "Synthetic prompt" }] },
+        CONFIG,
+      )) {
+        // Drain each accepted stream before advancing the injected clock.
+      }
+      now += 24 * 60 * 60 * 1_000;
+    }
+    expect(bodies).toHaveLength(4);
+    expect(bodies[2]).toHaveProperty("stream_options.include_usage", true);
   });
 });

@@ -135,13 +135,14 @@ function activityLines(stateDir) {
 
 function assertAnalyzableFailure(project, stateDir, lines) {
   // OpenCode may publish its terminal failure first. In that ordering the gateway's additional
-  // turn event is suppressed, and `published: false` is the required causal evidence; the browser
+  // turn event is suppressed; the closed publication reason explains that outcome. The browser
   // assertion above separately proves that the failure itself reached the Workbench.
   const turnFailure = lines.find(
     (line) =>
       line.op === "coding-sidecar.gateway.turn-failed" &&
       typeof line.correlationId === "string" &&
-      typeof line.published === "boolean",
+      typeof line.published === "boolean" &&
+      typeof line.publicationReason === "string",
   );
   if (turnFailure === undefined) {
     throw new Error("failed turn lacks a correlated Activity Log projection");
@@ -149,8 +150,8 @@ function assertAnalyzableFailure(project, stateDir, lines) {
   const diagnostic = lines.find(
     (line) =>
       line.op === "server.diagnostic.failure" &&
-      typeof line.correlationId === "string" &&
-      line.parentCorrelationId === turnFailure.correlationId &&
+      line.correlationId === turnFailure.correlationId &&
+      line.parentCorrelationId === turnFailure.parentCorrelationId &&
       Array.isArray(line.frames) &&
       line.frames.some((frame) => typeof frame === "string" && frame.includes("/dist/")),
   );

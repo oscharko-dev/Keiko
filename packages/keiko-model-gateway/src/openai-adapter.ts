@@ -138,16 +138,25 @@ const CHAT_REQUEST_COMPATIBILITY_RETRY_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-const strictStreamOptionsEndpoints = new Set<string>();
+const strictStreamOptionsEndpoints = new Map<string, number>();
 const MAX_STRICT_STREAM_OPTIONS_ENDPOINTS = 256;
+const STRICT_STREAM_OPTIONS_REPROBE_MS = 15 * 60_000;
 
-function rememberStrictStreamOptionsEndpoint(key: string): void {
-  if (strictStreamOptionsEndpoints.has(key)) return;
+function hasStrictStreamOptionsMemo(key: string, now: () => number): boolean {
+  const expiresAt = strictStreamOptionsEndpoints.get(key);
+  if (expiresAt === undefined) return false;
+  if (expiresAt > now()) return true;
+  strictStreamOptionsEndpoints.delete(key);
+  return false;
+}
+
+function rememberStrictStreamOptionsEndpoint(key: string, now: number): void {
+  if (strictStreamOptionsEndpoints.has(key)) strictStreamOptionsEndpoints.delete(key);
   if (strictStreamOptionsEndpoints.size >= MAX_STRICT_STREAM_OPTIONS_ENDPOINTS) {
-    const oldest = strictStreamOptionsEndpoints.values().next().value;
+    const oldest = strictStreamOptionsEndpoints.keys().next().value;
     if (oldest !== undefined) strictStreamOptionsEndpoints.delete(oldest);
   }
-  strictStreamOptionsEndpoints.add(key);
+  strictStreamOptionsEndpoints.set(key, now + STRICT_STREAM_OPTIONS_REPROBE_MS);
 }
 
 export function resetChatCompatibilityMemoForTests(): void {
@@ -770,6 +779,27 @@ function isStrictChatShapeRejection(status: number): boolean {
   return status === 400 || status === 422;
 }
 
+function shouldPreserveProviderRejection(status: number, payload: unknown): boolean {
+  return (
+    isContextOverflow(status, payload) ||
+    (isModelRefusal(payload) && !isOptionalStreamFieldRejection(payload))
+  );
+}
+
+function remainingCompatibilityBounds(
+  bounds: StreamReadBounds | undefined,
+  startedAt: number | undefined,
+  now: () => number,
+  config: ModelProviderConfig,
+  secrets: readonly string[],
+): StreamReadBounds | undefined {
+  if (bounds === undefined || startedAt === undefined) return undefined;
+  const budgetMs = bounds.budgetMs - Math.max(0, now() - startedAt);
+  if (budgetMs <= 0)
+    throw new TimeoutError(`provider retry budget expired for '${config.modelId}'`, secrets);
+  return { ...bounds, budgetMs };
+}
+
 function mapHttpError(
   response: Response,
   modelId: string,
@@ -1367,26 +1397,27 @@ export class OpenAiAdapter implements ProviderAdapter {
     bounds?: StreamReadBounds,
   ): Promise<DispatchedResponse> {
     const url = chatCompletionsUrl(config);
-    const key = sha256Hex(`${url}\u0000${config.modelId}`);
-    const includeUsage = !strictStreamOptionsEndpoints.has(key);
+    const startedAt = bounds === undefined ? undefined : Date.now();
+    const key = sha256Hex(
+      `${url}\u0000${config.modelId}\u0000${config.apiKeyHeaderName ?? ""}\u0000${config.apiKey}`,
+    );
+    const includeUsage = !hasStrictStreamOptionsMemo(key, this.now);
     const first = await this.dispatch(request, config, secrets, true, bounds, includeUsage);
     if (first.response.ok || !includeUsage || !isStrictChatShapeRejection(first.response.status)) {
       return first;
     }
     try {
       const payload = await this.readErrorBody(first.response, config, secrets, first.signal);
-      if (
-        isContextOverflow(first.response.status, payload) ||
-        (isModelRefusal(payload) && !isOptionalStreamFieldRejection(payload))
-      ) {
+      if (shouldPreserveProviderRejection(first.response.status, payload)) {
         mapHttpError(first.response, config.modelId, secrets, payload);
       }
     } finally {
       first.dispose();
     }
+    const retryBounds = remainingCompatibilityBounds(bounds, startedAt, Date.now, config, secrets);
     this.logChatCompatibilityRetry(url, config, first.response.status);
-    const retry = await this.dispatch(request, config, secrets, true, bounds, false);
-    if (retry.response.ok) rememberStrictStreamOptionsEndpoint(key);
+    const retry = await this.dispatch(request, config, secrets, true, retryBounds, false);
+    if (retry.response.ok) rememberStrictStreamOptionsEndpoint(key, this.now());
     return retry;
   }
 

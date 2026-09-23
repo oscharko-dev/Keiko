@@ -972,7 +972,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.turnFailure.stream-incomplete":
     "Der Antwort-Stream des Modells endete vor Abschluss des Schritts. Prüfe die Verbindung zum Anbieter und versuche es erneut.",
   "codingWorkbench.event.turnFailure.turn-rejected":
-    "Das Modell konnte diesen Schritt im aktuellen Kontext nicht annehmen. Starte eine kürzere Aufgabe oder wähle ein Modell mit größerem Kontextfenster.",
+    "Das Modell oder eine Schutzprüfung der Workbench hat diesen Schritt abgelehnt. Prüfe die Gateway- und Berechtigungsdiagnose des Runs und passe Modell, Aufgabe oder Berechtigungen vor einem erneuten Versuch an.",
   "codingWorkbench.event.detailOutcome": "Ergebnis: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Nicht vertrauenswürdiger Inhalt: Die abgerufene Seite wurde als Daten isoliert, nicht als Anweisungen.",

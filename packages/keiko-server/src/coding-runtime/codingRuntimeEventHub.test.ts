@@ -44,8 +44,12 @@ const recovery = (runId: string, revision: number): CodingRuntimeEventHubInput =
 describe("CodingRuntimeEventHub", () => {
   it("retains every redacted gateway failure when separate turns share a task revision", () => {
     const hub = new CodingRuntimeEventHub({ maxEvents: 3 });
-    expect(hub.publishTurnFailure("run-a", "running", 1, "provider-failed")).toBe(true);
-    expect(hub.publishTurnFailure("run-a", "running", 1, "stream-incomplete")).toBe(true);
+    expect(hub.publishTurnFailure("run-a", "running", 1, "provider-failed")).toMatchObject({
+      ok: true,
+    });
+    expect(hub.publishTurnFailure("run-a", "running", 1, "stream-incomplete")).toMatchObject({
+      ok: true,
+    });
     const replay = hub.replay("run-a");
     expect(replay.ok).toBe(true);
     if (!replay.ok) return;
@@ -61,6 +65,23 @@ describe("CodingRuntimeEventHub", () => {
         failureCode: "stream-incomplete",
       },
     ]);
+  });
+
+  it("distinguishes terminal and capacity rejection of a turn failure", () => {
+    const capacity = new CodingRuntimeEventHub({ maxEvents: 2 });
+    expect(capacity.publishTurnFailure("run-a", "running", 1, "provider-failed")).toMatchObject({
+      ok: true,
+    });
+    expect(capacity.publishTurnFailure("run-a", "running", 1, "stream-incomplete")).toEqual({
+      ok: false,
+      reason: "capacity-pressure",
+    });
+    const terminalHub = new CodingRuntimeEventHub();
+    terminalHub.publish(terminal("run-a", 1));
+    expect(terminalHub.publishTurnFailure("run-a", "running", 2, "provider-failed")).toEqual({
+      ok: false,
+      reason: "terminal-run",
+    });
   });
 
   it("replays approval and terminal facts exactly once across three forced reconnects", () => {
