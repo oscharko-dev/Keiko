@@ -1,4 +1,11 @@
 import { gatewaySpendRejectionReason } from "./gateway-spend-budget.js";
+import {
+  ContextOverflowError,
+  ModelRefusalError,
+  ProviderError,
+  TimeoutError,
+  TransportError,
+} from "@oscharko-dev/keiko-security/errors/gateway";
 import { createHash, randomUUID } from "node:crypto";
 import {
   findConfiguredCapability,
@@ -27,6 +34,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import type { CodingWorkbenchTurnFailureCode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -120,7 +128,9 @@ function settlePromptTokenReservation(
   runtimeCapabilityAuthenticator(deps)?.settlePromptTokens?.(
     reservation.capability,
     reservation.reservedPromptTokens,
-    actualPromptTokens ?? reservation.reservedPromptTokens,
+    actualPromptTokens !== undefined && actualPromptTokens > 0
+      ? actualPromptTokens
+      : reservation.reservedPromptTokens,
   );
 }
 
@@ -375,6 +385,7 @@ function logGatewayRejection(
       CODING_SIDECAR_GATEWAY_REJECTED_OPERATION,
       {
         correlationId: correlationIdOrUnknown(ctx.correlationId),
+        ...(runId === undefined ? {} : { parentCorrelationId: runId }),
         status,
         errorKind: gatewayRejectionErrorKind(reason),
       },
@@ -1268,17 +1279,58 @@ function emitGatewayFailureDiagnostic(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   error: unknown,
+  runId: string,
 ): void {
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
       correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+      parentCorrelationId: runId,
       operation: CODING_SIDECAR_GATEWAY_ROUTE,
       source: "coding-sidecar-gateway.chat",
       error,
       redact: (message) => String(deps.redactor(message)),
     }),
   );
+}
+
+function reportGatewayTurnFailure(
+  deps: UiHandlerDeps,
+  runId: string,
+  failureCode: CodingWorkbenchTurnFailureCode,
+): void {
+  const snapshot = deps.codingRuntimeOrchestrator?.getSnapshot(runId);
+  if (snapshot?.state !== "running" && snapshot?.state !== "paused") return;
+  deps.codingRuntimeEventHub?.publishTurnFailure(
+    runId,
+    snapshot.state,
+    snapshot.revision,
+    failureCode,
+  );
+}
+
+function gatewayTurnFailureCode(
+  error: unknown,
+): "provider-failed" | "stream-incomplete" | "turn-rejected" {
+  if (error instanceof ContextOverflowError || error instanceof ModelRefusalError)
+    return "turn-rejected";
+  if (
+    error instanceof TimeoutError ||
+    error instanceof TransportError ||
+    (error instanceof ProviderError && error.httpStatus === 200)
+  )
+    return "stream-incomplete";
+  return "provider-failed";
+}
+
+function gatewayStreamFailureCode(
+  error: unknown,
+): "provider-failed" | "stream-incomplete" | "turn-rejected" {
+  if (error instanceof ContextOverflowError || error instanceof ModelRefusalError)
+    return "turn-rejected";
+  return error instanceof ProviderError && error.httpStatus !== 200
+    ? "provider-failed"
+    : "stream-incomplete";
 }
 
 /**
@@ -1294,11 +1346,13 @@ function emitGatewayStreamFailureDiagnostic(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   error: unknown,
+  runId: string,
 ): void {
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
       correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+      parentCorrelationId: runId,
       operation: CODING_SIDECAR_GATEWAY_ROUTE,
       source: "coding-sidecar-gateway.stream",
       error,
@@ -1468,6 +1522,7 @@ function emitGatewayToolContractDiagnostic(
   const { code, reason } = toolContractRejectionReason(tools);
   emitServerDiagnostic(deps.diagnostics, {
     correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    parentCorrelationId: runId,
     timestamp: new Date(Date.now()).toISOString(),
     operation: CODING_SIDECAR_GATEWAY_ROUTE,
     source: "coding-sidecar-gateway.tool-contract",
@@ -1476,6 +1531,7 @@ function emitGatewayToolContractDiagnostic(
     code,
   });
   logGatewayRejection(ctx, runId, 403, reason, toolContractMismatch(tools));
+  reportGatewayTurnFailure(deps, runId, "turn-rejected");
 }
 
 /**
@@ -1662,6 +1718,7 @@ function unavailableGatewayProfile(
     message: "coding-sidecar-gateway-profile-unavailable",
     code: unavailableGatewayProfileCode(resolved, selectedModelId, authentication),
   });
+  reportGatewayTurnFailure(deps, authentication.runId, "turn-rejected");
   return unavailableError();
 }
 
@@ -1880,7 +1937,9 @@ function settleFailedGatewayChat(
   bufferedStream: BufferedOpenAiStreamSession | undefined,
 ): RouteResult | typeof STREAMING {
   recordGatewayOutcome(deps, runId, cancellationSignal.aborted ? "cancelled" : "failed", 0, 0);
-  emitGatewayFailureDiagnostic(ctx, deps, error);
+  emitGatewayFailureDiagnostic(ctx, deps, error, runId);
+  if (!cancellationSignal.aborted)
+    reportGatewayTurnFailure(deps, runId, gatewayTurnFailureCode(error));
   settlePromptTokenReservation(deps, delivery.promptTokenReservation);
   const spendReason = gatewaySpendRejectionReason(error);
   if (spendReason !== undefined && bufferedStream === undefined) {
@@ -1939,7 +1998,8 @@ async function streamGatewayChat(
     )(request)[Symbol.asyncIterator]();
   } catch (error) {
     recordGatewayOutcome(deps, runId, "failed", 0, 0);
-    emitGatewayFailureDiagnostic(ctx, deps, error);
+    emitGatewayFailureDiagnostic(ctx, deps, error, runId);
+    reportGatewayTurnFailure(deps, runId, gatewayTurnFailureCode(error));
     settlePromptTokenReservation(deps, promptTokenReservation);
     return unavailableError();
   }
@@ -1968,7 +2028,10 @@ async function pumpGatewayStreamWithCancellation(
   try {
     await pumpGatewayStream(session);
   } catch (error) {
-    emitGatewayStreamFailureDiagnostic(ctx, deps, error);
+    emitGatewayStreamFailureDiagnostic(ctx, deps, error, session.runId);
+    if (!session.cancellationSignal.aborted) {
+      reportGatewayTurnFailure(deps, session.runId, gatewayStreamFailureCode(error));
+    }
     settleGatewayStreamError(session);
   } finally {
     cancellationSignal.removeEventListener("abort", cancelIterator);
@@ -2466,6 +2529,7 @@ export async function handleCodingSidecarGatewayChatCompletions(
 
 function logChatRequestRejection(
   ctx: RouteContext,
+  deps: UiHandlerDeps,
   runId: string,
   validationError: RouteResult,
   observed?: {
@@ -2486,6 +2550,7 @@ function logChatRequestRejection(
         }
       : undefined;
   logGatewayRejection(ctx, runId, validationError.status, reason, boundedEvidence);
+  reportGatewayTurnFailure(deps, runId, "turn-rejected");
 }
 
 interface ValidatedChatRequest {
@@ -2495,6 +2560,7 @@ interface ValidatedChatRequest {
 
 async function readValidatedChatRequest(
   ctx: RouteContext,
+  deps: UiHandlerDeps,
   resolved: AvailableGatewayProfile,
   authentication: AuthenticatedGatewayRequest,
 ): Promise<RouteResult | ValidatedChatRequest> {
@@ -2512,6 +2578,7 @@ async function readValidatedChatRequest(
   if (validationError !== undefined) {
     logChatRequestRejection(
       ctx,
+      deps,
       authentication.runId,
       validationError,
       isRouteResult(parsed)
@@ -2533,7 +2600,7 @@ async function runHandleCodingSidecarGatewayChatCompletions(
   const resolved = resolveAuthenticatedGatewayProfile(deps, authentication);
   if (!isAvailableGatewayProfile(resolved))
     return unavailableGatewayProfile(ctx, deps, resolved, authentication);
-  const validated = await readValidatedChatRequest(ctx, resolved, authentication);
+  const validated = await readValidatedChatRequest(ctx, deps, resolved, authentication);
   if (isRouteResult(validated)) return validated;
   const { parsed, estimatedPromptTokens } = validated;
   logValidatedRequestBounds(
@@ -2582,7 +2649,10 @@ function logValidatedRequestBounds(
   getServerLogger().info(
     activityLogEvent(
       CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION,
-      { correlationId: correlationIdOrUnknown(ctx.correlationId) },
+      {
+        correlationId: correlationIdOrUnknown(ctx.correlationId),
+        parentCorrelationId: runId,
+      },
       {
         runId,
         maxRequestBytes: bounds.maxRequestBytes,
@@ -2617,6 +2687,7 @@ function executeBudgetedGatewayChat(
   );
   if (promptTokenReservation === undefined) {
     logGatewayRejection(ctx, authentication.runId, 403, "runtime-prompt-budget-denied");
+    reportGatewayTurnFailure(deps, authentication.runId, "turn-rejected");
     return Promise.resolve(forbiddenGatewayRequest());
   }
   return executeGatewayChat(ctx, deps, binding, parsed, authentication.runId, {

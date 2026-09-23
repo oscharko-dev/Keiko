@@ -12,6 +12,20 @@ against a LiteLLM-only configuration. Buffered dictation and read-aloud remain a
 
 ---
 
+## Coding Workbench turn has no assistant reply
+
+For a Workbench run that accepted a message but has no assistant reply, note the run id and export a
+body-free bundle with `keiko support export --out keiko-bundle.jsonl`. Analyze that bundle with
+`keiko support analyze keiko-bundle.jsonl --correlation-id <runId>`. The run timeline includes
+`coding-sidecar.gateway.request-validated`, any closed `coding-sidecar.gateway.rejected` reason,
+the provider dispatch, and a redacted diagnostic for a failed model call. A gateway HTTP 400 after a
+request carrying optional `stream_options` may indicate a strict OpenAI-compatible proxy; Keiko
+retries once without that optional field and records `chat.request.compatibility-retry` when it
+does. The Workbench displays a closed failure cause and next step if the turn still fails. Do not
+send the raw provider response or model prompt to support.
+
+---
+
 ## Authenticate x-litellm-key against a proxy that ignores it
 
 | Field             | Value                                                          |

@@ -224,6 +224,10 @@ jobs:
         # from @oscharko-dev/keiko-security's packages/*/dist. No publish ran after that import was
         # added, so this job would have died with ERR_MODULE_NOT_FOUND after owner authorization.
         run: npm run build:packages
+      - name: Install Chromium for customer-shape qualification
+        run: npx playwright install --with-deps chromium
+      - name: Qualify staged Coding Workbench on customer shape
+        run: npm run qualify:coding-workbench:customer-shape
       - name: Publish package
         # No NODE_AUTH_TOKEN/NPM_TOKEN here by design: this job authenticates to the npm
         # registry via OIDC trusted publishing (id-token: write above), scoped to this exact

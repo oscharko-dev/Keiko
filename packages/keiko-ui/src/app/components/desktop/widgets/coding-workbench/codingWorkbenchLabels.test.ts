@@ -237,6 +237,15 @@ function runtimeEvent(extra: Record<string, unknown>): CodingWorkbenchRuntimeSse
 }
 
 describe("eventDetail auxiliary outcome", () => {
+  it("shows actionable cause for a redacted gateway failure", () => {
+    expect(
+      eventDetail(
+        runtimeEvent({ eventKind: "failure-redacted", failureCode: "provider-failed" }),
+        t,
+      ),
+    ).toBe("codingWorkbench.event.detailFailure codingWorkbench.event.turnFailure.provider-failed");
+  });
+
   it("appends the normalized outcome as a content-free sentence", () => {
     expect(eventDetail(runtimeEvent({ auxiliaryOutcome: "denied" }), t)).toBe(
       "codingWorkbench.event.detail codingWorkbench.event.detailOutcome",

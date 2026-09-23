@@ -1,0 +1,158 @@
+import { beforeEach, describe, expect, it } from "vitest";
+import { OpenAiAdapter, resetChatCompatibilityMemoForTests } from "./openai-adapter.js";
+import { gatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
+import type { ModelGatewayLogEvent } from "./observability.js";
+import type { GatewayStreamChunk, ModelProviderConfig } from "./types.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+
+const CONFIG: ModelProviderConfig = {
+  modelId: "gemma-4-31b-it",
+  baseUrl: "https://gateway.example/v1",
+  apiKey: "fixture-key",
+  timeoutMs: 10_000,
+  maxRetries: 0,
+  retryBaseDelayMs: 0,
+};
+
+function requestBody(init: RequestInit | undefined): Record<string, unknown> {
+  if (typeof init?.body !== "string") throw new TypeError("expected JSON request body");
+  return JSON.parse(init.body) as Record<string, unknown>;
+}
+
+function streamedAnswer(): Response {
+  const frames = [
+    'data: {"choices":[{"index":0,"delta":{"role":"assistant","content":null},"finish_reason":null}]}',
+    ": ping",
+    'data: {"choices":[{"index":0,"delta":{"content":"Synthetic answer."},"finish_reason":null}]}',
+    'data: {"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}',
+    "data: [DONE]",
+    "",
+  ];
+  return new Response(frames.join("\n\n"), {
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+describe("OpenAI-compatible chat compatibility", () => {
+  beforeEach(resetChatCompatibilityMemoForTests);
+
+  it("does not retry a context overflow after the provider has rejected the turn", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const adapter = new OpenAiAdapter({
+      requestId: "context-overflow",
+      costClass: "low",
+      fetchImpl: (_url, init): Promise<Response> => {
+        bodies.push(requestBody(init));
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: { message: "context length exceeded" } }), {
+            status: 400,
+          }),
+        );
+      },
+    });
+
+    const consume = async (): Promise<void> => {
+      for await (const _chunk of adapter.callStream(
+        { modelId: CONFIG.modelId, messages: [{ role: "user", content: "Synthetic prompt" }] },
+        CONFIG,
+      )) {
+        // No chunk can be emitted after a rejected request.
+      }
+    };
+    await expect(consume()).rejects.toMatchObject({ code: "GATEWAY_CONTEXT_OVERFLOW" });
+    expect(bodies).toHaveLength(1);
+  });
+
+  it("stops after one compatibility retry when the minimal request also fails", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const adapter = new OpenAiAdapter({
+      requestId: "minimal-rejected",
+      costClass: "low",
+      fetchImpl: (_url, init): Promise<Response> => {
+        bodies.push(requestBody(init));
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: { code: "bad_request" } }), {
+            status: 400,
+          }),
+        );
+      },
+    });
+    const consume = async (): Promise<void> => {
+      for await (const _chunk of adapter.callStream(
+        { modelId: CONFIG.modelId, messages: [{ role: "user", content: "Synthetic prompt" }] },
+        CONFIG,
+      )) {
+        // A rejected request cannot produce a response chunk.
+      }
+    };
+
+    await expect(consume()).rejects.toMatchObject({ code: "GATEWAY_PROVIDER_ERROR" });
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).not.toHaveProperty("stream_options");
+  });
+
+  it("retries a strict proxy without optional streaming usage and remembers the accepted shape", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const events: ModelGatewayLogEvent[] = [];
+    const fetchImpl: typeof fetch = (_url, init) => {
+      const body = requestBody(init);
+      bodies.push(body);
+      return Promise.resolve(
+        "stream_options" in body
+          ? new Response(JSON.stringify({ error: { code: "unsupported_parameter" } }), {
+              status: 400,
+              headers: { "content-type": "application/json" },
+            })
+          : streamedAnswer(),
+      );
+    };
+    const adapter = new OpenAiAdapter({
+      requestId: "compat",
+      costClass: "low",
+      fetchImpl,
+      log: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+      logContext: { correlationId: "run-compat" },
+    });
+
+    for (let turn = 0; turn < 2; turn += 1) {
+      const chunks: GatewayStreamChunk[] = [];
+      for await (const chunk of adapter.callStream(
+        {
+          modelId: CONFIG.modelId,
+          messages: [{ role: "user", content: "Synthetic prompt" }],
+          toolCatalog: gatewayCatalogAdvertisement(Date.now(), ["read_file"]),
+        },
+        CONFIG,
+      )) {
+        chunks.push(chunk);
+      }
+      expect(chunks.at(-1)).toMatchObject({
+        type: "done",
+        response: { content: "Synthetic answer." },
+      });
+    }
+
+    expect(bodies).toHaveLength(3);
+    expect(bodies[0]).toHaveProperty("stream_options.include_usage", true);
+    expect(bodies[1]).not.toHaveProperty("stream_options");
+    expect(bodies[2]).not.toHaveProperty("stream_options");
+    expect(bodies[0]?.tools).toEqual(bodies[1]?.tools);
+    expect(bodies[0]?.messages).toEqual(bodies[1]?.messages);
+    const retries = events.filter((event) => event.op === "chat.request.compatibility-retry");
+    expect(retries).toHaveLength(1);
+    const retry = retries[0];
+    if (retry === undefined) throw new TypeError("compatibility retry evidence missing");
+    expectActivityLogProof(
+      "chat.request.compatibility-retry.emitted-line",
+      formatActivityLogProofLine(retry),
+    );
+    expect(JSON.stringify(events)).not.toContain(CONFIG.apiKey);
+  });
+});

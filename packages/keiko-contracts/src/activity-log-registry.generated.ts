@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "6456478ba618114fc4af6640bf37829ebaca27616ce39163b9925f1ced47dc4f" as const;
+  "e5b27d407f46b754bdb0becaf60a332d03aa7fed9d105e1b9ac104f68f1dcd8b" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -945,6 +945,50 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "chat.request.compatibility-retry",
+    category: "gateway",
+    owner: "keiko-model-gateway",
+    emitter: "openai-adapter.dispatchCompatibleStream",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      endpointDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+      modelId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: true,
+        maxLength: 256,
+      },
+      omittedField: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["stream_options"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["gateway-chat-provider-call"],
+    proofIds: ["chat.request.compatibility-retry.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "chat.request.dispatch",
     category: "gateway",
     owner: "keiko-model-gateway",
@@ -990,6 +1034,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       stream: {
         type: "boolean",
         dataClass: "closed-enum",
+        required: true,
+      },
+      streamUsageRequested: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: false,
+      },
+      toolCount: {
+        type: "integer",
+        dataClass: "count",
         required: true,
       },
       readBudgetMs: {
@@ -40539,24 +40593,70 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       failureClass: "gateway-chat-provider-call",
       requirementContract: "gateway-chat-provider-call",
       productSurfaces: ["keiko-model-gateway"],
-      lifecycleTransitions: ["start"],
+      lifecycleTransitions: ["start", "state"],
       lifecycleOperations: {
         start: ["chat.request.dispatch"],
-        state: [],
+        state: ["chat.request.compatibility-retry"],
         end: [],
         failure: [],
         loss: [],
       },
       causalEdges: [
         {
+          op: "chat.request.compatibility-retry",
+          mode: "correlation",
+        },
+        {
           op: "chat.request.dispatch",
           mode: "correlation",
         },
       ],
       lossSignals: [],
-      resourceSignals: ["chat.request.dispatch"],
+      resourceSignals: ["chat.request.compatibility-retry", "chat.request.dispatch"],
       replayReferences: [],
       operations: [
+        {
+          op: "chat.request.compatibility-retry",
+          owner: "keiko-model-gateway",
+          category: "gateway",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "endpointDigest",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "modelId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "omittedField",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "digest",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["chat.request.compatibility-retry.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "chat.request.dispatch",
           owner: "keiko-model-gateway",
@@ -40602,9 +40702,21 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "streamUsageRequested",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "timeoutMs",
               type: "number",
               dataClass: "duration",
+              required: true,
+            },
+            {
+              name: "toolCount",
+              type: "integer",
+              dataClass: "count",
               required: true,
             },
           ],
@@ -59862,6 +59974,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "chat.compaction.facts.classified": "bff",
     "chat.creation.rejected": "bff",
     "chat.regeneration.rejected": "bff",
+    "chat.request.compatibility-retry": "model-gateway",
     "chat.request.dispatch": "model-gateway",
     "chat.response.message": "bff",
     "chat.response.streamed": "model-gateway",

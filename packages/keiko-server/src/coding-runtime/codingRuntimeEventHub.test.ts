@@ -42,6 +42,22 @@ const recovery = (runId: string, revision: number): CodingRuntimeEventHubInput =
 });
 
 describe("CodingRuntimeEventHub", () => {
+  it("reports one redacted gateway failure per revision and retains it across replay", () => {
+    const hub = new CodingRuntimeEventHub({ maxEvents: 3 });
+    expect(hub.publishTurnFailure("run-a", "running", 1, "provider-failed")).toBe(true);
+    expect(hub.publishTurnFailure("run-a", "running", 1, "stream-incomplete")).toBe(false);
+    const replay = hub.replay("run-a");
+    expect(replay.ok).toBe(true);
+    if (!replay.ok) return;
+    expect(replay.events).toMatchObject([
+      {
+        kind: "runtime-event",
+        eventKind: "failure-redacted",
+        failureCode: "provider-failed",
+      },
+    ]);
+  });
+
   it("replays approval and terminal facts exactly once across three forced reconnects", () => {
     const hub = new CodingRuntimeEventHub();
     const first = hub.publish(approval("run-a", 1));

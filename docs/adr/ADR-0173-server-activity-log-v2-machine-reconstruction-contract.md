@@ -1037,6 +1037,16 @@ claim tool calling, never while a subscription source is selected, and only the 
 Workbench would elect is awaited. A profile read that
 finds nothing to prove writes no automatic record, and its absence is then not a lost call.
 
+The Coding Workbench gateway also connects each authenticated request to its run with
+`parentCorrelationId: runId`. The request validation and rejection operations, and the redacted
+server diagnostic for an upstream chat or stream failure, therefore appear in the same selective
+`keiko support analyze --correlation-id <runId>` timeline. `chat.request.dispatch` records the
+stream usage flag and tool count before the provider call; a strict OpenAI-compatible proxy's
+one-time retry without `stream_options` records `chat.request.compatibility-retry`. These lines
+contain counts, status, closed reasons, and digests only. The Workbench receives a separate
+`failure-redacted` SSE event with a closed gateway-turn cause while the runtime is still active;
+the event carries no provider response body or customer content.
+
 ### D14 — Bounded immutable segments under the OS-user filesystem boundary
 
 The Activity Log is one logical log stored as immutable segments in one closed-grammar directory,

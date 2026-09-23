@@ -8,6 +8,7 @@ import {
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
   CODING_WORKBENCH_RUNTIME_FAILURE_CODES,
   CODING_WORKBENCH_RUNTIME_STATE_NAMES,
+  CODING_WORKBENCH_TURN_FAILURE_CODES,
 } from "./coding-workbench-runtime-constants.js";
 import { stripUnsafeFormatChars } from "./text-safety.js";
 
@@ -133,7 +134,12 @@ function validateSseOptionalEnums(value: Record<string, unknown>, errors: string
   validateSseContentTrust(value, errors);
   if (
     value.failureCode !== undefined &&
-    !isOneOf(value.failureCode, CODING_WORKBENCH_RUNTIME_FAILURE_CODES)
+    !isOneOf(value.failureCode, CODING_WORKBENCH_RUNTIME_FAILURE_CODES) &&
+    !(
+      value.kind === "runtime-event" &&
+      value.eventKind === "failure-redacted" &&
+      isOneOf(value.failureCode, CODING_WORKBENCH_TURN_FAILURE_CODES)
+    )
   ) {
     errors.push("failureCode is invalid");
   }

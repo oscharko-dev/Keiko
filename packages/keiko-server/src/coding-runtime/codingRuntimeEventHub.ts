@@ -1,4 +1,5 @@
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import type { CodingWorkbenchTurnFailureCode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { validateCodingWorkbenchRuntimeSseEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type {
   CodingWorkbenchRuntimeFailureCode,
@@ -44,7 +45,8 @@ export type CodingRuntimeEventHubInput =
         CodingWorkbenchRuntimeSseEvent,
         { kind: "runtime-event" }
       >["contentTrust"];
-      readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+      readonly failureCode?:
+        CodingWorkbenchRuntimeFailureCode | CodingWorkbenchTurnFailureCode | undefined;
     };
 
 export type CodingRuntimeEventHubResetReason =
@@ -106,6 +108,7 @@ interface RunBuffer {
   nextSequence: number;
   bytes: number;
   terminal: boolean;
+  lastTurnFailureRevision?: number;
   readonly events: RetainedEvent[];
   readonly subscribers: Set<CodingRuntimeEventHubSubscriber>;
 }
@@ -174,6 +177,30 @@ export class CodingRuntimeEventHub {
     this.fanOut(run, event);
     if (run.terminal) this.closeSubscribers(run);
     return { ok: true, event };
+  }
+
+  /** Reports one content-free gateway failure per task revision while the runtime may still retry. */
+  publishTurnFailure(
+    runId: string,
+    state: CodingWorkbenchRuntimeStateName,
+    revision: number,
+    failureCode: CodingWorkbenchTurnFailureCode,
+  ): boolean {
+    const run = this.runs.get(runId);
+    if (run?.terminal === true || run?.lastTurnFailureRevision === revision) return false;
+    const result = this.publish({
+      schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+      kind: "runtime-event",
+      runId,
+      state,
+      revision,
+      eventKind: "failure-redacted",
+      failureCode,
+    });
+    if (!result.ok) return false;
+    const retained = this.runs.get(runId);
+    if (retained !== undefined) retained.lastTurnFailureRevision = revision;
+    return true;
   }
 
   replay(runId: string, lastEventId?: string): CodingRuntimeEventHubReplay {
@@ -318,7 +345,8 @@ function isCritical(event: CodingWorkbenchRuntimeSseEvent): boolean {
     event.state === "awaiting-approval" ||
     event.state === "recovery-required" ||
     event.failureCode === "revoked" ||
-    (event.kind === "runtime-event" && event.eventKind === "permission-requested")
+    (event.kind === "runtime-event" &&
+      (event.eventKind === "permission-requested" || event.eventKind === "failure-redacted"))
   );
 }
 

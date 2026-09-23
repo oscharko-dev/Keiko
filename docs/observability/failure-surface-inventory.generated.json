@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "6456478ba618114fc4af6640bf37829ebaca27616ce39163b9925f1ced47dc4f"
+    "catalogDigest": "e5b27d407f46b754bdb0becaf60a332d03aa7fed9d105e1b9ac104f68f1dcd8b"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,9 +51,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 447,
-    "proofCount": 455,
-    "resolvedProofCount": 455,
+    "operationCount": 448,
+    "proofCount": 456,
+    "resolvedProofCount": 456,
     "failureClassCount": 316,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
@@ -135,6 +135,7 @@
       "owners": ["keiko-model-gateway", "keiko-server"],
       "ports": ["ModelGatewayLogSink", "ServerLogSink"],
       "operations": [
+        "chat.request.compatibility-retry",
         "chat.request.dispatch",
         "chat.response.streamed",
         "embedding.batch.array-unsupported",
@@ -976,6 +977,9 @@
     ],
     "chat.creation.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
     "chat.regeneration.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
+    "chat.request.compatibility-retry.emitted-line": [
+      "packages/keiko-model-gateway/src/openai-adapter.compat.test.ts"
+    ],
     "chat.request.dispatch.emitted-line": [
       "packages/keiko-model-gateway/src/openai-adapter.logging.test.ts"
     ],
