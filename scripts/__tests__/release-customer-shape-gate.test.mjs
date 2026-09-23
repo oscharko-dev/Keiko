@@ -41,7 +41,7 @@ function noRedundantBuildStep(steps) {
 
 function qualificationStepGate(installStep, qualifyStep, steps) {
   return (
-    installStep.run === "npx playwright install --with-deps chromium" &&
+    installStep.run === "node node_modules/playwright/cli.js install --with-deps chromium" &&
     installStep["timeout-minutes"] === 10 &&
     qualifyStep.run === "npm run qualify:coding-workbench:customer-shape" &&
     qualifyStep["timeout-minutes"] === 25 &&
@@ -104,6 +104,15 @@ describe("customer-shape publish gate", () => {
 
   it("runs the bounded staged Yarn Workbench journey on macOS before npm publication", () => {
     expect(executableGate(workflow)).toBe(true);
+  });
+
+  it("rejects an on-demand Chromium installer instead of the pinned local CLI", () => {
+    const weakened = workflow.replace(
+      "run: node node_modules/playwright/cli.js install --with-deps chromium",
+      "run: npx playwright install --with-deps chromium",
+    );
+    expect(weakened).not.toBe(workflow);
+    expect(executableGate(weakened)).toBe(false);
   });
 
   it("rejects a comment that mentions qualification when the executable step is bypassed", () => {
