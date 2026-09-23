@@ -542,6 +542,7 @@ function recordProviderFailure(
 
 interface RoutedCall {
   readonly provider: ModelProviderConfig;
+  readonly compatibilityMemoScope: ModelProviderConfig;
   readonly capability: ModelCapability;
 }
 
@@ -784,7 +785,7 @@ export class Gateway {
     const ids = callIds(requestId, request);
     const start = this.clock.now();
     const elapsed = logTimer();
-    const adapter = this.adapterFor(requestId, route.capability, ids.correlationId);
+    const adapter = this.adapterFor(requestId, route, ids.correlationId);
     const attempt: BufferedChatAttempt = {
       route,
       breaker,
@@ -941,7 +942,7 @@ export class Gateway {
     breaker.assertAllowed(ids.correlationId);
     const start = this.clock.now();
     const elapsed = logTimer();
-    const adapter = this.adapterFor(ids.requestId, route.capability, ids.correlationId);
+    const adapter = this.adapterFor(ids.requestId, route, ids.correlationId);
     this.logCallStarted(ids, route, true, request.reasoningEffort);
     let reservation: GatewaySpendReservation | undefined;
     let chunkCount = 0;
@@ -1316,7 +1317,7 @@ export class Gateway {
         `model '${modelId}' has kind '${capability.kind}'; the chat path requires a chat model`,
       );
     }
-    return { provider, capability };
+    return { provider, compatibilityMemoScope: provider, capability };
   }
 
   private routeForCall(request: GatewayCallRequest): RoutedCall {
@@ -1345,16 +1346,13 @@ export class Gateway {
     return breaker;
   }
 
-  private adapterFor(
-    requestId: string,
-    capability: ModelCapability,
-    correlationId: string,
-  ): ProviderAdapter {
+  private adapterFor(requestId: string, route: RoutedCall, correlationId: string): ProviderAdapter {
     return (
       this.adapter ??
       new OpenAiAdapter({
         requestId,
-        costClass: capability.costClass,
+        costClass: route.capability.costClass,
+        compatibilityMemoScope: route.compatibilityMemoScope,
         now: this.clock.now,
         fetchImpl: this.fetchImpl,
         log: this.log,

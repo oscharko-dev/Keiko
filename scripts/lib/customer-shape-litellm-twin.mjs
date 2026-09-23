@@ -74,8 +74,30 @@ function plannedWorkspaceDiscovery(body, behavior) {
   };
 }
 
-function hasToolResult(body) {
-  return Array.isArray(body.messages) && body.messages.some((message) => message?.role === "tool");
+function completedDiscoveryResult(content) {
+  if (typeof content !== "string") return false;
+  try {
+    const result = JSON.parse(content);
+    return (
+      result?.status === "completed" &&
+      typeof result.read?.text === "string" &&
+      result.read.text.split("\n").includes("README.md")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function hasCompletedWorkspaceDiscoveryResult(body) {
+  return (
+    Array.isArray(body.messages) &&
+    body.messages.some(
+      (message) =>
+        message?.role === "tool" &&
+        message.tool_call_id === "call-twin" &&
+        completedDiscoveryResult(message.content),
+    )
+  );
 }
 
 function answerBuffered(response, body) {
@@ -123,7 +145,7 @@ async function handleTwinChat(request, response, requests, behavior) {
       hasStreamOptions: "stream_options" in body,
       delayed: false,
       deliveredToolCall: false,
-      sawToolResult: hasToolResult(body),
+      completedDiscoveryResult: hasCompletedWorkspaceDiscoveryResult(body),
     };
     requests.push(observed);
     if (body.stream === true && ("stream_options" in body || behavior.rejectAllStreams)) {

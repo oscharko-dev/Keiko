@@ -25,6 +25,7 @@ import {
 } from "../lib/customer-shape-litellm-twin.mjs";
 import {
   completedTurnEvidence,
+  completedToolRoundTripEvidence,
   customerShapeRequestEvidence,
   linkedFailureEvidence,
 } from "../lib/customer-shape-evidence.mjs";
@@ -357,12 +358,8 @@ function assertGatewayEvidence(twin, firstRequest, lines, runId, phase) {
 }
 
 function assertToolRoundTrip(twin, firstRequest) {
-  const requests = twin.requests.slice(firstRequest);
-  if (!requests.some((request) => request.deliveredToolCall)) {
-    throw new Error("the vLLM-style governed read call was not delivered");
-  }
-  if (!requests.some((request) => request.sawToolResult)) {
-    throw new Error("the governed read result never reached the follow-up model turn");
+  if (!completedToolRoundTripEvidence(twin.requests, firstRequest)) {
+    throw new Error("the governed discovery did not complete after its emitted tool call");
   }
 }
 

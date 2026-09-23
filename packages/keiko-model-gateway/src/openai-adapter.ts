@@ -140,16 +140,12 @@ const CHAT_REQUEST_COMPATIBILITY_RETRY_OPERATION = defineActivityLogOperation({
 
 // A provider config object already carries the credential identity. Weak keys keep the memo scoped
 // to that config without deriving, storing, or logging any digest of its secret material.
-let strictStreamOptionsEndpoints = new WeakMap<ModelProviderConfig, Map<string, number>>();
+let strictStreamOptionsEndpoints = new WeakMap<object, Map<string, number>>();
 const MAX_STRICT_STREAM_OPTIONS_ENDPOINTS = 256;
 const STRICT_STREAM_OPTIONS_REPROBE_MS = 15 * 60_000;
 
-function hasStrictStreamOptionsMemo(
-  config: ModelProviderConfig,
-  url: string,
-  now: () => number,
-): boolean {
-  const endpoints = strictStreamOptionsEndpoints.get(config);
+function hasStrictStreamOptionsMemo(scope: object, url: string, now: () => number): boolean {
+  const endpoints = strictStreamOptionsEndpoints.get(scope);
   const expiresAt = endpoints?.get(url);
   if (expiresAt === undefined) return false;
   if (expiresAt > now()) return true;
@@ -157,15 +153,11 @@ function hasStrictStreamOptionsMemo(
   return false;
 }
 
-function rememberStrictStreamOptionsEndpoint(
-  config: ModelProviderConfig,
-  url: string,
-  now: number,
-): void {
-  let endpoints = strictStreamOptionsEndpoints.get(config);
+function rememberStrictStreamOptionsEndpoint(scope: object, url: string, now: number): void {
+  let endpoints = strictStreamOptionsEndpoints.get(scope);
   if (endpoints === undefined) {
     endpoints = new Map<string, number>();
-    strictStreamOptionsEndpoints.set(config, endpoints);
+    strictStreamOptionsEndpoints.set(scope, endpoints);
   }
   if (endpoints.has(url)) endpoints.delete(url);
   if (endpoints.size >= MAX_STRICT_STREAM_OPTIONS_ENDPOINTS) {
@@ -176,7 +168,7 @@ function rememberStrictStreamOptionsEndpoint(
 }
 
 export function resetChatCompatibilityMemoForTests(): void {
-  strictStreamOptionsEndpoints = new WeakMap<ModelProviderConfig, Map<string, number>>();
+  strictStreamOptionsEndpoints = new WeakMap<object, Map<string, number>>();
 }
 
 const CHAT_RESPONSE_STREAMED_OPERATION = defineActivityLogOperation({
@@ -228,6 +220,8 @@ export interface AdapterDeps {
   readonly fetchImpl?: typeof fetch | undefined;
   readonly requestId: string;
   readonly costClass: CostClass;
+  /** Stable, credential-scoped provider identity before per-call timeout copies are made. */
+  readonly compatibilityMemoScope?: object | undefined;
   readonly now?: (() => number) | undefined;
   // Activity-log sink (ADR-0019: a local port, see `observability.ts`). Unset means no-op.
   readonly log?: ModelGatewayLogSink | undefined;
@@ -1451,7 +1445,8 @@ export class OpenAiAdapter implements ProviderAdapter {
   ): Promise<DispatchedResponse> {
     const url = chatCompletionsUrl(config);
     const startedAt = Date.now();
-    const includeUsage = !hasStrictStreamOptionsMemo(config, url, this.now);
+    const memoScope = this.deps.compatibilityMemoScope ?? config;
+    const includeUsage = !hasStrictStreamOptionsMemo(memoScope, url, this.now);
     const first = await this.dispatch(request, config, secrets, true, bounds, includeUsage);
     if (first.response.ok || !includeUsage || !isStrictChatShapeRejection(first.response.status)) {
       return first;
@@ -1475,7 +1470,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     const retryConfig = bounds === undefined ? { ...config, timeoutMs: remainingMs } : config;
     this.logChatCompatibilityRetry(url, config, first.response.status);
     const retry = await this.dispatch(request, retryConfig, secrets, true, retryBounds, false);
-    if (retry.response.ok) rememberStrictStreamOptionsEndpoint(config, url, this.now());
+    if (retry.response.ok) rememberStrictStreamOptionsEndpoint(memoScope, url, this.now());
     return retry;
   }
 

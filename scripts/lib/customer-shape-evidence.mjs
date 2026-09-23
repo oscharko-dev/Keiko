@@ -9,6 +9,14 @@ export function customerShapeRequestEvidence(requests, firstRequest) {
   };
 }
 
+export function completedToolRoundTripEvidence(requests, firstRequest) {
+  const current = requests.slice(firstRequest);
+  const emitted = current.findIndex((request) => request.deliveredToolCall === true);
+  return (
+    emitted >= 0 && current.slice(emitted + 1).some((request) => request.completedDiscoveryResult)
+  );
+}
+
 export function completedTurnEvidence(lines, runId) {
   const usage = lines.find(
     (line) =>

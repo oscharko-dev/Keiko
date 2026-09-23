@@ -531,6 +531,42 @@ describe("OpenAI-compatible chat compatibility", () => {
     expect(bodies[2]).toHaveProperty("stream_options.include_usage", true);
   });
 
+  it("remembers a strict endpoint across Workbench calls that copy the provider config", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const gateway = new Gateway(
+      {
+        providers: [CONFIG],
+        circuitBreaker: { failureThreshold: 3, cooldownMs: 1000, halfOpenProbes: 1 },
+      },
+      {
+        fetchImpl: (_url, init): Promise<Response> => {
+          const body = requestBody(init);
+          bodies.push(body);
+          return Promise.resolve(
+            "stream_options" in body
+              ? new Response(JSON.stringify({ error: { code: "unsupported_parameter" } }), {
+                  status: 400,
+                })
+              : streamedAnswer(),
+          );
+        },
+      },
+    );
+    for (let turn = 0; turn < 2; turn += 1) {
+      for await (const _chunk of gateway.chatStream({
+        modelId: CONFIG.modelId,
+        messages: [{ role: "user", content: "Synthetic prompt" }],
+        latencyProfile: "coding-workbench",
+      })) {
+        // Drain the accepted Workbench stream before the next turn.
+      }
+    }
+    expect(bodies).toHaveLength(3);
+    expect(bodies[0]).toHaveProperty("stream_options.include_usage", true);
+    expect(bodies[1]).not.toHaveProperty("stream_options");
+    expect(bodies[2]).not.toHaveProperty("stream_options");
+  });
+
   it("reprobes optional usage metadata after the compatibility memo expires", async () => {
     let now = 0;
     const bodies: Record<string, unknown>[] = [];

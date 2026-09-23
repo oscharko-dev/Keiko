@@ -6,6 +6,7 @@ import {
 } from "../lib/customer-shape-litellm-twin.mjs";
 import {
   completedTurnEvidence,
+  completedToolRoundTripEvidence,
   customerShapeRequestEvidence,
   linkedFailureEvidence,
 } from "../lib/customer-shape-evidence.mjs";
@@ -68,15 +69,65 @@ describe("customer-shape LiteLLM twin", () => {
         headers,
         body: JSON.stringify({
           ...request,
-          messages: [...request.messages, { role: "tool", content: "Synthetic result" }],
+          messages: [
+            ...request.messages,
+            {
+              role: "tool",
+              tool_call_id: "call-twin",
+              content: JSON.stringify({ status: "completed", read: { text: "README.md\n" } }),
+            },
+          ],
         }),
       });
       expect(await second.text()).toContain("Synthetic Workbench reply.");
       expect(twin.requests[0]).toMatchObject({ deliveredToolCall: true });
-      expect(twin.requests[1]).toMatchObject({ sawToolResult: true });
+      expect(twin.requests[1]).toMatchObject({ completedDiscoveryResult: true });
     } finally {
       await twin.close();
     }
+  });
+
+  it("does not accept denied or unrelated tool results as a governed discovery", async () => {
+    const twin = await startCustomerShapeLiteLlmTwin();
+    try {
+      const headers = {
+        "content-type": "application/json",
+        "x-litellm-key": apiKeyHeaderValue("x-litellm-key", CUSTOMER_SHAPE_API_KEY),
+      };
+      const url = `${twin.baseUrl}/chat/completions`;
+      for (const [toolCallId, result] of [
+        ["call-twin", { status: "denied", evidence: [] }],
+        ["call-twin", { status: "failed", evidence: [] }],
+        ["unrelated-call", { status: "completed", read: { text: "README.md\n" } }],
+      ]) {
+        const response = await globalThis.fetch(url, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({
+            model: "gemma-4-31b-it",
+            messages: [
+              { role: "user", content: "Discover README.md" },
+              { role: "tool", tool_call_id: toolCallId, content: JSON.stringify(result) },
+            ],
+            stream: true,
+          }),
+        });
+        await response.text();
+      }
+      expect(twin.requests[0]).toMatchObject({ completedDiscoveryResult: false });
+      expect(twin.requests[1]).toMatchObject({ completedDiscoveryResult: false });
+      expect(twin.requests[2]).toMatchObject({ completedDiscoveryResult: false });
+    } finally {
+      await twin.close();
+    }
+  });
+
+  it("requires the completed discovery to follow the emitted tool call in this phase", () => {
+    const emitted = { deliveredToolCall: true, completedDiscoveryResult: false };
+    const completed = { deliveredToolCall: false, completedDiscoveryResult: true };
+    expect(completedToolRoundTripEvidence([completed, emitted], 0)).toBe(false);
+    expect(completedToolRoundTripEvidence([emitted, completed], 0)).toBe(true);
+    expect(completedToolRoundTripEvidence([emitted, completed], 2)).toBe(false);
   });
 
   it("does not satisfy current-run request evidence with an earlier run's requests", () => {
