@@ -3,8 +3,6 @@
 // with no network I/O and no real time. The raw provider body is never echoed into
 // an error; only a redacted, status-level summary is surfaced.
 
-import { createHmac, randomBytes } from "node:crypto";
-
 import {
   ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   activityLogEvent,
@@ -140,38 +138,45 @@ const CHAT_REQUEST_COMPATIBILITY_RETRY_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-const strictStreamOptionsEndpoints = new Map<string, number>();
-// A process-local keyed digest scopes the compatibility memo by credential without retaining or
-// publishing a reversible fingerprint of the customer's API key.
-const strictStreamOptionsMemoKey = randomBytes(32);
+// A provider config object already carries the credential identity. Weak keys keep the memo scoped
+// to that config without deriving, storing, or logging any digest of its secret material.
+let strictStreamOptionsEndpoints = new WeakMap<ModelProviderConfig, Map<string, number>>();
 const MAX_STRICT_STREAM_OPTIONS_ENDPOINTS = 256;
 const STRICT_STREAM_OPTIONS_REPROBE_MS = 15 * 60_000;
 
-function strictStreamOptionsCacheKey(url: string, config: ModelProviderConfig): string {
-  return createHmac("sha256", strictStreamOptionsMemoKey)
-    .update(JSON.stringify([url, config.modelId, config.apiKeyHeaderName ?? "", config.apiKey]))
-    .digest("hex");
-}
-
-function hasStrictStreamOptionsMemo(key: string, now: () => number): boolean {
-  const expiresAt = strictStreamOptionsEndpoints.get(key);
+function hasStrictStreamOptionsMemo(
+  config: ModelProviderConfig,
+  url: string,
+  now: () => number,
+): boolean {
+  const endpoints = strictStreamOptionsEndpoints.get(config);
+  const expiresAt = endpoints?.get(url);
   if (expiresAt === undefined) return false;
   if (expiresAt > now()) return true;
-  strictStreamOptionsEndpoints.delete(key);
+  endpoints?.delete(url);
   return false;
 }
 
-function rememberStrictStreamOptionsEndpoint(key: string, now: number): void {
-  if (strictStreamOptionsEndpoints.has(key)) strictStreamOptionsEndpoints.delete(key);
-  if (strictStreamOptionsEndpoints.size >= MAX_STRICT_STREAM_OPTIONS_ENDPOINTS) {
-    const oldest = strictStreamOptionsEndpoints.keys().next().value;
-    if (oldest !== undefined) strictStreamOptionsEndpoints.delete(oldest);
+function rememberStrictStreamOptionsEndpoint(
+  config: ModelProviderConfig,
+  url: string,
+  now: number,
+): void {
+  let endpoints = strictStreamOptionsEndpoints.get(config);
+  if (endpoints === undefined) {
+    endpoints = new Map<string, number>();
+    strictStreamOptionsEndpoints.set(config, endpoints);
   }
-  strictStreamOptionsEndpoints.set(key, now + STRICT_STREAM_OPTIONS_REPROBE_MS);
+  if (endpoints.has(url)) endpoints.delete(url);
+  if (endpoints.size >= MAX_STRICT_STREAM_OPTIONS_ENDPOINTS) {
+    const oldest = endpoints.keys().next().value;
+    if (oldest !== undefined) endpoints.delete(oldest);
+  }
+  endpoints.set(url, now + STRICT_STREAM_OPTIONS_REPROBE_MS);
 }
 
 export function resetChatCompatibilityMemoForTests(): void {
-  strictStreamOptionsEndpoints.clear();
+  strictStreamOptionsEndpoints = new WeakMap<ModelProviderConfig, Map<string, number>>();
 }
 
 const CHAT_RESPONSE_STREAMED_OPERATION = defineActivityLogOperation({
@@ -1446,8 +1451,7 @@ export class OpenAiAdapter implements ProviderAdapter {
   ): Promise<DispatchedResponse> {
     const url = chatCompletionsUrl(config);
     const startedAt = Date.now();
-    const key = strictStreamOptionsCacheKey(url, config);
-    const includeUsage = !hasStrictStreamOptionsMemo(key, this.now);
+    const includeUsage = !hasStrictStreamOptionsMemo(config, url, this.now);
     const first = await this.dispatch(request, config, secrets, true, bounds, includeUsage);
     if (first.response.ok || !includeUsage || !isStrictChatShapeRejection(first.response.status)) {
       return first;
@@ -1471,7 +1475,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     const retryConfig = bounds === undefined ? { ...config, timeoutMs: remainingMs } : config;
     this.logChatCompatibilityRetry(url, config, first.response.status);
     const retry = await this.dispatch(request, retryConfig, secrets, true, retryBounds, false);
-    if (retry.response.ok) rememberStrictStreamOptionsEndpoint(key, this.now());
+    if (retry.response.ok) rememberStrictStreamOptionsEndpoint(config, url, this.now());
     return retry;
   }
 

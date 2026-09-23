@@ -1,8 +1,11 @@
 import { gatewaySpendRejectionReason } from "./gateway-spend-budget.js";
 import {
+  AuthenticationError,
+  CircuitOpenError,
   ContextOverflowError,
   ModelRefusalError,
   ProviderError,
+  RateLimitError,
   TimeoutError,
   TransportError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
@@ -1567,9 +1570,14 @@ function gatewayStreamFailureCode(
   if (gatewaySpendRejectionReason(error) !== undefined) return "turn-rejected";
   if (error instanceof ContextOverflowError || error instanceof ModelRefusalError)
     return "turn-rejected";
-  return error instanceof ProviderError && error.httpStatus !== 200
-    ? "provider-failed"
-    : "stream-incomplete";
+  if (
+    error instanceof AuthenticationError ||
+    error instanceof RateLimitError ||
+    error instanceof CircuitOpenError ||
+    (error instanceof ProviderError && error.httpStatus !== 200)
+  )
+    return "provider-failed";
+  return "stream-incomplete";
 }
 
 /**

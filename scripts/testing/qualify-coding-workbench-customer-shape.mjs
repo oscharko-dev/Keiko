@@ -26,6 +26,7 @@ import {
 import {
   completedTurnEvidence,
   customerShapeRequestEvidence,
+  linkedFailureEvidence,
 } from "../lib/customer-shape-evidence.mjs";
 
 const CSRF = { "X-Keiko-CSRF": "1" };
@@ -142,28 +143,9 @@ function assertAnalyzableFailure(project, stateDir, lines, runId) {
   // OpenCode may publish its terminal failure first. In that ordering the gateway's additional
   // turn event is suppressed; the closed publication reason explains that outcome. The browser
   // assertion above separately proves that the failure itself reached the Workbench.
-  const turnFailure = lines.find(
-    (line) =>
-      line.op === "coding-sidecar.gateway.turn-failed" &&
-      line.runId === runId &&
-      typeof line.correlationId === "string" &&
-      typeof line.published === "boolean" &&
-      typeof line.publicationReason === "string",
-  );
-  if (turnFailure === undefined) {
-    throw new Error("failed turn lacks a correlated Activity Log projection");
-  }
-  const diagnostic = lines.find(
-    (line) =>
-      line.op === "server.diagnostic.failure" &&
-      line.correlationId === turnFailure.correlationId &&
-      line.parentCorrelationId === turnFailure.parentCorrelationId &&
-      Array.isArray(line.frames) &&
-      line.frames.some((frame) => typeof frame === "string" && frame.includes("/dist/")),
-  );
-  if (diagnostic === undefined) {
-    throw new Error("failed turn lacks a correlated installed-build diagnostic with frames");
-  }
+  const evidence = linkedFailureEvidence(lines, runId);
+  if (evidence === undefined) throw new Error("failed turn lacks linked installed-build evidence");
+  const { turnFailure, diagnostic } = evidence;
   const bin = join(project, "node_modules", "@oscharko-dev", "keiko", "dist", "cli", "index.js");
   const bundle = join(project, "failure-support.jsonl");
   run(process.execPath, [bin, "support", "export", "--state-dir", stateDir, "--out", bundle], {
@@ -344,7 +326,7 @@ async function runTurn(page, repository, scpRepository, pairingSecret, phase) {
   return runId;
 }
 
-function assertGatewayEvidence(twin, firstRequest, lines, runId, expectFailure) {
+function assertGatewayEvidence(twin, firstRequest, lines, runId, phase) {
   const operations = new Set(lines.map((line) => line.op));
   for (const required of [
     "coding-sidecar.gateway.request-validated",
@@ -359,7 +341,10 @@ function assertGatewayEvidence(twin, firstRequest, lines, runId, expectFailure) 
   if (!requestEvidence.compatibleRetry) {
     throw new Error("twin did not receive a compatible streaming retry");
   }
-  if (expectFailure) return;
+  if (phase === "failure-proof") return;
+  if (phase === "qualification" && !requestEvidence.delayedAcceptedStream) {
+    throw new Error("twin did not delay the accepted streaming request");
+  }
   const usage = lines.find(
     (line) =>
       line.op === "coding-sidecar.gateway.usage-settled" &&
@@ -412,7 +397,7 @@ async function qualifyInstalled(
     if (expectFailure) await awaitProjectedTurnFailure(stateDir, runId);
     else await awaitSettledUsage(stateDir, runId);
     const lines = activityLines(stateDir);
-    assertGatewayEvidence(twin, firstRequest, lines, runId, expectFailure);
+    assertGatewayEvidence(twin, firstRequest, lines, runId, phase);
     if (expectToolCall) assertToolRoundTrip(twin, firstRequest);
     if (expectFailure) assertAnalyzableFailure(project, stateDir, lines, runId);
   } finally {

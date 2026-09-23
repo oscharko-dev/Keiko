@@ -121,6 +121,7 @@ async function handleTwinChat(request, response, requests, behavior) {
     const observed = {
       stream: body.stream === true,
       hasStreamOptions: "stream_options" in body,
+      delayed: false,
       deliveredToolCall: false,
       sawToolResult: hasToolResult(body),
     };
@@ -131,6 +132,7 @@ async function handleTwinChat(request, response, requests, behavior) {
     }
     if (body.stream === true) {
       if (behavior.acceptedStreamDelayMs > 0 && forcedToolName(body) === undefined) {
+        observed.delayed = true;
         await delay(behavior.acceptedStreamDelayMs);
       }
       const plannedTool = plannedWorkspaceDiscovery(body, behavior);

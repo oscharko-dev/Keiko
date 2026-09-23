@@ -14,7 +14,12 @@ const workflowPath = resolve(
 const workflow = readFileSync(workflowPath, "utf8");
 
 function unconditionalStep(step) {
-  return step.if === undefined && step["continue-on-error"] === undefined;
+  return (
+    step.if === undefined &&
+    step["continue-on-error"] === undefined &&
+    step.shell === undefined &&
+    step["working-directory"] === undefined
+  );
 }
 
 function noRedundantBuildStep(steps) {
@@ -102,4 +107,17 @@ describe("customer-shape publish gate", () => {
     step.if = "false";
     expect(executableGate(stringify(modified))).toBe(false);
   });
+
+  it.each(["shell", "working-directory"])(
+    "rejects a qualification step with a %s execution override",
+    (property) => {
+      const modified = parse(workflow);
+      const step = modified.jobs["qualify-customer-shape"].steps.find(
+        (candidate) => candidate.name === "Run customer-shape qualification",
+      );
+      if (step === undefined) throw new Error("qualification step missing");
+      step[property] = property === "shell" ? 'bash -c "true" -- {0}' : "scripts";
+      expect(executableGate(stringify(modified))).toBe(false);
+    },
+  );
 });

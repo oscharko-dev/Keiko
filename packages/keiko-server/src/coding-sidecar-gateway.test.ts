@@ -16,8 +16,11 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { providerRequestBudgetMs } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import {
+  AuthenticationError,
+  CircuitOpenError,
   ConfigInvalidError,
   ContextOverflowError,
+  RateLimitError,
   TimeoutError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { TOOL_CALLING_VERIFICATION_MAX_AGE_MS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
@@ -3788,6 +3791,40 @@ describe("coding sidecar gateway turn failure projection", () => {
     expect(
       sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed")?.extra,
     ).toMatchObject({ failureCode: "turn-rejected" });
+  });
+
+  it.each([
+    new AuthenticationError("synthetic authentication failure"),
+    new RateLimitError("synthetic rate limit"),
+    new CircuitOpenError("synthetic circuit open"),
+  ])("classifies streamed %s as a provider failure", async (error) => {
+    const sink = captureServerLog("warn");
+    const stream = (): AsyncIterable<GatewayStreamChunk> => ({
+      [Symbol.asyncIterator]: () => ({ next: () => Promise.reject(error) }),
+    });
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-stream-provider" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => stream,
+      ),
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 3 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    } as UiHandlerDeps;
+    await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "synthetic" }],
+        tools: modelVisibleTools(),
+      }),
+      deps,
+    );
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed")?.extra,
+    ).toMatchObject({ failureCode: "provider-failed" });
   });
 
   it.each([

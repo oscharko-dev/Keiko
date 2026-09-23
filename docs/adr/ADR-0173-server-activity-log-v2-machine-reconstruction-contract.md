@@ -1067,8 +1067,9 @@ deployment without a settlement port. A refused or unverified settlement reports
 reservation rather than the provider count requested by the caller.
 `coding-sidecar.gateway.outcome`
 records the closed accepted, cancelled, failed, or output-limit result under that same request and
-run correlation; streamed acceptance is recorded after the terminal frame is written. Only counts,
-closed states, and the source are logged. Generic provider policy refusals remain terminal; an error
+run correlation; streamed acceptance is recorded after the terminal frame is written. These records
+contain request and run correlations, counts, closed states, and the source, without message bodies.
+Generic provider policy refusals remain terminal; an error
 that identifies the optional `stream_options` or `include_usage` field may take the one-time
 compatibility retry.
 

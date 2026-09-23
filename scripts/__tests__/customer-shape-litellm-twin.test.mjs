@@ -7,6 +7,7 @@ import {
 import {
   completedTurnEvidence,
   customerShapeRequestEvidence,
+  linkedFailureEvidence,
 } from "../lib/customer-shape-evidence.mjs";
 
 describe("customer-shape LiteLLM twin", () => {
@@ -86,11 +87,32 @@ describe("customer-shape LiteLLM twin", () => {
     expect(customerShapeRequestEvidence(requests, 0)).toEqual({
       rejectedOptionalField: true,
       compatibleRetry: true,
+      delayedAcceptedStream: false,
     });
     expect(customerShapeRequestEvidence(requests, 2)).toEqual({
       rejectedOptionalField: false,
       compatibleRetry: false,
+      delayedAcceptedStream: false,
     });
+  });
+
+  it("records an accepted stream that entered the delayed-response branch", async () => {
+    const twin = await startCustomerShapeLiteLlmTwin();
+    try {
+      twin.delayAcceptedStreamingBy(1);
+      const response = await globalThis.fetch(`${twin.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-litellm-key": apiKeyHeaderValue("x-litellm-key", CUSTOMER_SHAPE_API_KEY),
+        },
+        body: JSON.stringify({ model: "gemma-4-31b-it", messages: [], stream: true }),
+      });
+      await response.text();
+      expect(customerShapeRequestEvidence(twin.requests, 0).delayedAcceptedStream).toBe(true);
+    } finally {
+      await twin.close();
+    }
   });
 
   it("requires accepted completion for the same run and model request", () => {
@@ -128,5 +150,60 @@ describe("customer-shape LiteLLM twin", () => {
       outcome: "accepted",
     });
     expect(completedTurnEvidence(lines, "current-run")).toBe(true);
+  });
+
+  it("rejects completion lines without a populated request correlation", () => {
+    expect(
+      completedTurnEvidence(
+        [
+          {
+            op: "coding-sidecar.gateway.usage-settled",
+            parentCorrelationId: "current-run",
+            completionTokens: 4,
+          },
+          {
+            op: "coding-sidecar.gateway.outcome",
+            parentCorrelationId: "current-run",
+            outcome: "accepted",
+          },
+        ],
+        "current-run",
+      ),
+    ).toBe(false);
+  });
+
+  it("requires a published or terminal-run failure linked to its installed diagnostic", () => {
+    const failure = {
+      op: "coding-sidecar.gateway.turn-failed",
+      runId: "current-run",
+      parentCorrelationId: "current-run",
+      correlationId: "current-request",
+      published: true,
+    };
+    const diagnostic = {
+      op: "server.diagnostic.failure",
+      parentCorrelationId: "current-run",
+      correlationId: "current-request",
+      frames: ["packages/keiko-server/dist/route.js:1:1"],
+    };
+    expect(linkedFailureEvidence([failure, diagnostic], "current-run")).toEqual({
+      turnFailure: failure,
+      diagnostic,
+    });
+    expect(
+      linkedFailureEvidence([{ ...failure, correlationId: undefined }, diagnostic], "current-run"),
+    ).toBeUndefined();
+    expect(
+      linkedFailureEvidence(
+        [{ ...failure, published: false, publicationReason: "invalid-event" }, diagnostic],
+        "current-run",
+      ),
+    ).toBeUndefined();
+    expect(
+      linkedFailureEvidence(
+        [failure, { ...diagnostic, parentCorrelationId: undefined }],
+        "current-run",
+      ),
+    ).toBeUndefined();
   });
 });
