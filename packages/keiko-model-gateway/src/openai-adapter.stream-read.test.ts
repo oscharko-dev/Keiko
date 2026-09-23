@@ -188,6 +188,26 @@ describe("OpenAiAdapter.callStream with read bounds: silence and budget", () => 
     },
   );
 
+  it("preserves an explicit model refusal when the provider closes before a terminal frame", async () => {
+    const log = recorder();
+    const refusal = data({ choices: [{ index: 0, delta: { refusal: "Synthetic refusal" } }] });
+    const reading = answerOf(
+      adapterWith(() => Promise.resolve(sse([refusal])), log.sink).callStream(
+        REQUEST,
+        CONFIG,
+        BOUNDS,
+      ),
+    );
+
+    await expect(reading).rejects.toBeInstanceOf(ModelRefusalError);
+    expect(streamedLine(log.events)).toMatchObject({
+      level: "warn",
+      errorKind: "permission-denied",
+      extra: { outcome: "failed", dataEvents: 1 },
+    });
+    expect(JSON.stringify(log.events)).not.toContain("Synthetic refusal");
+  });
+
   it.each([
     ["done marker", [delta("complete answer"), DONE]],
     ["finish reason", [delta("complete answer"), finish("stop")]],

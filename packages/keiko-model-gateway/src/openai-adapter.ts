@@ -1234,7 +1234,8 @@ export class OpenAiAdapter implements ProviderAdapter {
         }
         applyChunkMetadata(chunk, acc);
       }
-      if (!completion.sawDone && !acc.sawFinishReason) {
+      // An explicit provider refusal must retain its refusal class even if the stream then closes.
+      if (!completion.sawDone && !acc.sawFinishReason && acc.refusal.length === 0) {
         throw new ProviderError(
           "provider stream ended without a terminal frame",
           PROVIDER_EMPTY_ASSISTANT_STATUS,

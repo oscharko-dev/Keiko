@@ -537,7 +537,9 @@ normalization as a whole body, and an endpoint that answers a streamed request w
 An SSE answer counts as complete only after a recognized `finish_reason` or the `data: [DONE]`
 marker. If the connection closes after deltas without either signal, the adapter raises a typed
 provider error instead of turning the partial text into a successful assistant reply. An unknown
-finish reason can still complete when the proxy sends `[DONE]`.
+finish reason can still complete when the proxy sends `[DONE]`. An explicit refusal delta retains
+its refusal classification on early close instead of being masked by the generic incomplete-stream
+error.
 Coding run 30 (2026-09-11): two gpt-5.4 generations of 4.8k to 5.9k output tokens at 27 to 45
 tokens per second were cut off at 120 s and generated a second time; Azure answered both with
 HTTP 200.
