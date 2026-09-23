@@ -23,7 +23,10 @@ import {
   countGatewayPromptTokens,
   type ModelTokenAccounting,
 } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
-import { providerRequestBudgetMs } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
+import {
+  codingWorkbenchProviderTimeoutMs,
+  providerRequestBudgetMs,
+} from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import { MAX_TIMER_DELAY_MS } from "./abort-race.js";
 import type {
   CodingWorkbenchModelSource,
@@ -752,13 +755,15 @@ function chatFactoryFor(deps: UiHandlerDeps, gateway: Gateway): CodingSidecarGat
 
 function defaultChatFactoryFor(gateway: Gateway): CodingSidecarGatewayChatFactory {
   return (_config, modelId) => {
-    return (request: GatewayRequest) => gateway.chat({ ...request, modelId });
+    return (request: GatewayRequest) =>
+      gateway.chat({ ...request, modelId, latencyProfile: "coding-workbench" });
   };
 }
 
 function defaultChatStreamFactoryFor(gateway: Gateway): CodingSidecarGatewayChatStreamFactory {
   return (_config, modelId) => {
-    return (request: GatewayRequest) => gateway.chatStream({ ...request, modelId });
+    return (request: GatewayRequest) =>
+      gateway.chatStream({ ...request, modelId, latencyProfile: "coding-workbench" });
   };
 }
 
@@ -1978,7 +1983,13 @@ export function codingSidecarGatewayRequestDeadlineMs(
 ): number {
   const provider = config.providers.find((candidate) => candidate.modelId === modelId);
   // An unconfigured model is refused before any provider call; 30 s only bounds that refusal.
-  const budget = provider === undefined ? 30_000 : providerRequestBudgetMs(provider);
+  const budget =
+    provider === undefined
+      ? 30_000
+      : providerRequestBudgetMs({
+          ...provider,
+          timeoutMs: codingWorkbenchProviderTimeoutMs(provider.timeoutMs),
+        });
   // Armed with AbortSignal.timeout, which fires at once past 2^31 - 1 ms: an absurd budget must not
   // turn the backstop into an immediate abort.
   return Math.min(budget + GATEWAY_ROUTE_DEADLINE_GRACE_MS, MAX_TIMER_DELAY_MS);

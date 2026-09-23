@@ -422,7 +422,9 @@ async function main() {
     artifact = seeded.artifact;
     seedVendoredRegistry(vendorTmp, undefined, artifact.manifest, seeded.vendored);
     await installIntoWithYarn(project, artifact, seeded.vendored);
+    twin.delayAcceptedStreamingBy(35_000);
     await qualifyInstalled(project, stateDir, configPath, twin, repository, scpRepository);
+    twin.delayAcceptedStreamingBy(0);
     twin.rejectAllStreaming();
     const failureStateDir = mkdtempSync(join(homedir(), ".keiko-customer-shape-failure-state-"));
     try {

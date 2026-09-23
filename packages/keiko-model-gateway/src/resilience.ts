@@ -32,6 +32,11 @@ import type {
 } from "./types.js";
 
 const MAX_BACKOFF_MS = 30_000;
+export const CODING_WORKBENCH_PROVIDER_TIMEOUT_FLOOR_MS = 90_000;
+
+export function codingWorkbenchProviderTimeoutMs(timeoutMs: number): number {
+  return Math.max(timeoutMs, CODING_WORKBENCH_PROVIDER_TIMEOUT_FLOOR_MS);
+}
 
 const GATEWAY_RETRY_BUDGET_EXHAUSTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",

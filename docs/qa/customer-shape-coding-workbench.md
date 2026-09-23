@@ -13,7 +13,7 @@ project folder. The package's `keiko start` then serves the real UI and BFF. A b
 Workbench, binds synthetic Git repositories with HTTPS and scp-like non-GitHub origins, selects
 **Ask for approval**, and starts a turn. The gateway is a local LiteLLM/vLLM-shaped twin: it rejects streamed
 `stream_options` with HTTP 400, then sends `content: null`, a ping comment, and an answer without
-usage in the accepted stream. The gate requires the answer to be visible and the Activity Log to
+usage in the accepted stream after a 35-second upstream delay. The gate requires the answer to be visible and the Activity Log to
 contain request validation, the compatibility retry, usage settlement with a closed source and
 completion count, and an accepted outcome for the same run and request after terminal delivery.
 The sidecar may request a buffered answer even when the provider supports

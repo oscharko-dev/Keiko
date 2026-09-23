@@ -35,6 +35,7 @@ import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
 import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
 import {
   CircuitBreaker,
+  codingWorkbenchProviderTimeoutMs,
   executeWithRetry,
   providerRequestBudgetMs,
   providerRetryConfig,
@@ -99,6 +100,8 @@ export interface GatewayDeps {
 // this one.
 export interface GatewayCallRequest extends GatewayRequest {
   readonly logContext?: ModelGatewayLogContext | undefined;
+  /** A closed local profile; never serialized into a provider request body. */
+  readonly latencyProfile?: "coding-workbench" | undefined;
 }
 
 // The two ids a single gateway call carries.
@@ -774,7 +777,7 @@ export class Gateway {
   }
 
   async chat(request: GatewayCallRequest): Promise<NormalizedResponse> {
-    const route = this.route(request.modelId, request.logContext?.correlationId);
+    const route = this.routeForCall(request);
     request = this.prepareRequest(request, route.capability);
     const breaker = this.breakerFor(route.provider);
     const requestId = randomUUID();
@@ -931,7 +934,7 @@ export class Gateway {
   // already-emitted tokens. An adapter without a streaming variant falls back to a
   // single delta+done synthesised from its buffered call().
   async *chatStream(request: GatewayCallRequest): AsyncGenerator<GatewayStreamChunk> {
-    const route = this.route(request.modelId, request.logContext?.correlationId);
+    const route = this.routeForCall(request);
     request = this.prepareRequest(request, route.capability);
     const breaker = this.breakerFor(route.provider);
     const ids = callIds(randomUUID(), request);
@@ -1314,6 +1317,18 @@ export class Gateway {
       );
     }
     return { provider, capability };
+  }
+
+  private routeForCall(request: GatewayCallRequest): RoutedCall {
+    const route = this.route(request.modelId, request.logContext?.correlationId);
+    if (request.latencyProfile !== "coding-workbench") return route;
+    return {
+      ...route,
+      provider: {
+        ...route.provider,
+        timeoutMs: codingWorkbenchProviderTimeoutMs(route.provider.timeoutMs),
+      },
+    };
   }
 
   private breakerFor(provider: ModelProviderConfig): CircuitBreaker {

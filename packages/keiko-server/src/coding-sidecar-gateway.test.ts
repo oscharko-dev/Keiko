@@ -1956,6 +1956,13 @@ describe("coding-sidecar gateway", () => {
     }
   });
 
+  it("keeps a slow Coding Workbench turn alive past a 30-second provider spike", () => {
+    const slow = provider({ timeoutMs: 30_000, maxRetries: 0 });
+    expect(
+      codingSidecarGatewayRequestDeadlineMs(configValue(slow, capability()), slow.modelId),
+    ).toBe(91_000);
+  });
+
   // A timer armed with more than 2^31 - 1 ms fires at once: a budget that large must not turn the
   // route's backstop into an immediate abort (PR #3452 review).
   it("keeps the route deadline inside what a timer can hold", () => {
@@ -1970,25 +1977,16 @@ describe("coding-sidecar gateway", () => {
     expect(providerRequestBudgetMs(vast)).toBe(MAX_TIMER_DELAY_MS);
   });
 
-  it("bounds an unconfigured model like a default provider that never retries", () => {
+  it("bounds an unconfigured model before it can enter the Workbench provider path", () => {
     const unconfigured = configValue(provider(), capability());
-    const defaultProvider = provider({
-      modelId: "unconfigured-model",
-      timeoutMs: 30_000,
-      maxRetries: 0,
-    });
-    expect(codingSidecarGatewayRequestDeadlineMs(unconfigured, "unconfigured-model")).toBe(
-      codingSidecarGatewayRequestDeadlineMs(
-        configValue(defaultProvider, capability()),
-        "unconfigured-model",
-      ),
-    );
+    expect(codingSidecarGatewayRequestDeadlineMs(unconfigured, "unconfigured-model")).toBe(31_000);
   });
 
   // Run 23 (2026-09-11), end to end through the route and the real gateway: the first attempt hangs
   // until its own timeout, and the call must be retried instead of ending GATEWAY_CANCELLED.
   it("lets the gateway retry an attempt that hung to its timeout instead of cancelling the call", async () => {
     resetGatewayInstanceCacheForTests();
+    vi.useFakeTimers();
     let calls = 0;
     vi.stubGlobal(
       "fetch",
@@ -2020,7 +2018,7 @@ describe("coding-sidecar gateway", () => {
       config: configValue(provider({ timeoutMs: 50, retryBaseDelayMs: 1 }), capability()),
     } as UiHandlerDeps;
     try {
-      const result = await handleCodingSidecarGatewayChatCompletions(
+      const pending = handleCodingSidecarGatewayChatCompletions(
         authenticatedContext({
           model: "coding",
           messages: [{ role: "user", content: "continue" }],
@@ -2028,11 +2026,14 @@ describe("coding-sidecar gateway", () => {
         }),
         deps,
       );
+      await vi.advanceTimersByTimeAsync(90_050);
+      const result = await pending;
       assertRouteResult(result);
       expect(result.status).toBe(200);
       expect(calls).toBe(2);
     } finally {
       vi.unstubAllGlobals();
+      vi.useRealTimers();
       resetGatewayInstanceCacheForTests();
     }
   });
@@ -2113,6 +2114,10 @@ describe("coding-sidecar gateway", () => {
   });
 
   it("passes the sidecar deadline through to an in-flight provider call", async () => {
+    const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockImplementation((ms) => nativeTimeout(ms === 91_000 ? 10 : ms));
     let seenSignal: AbortSignal | undefined;
     let observeAbort: (() => void) | undefined;
     const providerAborted = new Promise<void>((resolve) => {
@@ -2141,18 +2146,21 @@ describe("coding-sidecar gateway", () => {
       config: configValue(provider({ timeoutMs: 10, maxRetries: 0 }), capability()),
     } as UiHandlerDeps;
 
-    const result = await handleCodingSidecarGatewayChatCompletions(
-      authenticatedContext({
-        model: "coding",
-        messages: [{ role: "user", content: "deadline" }],
-        tools: modelVisibleTools(),
-      }),
-      deps,
-    );
-
-    await expect(providerAborted).resolves.toBeUndefined();
-    expect(result).toMatchObject({ status: 503 });
-    expect(seenSignal?.aborted).toBe(true);
+    try {
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: "deadline" }],
+          tools: modelVisibleTools(),
+        }),
+        deps,
+      );
+      await expect(providerAborted).resolves.toBeUndefined();
+      expect(result).toMatchObject({ status: 503 });
+      expect(seenSignal?.aborted).toBe(true);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 
   it("rejects buffered responses that exceed completion-token or UTF-8 output bounds", async () => {

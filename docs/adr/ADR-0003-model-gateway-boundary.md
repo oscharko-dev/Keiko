@@ -561,6 +561,13 @@ coding sidecar route adds a grace so the gateway settles its own timeout first. 
 `timeoutMs` reached the retry loop as the budget of the whole call, so an attempt that hung to its
 timeout left no budget and a `TimeoutError` was never retried (coding run 23).
 
+The Coding Workbench uses a local `coding-workbench` latency profile on its sidecar gateway calls.
+That profile raises a provider attempt below 90 seconds to 90 seconds, including the buffered
+stream's silence bound; a larger configured timeout is retained. The sidecar route derives its
+backstop from the same effective timeout. Other gateway callers, including retrieval and indexing,
+retain their configured provider timeout. The gateway's body-free call-started line records the
+effective `timeoutMs` so a slow self-hosted provider can be distinguished from a hung turn.
+
 **Circuit breaker.** One `CircuitBreaker` instance per `(modelId, baseUrl)` pair, keyed in a `Map`.
 States:
 

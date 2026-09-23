@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { createServer } from "node:http";
+import { setTimeout as delay } from "node:timers/promises";
 import { apiKeyHeaderValue } from "../../packages/keiko-model-gateway/dist/index.js";
 
 export const CUSTOMER_SHAPE_MODEL = "gemma-4-31b-it";
@@ -105,8 +106,12 @@ async function handleTwinChat(request, response, requests, behavior) {
       sendJson(response, { error: { code: "unsupported_parameter" } }, 400);
       return;
     }
-    if (body.stream === true) answerStream(response, body);
-    else answerBuffered(response, body);
+    if (body.stream === true) {
+      if (behavior.acceptedStreamDelayMs > 0 && forcedToolName(body) === undefined) {
+        await delay(behavior.acceptedStreamDelayMs);
+      }
+      answerStream(response, body);
+    } else answerBuffered(response, body);
   } catch {
     sendJson(response, { error: { type: "invalid_request_error" } }, 400);
   }
@@ -146,7 +151,7 @@ function handleTwinRequest(request, response, requests, behavior) {
 
 export async function startCustomerShapeLiteLlmTwin() {
   const requests = [];
-  const behavior = { rejectAllStreams: false };
+  const behavior = { rejectAllStreams: false, acceptedStreamDelayMs: 0 };
   const server = createServer((request, response) =>
     handleTwinRequest(request, response, requests, behavior),
   );
@@ -161,6 +166,9 @@ export async function startCustomerShapeLiteLlmTwin() {
     requests,
     rejectAllStreaming: () => {
       behavior.rejectAllStreams = true;
+    },
+    delayAcceptedStreamingBy: (milliseconds) => {
+      behavior.acceptedStreamDelayMs = milliseconds;
     },
     close: () =>
       new Promise((resolve, reject) =>
