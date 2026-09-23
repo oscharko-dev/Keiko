@@ -1047,6 +1047,9 @@ one hop and includes every line with that child request correlation, including p
 and diagnostics that do not repeat the parent field. Direct request lookup remains available;
 the analyzer does not infer relationships from message or error text. Request validation and
 rejection retain the same request-to-run edge for causal queries.
+The shared `unknown-correlation-id` fallback is not a unique child request identity: a run query
+includes only fallback records that individually name that run as parent, so unrelated failures
+cannot contaminate its timeline. Direct fallback-id lookup still shows all such records.
 `chat.request.dispatch` records the
 stream usage flag and tool count before the provider call; a strict OpenAI-compatible proxy's
 one-time retry without `stream_options` records `chat.request.compatibility-retry`. These lines

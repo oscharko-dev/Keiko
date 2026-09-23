@@ -50,6 +50,7 @@ import {
   ACTIVITY_LOG_COMPATIBILITY_STATES,
   ACTIVITY_LOG_REGISTRY_VERSION,
   ACTIVITY_LOG_SCHEMA_DIGEST,
+  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   ACTIVITY_LOG_WRITER_CAPABILITY_STATES,
   ActivityLogEventValidationError,
   activityLogOperationSchema,
@@ -781,9 +782,18 @@ function expandedParentGroup(
   const expanded = [...(direct.get(parent) ?? [])];
   const seen = new Set(expanded);
   // One line establishes the request-to-run edge; other lines with that request ID may carry
-  // no parent field. Include the whole child timeline while keeping its direct lookup intact.
+  // no parent field. Include the whole uniquely identified child timeline while keeping its
+  // direct lookup intact. The shared fallback ID requires record-level parent evidence.
   for (const child of linked) {
     for (const record of direct.get(child) ?? []) {
+      // The fallback correlation is shared by unrelated requests. Only an explicit parent
+      // on that individual record proves it belongs to this run.
+      if (
+        child === ACTIVITY_LOG_UNKNOWN_CORRELATION_ID &&
+        record.view.parentCorrelationId !== parent
+      ) {
+        continue;
+      }
       if (seen.has(record)) continue;
       expanded.push(record);
       seen.add(record);

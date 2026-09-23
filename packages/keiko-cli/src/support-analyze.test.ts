@@ -9,6 +9,7 @@ import {
   ACTIVITY_LOG_CATALOG_DIGEST,
   ACTIVITY_LOG_REGISTRY_VERSION,
   ACTIVITY_LOG_SCHEMA_DIGEST,
+  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   activityLogLossCounters,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
@@ -1715,6 +1716,37 @@ describe("findTimeline", () => {
       "coding-sidecar.gateway.turn-failed",
     ]);
     expect(findTimeline(result, "request-1")?.lines).toHaveLength(4);
+  });
+
+  it("does not attach unrelated unknown-correlation events to a linked run", () => {
+    const serialized = [
+      line({
+        ts: T0,
+        category: "coding",
+        op: "coding-runtime.run.started",
+        correlationId: "run-1",
+      }),
+      line({
+        ts: T1,
+        category: "model",
+        op: "coding-sidecar.gateway.turn-failed",
+        correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+        parentCorrelationId: "run-1",
+      }),
+      line({
+        ts: T2,
+        category: "diagnostic",
+        op: "server.diagnostic.failure",
+        correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+      }),
+    ].join("\n");
+    const result = analyzeLogText(`${serialized}\n`);
+
+    expect(findTimeline(result, "run-1")?.lines.map((entry) => entry.op)).toEqual([
+      "coding-runtime.run.started",
+      "coding-sidecar.gateway.turn-failed",
+    ]);
+    expect(findTimeline(result, ACTIVITY_LOG_UNKNOWN_CORRELATION_ID)?.lines).toHaveLength(2);
   });
 });
 
