@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "754c96d36e2173116cc3caeeba30a0377b5ac6925987b3f395de58c4d6121e16"
+    "catalogDigest": "76255d44f99ed054367dc8077e080de11ee51493835b8c771b4c8ffd47fe42f5"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -1502,7 +1502,8 @@
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"
     ],
     "gateway.stream.failed.emitted-line": [
-      "packages/keiko-model-gateway/src/gateway.logging.test.ts"
+      "packages/keiko-model-gateway/src/gateway.logging.test.ts",
+      "packages/keiko-model-gateway/src/openai-adapter.compat.test.ts"
     ],
     "gateway.stream.started.emitted-line": [
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"

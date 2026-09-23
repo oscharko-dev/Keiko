@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Gateway } from "./gateway.js";
 import { OpenAiAdapter, resetChatCompatibilityMemoForTests } from "./openai-adapter.js";
 import { gatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
@@ -202,6 +203,64 @@ describe("OpenAI-compatible chat compatibility", () => {
     await expect(consume()).rejects.toMatchObject({ code: "GATEWAY_MODEL_REFUSAL" });
     expect(bodies).toHaveLength(1);
   });
+
+  it.each(["absent", "null"] as const)(
+    "does not resend a message-only policy refusal with %s parameter metadata",
+    async (metadata) => {
+      const bodies: Record<string, unknown>[] = [];
+      const events: ModelGatewayLogEvent[] = [];
+      const correlationId = `run-policy-${metadata}`;
+      const gateway = new Gateway(
+        {
+          providers: [CONFIG],
+          circuitBreaker: { failureThreshold: 3, cooldownMs: 1000, halfOpenProbes: 1 },
+        },
+        {
+          fetchImpl: (_url, init): Promise<Response> => {
+            const body = requestBody(init);
+            bodies.push(body);
+            return Promise.resolve(
+              "stream_options" in body
+                ? new Response(
+                    JSON.stringify({
+                      error: {
+                        ...(metadata === "null" ? { param: null } : {}),
+                        message: "Prompt text containing stream_options violates policy",
+                      },
+                    }),
+                    { status: 400 },
+                  )
+                : streamedAnswer(),
+            );
+          },
+          log: { write: (event): void => void events.push(event) },
+        },
+      );
+      const consume = async (): Promise<void> => {
+        for await (const _chunk of gateway.chatStream({
+          modelId: CONFIG.modelId,
+          messages: [{ role: "user", content: "Synthetic prompt" }],
+          logContext: { correlationId },
+        })) {
+          // A refused turn cannot produce a response chunk.
+        }
+      };
+      await expect(consume()).rejects.toMatchObject({ code: "GATEWAY_MODEL_REFUSAL" });
+      expect(bodies).toHaveLength(1);
+      expect(events.some((event) => event.op === "chat.request.compatibility-retry")).toBe(false);
+      const failure = events.find((event) => event.op === "gateway.stream.failed");
+      if (failure === undefined) throw new Error("missing gateway stream failure line");
+      expect(failure).toMatchObject({
+        correlationId,
+        errorKind: "permission-denied",
+        extra: { chunkCount: 0, afterFirstChunk: false, streaming: true },
+      });
+      expectActivityLogProof(
+        "gateway.stream.failed.emitted-line",
+        formatActivityLogProofLine(failure),
+      );
+    },
+  );
 
   it("stops after one compatibility retry when the minimal request also fails", async () => {
     const bodies: Record<string, unknown>[] = [];

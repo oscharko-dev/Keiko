@@ -771,9 +771,17 @@ function isModelRefusal(payload: unknown): boolean {
 
 function isOptionalStreamFieldRejection(payload: unknown): boolean {
   const error = isRecord(payload) && isRecord(payload.error) ? payload.error : payload;
-  const param = isRecord(error) && typeof error.param === "string" ? error.param : "";
-  return /stream[_ -]?options|include[_ -]?usage/.test(
-    `${errorSignal(payload)} ${param}`.toLowerCase(),
+  if (!isRecord(error)) return false;
+  const field = /stream[_ -]?options|include[_ -]?usage/;
+  if (typeof error.param === "string" && field.test(error.param.toLowerCase())) return true;
+  const message = typeof error.message === "string" ? error.message.toLowerCase() : "";
+  return (
+    /(?:stream[_ -]?options|include[_ -]?usage).{0,48}(?:disabled|unsupported|not supported|not allowed|not permitted|unrecognized|unknown|invalid|prohibited|rejected)/.test(
+      message,
+    ) ||
+    /(?:unsupported|unknown|unrecognized|invalid|prohibited|rejected).{0,48}(?:stream[_ -]?options|include[_ -]?usage)/.test(
+      message,
+    )
   );
 }
 
