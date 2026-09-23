@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "31f79c06df8ea2237eb28f3760f41efaa86e2367030e8be99a7276d72a0e3694",
+    "catalogDigest": "0b72f7974e58ad9ac62c8ef59770259e72bc1cfbcca4a591dab6ff119dcd816a",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1034,7 +1034,7 @@
         "proofIds": ["chat.request.compatibility-retry.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:116",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:1499"]
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:1517"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1207,7 +1207,7 @@
         "proofIds": ["chat.response.streamed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:174",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:1354"]
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:1372"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -70539,25 +70539,25 @@
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/support-analyze.ts:1184",
+      "site": "packages/keiko-cli/src/support-analyze.ts:1220",
       "package": "keiko-cli"
     },
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/support-analyze.ts:1528",
+      "site": "packages/keiko-cli/src/support-analyze.ts:1564",
       "package": "keiko-cli"
     },
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/support-analyze.ts:2042",
+      "site": "packages/keiko-cli/src/support-analyze.ts:2078",
       "package": "keiko-cli"
     },
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/support-analyze.ts:2051",
+      "site": "packages/keiko-cli/src/support-analyze.ts:2087",
       "package": "keiko-cli"
     },
     {
@@ -71397,7 +71397,7 @@
     {
       "op": "<dynamic>",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:1433",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:1451",
       "package": "keiko-model-gateway"
     },
     {

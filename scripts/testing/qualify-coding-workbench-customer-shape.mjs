@@ -146,7 +146,7 @@ function assertAnalyzableFailure(project, stateDir, lines, runId) {
   // assertion above separately proves that the failure itself reached the Workbench.
   const evidence = linkedFailureEvidence(lines, runId);
   if (evidence === undefined) throw new Error("failed turn lacks linked installed-build evidence");
-  const { turnFailure, diagnostic } = evidence;
+  const { diagnostic } = evidence;
   const bin = join(project, "node_modules", "@oscharko-dev", "keiko", "dist", "cli", "index.js");
   const bundle = join(project, `failure-support-${randomBytes(8).toString("hex")}.jsonl`);
   run(process.execPath, [bin, "support", "export", "--state-dir", stateDir, "--out", bundle], {
@@ -163,7 +163,7 @@ function assertAnalyzableFailure(project, stateDir, lines, runId) {
   }
   const analyzedRun = run(
     process.execPath,
-    [bin, "support", "analyze", bundle, "--correlation-id", turnFailure.correlationId, "--json"],
+    [bin, "support", "analyze", bundle, "--correlation-id", runId, "--json"],
     { cwd: project },
   );
   if (

@@ -1041,8 +1041,12 @@ The Coding Workbench gateway connects each authenticated request to its run with
 `parentCorrelationId: runId`. An upstream chat or stream failure keeps the request correlation on
 its redacted diagnostic and names the run as parent, so concurrent failed requests remain
 distinguishable. `keiko support analyze --correlation-id <requestId>` retrieves the diagnostic;
-`keiko support analyze --correlation-id <runId>` retrieves the run's closed turn-failure projection.
-Request validation and rejection retain the same request-to-run edge for causal queries.
+`keiko support analyze --correlation-id <runId>` retrieves the run's closed turn-failure projection
+and its linked request timeline. The analyzer follows an explicit `parentCorrelationId` edge for
+one hop and includes every line with that child request correlation, including provider dispatch
+and diagnostics that do not repeat the parent field. Direct request lookup remains available;
+the analyzer does not infer relationships from message or error text. Request validation and
+rejection retain the same request-to-run edge for causal queries.
 `chat.request.dispatch` records the
 stream usage flag and tool count before the provider call; a strict OpenAI-compatible proxy's
 one-time retry without `stream_options` records `chat.request.compatibility-retry`. These lines

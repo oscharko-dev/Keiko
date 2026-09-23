@@ -306,6 +306,37 @@ describe("OpenAI-compatible chat compatibility", () => {
     expect(bodies[1]).not.toHaveProperty("stream_options");
   });
 
+  it.each([
+    "tools parameter is unsupported",
+    "Unsupported parameter: tools",
+    "Parameter 'tool_choice' is not supported",
+  ])("preserves a rejection naming another request field: %s", async (message) => {
+    const bodies: Record<string, unknown>[] = [];
+    const adapter = new OpenAiAdapter({
+      requestId: "different-field-rejected",
+      costClass: "low",
+      fetchImpl: (_url, init): Promise<Response> => {
+        bodies.push(requestBody(init));
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: { code: "unsupported_parameter", message } }), {
+            status: 400,
+          }),
+        );
+      },
+    });
+    const consume = async (): Promise<void> => {
+      for await (const _chunk of adapter.callStream(
+        { modelId: CONFIG.modelId, messages: [{ role: "user", content: "Synthetic prompt" }] },
+        CONFIG,
+      )) {
+        // A rejection naming another field cannot be fixed by omitting stream_options.
+      }
+    };
+
+    await expect(consume()).rejects.toMatchObject({ code: "GATEWAY_PROVIDER_ERROR" });
+    expect(bodies).toHaveLength(1);
+  });
+
   it.each([400, 422])(
     "does not retry an ambiguous HTTP %s rejection without optional-field evidence",
     async (status) => {

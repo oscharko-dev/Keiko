@@ -798,9 +798,27 @@ function isOptionalStreamFieldRejection(payload: unknown): boolean {
 
 function hasNonStreamErrorParameter(payload: unknown): boolean {
   const error = isRecord(payload) && isRecord(payload.error) ? payload.error : payload;
-  if (!isRecord(error) || typeof error.param !== "string") return false;
-  const param = error.param.trim().toLowerCase();
-  return param.length > 0 && !/stream[_ -]?options|include[_ -]?usage/.test(param);
+  if (!isRecord(error)) return false;
+  if (typeof error.param === "string" && isNonStreamField(error.param)) return true;
+  return typeof error.message === "string" && namesDifferentUnsupportedField(error.message);
+}
+
+function isNonStreamField(field: string): boolean {
+  const normalized = field.trim().toLowerCase();
+  return normalized.length > 0 && !/^(?:stream[_ -]?options|include[_ -]?usage)$/.test(normalized);
+}
+
+function namesDifferentUnsupportedField(message: string): boolean {
+  const patterns = [
+    /\b([a-z][a-z0-9_]*)\s+(?:parameter|field)\s+(?:is\s+)?(?:unsupported|not supported|invalid|rejected)\b/g,
+    /\b(?:unsupported|unknown|unrecognized|invalid|rejected)\s+(?:parameter|field)\s*:\s*[`"']?([a-z][a-z0-9_]*)/g,
+    /\b(?:parameter|field)\s+[`"']([a-z][a-z0-9_]*)[`"']\s+(?:is\s+)?(?:unsupported|not supported|invalid|rejected)\b/g,
+  ];
+  return patterns.some((pattern) =>
+    [...message.toLowerCase().matchAll(pattern)].some(
+      (match) => match[1] !== undefined && isNonStreamField(match[1]),
+    ),
+  );
 }
 
 function isStructuredModelRefusal(payload: unknown): boolean {

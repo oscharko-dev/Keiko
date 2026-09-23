@@ -1662,6 +1662,60 @@ describe("findTimeline", () => {
     const result = analyzeLogText(FIXTURE_TEXT);
     expect(findTimeline(result, "does-not-exist")).toBeUndefined();
   });
+
+  it("includes a request's whole timeline when its validated gateway line links it to a run", () => {
+    const serialized = [
+      line({
+        ts: T0,
+        category: "coding",
+        op: "coding-runtime.run.started",
+        correlationId: "run-1",
+      }),
+      line({
+        ts: T1,
+        category: "model",
+        op: "coding-sidecar.gateway.request-validated",
+        correlationId: "request-1",
+        parentCorrelationId: "run-1",
+      }),
+      line({
+        ts: T2,
+        category: "model",
+        op: "chat.request.dispatch",
+        correlationId: "request-1",
+      }),
+      line({
+        ts: T3,
+        category: "diagnostic",
+        op: "server.diagnostic.failure",
+        correlationId: "request-1",
+        errorKind: "GATEWAY_PROVIDER_ERROR",
+      }),
+      line({
+        ts: T3,
+        category: "model",
+        op: "coding-sidecar.gateway.turn-failed",
+        correlationId: "request-1",
+        parentCorrelationId: "run-1",
+      }),
+      line({
+        ts: T3,
+        category: "model",
+        op: "chat.request.dispatch",
+        correlationId: "request-unrelated",
+      }),
+    ].join("\n");
+    const result = analyzeLogText(`${serialized}\n`);
+
+    expect(findTimeline(result, "run-1")?.lines.map((entry) => entry.op)).toEqual([
+      "coding-runtime.run.started",
+      "coding-sidecar.gateway.request-validated",
+      "chat.request.dispatch",
+      "server.diagnostic.failure",
+      "coding-sidecar.gateway.turn-failed",
+    ]);
+    expect(findTimeline(result, "request-1")?.lines).toHaveLength(4);
+  });
 });
 
 describe("analyzeLogText — line-splitting and value-shape edge cases", () => {
