@@ -2129,7 +2129,8 @@ describe("coding-sidecar gateway", () => {
       .map(([entry]) => entry)
       .filter((entry) => entry.source === "coding-sidecar-gateway.stream");
     expect(streamRecords).toHaveLength(1);
-    expect(streamRecords[0]?.correlationId).toBe("run-stream-failure");
+    expect(streamRecords[0]?.correlationId).toBe("sidecar-corr-0001");
+    expect(streamRecords[0]?.parentCorrelationId).toBe("run-stream-failure");
     expect(streamRecords[0]?.errorClass).toBe("Error");
     expect(streamRecords[0]?.code).toBe("GATEWAY_TRANSPORT");
     // Interrupted-turn token counts survive the failure instead of vanishing with the error.
@@ -3473,6 +3474,29 @@ describe("coding-sidecar gateway", () => {
 
 describe("coding sidecar gateway turn failure projection", () => {
   afterEach(resetServerLogger);
+
+  it("keeps concurrent failed requests distinct beneath their shared run", async () => {
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const deps = depsValue(
+      configValue(provider(), capability()),
+      (): (() => Promise<NormalizedResponse>) => (): Promise<NormalizedResponse> =>
+        Promise.reject(new ProviderError("synthetic unavailable", 503)),
+      {},
+      undefined,
+      { diagnostics },
+    );
+    const contexts = ["request-chat-a", "request-chat-b"].map((correlationId): RouteContext => ({
+      ...routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
+      correlationId,
+    }));
+    await Promise.all(
+      contexts.map((context) => handleCodingSidecarGatewayChatCompletions(context, deps)),
+    );
+    expect(diagnostics.record.mock.calls.map(([record]) => record)).toMatchObject([
+      { correlationId: "request-chat-a", parentCorrelationId: "run-gateway-test" },
+      { correlationId: "request-chat-b", parentCorrelationId: "run-gateway-test" },
+    ]);
+  });
 
   it("records a failed SSE projection for an active run when the event hub is unavailable", async () => {
     const sink = captureServerLog("warn");

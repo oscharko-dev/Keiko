@@ -1038,10 +1038,12 @@ Workbench would elect is awaited. A profile read that
 finds nothing to prove writes no automatic record, and its absence is then not a lost call.
 
 The Coding Workbench gateway connects each authenticated request to its run with
-`parentCorrelationId: runId`. An upstream chat or stream failure writes its redacted diagnostic
-under `correlationId: runId` so `keiko support analyze --correlation-id <runId>` retrieves it
-directly; request validation and rejection retain their request correlation and parent edge for
-causal queries. `chat.request.dispatch` records the
+`parentCorrelationId: runId`. An upstream chat or stream failure keeps the request correlation on
+its redacted diagnostic and names the run as parent, so concurrent failed requests remain
+distinguishable. `keiko support analyze --correlation-id <requestId>` retrieves the diagnostic;
+`keiko support analyze --correlation-id <runId>` retrieves the run's closed turn-failure projection.
+Request validation and rejection retain the same request-to-run edge for causal queries.
+`chat.request.dispatch` records the
 stream usage flag and tool count before the provider call; a strict OpenAI-compatible proxy's
 one-time retry without `stream_options` records `chat.request.compatibility-retry`. These lines
 contain counts, status, closed reasons, and digests only. The Workbench receives a separate

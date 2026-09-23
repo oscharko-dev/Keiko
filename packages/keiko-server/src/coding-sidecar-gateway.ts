@@ -1309,11 +1309,26 @@ function validationErrorForChatRequest(
   return undefined;
 }
 
-function emitGatewayFailureDiagnostic(deps: UiHandlerDeps, error: unknown, runId: string): void {
+function gatewayDiagnosticCorrelation(
+  ctx: RouteContext,
+  runId: string,
+): { readonly correlationId: string; readonly parentCorrelationId?: string } {
+  const correlationId = ctx.correlationId ?? runId;
+  return correlationId === runId
+    ? { correlationId }
+    : { correlationId, parentCorrelationId: runId };
+}
+
+function emitGatewayFailureDiagnostic(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  error: unknown,
+  runId: string,
+): void {
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
-      correlationId: runId,
+      ...gatewayDiagnosticCorrelation(ctx, runId),
       operation: CODING_SIDECAR_GATEWAY_ROUTE,
       source: "coding-sidecar-gateway.chat",
       error,
@@ -1384,12 +1399,13 @@ function gatewayStreamFailureCode(
  * A mid-stream failure aborts an in-flight coding turn. Before this the cause went into a bare
  * `catch {}` — the pattern AGENTS.md §7 forbids — leaving `settleGatewayStreamError` to emit the SSE
  * error frame with nothing recorded anywhere, on the coding path. The frame and the run outcome are
- * unchanged; only the redacted cause is added, keyed by the run id and separated from
- * the pre-stream failure by `source` so an operator can tell "the stream never opened" from "the
+ * unchanged; only the redacted cause is added, keyed by the request and linked to its run,
+ * separated from the pre-stream failure by `source` so an operator can tell "the stream never opened" from "the
  * stream died after N deltas". `partialUsage` rides along through `serverDiagnosticFromError`, so an
  * interrupted turn's accumulated token counts stay visible instead of vanishing with the error.
  */
 function emitGatewayStreamFailureDiagnostic(
+  ctx: RouteContext,
   deps: UiHandlerDeps,
   error: unknown,
   runId: string,
@@ -1397,7 +1413,7 @@ function emitGatewayStreamFailureDiagnostic(
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
-      correlationId: runId,
+      ...gatewayDiagnosticCorrelation(ctx, runId),
       operation: CODING_SIDECAR_GATEWAY_ROUTE,
       source: "coding-sidecar-gateway.stream",
       error,
@@ -1982,7 +1998,7 @@ function settleFailedGatewayChat(
   bufferedStream: BufferedOpenAiStreamSession | undefined,
 ): RouteResult | typeof STREAMING {
   recordGatewayOutcome(deps, runId, cancellationSignal.aborted ? "cancelled" : "failed", 0, 0);
-  emitGatewayFailureDiagnostic(deps, error, runId);
+  emitGatewayFailureDiagnostic(ctx, deps, error, runId);
   if (!cancellationSignal.aborted)
     reportGatewayTurnFailure(deps, runId, gatewayTurnFailureCode(error));
   settlePromptTokenReservation(deps, delivery.promptTokenReservation);
@@ -2043,7 +2059,7 @@ async function streamGatewayChat(
     )(request)[Symbol.asyncIterator]();
   } catch (error) {
     recordGatewayOutcome(deps, runId, "failed", 0, 0);
-    emitGatewayFailureDiagnostic(deps, error, runId);
+    emitGatewayFailureDiagnostic(ctx, deps, error, runId);
     reportGatewayTurnFailure(deps, runId, gatewayTurnFailureCode(error));
     settlePromptTokenReservation(deps, promptTokenReservation);
     return unavailableError();
@@ -2072,7 +2088,7 @@ async function pumpGatewayStreamWithCancellation(
   try {
     await pumpGatewayStream(session);
   } catch (error) {
-    emitGatewayStreamFailureDiagnostic(deps, error, session.runId);
+    emitGatewayStreamFailureDiagnostic(session.ctx, deps, error, session.runId);
     if (!session.cancellationSignal.aborted) {
       reportGatewayTurnFailure(deps, session.runId, gatewayStreamFailureCode(error));
     }

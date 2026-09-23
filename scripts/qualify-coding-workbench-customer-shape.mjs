@@ -134,11 +134,23 @@ function activityLines(stateDir) {
 }
 
 function assertAnalyzableFailure(project, stateDir, lines) {
+  // OpenCode may publish its terminal failure first. In that ordering the gateway's additional
+  // turn event is suppressed, and `published: false` is the required causal evidence; the browser
+  // assertion above separately proves that the failure itself reached the Workbench.
+  const turnFailure = lines.find(
+    (line) =>
+      line.op === "coding-sidecar.gateway.turn-failed" &&
+      typeof line.correlationId === "string" &&
+      typeof line.published === "boolean",
+  );
+  if (turnFailure === undefined) {
+    throw new Error("failed turn lacks a correlated Activity Log projection");
+  }
   const diagnostic = lines.find(
     (line) =>
       line.op === "server.diagnostic.failure" &&
       typeof line.correlationId === "string" &&
-      line.correlationId.startsWith("run-") &&
+      line.parentCorrelationId === turnFailure.correlationId &&
       Array.isArray(line.frames) &&
       line.frames.some((frame) => typeof frame === "string" && frame.includes("/dist/")),
   );
@@ -158,6 +170,43 @@ function assertAnalyzableFailure(project, stateDir, lines) {
   const report = JSON.parse(analyzed);
   if (!JSON.stringify(report.lines).includes('"server.diagnostic.failure"')) {
     throw new Error("support analyze omitted the failed turn's correlated diagnostic");
+  }
+  const analyzedRun = run(
+    process.execPath,
+    [bin, "support", "analyze", bundle, "--correlation-id", turnFailure.correlationId, "--json"],
+    { cwd: project },
+  );
+  if (
+    !JSON.stringify(JSON.parse(analyzedRun).lines).includes('"coding-sidecar.gateway.turn-failed"')
+  ) {
+    throw new Error("support analyze omitted the run's turn failure projection");
+  }
+}
+
+async function awaitProjectedTurnFailure(stateDir) {
+  try {
+    await expect
+      .poll(
+        () =>
+          activityLines(stateDir).some(
+            (line) =>
+              line.op === "coding-sidecar.gateway.turn-failed" &&
+              typeof line.published === "boolean",
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(true);
+  } catch {
+    const lines = activityLines(stateDir);
+    const failures = lines.filter((line) => line.op === "coding-sidecar.gateway.turn-failed");
+    const diagnostics = lines.filter((line) => line.op === "server.diagnostic.failure");
+    const starts = lines.filter((line) => line.op === "coding-runtime.run.started");
+    const settlements = lines.filter((line) => line.op === "coding-runtime.run.settled");
+    throw new Error(
+      `turn-failure projection missing: recorded=${failures.length}, ` +
+        `published=${failures.filter((line) => line.published === true).length}, ` +
+        `diagnostics=${diagnostics.length}, starts=${starts.length}, settlements=${settlements.length}`,
+    );
   }
 }
 
@@ -270,6 +319,22 @@ async function runTurn(page, repository, scpRepository, pairingSecret, expectFai
   }
 }
 
+function assertGatewayEvidence(twin, lines) {
+  const operations = new Set(lines.map((line) => line.op));
+  for (const required of [
+    "coding-sidecar.gateway.request-validated",
+    "chat.request.compatibility-retry",
+  ]) {
+    if (!operations.has(required)) throw new Error(`missing Activity Log operation ${required}`);
+  }
+  if (!twin.requests.some((request) => request.stream && request.hasStreamOptions)) {
+    throw new Error("twin did not reject the optional streaming field");
+  }
+  if (!twin.requests.some((request) => request.stream && !request.hasStreamOptions)) {
+    throw new Error("twin did not receive a compatible streaming retry");
+  }
+}
+
 async function qualifyInstalled(
   project,
   stateDir,
@@ -295,20 +360,9 @@ async function qualifyInstalled(
       viewport: { width: 1440, height: 1400 },
     });
     await runTurn(page, repository, scpRepository, pairingSecret, expectFailure);
+    if (expectFailure) await awaitProjectedTurnFailure(stateDir);
     const lines = activityLines(stateDir);
-    const operations = new Set(lines.map((line) => line.op));
-    for (const required of [
-      "coding-sidecar.gateway.request-validated",
-      "chat.request.compatibility-retry",
-    ]) {
-      if (!operations.has(required)) throw new Error(`missing Activity Log operation ${required}`);
-    }
-    if (!twin.requests.some((request) => request.stream && request.hasStreamOptions)) {
-      throw new Error("twin did not reject the optional streaming field");
-    }
-    if (!twin.requests.some((request) => request.stream && !request.hasStreamOptions)) {
-      throw new Error("twin did not receive a compatible streaming retry");
-    }
+    assertGatewayEvidence(twin, lines);
     if (expectFailure) assertAnalyzableFailure(project, stateDir, lines);
   } finally {
     await browser?.close();
