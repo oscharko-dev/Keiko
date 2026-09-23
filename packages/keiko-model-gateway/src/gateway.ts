@@ -35,6 +35,7 @@ import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
 import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
 import {
   CircuitBreaker,
+  codingWorkbenchProviderTimeoutMs,
   executeWithRetry,
   providerRequestBudgetMs,
   providerRetryConfig,
@@ -99,6 +100,8 @@ export interface GatewayDeps {
 // this one.
 export interface GatewayCallRequest extends GatewayRequest {
   readonly logContext?: ModelGatewayLogContext | undefined;
+  /** A closed local profile; never serialized into a provider request body. */
+  readonly latencyProfile?: "coding-workbench" | undefined;
 }
 
 // The two ids a single gateway call carries.
@@ -539,6 +542,7 @@ function recordProviderFailure(
 
 interface RoutedCall {
   readonly provider: ModelProviderConfig;
+  readonly compatibilityMemoScope: ModelProviderConfig;
   readonly capability: ModelCapability;
 }
 
@@ -774,14 +778,14 @@ export class Gateway {
   }
 
   async chat(request: GatewayCallRequest): Promise<NormalizedResponse> {
-    const route = this.route(request.modelId, request.logContext?.correlationId);
+    const route = this.routeForCall(request);
     request = this.prepareRequest(request, route.capability);
     const breaker = this.breakerFor(route.provider);
     const requestId = randomUUID();
     const ids = callIds(requestId, request);
     const start = this.clock.now();
     const elapsed = logTimer();
-    const adapter = this.adapterFor(requestId, route.capability, ids.correlationId);
+    const adapter = this.adapterFor(requestId, route, ids.correlationId);
     const attempt: BufferedChatAttempt = {
       route,
       breaker,
@@ -931,14 +935,14 @@ export class Gateway {
   // already-emitted tokens. An adapter without a streaming variant falls back to a
   // single delta+done synthesised from its buffered call().
   async *chatStream(request: GatewayCallRequest): AsyncGenerator<GatewayStreamChunk> {
-    const route = this.route(request.modelId, request.logContext?.correlationId);
+    const route = this.routeForCall(request);
     request = this.prepareRequest(request, route.capability);
     const breaker = this.breakerFor(route.provider);
     const ids = callIds(randomUUID(), request);
     breaker.assertAllowed(ids.correlationId);
     const start = this.clock.now();
     const elapsed = logTimer();
-    const adapter = this.adapterFor(ids.requestId, route.capability, ids.correlationId);
+    const adapter = this.adapterFor(ids.requestId, route, ids.correlationId);
     this.logCallStarted(ids, route, true, request.reasoningEffort);
     let reservation: GatewaySpendReservation | undefined;
     let chunkCount = 0;
@@ -1313,7 +1317,19 @@ export class Gateway {
         `model '${modelId}' has kind '${capability.kind}'; the chat path requires a chat model`,
       );
     }
-    return { provider, capability };
+    return { provider, compatibilityMemoScope: provider, capability };
+  }
+
+  private routeForCall(request: GatewayCallRequest): RoutedCall {
+    const route = this.route(request.modelId, request.logContext?.correlationId);
+    if (request.latencyProfile !== "coding-workbench") return route;
+    return {
+      ...route,
+      provider: {
+        ...route.provider,
+        timeoutMs: codingWorkbenchProviderTimeoutMs(route.provider.timeoutMs),
+      },
+    };
   }
 
   private breakerFor(provider: ModelProviderConfig): CircuitBreaker {
@@ -1330,16 +1346,13 @@ export class Gateway {
     return breaker;
   }
 
-  private adapterFor(
-    requestId: string,
-    capability: ModelCapability,
-    correlationId: string,
-  ): ProviderAdapter {
+  private adapterFor(requestId: string, route: RoutedCall, correlationId: string): ProviderAdapter {
     return (
       this.adapter ??
       new OpenAiAdapter({
         requestId,
-        costClass: capability.costClass,
+        costClass: route.capability.costClass,
+        compatibilityMemoScope: route.compatibilityMemoScope,
         now: this.clock.now,
         fetchImpl: this.fetchImpl,
         log: this.log,

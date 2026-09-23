@@ -268,6 +268,25 @@ describe("Coding Workbench event retention", () => {
     expect(retained.filter(isPinnedCodingWorkbenchRuntimeEvent)).toHaveLength(2);
   });
 
+  it("retains an active turn failure through a full observation window", () => {
+    const failure = {
+      ...event(1),
+      kind: "runtime-event" as const,
+      eventKind: "failure-redacted" as const,
+      failureCode: "provider-failed" as const,
+    };
+    const retained = retainCodingWorkbenchRuntimeEvents(
+      [failure],
+      Array.from({ length: CODING_WORKBENCH_EVENT_RETENTION_LIMIT }, (_, index) =>
+        observation(index + 2),
+      ),
+    );
+
+    expect(isPinnedCodingWorkbenchRuntimeEvent(failure)).toBe(true);
+    expect(retained).toContainEqual(failure);
+    expect(retained).toHaveLength(CODING_WORKBENCH_EVENT_RETENTION_LIMIT);
+  });
+
   it("deduplicates replayed cursors and preserves monotonic presentation order", () => {
     const retained = retainCodingWorkbenchRuntimeEvents(
       [event(2), event(3)],

@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "6456478ba618114fc4af6640bf37829ebaca27616ce39163b9925f1ced47dc4f"
+    "catalogDigest": "4db02210769394074154dfd3c28c15a9c4afb72f2b99057d33e843703f22d554"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,10 +51,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 447,
-    "proofCount": 455,
-    "resolvedProofCount": 455,
-    "failureClassCount": 316,
+    "operationCount": 451,
+    "proofCount": 459,
+    "resolvedProofCount": 459,
+    "failureClassCount": 317,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -135,6 +135,7 @@
       "owners": ["keiko-model-gateway", "keiko-server"],
       "ports": ["ModelGatewayLogSink", "ServerLogSink"],
       "operations": [
+        "chat.request.compatibility-retry",
         "chat.request.dispatch",
         "chat.response.streamed",
         "embedding.batch.array-unsupported",
@@ -283,10 +284,13 @@
         "coding-runtime.verification",
         "coding-runtime.verification-summarized",
         "coding-runtime.workspace-read",
+        "coding-sidecar.gateway.outcome",
         "coding-sidecar.gateway.readiness-insufficient",
         "coding-sidecar.gateway.rejected",
         "coding-sidecar.gateway.request-validated",
         "coding-sidecar.gateway.tool-availability",
+        "coding-sidecar.gateway.turn-failed",
+        "coding-sidecar.gateway.usage-settled",
         "coding-sidecar.tool-facade.rejected",
         "coding-workbench.issue.previewed",
         "coding-workbench.issue.resolved",
@@ -682,6 +686,7 @@
     "coding-safe-activity-projection": ["tools-workflows.loss"],
     "coding-sidecar-gateway-readiness": ["tools-workflows.dependency-failure"],
     "coding-sidecar-gateway-rejection": ["tools-workflows.rejection"],
+    "coding-sidecar-gateway-turn-failure": ["tools-workflows.dependency-failure"],
     "coding-sidecar-gateway-request": ["tools-workflows.dependency-failure"],
     "coding-sidecar-tool-availability": ["tools-workflows.dependency-failure"],
     "coding-sidecar-tool-facade-rejection": ["tools-workflows.rejection"],
@@ -976,6 +981,9 @@
     ],
     "chat.creation.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
     "chat.regeneration.rejected.reason": ["packages/keiko-server/src/chat-activity.test.ts"],
+    "chat.request.compatibility-retry.emitted-line": [
+      "packages/keiko-model-gateway/src/openai-adapter.compat.test.ts"
+    ],
     "chat.request.dispatch.emitted-line": [
       "packages/keiko-model-gateway/src/openai-adapter.logging.test.ts"
     ],
@@ -1240,6 +1248,9 @@
     "coding-runtime.workspace-read.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.test.ts"
     ],
+    "coding-sidecar.gateway.outcome.line": [
+      "packages/keiko-server/src/coding-sidecar-gateway.test.ts"
+    ],
     "coding-sidecar.gateway.readiness-insufficient.line": [
       "packages/keiko-server/src/coding-sidecar-gateway.test.ts"
     ],
@@ -1250,6 +1261,12 @@
       "packages/keiko-server/src/coding-sidecar-gateway.test.ts"
     ],
     "coding-sidecar.gateway.tool-availability.line": [
+      "packages/keiko-server/src/coding-sidecar-gateway.test.ts"
+    ],
+    "coding-sidecar.gateway.turn-failed.emitted-line": [
+      "packages/keiko-server/src/coding-sidecar-gateway.test.ts"
+    ],
+    "coding-sidecar.gateway.usage-settled.line": [
       "packages/keiko-server/src/coding-sidecar-gateway.test.ts"
     ],
     "coding-sidecar.tool-facade.rejected.line": [
@@ -1485,7 +1502,8 @@
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"
     ],
     "gateway.stream.failed.emitted-line": [
-      "packages/keiko-model-gateway/src/gateway.logging.test.ts"
+      "packages/keiko-model-gateway/src/gateway.logging.test.ts",
+      "packages/keiko-model-gateway/src/openai-adapter.compat.test.ts"
     ],
     "gateway.stream.started.emitted-line": [
       "packages/keiko-model-gateway/src/gateway.logging.test.ts"

@@ -262,6 +262,7 @@ export function eventDetail(
   event: CodingWorkbenchRuntimeSseEvent,
   t: CodingWorkbenchTranslate,
 ): string {
+  const turnFailure = turnFailureDetail(event, t);
   const base = event.failureCode
     ? t("codingWorkbench.event.detailFailure", {
         sequence: event.sequence,
@@ -269,9 +270,23 @@ export function eventDetail(
         failure: event.failureCode,
       })
     : t("codingWorkbench.event.detail", { sequence: event.sequence, revision: event.revision });
-  return [base, eventOutcomeDetail(event, t), eventContentTrustDetail(event, t)]
+  return [base, turnFailure, eventOutcomeDetail(event, t), eventContentTrustDetail(event, t)]
     .filter((part) => part.length > 0)
     .join(" ");
+}
+
+function turnFailureDetail(
+  event: CodingWorkbenchRuntimeSseEvent,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (event.kind !== "runtime-event" || event.eventKind !== "failure-redacted") return "";
+  if (event.failureCode === "provider-failed")
+    return t("codingWorkbench.event.turnFailure.provider-failed");
+  if (event.failureCode === "stream-incomplete")
+    return t("codingWorkbench.event.turnFailure.stream-incomplete");
+  if (event.failureCode === "turn-rejected")
+    return t("codingWorkbench.event.turnFailure.turn-rejected");
+  return "";
 }
 
 // #2637: an accepted research read handed quarantined public-page text to the run. The operator has

@@ -967,6 +967,12 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.failure-redacted": "Fehler gemeldet",
   "codingWorkbench.event.detail": "Seq. {sequence} · Rev. {revision}",
   "codingWorkbench.event.detailFailure": "Seq. {sequence} · Rev. {revision} · Fehler: {failure}",
+  "codingWorkbench.event.turnFailure.provider-failed":
+    "Der Modellanbieter hat diesen Schritt abgelehnt. Prüfe Gateway-Konfiguration und Bereitschaft des gewählten Modells und versuche es erneut.",
+  "codingWorkbench.event.turnFailure.stream-incomplete":
+    "Der Antwort-Stream des Modells endete vor Abschluss des Schritts. Prüfe die Verbindung zum Anbieter und versuche es erneut.",
+  "codingWorkbench.event.turnFailure.turn-rejected":
+    "Das Modell oder eine Schutzprüfung der Workbench hat diesen Schritt abgelehnt. Prüfe die Gateway- und Berechtigungsdiagnose des Runs und passe Modell, Aufgabe oder Berechtigungen vor einem erneuten Versuch an.",
   "codingWorkbench.event.detailOutcome": "Ergebnis: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Nicht vertrauenswürdiger Inhalt: Die abgerufene Seite wurde als Daten isoliert, nicht als Anweisungen.",

@@ -96,6 +96,13 @@ const CHAT_REQUEST_DISPATCH_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
     },
+    streamUsageRequested: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: false,
+    },
+    // Historical chat.request.dispatch lines predate this diagnostic; old bundles remain readable.
+    toolCount: { type: "integer", dataClass: "count", required: false },
     readBudgetMs: { type: "number", dataClass: "duration", required: false },
   },
   causal: "correlation",
@@ -105,6 +112,64 @@ const CHAT_REQUEST_DISPATCH_OPERATION = defineActivityLogOperation({
   proofIds: ["chat.request.dispatch.emitted-line"],
   releaseImpact: "patch",
 });
+
+const CHAT_REQUEST_COMPATIBILITY_RETRY_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "chat.request.compatibility-retry",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "openai-adapter.dispatchCompatibleStream",
+  fields: {
+    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    omittedField: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["stream_options"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-chat-provider-call"],
+  proofIds: ["chat.request.compatibility-retry.emitted-line"],
+  releaseImpact: "patch",
+});
+
+// A provider config object already carries the credential identity. Weak keys keep the memo scoped
+// to that config without deriving, storing, or logging any digest of its secret material.
+let strictStreamOptionsEndpoints = new WeakMap<object, Map<string, number>>();
+const MAX_STRICT_STREAM_OPTIONS_ENDPOINTS = 256;
+const STRICT_STREAM_OPTIONS_REPROBE_MS = 15 * 60_000;
+
+function hasStrictStreamOptionsMemo(scope: object, url: string, now: () => number): boolean {
+  const endpoints = strictStreamOptionsEndpoints.get(scope);
+  const expiresAt = endpoints?.get(url);
+  if (expiresAt === undefined) return false;
+  if (expiresAt > now()) return true;
+  endpoints?.delete(url);
+  return false;
+}
+
+function rememberStrictStreamOptionsEndpoint(scope: object, url: string, now: number): void {
+  let endpoints = strictStreamOptionsEndpoints.get(scope);
+  if (endpoints === undefined) {
+    endpoints = new Map<string, number>();
+    strictStreamOptionsEndpoints.set(scope, endpoints);
+  }
+  if (endpoints.has(url)) endpoints.delete(url);
+  if (endpoints.size >= MAX_STRICT_STREAM_OPTIONS_ENDPOINTS) {
+    const oldest = endpoints.keys().next().value;
+    if (oldest !== undefined) endpoints.delete(oldest);
+  }
+  endpoints.set(url, now + STRICT_STREAM_OPTIONS_REPROBE_MS);
+}
+
+export function resetChatCompatibilityMemoForTests(): void {
+  strictStreamOptionsEndpoints = new WeakMap<object, Map<string, number>>();
+}
 
 const CHAT_RESPONSE_STREAMED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -155,6 +220,8 @@ export interface AdapterDeps {
   readonly fetchImpl?: typeof fetch | undefined;
   readonly requestId: string;
   readonly costClass: CostClass;
+  /** Stable, credential-scoped provider identity before per-call timeout copies are made. */
+  readonly compatibilityMemoScope?: object | undefined;
   readonly now?: (() => number) | undefined;
   // Activity-log sink (ADR-0019: a local port, see `observability.ts`). Unset means no-op.
   readonly log?: ModelGatewayLogSink | undefined;
@@ -179,6 +246,8 @@ interface ChatDispatchFields {
   // A read with bounds (ADR-0003): `timeoutMs` is then its silence bound, `readBudgetMs` its budget.
   readonly timeoutMs: number;
   readonly stream: boolean;
+  readonly streamUsageRequested?: boolean;
+  readonly toolCount: number;
   readonly readBudgetMs?: number;
 }
 
@@ -200,6 +269,28 @@ function logChatDispatch(log: ModelGatewayLogSink, fields: ChatDispatchFields): 
       fields,
     ),
   );
+}
+
+function chatDispatchFields(
+  url: string,
+  request: ProviderGatewayRequest,
+  config: ModelProviderConfig,
+  body: string,
+  stream: boolean,
+  includeUsage: boolean,
+  bounds?: StreamReadBounds,
+): ChatDispatchFields {
+  return {
+    endpointDigest: sha256Hex(logEndpointHost(url) ?? "invalid-endpoint"),
+    modelId: logModelId(config.modelId),
+    messageCount: request.messages.length,
+    bodyBytes: Buffer.byteLength(body, "utf8"),
+    timeoutMs: bounds?.silenceMs ?? config.timeoutMs,
+    stream,
+    ...(stream ? { streamUsageRequested: includeUsage } : {}),
+    toolCount: request.tools?.length ?? 0,
+    ...(bounds === undefined ? {} : { readBudgetMs: bounds.budgetMs }),
+  };
 }
 
 function cancellationWasDeadline(signal: AbortSignal | undefined): boolean {
@@ -388,11 +479,12 @@ export const STREAM_IDLE_TIMEOUT_MS = 60_000;
 function buildStreamBody(
   request: ProviderGatewayRequest,
   config: ModelProviderConfig,
+  includeUsage: boolean,
 ): ChatRequestBody {
   return {
     ...buildBody(request, config),
     stream: true,
-    stream_options: { include_usage: true },
+    ...(includeUsage ? { stream_options: { include_usage: true } } : {}),
   };
 }
 
@@ -681,8 +773,99 @@ function isContextOverflow(status: number, payload: unknown): boolean {
   return CONTEXT_OVERFLOW_SIGNAL.test(errorSignal(payload));
 }
 
+const MODEL_REFUSAL_SIGNAL = /content[_ -]?filter|refus|safety|policy/;
+
 function isModelRefusal(payload: unknown): boolean {
-  return /content[_ -]?filter|refus|safety|policy/.test(errorSignal(payload));
+  return MODEL_REFUSAL_SIGNAL.test(errorSignal(payload));
+}
+
+function isOptionalStreamFieldRejection(payload: unknown): boolean {
+  const error = isRecord(payload) && isRecord(payload.error) ? payload.error : payload;
+  if (!isRecord(error)) return false;
+  const field = /stream[_ -]?options|include[_ -]?usage/;
+  if (typeof error.param === "string" && field.test(error.param.toLowerCase())) return true;
+  if (error.code === "unsupported_parameter" || error.type === "unsupported_parameter") return true;
+  const message = typeof error.message === "string" ? error.message.toLowerCase() : "";
+  return (
+    /(?:stream[_ -]?options|include[_ -]?usage).{0,48}(?:disabled|unsupported|not supported|not allowed|not permitted|unrecognized|unknown|invalid|prohibited|rejected)/.test(
+      message,
+    ) ||
+    /(?:unsupported|unknown|unrecognized|invalid|prohibited|rejected).{0,48}(?:stream[_ -]?options|include[_ -]?usage)/.test(
+      message,
+    )
+  );
+}
+
+function hasNonStreamErrorParameter(payload: unknown): boolean {
+  const error = isRecord(payload) && isRecord(payload.error) ? payload.error : payload;
+  if (!isRecord(error)) return false;
+  if (typeof error.param === "string" && isNonStreamField(error.param)) return true;
+  return typeof error.message === "string" && namesDifferentUnsupportedField(error.message);
+}
+
+function isNonStreamField(field: string): boolean {
+  const normalized = field.trim().toLowerCase();
+  return (
+    normalized.length > 0 &&
+    !/^(?:stream[_ -]?options(?:\.[a-z][a-z0-9_]*)*|include[_ -]?usage)$/.test(normalized)
+  );
+}
+
+function namesDifferentUnsupportedField(message: string): boolean {
+  const patterns = [
+    /\b([a-z][a-z0-9_]*)\s+(?:parameter|field)\s+(?:is\s+)?(?:unsupported|not supported|invalid|rejected)\b/g,
+    /\b(?:unsupported|unknown|unrecognized|invalid|rejected)\s+(?:parameter|field)\s*:\s*[`"']?([a-z][a-z0-9_]*)/g,
+    /\b(?:parameter|field)\s+[`"']([a-z][a-z0-9_]*)[`"']\s+(?:is\s+)?(?:unsupported|not supported|invalid|rejected)\b/g,
+  ];
+  return patterns.some((pattern) =>
+    [...message.toLowerCase().matchAll(pattern)].some(
+      (match) => match[1] !== undefined && isNonStreamField(match[1]),
+    ),
+  );
+}
+
+function isStructuredModelRefusal(payload: unknown): boolean {
+  const error = isRecord(payload) && isRecord(payload.error) ? payload.error : payload;
+  if (!isRecord(error)) return false;
+  return [error.code, error.type].some(
+    (value) => typeof value === "string" && MODEL_REFUSAL_SIGNAL.test(value.toLowerCase()),
+  );
+}
+
+function isContentRefusalMessage(payload: unknown): boolean {
+  const error = isRecord(payload) && isRecord(payload.error) ? payload.error : payload;
+  if (!isRecord(error) || typeof error.message !== "string") return false;
+  // A refusal can quote the request field without rejecting that field's shape.
+  return /\bprompt\b|content[_ -]?filter|\bsafety\b|\brefus(?:al|ed|es|ing)\b/.test(
+    error.message.toLowerCase(),
+  );
+}
+
+function isStrictChatShapeRejection(status: number): boolean {
+  return status === 400 || status === 422;
+}
+
+function shouldPreserveProviderRejection(status: number, payload: unknown): boolean {
+  return (
+    isContextOverflow(status, payload) ||
+    hasNonStreamErrorParameter(payload) ||
+    (isModelRefusal(payload) &&
+      (isStructuredModelRefusal(payload) || isContentRefusalMessage(payload))) ||
+    !isOptionalStreamFieldRejection(payload)
+  );
+}
+
+function remainingCompatibilityBudgetMs(
+  bounds: StreamReadBounds | undefined,
+  startedAt: number,
+  now: () => number,
+  config: ModelProviderConfig,
+  secrets: readonly string[],
+): number {
+  const budgetMs = (bounds?.budgetMs ?? config.timeoutMs) - Math.max(0, now() - startedAt);
+  if (budgetMs <= 0)
+    throw new TimeoutError(`provider retry budget expired for '${config.modelId}'`, secrets);
+  return budgetMs;
 }
 
 function mapHttpError(
@@ -803,6 +986,7 @@ interface StreamAccumulator {
   content: string;
   refusal: string;
   finishReason: FinishReason;
+  sawFinishReason: boolean;
   prompt: number;
   completion: number;
   // The provider's own usage record, kept as it came, so the streamed answer is normalized exactly
@@ -816,6 +1000,7 @@ function newStreamAccumulator(): StreamAccumulator {
     content: "",
     refusal: "",
     finishReason: "stop",
+    sawFinishReason: false,
     prompt: 0,
     completion: 0,
     usage: undefined,
@@ -919,7 +1104,10 @@ function streamReadFields(
 // in-flight response accumulator, when present.
 function applyChunkMetadata(chunk: unknown, acc: StreamAccumulator): void {
   const finish = finishReasonFromChunk(chunk);
-  if (finish !== undefined) acc.finishReason = finish;
+  if (finish !== undefined) {
+    acc.finishReason = finish;
+    acc.sawFinishReason = true;
+  }
   const usage = usageFromChunk(chunk);
   if (usage !== undefined && isRecord(chunk) && isRecord(chunk.usage)) {
     acc.prompt = usage.prompt;
@@ -1011,11 +1199,10 @@ export class OpenAiAdapter implements ProviderAdapter {
     }
     const start = this.now();
     const catalog = createGatewayToolCatalogBridge(request, this.now, this.log);
-    const dispatched = await this.dispatch(
+    const dispatched = await this.dispatchCompatibleStream(
       { ...request, tools: catalog.tools.length === 0 ? undefined : catalog.tools },
       config,
       secrets,
-      true,
       bounds,
     );
     try {
@@ -1055,8 +1242,11 @@ export class OpenAiAdapter implements ProviderAdapter {
     const buffer = { pending: "" };
     const activeSecrets = configuredSecrets(read.secrets);
     const silenceMs = read.bounds?.silenceMs ?? STREAM_IDLE_TIMEOUT_MS;
+    const completion = { sawDone: false };
     try {
-      for await (const chunk of readSseStream(response, undefined, silenceMs, read.signal)) {
+      for await (const chunk of readSseStream(response, undefined, silenceMs, read.signal, () => {
+        completion.sawDone = true;
+      })) {
         recordDataEvent(report);
         throwOnStreamedFailure(chunk, read.config.modelId, read.secrets);
         const content = deltaFromChunk(chunk);
@@ -1064,6 +1254,14 @@ export class OpenAiAdapter implements ProviderAdapter {
           yield* emitRedactedDelta(content, buffer, activeSecrets, read.secrets, acc);
         }
         applyChunkMetadata(chunk, acc);
+      }
+      // An explicit provider refusal must retain its refusal class even if the stream then closes.
+      if (!completion.sawDone && !acc.sawFinishReason && acc.refusal.length === 0) {
+        throw new ProviderError(
+          "provider stream ended without a terminal frame",
+          PROVIDER_EMPTY_ASSISTANT_STATUS,
+          read.secrets,
+        );
       }
       yield* flushPendingBuffer(buffer, read.secrets);
     } catch (error) {
@@ -1243,24 +1441,20 @@ export class OpenAiAdapter implements ProviderAdapter {
     secrets: readonly string[],
     stream = false,
     bounds?: StreamReadBounds,
+    includeUsage = true,
   ): Promise<DispatchedResponse> {
     const url = chatCompletionsUrl(config);
     const body = JSON.stringify(
-      stream ? buildStreamBody(request, config) : buildBody(request, config),
+      stream ? buildStreamBody(request, config, includeUsage) : buildBody(request, config),
     );
     const headers = {
       "content-type": "application/json",
       ...apiKeyHeaders(config),
     };
-    logChatDispatch(this.log, {
-      endpointDigest: sha256Hex(logEndpointHost(url) ?? "invalid-endpoint"),
-      modelId: logModelId(config.modelId),
-      messageCount: request.messages.length,
-      bodyBytes: Buffer.byteLength(body, "utf8"),
-      timeoutMs: bounds?.silenceMs ?? config.timeoutMs,
-      stream,
-      ...(bounds === undefined ? {} : { readBudgetMs: bounds.budgetMs }),
-    });
+    logChatDispatch(
+      this.log,
+      chatDispatchFields(url, request, config, body, stream, includeUsage, bounds),
+    );
     const deadline = requestDeadline(config.timeoutMs, bounds, request.cancellationSignal);
     try {
       const response = await gatewayFetch(url, {
@@ -1278,6 +1472,61 @@ export class OpenAiAdapter implements ProviderAdapter {
       deadline.dispose();
       throw this.mapDispatchError(error, config, deadline.signal, secrets);
     }
+  }
+
+  private async dispatchCompatibleStream(
+    request: ProviderGatewayRequest,
+    config: ModelProviderConfig,
+    secrets: readonly string[],
+    bounds?: StreamReadBounds,
+  ): Promise<DispatchedResponse> {
+    const url = chatCompletionsUrl(config);
+    const startedAt = Date.now();
+    const memoScope = this.deps.compatibilityMemoScope ?? config;
+    const includeUsage = !hasStrictStreamOptionsMemo(memoScope, url, this.now);
+    const first = await this.dispatch(request, config, secrets, true, bounds, includeUsage);
+    if (first.response.ok || !includeUsage || !isStrictChatShapeRejection(first.response.status)) {
+      return first;
+    }
+    try {
+      const payload = await this.readErrorBody(first.response, config, secrets, first.signal);
+      if (shouldPreserveProviderRejection(first.response.status, payload)) {
+        mapHttpError(first.response, config.modelId, secrets, payload);
+      }
+    } finally {
+      first.dispose();
+    }
+    const remainingMs = remainingCompatibilityBudgetMs(
+      bounds,
+      startedAt,
+      Date.now,
+      config,
+      secrets,
+    );
+    const retryBounds = bounds === undefined ? undefined : { ...bounds, budgetMs: remainingMs };
+    const retryConfig = bounds === undefined ? { ...config, timeoutMs: remainingMs } : config;
+    this.logChatCompatibilityRetry(url, config, first.response.status);
+    const retry = await this.dispatch(request, retryConfig, secrets, true, retryBounds, false);
+    if (retry.response.ok) rememberStrictStreamOptionsEndpoint(memoScope, url, this.now());
+    return retry;
+  }
+
+  private logChatCompatibilityRetry(
+    url: string,
+    config: ModelProviderConfig,
+    status: number,
+  ): void {
+    this.log.write(
+      activityLogEvent(
+        CHAT_REQUEST_COMPATIBILITY_RETRY_OPERATION,
+        { level: "warn", status, correlationId: logCorrelationId(this.log) },
+        {
+          endpointDigest: sha256Hex(logEndpointHost(url) ?? "invalid-endpoint"),
+          modelId: logModelId(config.modelId),
+          omittedField: "stream_options",
+        },
+      ),
+    );
   }
 
   private mapDispatchError(

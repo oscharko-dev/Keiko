@@ -65,6 +65,28 @@ const REQUEST: GatewayRequest = {
 };
 
 describe("Gateway.chat", () => {
+  it("allows a slow Coding Workbench provider without changing ordinary chat timeouts", async () => {
+    const timeouts: number[] = [];
+    const gateway = new Gateway(config([provider({ maxRetries: 0 })]), {
+      clock: createScriptedGatewayClock(),
+      adapter: fakeAdapter((_request, cfg) => {
+        timeouts.push(cfg.timeoutMs);
+        return Promise.resolve(okResponse(cfg.modelId));
+      }),
+    });
+    await gateway.chat(REQUEST);
+    await gateway.chat({ ...REQUEST, latencyProfile: "coding-workbench" });
+    const longConfigured = new Gateway(config([provider({ timeoutMs: 120_000, maxRetries: 0 })]), {
+      clock: createScriptedGatewayClock(),
+      adapter: fakeAdapter((_request, cfg) => {
+        timeouts.push(cfg.timeoutMs);
+        return Promise.resolve(okResponse(cfg.modelId));
+      }),
+    });
+    await longConfigured.chat({ ...REQUEST, latencyProfile: "coding-workbench" });
+    expect(timeouts).toStrictEqual([30_000, 90_000, 120_000]);
+  });
+
   it("returns a response with a UUID v4 request id and exact deterministic latency", async () => {
     // Bespoke on purpose: this pins an exact now()-call-count sequence
     // (createScriptedGatewayClock's now() never advances merely by being read, so it cannot
@@ -371,6 +393,22 @@ function streamingAdapter(tokens: readonly string[]): ProviderAdapter {
 }
 
 describe("Gateway.chatStream", () => {
+  it("uses the Workbench latency floor only for marked streaming calls", async () => {
+    const timeouts: number[] = [];
+    const adapter: ProviderAdapter = {
+      call: (_request, cfg) => Promise.resolve(okResponse(cfg.modelId)),
+      callStream: async function* (_request, cfg): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        timeouts.push(cfg.timeoutMs);
+        yield { type: "done", response: okResponse(cfg.modelId) };
+      },
+    };
+    const gateway = new Gateway(config([provider({ maxRetries: 0 })]), { adapter });
+    await collectStream(gateway.chatStream(REQUEST));
+    await collectStream(gateway.chatStream({ ...REQUEST, latencyProfile: "coding-workbench" }));
+    expect(timeouts).toStrictEqual([30_000, 90_000]);
+  });
+
   it("yields ordered deltas then a done chunk enriched with a UUID requestId and costClass", async () => {
     const gateway = new Gateway(config([provider()]), {
       adapter: streamingAdapter(["Hel", "lo"]),

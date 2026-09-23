@@ -297,6 +297,16 @@ The checks run with signing credentials removed before payload execution. A qual
 produce evidence but cannot publish or widen a manifest. Assembly still requires all four exact
 targets from one commit and one successful stable-tag workflow.
 
+**Amended 2026-09-23 — customer-shape Workbench publish gate (#3594).** The npm publish job
+stages the candidate package, installs it in a clean Yarn 4.9.1 project, starts its packaged CLI,
+and drives a browser Workbench turn in **Ask for approval** against a synthetic repository with a
+non-GitHub origin. A local LiteLLM/vLLM twin rejects optional streaming usage metadata with HTTP
+400 and emits `content: null`, keep-alive comments, and no usage in its answer stream. Publishing
+requires a visible assistant answer and body-free activity evidence for request validation and
+the bounded compatibility retry. The twin carries no customer data or credentials. This gate
+checks the published package path in addition to the target-specific portable activation checks;
+it does not grant runtime authority or change the approved OpenCode payload.
+
 ### D9 — One explicitly declared, unsigned evaluation lane may activate
 
 Keiko ships a portable EVALUATION build in which the bundled OpenCode sidecar actually runs without

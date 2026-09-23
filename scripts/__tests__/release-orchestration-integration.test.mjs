@@ -137,6 +137,6 @@ describe("release orchestration integration (#3548, ADR-0177 D9)", () => {
     expect(start.action).toBe("dispatch");
     expect(authorized).toMatchObject({ runAttempt: 1, runId: 42 });
     expect(release.on).toStrictEqual({ workflow_dispatch: null });
-    expect(release.jobs.publish.needs).toBe("authorize");
+    expect(release.jobs.publish.needs).toStrictEqual(["authorize", "qualify-customer-shape"]);
   });
 });

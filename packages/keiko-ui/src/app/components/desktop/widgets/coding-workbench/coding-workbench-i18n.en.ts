@@ -933,6 +933,12 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.failure-redacted": "Failure reported",
   "codingWorkbench.event.detail": "Seq. {sequence} · Rev. {revision}",
   "codingWorkbench.event.detailFailure": "Seq. {sequence} · Rev. {revision} · Failure: {failure}",
+  "codingWorkbench.event.turnFailure.provider-failed":
+    "The model provider rejected this turn. Check the selected model's gateway configuration and readiness, then retry.",
+  "codingWorkbench.event.turnFailure.stream-incomplete":
+    "The model response stream stopped before the turn completed. Check provider connectivity and retry.",
+  "codingWorkbench.event.turnFailure.turn-rejected":
+    "The model or a Workbench guard rejected this turn. Check the run's gateway and authority diagnostics for the cause, then adjust the model, task, or permissions before retrying.",
   "codingWorkbench.event.detailOutcome": "Outcome: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Untrusted content: the fetched page was quarantined as data, not instructions.",

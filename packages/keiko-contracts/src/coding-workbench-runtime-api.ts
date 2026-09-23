@@ -35,7 +35,9 @@ import {
   type CodingWorkbenchRuntimeFailureCode,
   type CodingWorkbenchRuntimeStateName,
 } from "./coding-workbench-runtime.js";
+import type { CodingWorkbenchTurnFailureCode } from "./coding-workbench-runtime-constants.js";
 import { MODEL_REASONING_EFFORTS, type ModelReasoningEffort } from "./gateway.js";
+export type { CodingWorkbenchTurnFailureCode } from "./coding-workbench-runtime-constants.js";
 import { validateCodingWorkbenchIssueBinding } from "./coding-workbench-issue-binding.js";
 export { CODING_WORKBENCH_ISSUE_NUMBER_MAX } from "./coding-workbench-issue-binding.js";
 import { GITHUB_ISSUE_REFERENCE_MAX_CHARS } from "./github-issue-reference.js";
@@ -354,7 +356,8 @@ export type CodingWorkbenchRuntimeSseEvent =
       readonly state: CodingWorkbenchRuntimeStateName;
       readonly revision: number;
       readonly eventKind: CodingWorkbenchRuntimeEventKind;
-      readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+      readonly failureCode?:
+        CodingWorkbenchRuntimeFailureCode | CodingWorkbenchTurnFailureCode | undefined;
       /**
        * The normalized #2387 outcome for a research-performed / skill-invoked / child-run-* frame.
        * `limit-reached` and `stopped` stay distinct from `denied` so the timeline never mislabels an

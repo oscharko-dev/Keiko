@@ -27,9 +27,11 @@ export function exactKeys(
   allowed: readonly string[],
   path: string,
 ): string[] {
-  return Object.keys(value)
-    .filter((key) => !allowed.includes(key))
-    .map((key) => `${path}.${key} is not allowed`);
+  const errors: string[] = [];
+  for (const key of Object.keys(value)) {
+    if (!allowed.includes(key)) errors.push(`${path}.${key} is not allowed`);
+  }
+  return errors;
 }
 
 export function result<T>(value: unknown, errors: string[]): CodingWorkbenchValidationResult<T> {
@@ -66,14 +68,11 @@ export function validateUntrustedDisplayText(
 }
 
 export function validateStrictUtcInstant(value: unknown, path: string, errors: string[]): void {
-  const parsed = typeof value === "string" ? Date.parse(value) : Number.NaN;
-  const normalized =
-    typeof value === "string" && !value.includes(".") ? `${value.slice(0, -1)}.000Z` : value;
   if (
     typeof value !== "string" ||
     !STRICT_UTC_INSTANT.test(value) ||
-    Number.isNaN(parsed) ||
-    new Date(parsed).toISOString() !== normalized
+    Number.isNaN(Date.parse(value)) ||
+    new Date(value).toISOString() !== (value.includes(".") ? value : `${value.slice(0, -1)}.000Z`)
   ) {
     errors.push(`${path} must be a strict UTC instant`);
   }
@@ -133,7 +132,14 @@ function validateSseOptionalEnums(value: Record<string, unknown>, errors: string
   validateSseContentTrust(value, errors);
   if (
     value.failureCode !== undefined &&
-    !isOneOf(value.failureCode, CODING_WORKBENCH_RUNTIME_FAILURE_CODES)
+    !isOneOf(value.failureCode, CODING_WORKBENCH_RUNTIME_FAILURE_CODES) &&
+    // Non-runtime frames cannot carry eventKind; exactKeys rejects them.
+    !(
+      value.eventKind === "failure-redacted" &&
+      (value.failureCode === "provider-failed" ||
+        value.failureCode === "stream-incomplete" ||
+        value.failureCode === "turn-rejected")
+    )
   ) {
     errors.push("failureCode is invalid");
   }

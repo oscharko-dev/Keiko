@@ -101,6 +101,10 @@ export type CodingWorkbenchRuntimeFailureCode =
   | "model-unavailable"
   | "workspace-unqualified";
 
+/** Redacted per-turn gateway causes. These are SSE-only, not durable run failure states. */
+export type CodingWorkbenchTurnFailureCode =
+  "provider-failed" | "stream-incomplete" | "turn-rejected";
+
 export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRuntimeFailureCode[] =
   Object.freeze([
     "runtime-unavailable",

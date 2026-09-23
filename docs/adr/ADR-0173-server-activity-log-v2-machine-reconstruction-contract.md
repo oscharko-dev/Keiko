@@ -1037,6 +1037,51 @@ claim tool calling, never while a subscription source is selected, and only the 
 Workbench would elect is awaited. A profile read that
 finds nothing to prove writes no automatic record, and its absence is then not a lost call.
 
+The Coding Workbench gateway connects each authenticated request to its run with
+`parentCorrelationId: runId`. An upstream chat or stream failure keeps the request correlation on
+its redacted diagnostic and names the run as parent, so concurrent failed requests remain
+distinguishable. `keiko support analyze --correlation-id <requestId>` retrieves the diagnostic;
+`keiko support analyze --correlation-id <runId>` retrieves the run's closed turn-failure projection
+and its linked request timeline. The analyzer follows an explicit `parentCorrelationId` edge for
+one hop and includes every line with that child request correlation, including provider dispatch
+and diagnostics that do not repeat the parent field. Direct request lookup remains available;
+the analyzer does not infer relationships from message or error text. Request validation and
+rejection retain the same request-to-run edge for causal queries.
+The shared `unknown-correlation-id` fallback is not a unique child request identity: a run query
+includes only fallback records that individually name that run as parent, so unrelated failures
+cannot contaminate its timeline. Direct fallback-id lookup still shows all such records.
+Before ranking process lifetimes, the expanded run timeline restores original file order across
+run and request records; otherwise a parent-first join can reverse the first-seen lifetime order.
+`chat.request.dispatch` records the
+stream usage flag and tool count before the provider call; a strict OpenAI-compatible proxy's
+one-time retry without `stream_options` records `chat.request.compatibility-retry`. These lines
+contain counts, status, closed reasons, and digests only. The Workbench receives a separate
+`failure-redacted` SSE event with a closed gateway-turn cause while the runtime is still active;
+the event carries no provider response body or customer content. Each gateway turn failure,
+including another failed model request at the same task revision, writes
+`coding-sidecar.gateway.turn-failed` with the closed failure code, request correlation, run parent,
+revision, state, and a closed publication reason (published, unavailable hub, terminal run, invalid
+event, exhausted sequence, or capacity pressure). A revision is a task-state version, not a turn identifier, so
+it must not suppress later turn failures.
+On completed buffered and streamed requests, `coding-sidecar.gateway.usage-settled` records the count and
+closed source (`provider-reported`, `streamed-byte-estimate`, or `output-byte-estimate`) beneath
+the request correlation and run parent. A positive provider count takes precedence over a byte
+estimate; a response without usage derives a count from streamed content or terminal tool output.
+Mixed text and tool output uses the complete output-byte estimate.
+The same usage line records the prompt-token count used for authority accounting and its closed
+source (`provider-reported` or `reserved-estimate`); absent or zero provider prompt usage
+retains the pre-call reservation. Its closed settlement status distinguishes a successful authority
+reconciliation from a reservation retained after an authority refusal, an unverified result, or a
+deployment without a settlement port. A refused or unverified settlement reports the retained
+reservation rather than the provider count requested by the caller.
+`coding-sidecar.gateway.outcome`
+records the closed accepted, cancelled, failed, or output-limit result under that same request and
+run correlation; streamed acceptance is recorded after the terminal frame is written. These records
+contain request and run correlations, counts, closed states, and the source, without message bodies.
+Generic provider policy refusals remain terminal; an error
+that identifies the optional `stream_options` or `include_usage` field may take the one-time
+compatibility retry.
+
 ### D14 — Bounded immutable segments under the OS-user filesystem boundary
 
 The Activity Log is one logical log stored as immutable segments in one closed-grammar directory,

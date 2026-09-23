@@ -1010,7 +1010,7 @@
 }
 
 .approvalFact dt {
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   font-size: var(--text-caption);
   font-weight: var(--weight-semibold);
 }

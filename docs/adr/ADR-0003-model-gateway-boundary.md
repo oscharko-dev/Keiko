@@ -534,6 +534,12 @@ failure (502), so a terminal failure is never generated again. The read releases
 body on every exit, also when its consumer stops early. The streamed answer runs through the same
 normalization as a whole body, and an endpoint that answers a streamed request with
 `application/json` is read as that whole body.
+An SSE answer counts as complete only after a recognized `finish_reason` or the `data: [DONE]`
+marker. If the connection closes after deltas without either signal, the adapter raises a typed
+provider error instead of turning the partial text into a successful assistant reply. An unknown
+finish reason can still complete when the proxy sends `[DONE]`. An explicit refusal delta retains
+its refusal classification on early close instead of being masked by the generic incomplete-stream
+error.
 Coding run 30 (2026-09-11): two gpt-5.4 generations of 4.8k to 5.9k output tokens at 27 to 45
 tokens per second were cut off at 120 s and generated a second time; Azure answered both with
 HTTP 200.
@@ -560,6 +566,13 @@ coding sidecar route adds a grace so the gateway settles its own timeout first. 
 `timeoutMs`, with `STREAM_IDLE_TIMEOUT_MS` (60 s) as the longest wait for its next data event. Until PR #3452 (2026-09-11) the provider's
 `timeoutMs` reached the retry loop as the budget of the whole call, so an attempt that hung to its
 timeout left no budget and a `TimeoutError` was never retried (coding run 23).
+
+The Coding Workbench uses a local `coding-workbench` latency profile on its sidecar gateway calls.
+That profile raises a provider attempt below 90 seconds to 90 seconds, including the buffered
+stream's silence bound; a larger configured timeout is retained. The sidecar route derives its
+backstop from the same effective timeout. Other gateway callers, including retrieval and indexing,
+retain their configured provider timeout. The gateway's body-free call-started line records the
+effective `timeoutMs` so a slow self-hosted provider can be distinguished from a hung turn.
 
 **Circuit breaker.** One `CircuitBreaker` instance per `(modelId, baseUrl)` pair, keyed in a `Map`.
 States:

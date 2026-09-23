@@ -484,9 +484,11 @@ describe("CI test/gate wiring guard", () => {
     // ADR-0178 adds one Node lane: `verified-tree`, the resolver that answers whether this exact
     // tree was already proven green. It sets up Node 24 and verifies the governed toolchain like
     // every other lane, so `verificationCount === nodeSetupCount` below still holds.
-    expect(node24SetupCount).toBe(30);
+    // Issue #3594 adds the required customer-shape qualification job to the release workflow.
+    // It uses the same pinned Node 24 setup and toolchain verification before staging the package.
+    expect(node24SetupCount).toBe(31);
     expect(node26SetupCount).toBe(1);
-    expect(nodeSetupCount).toBe(31);
+    expect(nodeSetupCount).toBe(32);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
     expect(ci).toContain("NODE_26_COMPATIBILITY_RESULT");

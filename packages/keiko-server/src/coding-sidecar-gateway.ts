@@ -1,4 +1,14 @@
 import { gatewaySpendRejectionReason } from "./gateway-spend-budget.js";
+import {
+  AuthenticationError,
+  CircuitOpenError,
+  ContextOverflowError,
+  ModelRefusalError,
+  ProviderError,
+  RateLimitError,
+  TimeoutError,
+  TransportError,
+} from "@oscharko-dev/keiko-security/errors/gateway";
 import { createHash, randomUUID } from "node:crypto";
 import {
   findConfiguredCapability,
@@ -16,7 +26,10 @@ import {
   countGatewayPromptTokens,
   type ModelTokenAccounting,
 } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
-import { providerRequestBudgetMs } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
+import {
+  codingWorkbenchProviderTimeoutMs,
+  providerRequestBudgetMs,
+} from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import { MAX_TIMER_DELAY_MS } from "./abort-race.js";
 import type {
   CodingWorkbenchModelSource,
@@ -27,6 +40,10 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import type {
+  CodingWorkbenchRuntimeSnapshot,
+  CodingWorkbenchTurnFailureCode,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import {
   activityLogEvent,
   defineActivityLogOperation,
@@ -100,6 +117,24 @@ interface PromptTokenReservation {
   readonly capability: string;
   readonly reservedPromptTokens: number;
   settled: boolean;
+  settlement?: PromptTokenSettlement;
+}
+
+interface PromptTokenSettlement {
+  readonly promptTokens: number;
+  readonly source: "provider-reported" | "reserved-estimate";
+  readonly status: "settled" | "retained-after-refusal" | "unverified" | "not-wired";
+}
+
+function observedPromptSettlement(
+  outcome: unknown,
+  selected: PromptTokenSettlement,
+  unverified: PromptTokenSettlement,
+): PromptTokenSettlement {
+  if (!isRecord(outcome)) return unverified;
+  if (outcome.ok === true) return selected;
+  if (outcome.ok === false) return { ...unverified, status: "retained-after-refusal" };
+  return unverified;
 }
 
 /**
@@ -114,14 +149,37 @@ function settlePromptTokenReservation(
   deps: UiHandlerDeps,
   reservation: PromptTokenReservation,
   actualPromptTokens?: number,
-): void {
-  if (reservation.settled) return;
+): PromptTokenSettlement {
+  if (reservation.settled) {
+    if (reservation.settlement === undefined) throw new TypeError("missing prompt settlement");
+    return reservation.settlement;
+  }
   reservation.settled = true;
-  runtimeCapabilityAuthenticator(deps)?.settlePromptTokens?.(
+  const providerReported = actualPromptTokens !== undefined && actualPromptTokens > 0;
+  const promptTokens = providerReported ? actualPromptTokens : reservation.reservedPromptTokens;
+  const unverified: PromptTokenSettlement = {
+    promptTokens: reservation.reservedPromptTokens,
+    source: "reserved-estimate",
+    status: "unverified",
+  };
+  const selected: PromptTokenSettlement = {
+    promptTokens,
+    source: providerReported ? "provider-reported" : "reserved-estimate",
+    status: "settled",
+  };
+  reservation.settlement = unverified;
+  const authenticator = runtimeCapabilityAuthenticator(deps);
+  if (authenticator?.settlePromptTokens === undefined) {
+    reservation.settlement = { ...selected, status: "not-wired" };
+    return reservation.settlement;
+  }
+  const outcome = authenticator.settlePromptTokens(
     reservation.capability,
     reservation.reservedPromptTokens,
-    actualPromptTokens ?? reservation.reservedPromptTokens,
+    promptTokens,
   );
+  reservation.settlement = observedPromptSettlement(outcome, selected, unverified);
+  return reservation.settlement;
 }
 
 const CODING_SIDECAR_GATEWAY_ERROR_CODE = "CODING_SIDECAR_UNAVAILABLE";
@@ -325,6 +383,122 @@ const CODING_SIDECAR_GATEWAY_REJECTED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.gateway.turn-failed",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-gateway.reportGatewayTurnFailure",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    revision: { type: "integer", dataClass: "count", required: true },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["running", "paused"],
+    },
+    failureCode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["provider-failed", "stream-incomplete", "turn-rejected"],
+    },
+    published: { type: "boolean", dataClass: "closed-enum", required: true },
+    publicationReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "published",
+        "event-hub-unavailable",
+        "terminal-run",
+        "invalid-event",
+        "sequence-exhausted",
+        "capacity-pressure",
+      ],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-sidecar-gateway-turn-failure"],
+  proofIds: ["coding-sidecar.gateway.turn-failed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_SIDECAR_GATEWAY_USAGE_SETTLED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.gateway.usage-settled",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-gateway.logGatewayCompletionUsage",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    completionTokens: { type: "integer", dataClass: "count", required: true },
+    promptTokens: { type: "integer", dataClass: "count", required: true },
+    promptSource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["provider-reported", "reserved-estimate"],
+    },
+    promptSettlementStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["settled", "retained-after-refusal", "unverified", "not-wired"],
+    },
+    outputBytes: { type: "integer", dataClass: "count", required: true },
+    source: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["provider-reported", "streamed-byte-estimate", "output-byte-estimate"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-sidecar-gateway-request"],
+  proofIds: ["coding-sidecar.gateway.usage-settled.line"],
+  releaseImpact: "patch",
+});
+
+const CODING_SIDECAR_GATEWAY_OUTCOME_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.gateway.outcome",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-gateway.recordGatewayOutcome",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["accepted", "cancelled", "failed", "output-limit"],
+    },
+    completionTokens: { type: "integer", dataClass: "count", required: true },
+    outputBytes: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-sidecar-gateway-request"],
+  proofIds: ["coding-sidecar.gateway.outcome.line"],
+  releaseImpact: "patch",
+});
+
 type GatewayRejectionEvidence = Partial<{
   readonly expectedToolCount: number;
   readonly receivedToolCount: number;
@@ -375,6 +549,7 @@ function logGatewayRejection(
       CODING_SIDECAR_GATEWAY_REJECTED_OPERATION,
       {
         correlationId: correlationIdOrUnknown(ctx.correlationId),
+        ...(runId === undefined ? {} : { parentCorrelationId: runId }),
         status,
         errorKind: gatewayRejectionErrorKind(reason),
       },
@@ -614,13 +789,15 @@ function chatFactoryFor(deps: UiHandlerDeps, gateway: Gateway): CodingSidecarGat
 
 function defaultChatFactoryFor(gateway: Gateway): CodingSidecarGatewayChatFactory {
   return (_config, modelId) => {
-    return (request: GatewayRequest) => gateway.chat({ ...request, modelId });
+    return (request: GatewayRequest) =>
+      gateway.chat({ ...request, modelId, latencyProfile: "coding-workbench" });
   };
 }
 
 function defaultChatStreamFactoryFor(gateway: Gateway): CodingSidecarGatewayChatStreamFactory {
   return (_config, modelId) => {
-    return (request: GatewayRequest) => gateway.chatStream({ ...request, modelId });
+    return (request: GatewayRequest) =>
+      gateway.chatStream({ ...request, modelId, latencyProfile: "coding-workbench" });
   };
 }
 
@@ -1094,12 +1271,20 @@ function emitGatewayEvidenceAggregationDiagnostic(deps: UiHandlerDeps, runId: st
 }
 
 function recordGatewayOutcome(
+  ctx: RouteContext,
   deps: UiHandlerDeps,
   runId: string,
   outcome: CodingSidecarGatewayRunOutcome,
   completionTokens: number,
   outputBytes: number,
 ): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CODING_SIDECAR_GATEWAY_OUTCOME_OPERATION,
+      { correlationId: correlationIdOrUnknown(ctx.correlationId), parentCorrelationId: runId },
+      { runId, outcome, completionTokens, outputBytes, completeness: "complete", loss: "none" },
+    ),
+  );
   try {
     void Promise.resolve(
       evidenceAggregator(deps)?.record({ runId, outcome, completionTokens, outputBytes }),
@@ -1264,15 +1449,26 @@ function validationErrorForChatRequest(
   return undefined;
 }
 
+function gatewayDiagnosticCorrelation(
+  ctx: RouteContext,
+  runId: string,
+): { readonly correlationId: string; readonly parentCorrelationId?: string } {
+  const correlationId = ctx.correlationId ?? runId;
+  return correlationId === runId
+    ? { correlationId }
+    : { correlationId, parentCorrelationId: runId };
+}
+
 function emitGatewayFailureDiagnostic(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   error: unknown,
+  runId: string,
 ): void {
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
-      correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+      ...gatewayDiagnosticCorrelation(ctx, runId),
       operation: CODING_SIDECAR_GATEWAY_ROUTE,
       source: "coding-sidecar-gateway.chat",
       error,
@@ -1281,12 +1477,115 @@ function emitGatewayFailureDiagnostic(
   );
 }
 
+function reportGatewayTurnFailure(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  runId: string,
+  failureCode: CodingWorkbenchTurnFailureCode,
+): void {
+  const snapshot = deps.codingRuntimeOrchestrator?.getSnapshot(runId);
+  if (snapshot?.state !== "running" && snapshot?.state !== "paused") return;
+  const publicationReason = gatewayTurnFailurePublication(deps, runId, snapshot, failureCode);
+  logGatewayTurnFailure(
+    ctx,
+    runId,
+    snapshot.revision,
+    snapshot.state,
+    failureCode,
+    publicationReason,
+  );
+}
+
+type GatewayFailurePublicationReason =
+  | "published"
+  | "event-hub-unavailable"
+  | "invalid-event"
+  | "sequence-exhausted"
+  | "capacity-pressure"
+  | "terminal-run";
+
+function gatewayTurnFailurePublication(
+  deps: UiHandlerDeps,
+  runId: string,
+  snapshot: CodingWorkbenchRuntimeSnapshot,
+  failureCode: CodingWorkbenchTurnFailureCode,
+): GatewayFailurePublicationReason {
+  const publication = deps.codingRuntimeEventHub?.publishTurnFailure(
+    runId,
+    snapshot.state,
+    snapshot.revision,
+    failureCode,
+  );
+  const publicationReason =
+    publication?.ok === true ? "published" : (publication?.reason ?? "event-hub-unavailable");
+  return publicationReason;
+}
+
+function logGatewayTurnFailure(
+  ctx: RouteContext,
+  runId: string,
+  revision: number,
+  state: "running" | "paused",
+  failureCode: CodingWorkbenchTurnFailureCode,
+  publicationReason: GatewayFailurePublicationReason,
+): void {
+  getServerLogger().warn(
+    activityLogEvent(
+      CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION,
+      {
+        ...gatewayDiagnosticCorrelation(ctx, runId),
+        errorKind: failureCode === "turn-rejected" ? "validation-failed" : "unavailable",
+      },
+      {
+        runId,
+        revision,
+        state,
+        failureCode,
+        published: publicationReason === "published",
+        publicationReason,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+function gatewayTurnFailureCode(
+  error: unknown,
+): "provider-failed" | "stream-incomplete" | "turn-rejected" {
+  if (error instanceof ContextOverflowError || error instanceof ModelRefusalError)
+    return "turn-rejected";
+  if (
+    error instanceof TimeoutError ||
+    error instanceof TransportError ||
+    (error instanceof ProviderError && error.httpStatus === 200)
+  )
+    return "stream-incomplete";
+  return "provider-failed";
+}
+
+function gatewayStreamFailureCode(
+  error: unknown,
+): "provider-failed" | "stream-incomplete" | "turn-rejected" {
+  if (gatewaySpendRejectionReason(error) !== undefined) return "turn-rejected";
+  if (error instanceof ContextOverflowError || error instanceof ModelRefusalError)
+    return "turn-rejected";
+  if (
+    error instanceof AuthenticationError ||
+    error instanceof RateLimitError ||
+    error instanceof CircuitOpenError ||
+    (error instanceof ProviderError && error.httpStatus !== 200)
+  )
+    return "provider-failed";
+  return "stream-incomplete";
+}
+
 /**
  * A mid-stream failure aborts an in-flight coding turn. Before this the cause went into a bare
  * `catch {}` — the pattern AGENTS.md §7 forbids — leaving `settleGatewayStreamError` to emit the SSE
  * error frame with nothing recorded anywhere, on the coding path. The frame and the run outcome are
- * unchanged; only the redacted cause is added, keyed by the request correlation id and separated from
- * the pre-stream failure by `source` so an operator can tell "the stream never opened" from "the
+ * unchanged; only the redacted cause is added, keyed by the request and linked to its run,
+ * separated from the pre-stream failure by `source` so an operator can tell "the stream never opened" from "the
  * stream died after N deltas". `partialUsage` rides along through `serverDiagnosticFromError`, so an
  * interrupted turn's accumulated token counts stay visible instead of vanishing with the error.
  */
@@ -1294,11 +1593,12 @@ function emitGatewayStreamFailureDiagnostic(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   error: unknown,
+  runId: string,
 ): void {
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
-      correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+      ...gatewayDiagnosticCorrelation(ctx, runId),
       operation: CODING_SIDECAR_GATEWAY_ROUTE,
       source: "coding-sidecar-gateway.stream",
       error,
@@ -1468,6 +1768,7 @@ function emitGatewayToolContractDiagnostic(
   const { code, reason } = toolContractRejectionReason(tools);
   emitServerDiagnostic(deps.diagnostics, {
     correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    parentCorrelationId: runId,
     timestamp: new Date(Date.now()).toISOString(),
     operation: CODING_SIDECAR_GATEWAY_ROUTE,
     source: "coding-sidecar-gateway.tool-contract",
@@ -1476,6 +1777,7 @@ function emitGatewayToolContractDiagnostic(
     code,
   });
   logGatewayRejection(ctx, runId, 403, reason, toolContractMismatch(tools));
+  reportGatewayTurnFailure(ctx, deps, runId, "turn-rejected");
 }
 
 /**
@@ -1662,6 +1964,7 @@ function unavailableGatewayProfile(
     message: "coding-sidecar-gateway-profile-unavailable",
     code: unavailableGatewayProfileCode(resolved, selectedModelId, authentication),
   });
+  reportGatewayTurnFailure(ctx, deps, authentication.runId, "turn-rejected");
   return unavailableError();
 }
 
@@ -1720,7 +2023,13 @@ export function codingSidecarGatewayRequestDeadlineMs(
 ): number {
   const provider = config.providers.find((candidate) => candidate.modelId === modelId);
   // An unconfigured model is refused before any provider call; 30 s only bounds that refusal.
-  const budget = provider === undefined ? 30_000 : providerRequestBudgetMs(provider);
+  const budget =
+    provider === undefined
+      ? 30_000
+      : providerRequestBudgetMs({
+          ...provider,
+          timeoutMs: codingWorkbenchProviderTimeoutMs(provider.timeoutMs),
+        });
   // Armed with AbortSignal.timeout, which fires at once past 2^31 - 1 ms: an absurd budget must not
   // turn the backstop into an immediate abort.
   return Math.min(budget + GATEWAY_ROUTE_DEADLINE_GRACE_MS, MAX_TIMER_DELAY_MS);
@@ -1855,7 +2164,7 @@ async function dispatchGatewayChat(
       return await streamGatewayChat(ctx, dispatch);
     }
     if (parsed.stream) bufferedStream = beginBufferedOpenAiStream(ctx, modelAlias);
-    return await executeBufferedGatewayChat(dispatch, bufferedStream);
+    return await executeBufferedGatewayChat(ctx, dispatch, bufferedStream);
   } catch (error) {
     return settleFailedGatewayChat(
       ctx,
@@ -1879,10 +2188,17 @@ function settleFailedGatewayChat(
   delivery: Pick<GatewayChatDelivery, "promptTokenReservation">,
   bufferedStream: BufferedOpenAiStreamSession | undefined,
 ): RouteResult | typeof STREAMING {
-  recordGatewayOutcome(deps, runId, cancellationSignal.aborted ? "cancelled" : "failed", 0, 0);
-  emitGatewayFailureDiagnostic(ctx, deps, error);
-  settlePromptTokenReservation(deps, delivery.promptTokenReservation);
+  recordGatewayOutcome(ctx, deps, runId, cancellationSignal.aborted ? "cancelled" : "failed", 0, 0);
+  emitGatewayFailureDiagnostic(ctx, deps, error, runId);
   const spendReason = gatewaySpendRejectionReason(error);
+  if (!cancellationSignal.aborted)
+    reportGatewayTurnFailure(
+      ctx,
+      deps,
+      runId,
+      spendReason === undefined ? gatewayTurnFailureCode(error) : "turn-rejected",
+    );
+  settlePromptTokenReservation(deps, delivery.promptTokenReservation);
   if (spendReason !== undefined && bufferedStream === undefined) {
     logGatewayRejection(ctx, runId, 403, spendReason);
     return forbiddenGatewayRequest();
@@ -1893,36 +2209,82 @@ function settleFailedGatewayChat(
 }
 
 async function executeBufferedGatewayChat(
+  ctx: RouteContext,
   dispatch: GatewayChatDispatchContext,
   stream: BufferedOpenAiStreamSession | undefined,
 ): Promise<RouteResult | typeof STREAMING> {
   const { deps, binding, modelAlias, request, runId, cancellationSignal, promptTokenReservation } =
     dispatch;
   const response = await chatFactoryFor(deps, binding.gateway)(binding.config, modelAlias)(request);
-  settlePromptTokenReservation(deps, promptTokenReservation, response.usage.promptTokens);
-  const metrics = outputMetrics(response);
+  const promptSettlement = settlePromptTokenReservation(
+    deps,
+    promptTokenReservation,
+    response.usage.promptTokens,
+  );
+  const output = outputMetrics(response);
+  const usage = completionUsage(response, output.outputBytes, 0);
+  const metrics = { ...output, completionTokens: usage.completionTokens };
+  const settledResponse = {
+    ...response,
+    usage: { ...response.usage, completionTokens: usage.completionTokens },
+  };
+  logGatewayCompletionUsage(ctx, runId, metrics, usage.source, promptSettlement);
+  const record = (outcome: CodingSidecarGatewayRunOutcome): void => {
+    recordGatewayOutcome(ctx, deps, runId, outcome, metrics.completionTokens, metrics.outputBytes);
+  };
   if (cancellationSignal.aborted) {
-    recordGatewayOutcome(deps, runId, "cancelled", metrics.completionTokens, metrics.outputBytes);
+    record("cancelled");
     return stream === undefined
       ? unavailableError()
       : settleBufferedOpenAiStreamError(stream, "error");
   }
   if (exceedsOutputBudget(metrics, request.maxOutputTokens ?? 1)) {
-    recordGatewayOutcome(
-      deps,
-      runId,
-      "output-limit",
-      metrics.completionTokens,
-      metrics.outputBytes,
-    );
+    record("output-limit");
     return stream === undefined
       ? unavailableError()
       : settleBufferedOpenAiStreamError(stream, "length");
   }
-  recordGatewayOutcome(deps, runId, "accepted", metrics.completionTokens, metrics.outputBytes);
-  return stream === undefined
-    ? openAiResponse(modelAlias, response)
-    : completeBufferedOpenAiStream(stream, response);
+  return deliverBufferedGatewayAnswer(
+    ctx,
+    deps,
+    runId,
+    stream,
+    modelAlias,
+    settledResponse,
+    metrics,
+  );
+}
+
+function deliverBufferedGatewayAnswer(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  runId: string,
+  stream: BufferedOpenAiStreamSession | undefined,
+  modelAlias: string,
+  response: NormalizedResponse,
+  metrics: { readonly completionTokens: number; readonly outputBytes: number },
+): RouteResult | typeof STREAMING {
+  if (stream === undefined) {
+    recordGatewayOutcome(
+      ctx,
+      deps,
+      runId,
+      "accepted",
+      metrics.completionTokens,
+      metrics.outputBytes,
+    );
+    return openAiResponse(modelAlias, response);
+  }
+  completeBufferedOpenAiStream(stream, response);
+  recordGatewayOutcome(
+    ctx,
+    deps,
+    runId,
+    ctx.res.writableEnded && !ctx.res.destroyed ? "accepted" : "cancelled",
+    metrics.completionTokens,
+    metrics.outputBytes,
+  );
+  return STREAMING;
 }
 
 // Closed stream state machine keeps iterator, cancellation, and SSE backpressure transitions together.
@@ -1938,14 +2300,15 @@ async function streamGatewayChat(
       modelAlias,
     )(request)[Symbol.asyncIterator]();
   } catch (error) {
-    recordGatewayOutcome(deps, runId, "failed", 0, 0);
-    emitGatewayFailureDiagnostic(ctx, deps, error);
+    recordGatewayOutcome(ctx, deps, runId, "failed", 0, 0);
+    emitGatewayFailureDiagnostic(ctx, deps, error, runId);
+    reportGatewayTurnFailure(ctx, deps, runId, gatewayTurnFailureCode(error));
     settlePromptTokenReservation(deps, promptTokenReservation);
     return unavailableError();
   }
   const session = createGatewayStreamSession(ctx, dispatch, iterator);
   try {
-    if (beginGatewayStream(session)) await pumpGatewayStreamWithCancellation(ctx, deps, session);
+    if (beginGatewayStream(session)) await pumpGatewayStreamWithCancellation(deps, session);
     return STREAMING;
   } finally {
     // Every exit path above returns/throws without necessarily having observed real usage
@@ -1956,7 +2319,6 @@ async function streamGatewayChat(
 }
 
 async function pumpGatewayStreamWithCancellation(
-  ctx: RouteContext,
   deps: UiHandlerDeps,
   session: GatewayStreamSession,
 ): Promise<void> {
@@ -1968,7 +2330,10 @@ async function pumpGatewayStreamWithCancellation(
   try {
     await pumpGatewayStream(session);
   } catch (error) {
-    emitGatewayStreamFailureDiagnostic(ctx, deps, error);
+    emitGatewayStreamFailureDiagnostic(session.ctx, deps, error, session.runId);
+    if (!session.cancellationSignal.aborted) {
+      reportGatewayTurnFailure(session.ctx, deps, session.runId, gatewayStreamFailureCode(error));
+    }
     settleGatewayStreamError(session);
   } finally {
     cancellationSignal.removeEventListener("abort", cancelIterator);
@@ -2040,8 +2405,8 @@ function recordSessionOutcome(
   session: GatewayStreamSession,
   outcome: CodingSidecarGatewayRunOutcome,
 ): void {
-  const { deps, runId, metrics } = session;
-  recordGatewayOutcome(deps, runId, outcome, metrics.completionTokens, metrics.outputBytes);
+  const { ctx, deps, runId, metrics } = session;
+  recordGatewayOutcome(ctx, deps, runId, outcome, metrics.completionTokens, metrics.outputBytes);
 }
 
 function writeSessionTerminal(
@@ -2082,8 +2447,8 @@ async function pumpGatewayStream(session: GatewayStreamSession): Promise<void> {
     await streamGatewayResponse(session, chunk.response);
     return;
   }
-  recordSessionOutcome(session, "failed");
-  writeSessionTerminal(session, "error");
+  // A stream without a terminal response must reach the shared diagnostic and turn-event path.
+  throw new ProviderError("provider stream ended without a terminal response", 200);
 }
 
 /** Returns true when the stream may continue with the next chunk. */
@@ -2115,11 +2480,15 @@ async function streamGatewayResponse(
 ): Promise<void> {
   const { ctx, id, created, modelId, request, iterator, metrics, promptTokenReservation } = session;
   const outcome = outputMetrics(response);
-  metrics.completionTokens = outcome.completionTokens;
-  metrics.outputBytes = outcome.outputBytes;
+  metrics.outputBytes = Math.max(outcome.outputBytes, metrics.outputBytes);
   metrics.promptTokens = response.usage.promptTokens;
-  settlePromptTokenReservation(session.deps, promptTokenReservation, response.usage.promptTokens);
-  if (exceedsOutputBudget(outcome, request.maxOutputTokens ?? 1)) {
+  const promptSettlement = settlePromptTokenReservation(
+    session.deps,
+    promptTokenReservation,
+    response.usage.promptTokens,
+  );
+  settleStreamCompletionUsage(session, response, outcome, promptSettlement);
+  if (exceedsOutputBudget(metrics, request.maxOutputTokens ?? 1)) {
     await iterator.return?.();
     recordSessionOutcome(session, "output-limit");
     writeSessionTerminal(session, "length");
@@ -2143,8 +2512,85 @@ async function streamGatewayResponse(
       return;
     }
   }
-  recordSessionOutcome(session, "accepted");
   writeSessionTerminal(session, response.finishReason);
+  recordSessionOutcome(
+    session,
+    ctx.res.writableEnded && !ctx.res.destroyed ? "accepted" : "cancelled",
+  );
+}
+
+function settleStreamCompletionUsage(
+  session: GatewayStreamSession,
+  response: NormalizedResponse,
+  outcome: ReturnType<typeof outputMetrics>,
+  promptSettlement: PromptTokenSettlement,
+): void {
+  const { metrics, ctx, runId } = session;
+  const usage = completionUsage(response, outcome.outputBytes, metrics.completionTokens);
+  metrics.completionTokens = usage.completionTokens;
+  logGatewayCompletionUsage(
+    ctx,
+    runId,
+    {
+      completionTokens: metrics.completionTokens,
+      outputBytes: Math.max(outcome.outputBytes, metrics.outputBytes),
+    },
+    usage.source,
+    promptSettlement,
+  );
+}
+
+type CompletionUsageSource =
+  "provider-reported" | "streamed-byte-estimate" | "output-byte-estimate";
+
+function completionUsage(
+  response: NormalizedResponse,
+  outputBytes: number,
+  streamedCompletionTokens: number,
+): { readonly completionTokens: number; readonly source: CompletionUsageSource } {
+  if (response.usage.completionTokens > 0) {
+    return { completionTokens: response.usage.completionTokens, source: "provider-reported" };
+  }
+  if (response.toolCalls.length > 0 || response.structuredOutput !== null) {
+    return {
+      completionTokens: Math.ceil(outputBytes / OUTPUT_BYTES_PER_TOKEN_LIMIT),
+      source: "output-byte-estimate",
+    };
+  }
+  if (streamedCompletionTokens > 0) {
+    return { completionTokens: streamedCompletionTokens, source: "streamed-byte-estimate" };
+  }
+  const hasOutput = response.content.length > 0;
+  return {
+    completionTokens: hasOutput ? Math.ceil(outputBytes / OUTPUT_BYTES_PER_TOKEN_LIMIT) : 0,
+    source: "output-byte-estimate",
+  };
+}
+
+function logGatewayCompletionUsage(
+  ctx: RouteContext,
+  runId: string,
+  metrics: { readonly completionTokens: number; readonly outputBytes: number },
+  source: CompletionUsageSource,
+  promptSettlement: PromptTokenSettlement,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CODING_SIDECAR_GATEWAY_USAGE_SETTLED_OPERATION,
+      { correlationId: correlationIdOrUnknown(ctx.correlationId), parentCorrelationId: runId },
+      {
+        runId,
+        completionTokens: metrics.completionTokens,
+        promptTokens: promptSettlement.promptTokens,
+        promptSource: promptSettlement.source,
+        promptSettlementStatus: promptSettlement.status,
+        outputBytes: metrics.outputBytes,
+        source,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
 }
 
 function settleGatewayStreamError(session: GatewayStreamSession): void {
@@ -2466,6 +2912,7 @@ export async function handleCodingSidecarGatewayChatCompletions(
 
 function logChatRequestRejection(
   ctx: RouteContext,
+  deps: UiHandlerDeps,
   runId: string,
   validationError: RouteResult,
   observed?: {
@@ -2486,6 +2933,7 @@ function logChatRequestRejection(
         }
       : undefined;
   logGatewayRejection(ctx, runId, validationError.status, reason, boundedEvidence);
+  reportGatewayTurnFailure(ctx, deps, runId, "turn-rejected");
 }
 
 interface ValidatedChatRequest {
@@ -2495,6 +2943,7 @@ interface ValidatedChatRequest {
 
 async function readValidatedChatRequest(
   ctx: RouteContext,
+  deps: UiHandlerDeps,
   resolved: AvailableGatewayProfile,
   authentication: AuthenticatedGatewayRequest,
 ): Promise<RouteResult | ValidatedChatRequest> {
@@ -2512,6 +2961,7 @@ async function readValidatedChatRequest(
   if (validationError !== undefined) {
     logChatRequestRejection(
       ctx,
+      deps,
       authentication.runId,
       validationError,
       isRouteResult(parsed)
@@ -2533,7 +2983,7 @@ async function runHandleCodingSidecarGatewayChatCompletions(
   const resolved = resolveAuthenticatedGatewayProfile(deps, authentication);
   if (!isAvailableGatewayProfile(resolved))
     return unavailableGatewayProfile(ctx, deps, resolved, authentication);
-  const validated = await readValidatedChatRequest(ctx, resolved, authentication);
+  const validated = await readValidatedChatRequest(ctx, deps, resolved, authentication);
   if (isRouteResult(validated)) return validated;
   const { parsed, estimatedPromptTokens } = validated;
   logValidatedRequestBounds(
@@ -2582,7 +3032,10 @@ function logValidatedRequestBounds(
   getServerLogger().info(
     activityLogEvent(
       CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION,
-      { correlationId: correlationIdOrUnknown(ctx.correlationId) },
+      {
+        correlationId: correlationIdOrUnknown(ctx.correlationId),
+        parentCorrelationId: runId,
+      },
       {
         runId,
         maxRequestBytes: bounds.maxRequestBytes,
@@ -2617,6 +3070,7 @@ function executeBudgetedGatewayChat(
   );
   if (promptTokenReservation === undefined) {
     logGatewayRejection(ctx, authentication.runId, 403, "runtime-prompt-budget-denied");
+    reportGatewayTurnFailure(ctx, deps, authentication.runId, "turn-rejected");
     return Promise.resolve(forbiddenGatewayRequest());
   }
   return executeGatewayChat(ctx, deps, binding, parsed, authentication.runId, {

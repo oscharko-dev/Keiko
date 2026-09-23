@@ -12,6 +12,30 @@ against a LiteLLM-only configuration. Buffered dictation and read-aloud remain a
 
 ---
 
+## Coding Workbench turn has no assistant reply
+
+For a Workbench run that accepted a message but has no assistant reply, note the run id and export a
+body-free bundle with `keiko support export --out keiko-bundle.jsonl`. Analyze that bundle with
+`keiko support analyze keiko-bundle.jsonl --correlation-id <runId>`. The run timeline includes
+`coding-sidecar.gateway.request-validated`, any closed `coding-sidecar.gateway.rejected` reason,
+the provider dispatch, and a redacted diagnostic for a failed model call. The analyzer follows the
+request's explicit parent link and includes its entire request timeline; the request ID still
+selects that timeline directly. A gateway HTTP 400 or 422 after a
+request carrying optional `stream_options` may indicate a strict OpenAI-compatible proxy; Keiko
+retries once without that optional field and records `chat.request.compatibility-retry` when it
+does. The Workbench displays a closed failure cause and next step if the turn still fails. Do not
+send the raw provider response or model prompt to support.
+A local control with LiteLLM 1.102.1 showed that it can add `stream_options` to its own
+`hosted_vllm` upstream request even when Keiko omits it. If the retry still fails for that reason,
+inspect the LiteLLM-to-vLLM configuration; Keiko cannot remove a field that the proxy inserts
+after receiving the request.
+If a proxy closes an SSE response after partial text without a recognized finish reason or
+`data: [DONE]`, the turn reports `stream-incomplete` rather than accepting the partial reply.
+Check the correlated `chat.response.streamed` and `coding-sidecar.gateway.turn-failed` lines for
+the failed read and run event; they contain counts and closed reasons, not model text.
+
+---
+
 ## Authenticate x-litellm-key against a proxy that ignores it
 
 | Field             | Value                                                          |

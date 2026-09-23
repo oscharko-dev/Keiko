@@ -1,9 +1,13 @@
 import { Buffer } from "node:buffer";
 import { webcrypto } from "node:crypto";
-import { createGeneratedOpenCodeBundle } from "../opencodeRuntimeAdapter.js";
+import {
+  createGeneratedOpenCodeBundle,
+  createGeneratedOpenCodeV2Plugins,
+} from "../opencodeRuntimeAdapter.js";
 import { projectOpenCodePermissionEvent } from "../opencodeProtocol.js";
 
 interface GeneratedToolContext {
+  readonly id: string;
   readonly sessionID: string;
   readonly callID: string;
   readonly abort: AbortSignal;
@@ -15,6 +19,15 @@ interface GeneratedTool {
     context: GeneratedToolContext,
   ) => Promise<unknown>;
 }
+interface V2ToolPlugin {
+  readonly setup: (context: {
+    readonly tool: {
+      readonly transform: (
+        register: (editor: { add: (tool: unknown) => void }) => void,
+      ) => Promise<void>;
+    };
+  }) => Promise<void>;
+}
 type GeneratedToolFactory = (runtime: Readonly<Record<string, unknown>>) => unknown;
 interface PendingPermission {
   readonly row: Record<string, unknown>;
@@ -22,6 +35,7 @@ interface PendingPermission {
 }
 export interface ScriptedGovernedToolsInput {
   readonly env: Readonly<Record<string, string>>;
+  readonly pluginVersion?: "v1" | "v2";
   readonly sessionId: string;
   readonly broadcast: (type: string, properties: Record<string, unknown>) => void;
   readonly fetch?: typeof globalThis.fetch;
@@ -79,9 +93,10 @@ async function generatedTool(
   name: string,
   input: ScriptedGovernedToolsInput,
 ): Promise<GeneratedTool> {
-  const source = createGeneratedOpenCodeBundle().toolSources[name];
+  const source = generatedToolSources(input)[name];
   if (source === undefined) throw new Error("functional-generated-tool-unavailable");
   const value = await loadGeneratedTool(source, input);
+  if (input.pluginVersion === "v2") return registeredV2Tool(value, name);
   if (
     typeof value !== "object" ||
     value === null ||
@@ -91,6 +106,61 @@ async function generatedTool(
     throw new Error("functional-generated-tool-invalid");
   }
   return value as GeneratedTool;
+}
+
+async function registeredV2Tool(value: unknown, name: string): Promise<GeneratedTool> {
+  if (!isV2ToolPlugin(value)) {
+    throw new Error("functional-generated-v2-plugin-invalid");
+  }
+  let registered: unknown;
+  await value.setup({
+    tool: {
+      transform: (register): Promise<void> => {
+        register({
+          add: (tool): void => {
+            if (registered !== undefined) throw new Error("functional-generated-v2-tool-duplicate");
+            registered = tool;
+          },
+        });
+        return Promise.resolve();
+      },
+    },
+  });
+  if (!isV2RegisteredTool(registered, name)) {
+    throw new Error("functional-generated-v2-tool-invalid");
+  }
+  return registered;
+}
+
+function isV2ToolPlugin(value: unknown): value is V2ToolPlugin {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "setup" in value &&
+    typeof value.setup === "function"
+  );
+}
+
+function isV2RegisteredTool(value: unknown, name: string): value is GeneratedTool {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "name" in value &&
+    value.name === name &&
+    "execute" in value &&
+    typeof value.execute === "function"
+  );
+}
+
+function generatedToolSources(input: ScriptedGovernedToolsInput): Readonly<Record<string, string>> {
+  return input.pluginVersion === "v2"
+    ? createGeneratedOpenCodeV2Plugins()
+    : createGeneratedOpenCodeBundle().toolSources;
+}
+
+function generatedToolOutput(result: object, pluginVersion: "v1" | "v2" | undefined): unknown {
+  if (pluginVersion === "v2") return "content" in result ? result.content : undefined;
+  return "output" in result ? result.output : undefined;
 }
 
 /** Only the fake upstream permission queue lives here; the real manager issues every approval. */
@@ -151,26 +221,24 @@ export class ScriptedGovernedTools {
     };
     const tool = await generatedTool(call.name, { ...this.input, fetch });
     const result = await tool.execute(call.args, {
+      id: call.id,
       sessionID: this.input.sessionId,
       callID: call.id,
       abort: signal,
       ask: (request) => this.ask(request, signal),
     });
-    if (
-      typeof result !== "object" ||
-      result === null ||
-      !("output" in result) ||
-      typeof result.output !== "string"
-    ) {
+    if (typeof result !== "object" || result === null) {
       throw new Error("functional-generated-tool-output-invalid");
     }
-    return result.output;
+    const output = generatedToolOutput(result, this.input.pluginVersion);
+    if (typeof output !== "string") throw new Error("functional-generated-tool-output-invalid");
+    return output;
   }
 
   private phase(name: string, phase: ScriptedToolPhase["phase"]): void {
     const runId = this.input.env.KEIKO_CODING_RUN_ID;
     if (runId === undefined || !/^run-[A-Za-z0-9-]{1,120}$/u.test(runId)) return;
-    const known = Object.hasOwn(createGeneratedOpenCodeBundle().toolSources, name);
+    const known = Object.hasOwn(generatedToolSources(this.input), name);
     this.input.observePhase?.({ runId, tool: known ? name : "unknown", phase });
   }
 

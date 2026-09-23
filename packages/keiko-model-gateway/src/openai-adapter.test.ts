@@ -349,6 +349,18 @@ describe("OpenAiAdapter.call", () => {
     await expect(adapter.call(REQUEST, CONFIG)).rejects.toBeInstanceOf(ModelRefusalError);
   });
 
+  it("maps generic provider policy refusals to ModelRefusalError", async () => {
+    const adapter = adapterWith(() =>
+      Promise.resolve(
+        jsonResponse(
+          { error: { code: "policy_violation", message: "Request blocked by policy" } },
+          { status: 400 },
+        ),
+      ),
+    );
+    await expect(adapter.call(REQUEST, CONFIG)).rejects.toBeInstanceOf(ModelRefusalError);
+  });
+
   it("throws TransportError when fetch rejects with a network TypeError", async () => {
     const adapter = adapterWith(() => Promise.reject(new TypeError("network down")));
     await expect(adapter.call(REQUEST, CONFIG)).rejects.toBeInstanceOf(TransportError);

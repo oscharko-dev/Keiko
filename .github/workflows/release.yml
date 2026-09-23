@@ -116,12 +116,43 @@ jobs:
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
         run: node scripts/release-authorize.mjs
 
+  qualify-customer-shape:
+    name: Qualify staged Coding Workbench on customer shape
+    needs: authorize
+    if: ${{ !cancelled() && needs.authorize.result == 'success' && startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: macos-15
+    permissions:
+      contents: read
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - name: Verify checked-out commit
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Build workspace packages for qualification
+        run: npm run build:packages
+      - name: Install Chromium for customer-shape qualification
+        timeout-minutes: 10
+        run: node node_modules/playwright/cli.js install --with-deps chromium
+      - name: Run customer-shape qualification
+        timeout-minutes: 25
+        run: npm run qualify:coding-workbench:customer-shape
+
   publish:
     name: Publish to npm
-    needs: authorize
+    needs: [authorize, qualify-customer-shape]
     # authorize is tag-only and refuses every dispatch no release owner authorized, so a skipped or
     # failed authorize never reaches the release credentials below.
-    if: ${{ !cancelled() && needs.authorize.result == 'success' && startsWith(github.ref, 'refs/tags/v') }}
+    if: ${{ !cancelled() && needs.authorize.result == 'success' && needs.qualify-customer-shape.result == 'success' && startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
     # The environment scopes the signing key and the npm Trusted Publisher identity; it has no reviewer
     # rule. Human control is the owner's release request that authorize verified.
@@ -171,6 +202,10 @@ jobs:
         run: npm install --global --ignore-scripts npm@11.16.0
       - name: Install dependencies
         run: npm ci --ignore-scripts
+      - name: Build workspace packages for publisher imports
+        # This Ubuntu filesystem is separate from the macOS qualification job. The publisher
+        # imports workspace package dist files before prepack can build the package again.
+        run: npm run build:packages
       - name: Validate required-check workflow names
         run: npm run check:release-required-workflows
       - name: Verify required checks for release SHA
@@ -219,11 +254,6 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: node scripts/resolve-release-portable-assets.mjs
-      - name: Build workspace packages
-        # --ignore-scripts builds nothing, and release-publish.mjs imports the portable release trust
-        # from @oscharko-dev/keiko-security's packages/*/dist. No publish ran after that import was
-        # added, so this job would have died with ERR_MODULE_NOT_FOUND after owner authorization.
-        run: npm run build:packages
       - name: Publish package
         # No NODE_AUTH_TOKEN/NPM_TOKEN here by design: this job authenticates to the npm
         # registry via OIDC trusted publishing (id-token: write above), scoped to this exact

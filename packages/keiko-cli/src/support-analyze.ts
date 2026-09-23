@@ -50,6 +50,7 @@ import {
   ACTIVITY_LOG_COMPATIBILITY_STATES,
   ACTIVITY_LOG_REGISTRY_VERSION,
   ACTIVITY_LOG_SCHEMA_DIGEST,
+  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   ACTIVITY_LOG_WRITER_CAPABILITY_STATES,
   ActivityLogEventValidationError,
   activityLogOperationSchema,
@@ -756,16 +757,63 @@ export function classifyLine(
   };
 }
 
-function groupByCorrelationId(records: readonly ParsedLine[]): ReadonlyMap<string, ParsedLine[]> {
-  const groups = new Map<string, ParsedLine[]>();
-  for (const record of records) {
-    if (record.correlationId === undefined) continue;
-    const existing = groups.get(record.correlationId);
-    if (existing === undefined) {
-      groups.set(record.correlationId, [record]);
-    } else {
-      existing.push(record);
+function addDirectCorrelation(direct: Map<string, ParsedLine[]>, record: ParsedLine): void {
+  const correlationId = record.correlationId;
+  if (correlationId === undefined) return;
+  const existing = direct.get(correlationId);
+  if (existing === undefined) direct.set(correlationId, [record]);
+  else existing.push(record);
+}
+
+function addParentLink(children: Map<string, Set<string>>, record: ParsedLine): void {
+  const parent = record.view.parentCorrelationId;
+  const child = record.correlationId;
+  if (parent === undefined || child === undefined || parent === child) return;
+  const linked = children.get(parent) ?? new Set<string>();
+  linked.add(child);
+  children.set(parent, linked);
+}
+
+function expandedParentGroup(
+  parent: string,
+  linked: ReadonlySet<string>,
+  direct: ReadonlyMap<string, readonly ParsedLine[]>,
+): ParsedLine[] {
+  const expanded = [...(direct.get(parent) ?? [])];
+  const seen = new Set(expanded);
+  // One line establishes the request-to-run edge; other lines with that request ID may carry
+  // no parent field. Include the whole uniquely identified child timeline while keeping its
+  // direct lookup intact. The shared fallback ID requires record-level parent evidence.
+  for (const child of linked) {
+    for (const record of direct.get(child) ?? []) {
+      // The fallback correlation is shared by unrelated requests. Only an explicit parent
+      // on that individual record proves it belongs to this run.
+      if (
+        child === ACTIVITY_LOG_UNKNOWN_CORRELATION_ID &&
+        record.view.parentCorrelationId !== parent
+      ) {
+        continue;
+      }
+      if (seen.has(record)) continue;
+      expanded.push(record);
+      seen.add(record);
     }
+  }
+  // assignOrder ranks each process lifetime by the first record it encounters. Parent-first
+  // expansion is not file order when a child request was written before the run's own line.
+  return expanded.sort((left, right) => left.fileIndex - right.fileIndex);
+}
+
+function groupByCorrelationId(records: readonly ParsedLine[]): ReadonlyMap<string, ParsedLine[]> {
+  const direct = new Map<string, ParsedLine[]>();
+  const children = new Map<string, Set<string>>();
+  for (const record of records) {
+    addDirectCorrelation(direct, record);
+    addParentLink(children, record);
+  }
+  const groups = new Map(direct);
+  for (const [parent, linked] of children) {
+    groups.set(parent, expandedParentGroup(parent, linked, direct));
   }
   return groups;
 }

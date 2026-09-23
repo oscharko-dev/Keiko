@@ -870,6 +870,29 @@ describe("Coding Workbench runtime API failure branches", () => {
     ).toMatchObject({ ok: false, errors: ["failureCode is invalid"] });
   });
 
+  it("accepts redacted gateway turn causes only on failure runtime events", () => {
+    const event = {
+      schemaVersion: "1",
+      cursor: "run-1:2",
+      sequence: 2,
+      occurredAt: AT,
+      kind: "runtime-event",
+      runId: "run-1",
+      state: "running",
+      revision: 3,
+      eventKind: "failure-redacted",
+      failureCode: "provider-failed",
+    };
+    expect(validateCodingWorkbenchRuntimeSseEvent(event).ok).toBe(true);
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent({ ...event, eventKind: "task-submitted" }).ok,
+    ).toBe(false);
+    expect(validateCodingWorkbenchRuntimeSseEvent({ ...event, kind: "status" }).ok).toBe(false);
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({ ...snapshot, failureCode: "provider-failed" }).ok,
+    ).toBe(false);
+  });
+
   // #2637 (review #2646): the SSE boundary enforces the research/outcome binding, not just the field
   // type. Every invalid combination below would let the timeline misstate what a run took in.
   it("binds the #2637 contentTrust marker to an accepted research-performed frame", () => {

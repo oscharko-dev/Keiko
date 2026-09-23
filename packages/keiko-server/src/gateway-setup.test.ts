@@ -7176,6 +7176,8 @@ describe("handleGatewaySetup", () => {
       expect(seen.map((call) => call.model)).toEqual([
         "Mistral-Large-3",
         "gpt-5.4",
+        // A generic incompatible-model 400 is terminal; only an explicit optional-field
+        // rejection may trigger the compatibility retry.
         "gpt-5.4",
         "gpt-5.4",
       ]);

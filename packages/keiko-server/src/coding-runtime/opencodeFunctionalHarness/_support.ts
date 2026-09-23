@@ -50,12 +50,19 @@ const MAX_FAKE_AGENT_STEPS = 12;
 const FAKE_SESSION_ID = "ses_functional0000000001";
 
 /** Captured OpenCode 2.0.10 protocol projection served by the scripted V2 child. */
-const FUNCTIONAL_OPENCODE_OPENAPI: unknown = JSON.parse(
-  readFileSync(
-    new URL("../opencodeProtocolSurface.opencode-2.0.10.fixture.json", import.meta.url),
-    "utf8",
-  ),
+const protocolFixtureUrl = new URL(
+  "../opencodeProtocolSurface.opencode-2.0.10.fixture.json",
+  import.meta.url,
 );
+// The e2e server compiles this harness under tests/e2e/servers/dist without copying JSON assets.
+// Its workspace root remains the repo root, where the checked-in fixture is authoritative.
+const protocolFixturePath = existsSync(protocolFixtureUrl)
+  ? protocolFixtureUrl
+  : resolve(
+      process.cwd(),
+      "packages/keiko-server/src/coding-runtime/opencodeProtocolSurface.opencode-2.0.10.fixture.json",
+    );
+const FUNCTIONAL_OPENCODE_OPENAPI: unknown = JSON.parse(readFileSync(protocolFixturePath, "utf8"));
 const PROTOCOL_HANDSHAKE_DIGEST = projectOpenCodeV2ProtocolSurface(
   FUNCTIONAL_OPENCODE_OPENAPI,
 ).digest;
@@ -436,11 +443,13 @@ class FakeOpenCodeChild {
     observePhase?: (event: ScriptedToolPhase) => void,
     scriptedModel?: ScriptedModelTurnInput,
     gatewayToolsOverride?: readonly FunctionalGatewayTool[],
+    pluginVersion: "v1" | "v2" = "v1",
   ) {
     this.gatewayToolsOverride = gatewayToolsOverride;
     this.governedTools = generatedTools
       ? new ScriptedGovernedTools({
           env,
+          pluginVersion,
           ...(observePhase === undefined ? {} : { observePhase }),
           sessionId: FAKE_SESSION_ID,
           broadcast: (type, properties): void => {
@@ -1237,12 +1246,20 @@ class ScriptedChildBackend implements RuntimeProcessBackend {
     private readonly children: FakeOpenCodeChild[],
     private readonly generatedTools: boolean,
     private readonly observePhase?: (event: ScriptedToolPhase) => void,
+    private readonly pluginVersion: "v1" | "v2" = "v1",
   ) {}
 
   public spawnOwnedTree(request: RuntimeSupervisorLaunchRequest): RuntimeProcessTree {
     const stdout = new PassThrough();
     const stderr = new PassThrough();
-    const child = new FakeOpenCodeChild(request.env, this.generatedTools, this.observePhase);
+    const child = new FakeOpenCodeChild(
+      request.env,
+      this.generatedTools,
+      this.observePhase,
+      undefined,
+      undefined,
+      this.pluginVersion,
+    );
     this.children.push(child);
     const tree: ScriptedTree = {
       treeId: request.recoveryHandle,
@@ -1317,6 +1334,7 @@ export function createScriptedOpenCodeHarness(
   options: {
     readonly generatedTools?: boolean;
     readonly observePhase?: (event: ScriptedToolPhase) => void;
+    readonly pluginVersion?: "v1" | "v2";
   } = {},
 ): ScriptedOpenCodeHarness {
   const children: FakeOpenCodeChild[] = [];
@@ -1333,6 +1351,7 @@ export function createScriptedOpenCodeHarness(
           children,
           options.generatedTools === true,
           options.observePhase,
+          options.pluginVersion,
         ),
         qualifications: [portable.qualification],
       }),

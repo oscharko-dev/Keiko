@@ -9,6 +9,7 @@ import {
   ACTIVITY_LOG_CATALOG_DIGEST,
   ACTIVITY_LOG_REGISTRY_VERSION,
   ACTIVITY_LOG_SCHEMA_DIGEST,
+  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   activityLogLossCounters,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
@@ -1661,6 +1662,128 @@ describe("findTimeline", () => {
   it("returns undefined for a correlation id that is not present", () => {
     const result = analyzeLogText(FIXTURE_TEXT);
     expect(findTimeline(result, "does-not-exist")).toBeUndefined();
+  });
+
+  it("includes a request's whole timeline when its validated gateway line links it to a run", () => {
+    const serialized = [
+      line({
+        ts: T0,
+        category: "coding",
+        op: "coding-runtime.run.started",
+        correlationId: "run-1",
+      }),
+      line({
+        ts: T1,
+        category: "model",
+        op: "coding-sidecar.gateway.request-validated",
+        correlationId: "request-1",
+        parentCorrelationId: "run-1",
+      }),
+      line({
+        ts: T2,
+        category: "model",
+        op: "chat.request.dispatch",
+        correlationId: "request-1",
+      }),
+      line({
+        ts: T3,
+        category: "diagnostic",
+        op: "server.diagnostic.failure",
+        correlationId: "request-1",
+        errorKind: "GATEWAY_PROVIDER_ERROR",
+      }),
+      line({
+        ts: T3,
+        category: "model",
+        op: "coding-sidecar.gateway.turn-failed",
+        correlationId: "request-1",
+        parentCorrelationId: "run-1",
+      }),
+      line({
+        ts: T3,
+        category: "model",
+        op: "chat.request.dispatch",
+        correlationId: "request-unrelated",
+      }),
+    ].join("\n");
+    const result = analyzeLogText(`${serialized}\n`);
+
+    expect(findTimeline(result, "run-1")?.lines.map((entry) => entry.op)).toEqual([
+      "coding-runtime.run.started",
+      "coding-sidecar.gateway.request-validated",
+      "chat.request.dispatch",
+      "server.diagnostic.failure",
+      "coding-sidecar.gateway.turn-failed",
+    ]);
+    expect(findTimeline(result, "request-1")?.lines).toHaveLength(4);
+  });
+
+  it("does not attach unrelated unknown-correlation events to a linked run", () => {
+    const serialized = [
+      line({
+        ts: T0,
+        category: "coding",
+        op: "coding-runtime.run.started",
+        correlationId: "run-1",
+      }),
+      line({
+        ts: T1,
+        category: "model",
+        op: "coding-sidecar.gateway.turn-failed",
+        correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+        parentCorrelationId: "run-1",
+      }),
+      line({
+        ts: T2,
+        category: "diagnostic",
+        op: "server.diagnostic.failure",
+        correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+      }),
+    ].join("\n");
+    const result = analyzeLogText(`${serialized}\n`);
+
+    expect(findTimeline(result, "run-1")?.lines.map((entry) => entry.op)).toEqual([
+      "coding-runtime.run.started",
+      "coding-sidecar.gateway.turn-failed",
+    ]);
+    expect(findTimeline(result, ACTIVITY_LOG_UNKNOWN_CORRELATION_ID)?.lines).toHaveLength(2);
+  });
+
+  it("orders linked request and run lifetimes by their first file appearance", () => {
+    const serialized = [
+      line({
+        ts: T0,
+        category: "model",
+        op: "child-a",
+        correlationId: "request-1",
+        parentCorrelationId: "run-1",
+        pid: 100,
+        instanceId: "aaaaaaaa",
+        seq: 1,
+      }),
+      line({
+        ts: T1,
+        category: "coding",
+        op: "parent-b",
+        correlationId: "run-1",
+        pid: 200,
+        instanceId: "bbbbbbbb",
+        seq: 1,
+      }),
+      line({
+        ts: T2,
+        category: "coding",
+        op: "parent-a",
+        correlationId: "run-1",
+        pid: 100,
+        instanceId: "aaaaaaaa",
+        seq: 2,
+      }),
+    ].join("\n");
+
+    expect(
+      findTimeline(analyzeLogText(`${serialized}\n`), "run-1")?.lines.map((entry) => entry.op),
+    ).toEqual(["child-a", "parent-a", "parent-b"]);
   });
 });
 

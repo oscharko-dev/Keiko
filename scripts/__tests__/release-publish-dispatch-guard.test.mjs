@@ -99,10 +99,10 @@ describe("release dispatch guard (#3505, ADR-0177 D9)", () => {
     expect(JSON.stringify(authorize)).not.toMatch(/secrets\./u);
   });
 
-  it("starts the publish only after authorize succeeded", () => {
-    expect(publish.needs).toBe("authorize");
+  it("starts the publish only after authorization and macOS qualification succeeded", () => {
+    expect(publish.needs).toStrictEqual(["authorize", "qualify-customer-shape"]);
     expect(normalized(publish.if)).toBe(
-      "${{ !cancelled() && needs.authorize.result == 'success' && startsWith(github.ref, 'refs/tags/v') }}",
+      "${{ !cancelled() && needs.authorize.result == 'success' && needs.qualify-customer-shape.result == 'success' && startsWith(github.ref, 'refs/tags/v') }}",
     );
     expect(impliedSuccessTraps(release)).toStrictEqual([]);
   });

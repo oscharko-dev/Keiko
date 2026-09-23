@@ -237,6 +237,27 @@ function runtimeEvent(extra: Record<string, unknown>): CodingWorkbenchRuntimeSse
 }
 
 describe("eventDetail auxiliary outcome", () => {
+  it.each(["provider-failed", "stream-incomplete", "turn-rejected"] as const)(
+    "shows the actionable %s cause for a redacted gateway failure",
+    (failureCode) => {
+      expect(eventDetail(runtimeEvent({ eventKind: "failure-redacted", failureCode }), t)).toBe(
+        `codingWorkbench.event.detailFailure codingWorkbench.event.turnFailure.${failureCode}`,
+      );
+    },
+  );
+
+  it("does not invent a gateway cause for a generic runtime failure", () => {
+    expect(
+      eventDetail(
+        runtimeEvent({ eventKind: "failure-redacted", failureCode: "recovery-required" }),
+        t,
+      ),
+    ).toBe("codingWorkbench.event.detailFailure");
+    expect(eventDetail(runtimeEvent({ eventKind: "child-run-completed" }), t)).toBe(
+      "codingWorkbench.event.detail",
+    );
+  });
+
   it("appends the normalized outcome as a content-free sentence", () => {
     expect(eventDetail(runtimeEvent({ auxiliaryOutcome: "denied" }), t)).toBe(
       "codingWorkbench.event.detail codingWorkbench.event.detailOutcome",
