@@ -774,6 +774,7 @@ function isOptionalStreamFieldRejection(payload: unknown): boolean {
   if (!isRecord(error)) return false;
   const field = /stream[_ -]?options|include[_ -]?usage/;
   if (typeof error.param === "string" && field.test(error.param.toLowerCase())) return true;
+  if (error.code === "unsupported_parameter" || error.type === "unsupported_parameter") return true;
   const message = typeof error.message === "string" ? error.message.toLowerCase() : "";
   return (
     /(?:stream[_ -]?options|include[_ -]?usage).{0,48}(?:disabled|unsupported|not supported|not allowed|not permitted|unrecognized|unknown|invalid|prohibited|rejected)/.test(
@@ -816,11 +817,10 @@ function isStrictChatShapeRejection(status: number): boolean {
 function shouldPreserveProviderRejection(status: number, payload: unknown): boolean {
   return (
     isContextOverflow(status, payload) ||
+    hasNonStreamErrorParameter(payload) ||
     (isModelRefusal(payload) &&
-      (isStructuredModelRefusal(payload) ||
-        hasNonStreamErrorParameter(payload) ||
-        isContentRefusalMessage(payload) ||
-        !isOptionalStreamFieldRejection(payload)))
+      (isStructuredModelRefusal(payload) || isContentRefusalMessage(payload))) ||
+    !isOptionalStreamFieldRejection(payload)
   );
 }
 

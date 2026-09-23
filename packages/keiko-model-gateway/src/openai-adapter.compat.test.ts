@@ -286,7 +286,7 @@ describe("OpenAI-compatible chat compatibility", () => {
       fetchImpl: (_url, init): Promise<Response> => {
         bodies.push(requestBody(init));
         return Promise.resolve(
-          new Response(JSON.stringify({ error: { code: "bad_request" } }), {
+          new Response(JSON.stringify({ error: { code: "unsupported_parameter" } }), {
             status: 400,
           }),
         );
@@ -305,6 +305,33 @@ describe("OpenAI-compatible chat compatibility", () => {
     expect(bodies).toHaveLength(2);
     expect(bodies[1]).not.toHaveProperty("stream_options");
   });
+
+  it.each([400, 422])(
+    "does not retry an ambiguous HTTP %s rejection without optional-field evidence",
+    async (status) => {
+      const bodies: Record<string, unknown>[] = [];
+      const adapter = new OpenAiAdapter({
+        requestId: `ambiguous-${String(status)}`,
+        costClass: "low",
+        fetchImpl: (_url, init): Promise<Response> => {
+          bodies.push(requestBody(init));
+          return Promise.resolve(
+            new Response(JSON.stringify({ error: { code: "bad_request" } }), { status }),
+          );
+        },
+      });
+      const consume = async (): Promise<void> => {
+        for await (const _chunk of adapter.callStream(
+          { modelId: CONFIG.modelId, messages: [{ role: "user", content: "Synthetic prompt" }] },
+          CONFIG,
+        )) {
+          // An ambiguous rejection cannot produce a response chunk.
+        }
+      };
+      await expect(consume()).rejects.toMatchObject({ code: "GATEWAY_PROVIDER_ERROR" });
+      expect(bodies).toHaveLength(1);
+    },
+  );
 
   it("keeps the original read budget across the optional-field retry", async () => {
     vi.useFakeTimers();
@@ -373,7 +400,13 @@ describe("OpenAI-compatible chat compatibility", () => {
         return new Promise((resolve, reject) => {
           const timer = setTimeout(
             () => {
-              resolve(first ? new Response("{}", { status: 400 }) : streamedAnswer());
+              resolve(
+                first
+                  ? new Response(JSON.stringify({ error: { code: "unsupported_parameter" } }), {
+                      status: 400,
+                    })
+                  : streamedAnswer(),
+              );
             },
             first ? 70 : 40,
           );
