@@ -148,7 +148,7 @@ function assertAnalyzableFailure(project, stateDir, lines, runId) {
   if (evidence === undefined) throw new Error("failed turn lacks linked installed-build evidence");
   const { turnFailure, diagnostic } = evidence;
   const bin = join(project, "node_modules", "@oscharko-dev", "keiko", "dist", "cli", "index.js");
-  const bundle = join(project, "failure-support.jsonl");
+  const bundle = join(project, `failure-support-${randomBytes(8).toString("hex")}.jsonl`);
   run(process.execPath, [bin, "support", "export", "--state-dir", stateDir, "--out", bundle], {
     cwd: project,
   });
@@ -286,7 +286,7 @@ async function startedRunId(responsePromise) {
 }
 
 async function runTurn(page, repository, scpRepository, pairingSecret, phase) {
-  const expectFailure = phase === "failure-proof";
+  const expectFailure = phase === "failure-proof" || phase === "truncation-proof";
   const expectToolCall = phase === "tool-proof";
   await pairWorkbench(page, repository, pairingSecret);
   const scpBound = await page.request.post("/api/task-workspaces", {
@@ -316,9 +316,11 @@ async function runTurn(page, repository, scpRepository, pairingSecret, phase) {
   await page.getByRole("button", { name: "Start coding run", exact: true }).click();
   const runId = await startedRunId(started);
   if (expectFailure) {
-    await expect(page.getByText(/The model provider rejected this turn/u).first()).toBeVisible({
-      timeout: 45_000,
-    });
+    const failure =
+      phase === "truncation-proof"
+        ? /The model response stream stopped before the turn completed/u
+        : /The model provider rejected this turn/u;
+    await expect(page.getByText(failure).first()).toBeVisible({ timeout: 45_000 });
   } else {
     await expect(page.getByText(CUSTOMER_SHAPE_REPLY, { exact: true })).toBeVisible({
       timeout: TURN_TIMEOUT_MS,
@@ -342,6 +344,10 @@ function assertGatewayEvidence(twin, firstRequest, lines, runId, phase) {
   if (!requestEvidence.compatibleRetry) {
     throw new Error("twin did not receive a compatible streaming retry");
   }
+  if (phase === "truncation-proof") {
+    assertTruncatedStream(twin, firstRequest);
+    return;
+  }
   if (phase === "failure-proof") return;
   if (phase === "qualification" && !requestEvidence.delayedAcceptedStream) {
     throw new Error("twin did not delay the accepted streaming request");
@@ -355,6 +361,12 @@ function assertGatewayEvidence(twin, firstRequest, lines, runId, phase) {
       line.parentCorrelationId === runId,
   );
   if (usage === undefined) throw new Error("answered turn lacks estimated usage evidence");
+}
+
+function assertTruncatedStream(twin, firstRequest) {
+  if (!twin.requests.slice(firstRequest).some((request) => request.truncated === true)) {
+    throw new Error("twin did not close the accepted stream without a terminal frame");
+  }
 }
 
 function assertToolRoundTrip(twin, firstRequest) {
@@ -372,7 +384,7 @@ async function qualifyInstalled(
   scpRepository,
   phase = "qualification",
 ) {
-  const expectFailure = phase === "failure-proof";
+  const expectFailure = phase === "failure-proof" || phase === "truncation-proof";
   const expectToolCall = phase === "tool-proof";
   const port = await reservePort();
   const pairingSecret = randomBytes(32).toString("hex");
@@ -421,6 +433,30 @@ async function qualifyGovernedReadTool(project, configPath, twin, repository, sc
   }
 }
 
+async function qualifyFailureScenario(
+  project,
+  configPath,
+  twin,
+  repository,
+  scpRepository,
+  phase,
+  configureTwin,
+) {
+  const stateDir = mkdtempSync(join(homedir(), `.keiko-customer-shape-${phase}-state-`));
+  try {
+    configureTwin();
+    await qualifyInstalled(project, stateDir, configPath, twin, repository, scpRepository, phase);
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true });
+  }
+}
+
+function reportQualification(start) {
+  process.stdout.write(
+    `customer-shape qualification ok: staged Yarn install, local LiteLLM twin, visible Workbench reply, governed read-tool round trip, truncated stream rejection, typed failure, body-free Activity Log (${Math.round(performance.now() - start)}ms).\n`,
+  );
+}
+
 async function main() {
   const start = performance.now();
   const project = mkdtempSync(join(tmpdir(), "keiko-customer-shape-yarn-"));
@@ -446,24 +482,25 @@ async function main() {
     await qualifyInstalled(project, stateDir, configPath, twin, repository, scpRepository);
     twin.delayAcceptedStreamingBy(0);
     await qualifyGovernedReadTool(project, configPath, twin, repository, scpRepository);
-    twin.rejectAllStreaming();
-    const failureStateDir = mkdtempSync(join(homedir(), ".keiko-customer-shape-failure-state-"));
-    try {
-      await qualifyInstalled(
-        project,
-        failureStateDir,
-        configPath,
-        twin,
-        repository,
-        scpRepository,
-        "failure-proof",
-      );
-    } finally {
-      rmSync(failureStateDir, { recursive: true, force: true });
-    }
-    process.stdout.write(
-      `customer-shape qualification ok: staged Yarn install, local LiteLLM twin, visible Workbench reply, governed read-tool round trip, typed failure, body-free Activity Log (${Math.round(performance.now() - start)}ms).\n`,
+    await qualifyFailureScenario(
+      project,
+      configPath,
+      twin,
+      repository,
+      scpRepository,
+      "truncation-proof",
+      () => twin.truncateNextAcceptedStream(),
     );
+    await qualifyFailureScenario(
+      project,
+      configPath,
+      twin,
+      repository,
+      scpRepository,
+      "failure-proof",
+      () => twin.rejectAllStreaming(),
+    );
+    reportQualification(start);
   } finally {
     await twin.close();
     artifact?.cleanup();

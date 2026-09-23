@@ -17,9 +17,12 @@ usage in the accepted stream after a 35-second upstream delay. The gate requires
 contain request validation, the compatibility retry, usage settlement with a closed source and
 completion count, and an accepted outcome for the same run and request after terminal delivery.
 The sidecar may request a buffered answer even when the provider supports
-streaming, so both delivery paths must settle usage. A second installed run rejects both stream
-shapes and must show the typed
-provider failure in the Workbench. The failed run must also have an
+streaming, so both delivery paths must settle usage. A separate installed run proves that a
+governed `keiko_workspace_discover` call completes and its result reaches a visible follow-up
+answer. Another run closes the accepted stream after partial text without a finish reason or
+`[DONE]`; the browser must show `stream-incomplete` rather than a successful partial reply. A
+final run rejects both stream shapes and must show the typed provider failure in the Workbench.
+Each failed run must also have an
 installed-build diagnostic with frames that `keiko support analyze` can find by request
 correlation. The diagnostic links to the run through `parentCorrelationId`;
 `coding-sidecar.gateway.turn-failed` records the closed cause and whether its SSE projection was

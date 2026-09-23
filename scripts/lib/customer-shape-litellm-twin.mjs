@@ -62,6 +62,12 @@ function answerStream(response, body, plannedTool) {
   response.end("data: [DONE]\n\n");
 }
 
+function truncatedStream(response) {
+  response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
+  writeFrame(response, { content: "Synthetic partial reply." });
+  response.end();
+}
+
 function plannedWorkspaceDiscovery(body, behavior) {
   if (!behavior.workspaceDiscoveryPending || forcedToolName(body) !== undefined) return undefined;
   if (!Array.isArray(body.tools)) return undefined;
@@ -144,6 +150,7 @@ async function handleTwinChat(request, response, requests, behavior) {
       stream: body.stream === true,
       hasStreamOptions: "stream_options" in body,
       delayed: false,
+      truncated: false,
       deliveredToolCall: false,
       completedDiscoveryResult: hasCompletedWorkspaceDiscoveryResult(body),
     };
@@ -153,6 +160,12 @@ async function handleTwinChat(request, response, requests, behavior) {
       return;
     }
     if (body.stream === true) {
+      if (behavior.truncateNextAcceptedStream) {
+        behavior.truncateNextAcceptedStream = false;
+        observed.truncated = true;
+        truncatedStream(response);
+        return;
+      }
       if (behavior.acceptedStreamDelayMs > 0 && forcedToolName(body) === undefined) {
         observed.delayed = true;
         await delay(behavior.acceptedStreamDelayMs);
@@ -204,6 +217,7 @@ export async function startCustomerShapeLiteLlmTwin() {
     rejectAllStreams: false,
     acceptedStreamDelayMs: 0,
     workspaceDiscoveryPending: false,
+    truncateNextAcceptedStream: false,
   };
   const server = createServer((request, response) =>
     handleTwinRequest(request, response, requests, behavior),
@@ -225,6 +239,9 @@ export async function startCustomerShapeLiteLlmTwin() {
     },
     planSingleWorkspaceDiscovery: () => {
       behavior.workspaceDiscoveryPending = true;
+    },
+    truncateNextAcceptedStream: () => {
+      behavior.truncateNextAcceptedStream = true;
     },
     close: () =>
       new Promise((resolve, reject) =>

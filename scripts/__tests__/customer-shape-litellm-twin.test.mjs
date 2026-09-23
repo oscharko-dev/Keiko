@@ -166,6 +166,32 @@ describe("customer-shape LiteLLM twin", () => {
     }
   });
 
+  it("truncates one accepted stream and then resumes normal completed replies", async () => {
+    const twin = await startCustomerShapeLiteLlmTwin();
+    try {
+      twin.truncateNextAcceptedStream();
+      const request = () =>
+        globalThis.fetch(`${twin.baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-litellm-key": apiKeyHeaderValue("x-litellm-key", CUSTOMER_SHAPE_API_KEY),
+          },
+          body: JSON.stringify({ model: "gemma-4-31b-it", messages: [], stream: true }),
+        });
+      const first = await request();
+      const partial = await first.text();
+      expect(partial).toContain("Synthetic partial reply.");
+      expect(partial).not.toContain("[DONE]");
+      expect(partial).not.toContain('"finish_reason":"stop"');
+      const second = await request();
+      expect(await second.text()).toContain("[DONE]");
+      expect(twin.requests.map(({ truncated }) => truncated)).toEqual([true, false]);
+    } finally {
+      await twin.close();
+    }
+  });
+
   it("requires accepted completion for the same run and model request", () => {
     const lines = [
       {
