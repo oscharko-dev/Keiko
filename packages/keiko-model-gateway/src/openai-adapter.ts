@@ -805,7 +805,10 @@ function hasNonStreamErrorParameter(payload: unknown): boolean {
 
 function isNonStreamField(field: string): boolean {
   const normalized = field.trim().toLowerCase();
-  return normalized.length > 0 && !/^(?:stream[_ -]?options|include[_ -]?usage)$/.test(normalized);
+  return (
+    normalized.length > 0 &&
+    !/^(?:stream[_ -]?options(?:\.[a-z][a-z0-9_]*)*|include[_ -]?usage)$/.test(normalized)
+  );
 }
 
 function namesDifferentUnsupportedField(message: string): boolean {

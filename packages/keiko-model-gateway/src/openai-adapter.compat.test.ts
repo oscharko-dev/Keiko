@@ -106,6 +106,42 @@ describe("OpenAI-compatible chat compatibility", () => {
     expect(bodies[1]).not.toHaveProperty("stream_options");
   });
 
+  it("retries a rejection naming a nested stream_options field", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const adapter = new OpenAiAdapter({
+      requestId: "nested-optional-field",
+      costClass: "low",
+      fetchImpl: (_url, init): Promise<Response> => {
+        const body = requestBody(init);
+        bodies.push(body);
+        return Promise.resolve(
+          "stream_options" in body
+            ? new Response(
+                JSON.stringify({
+                  error: { code: "unsupported_parameter", param: "stream_options.include_usage" },
+                }),
+                { status: 400 },
+              )
+            : streamedAnswer(),
+        );
+      },
+    });
+    const chunks: GatewayStreamChunk[] = [];
+    for await (const chunk of adapter.callStream(
+      { modelId: CONFIG.modelId, messages: [{ role: "user", content: "Synthetic prompt" }] },
+      CONFIG,
+    )) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks.at(-1)).toMatchObject({
+      type: "done",
+      response: { content: "Synthetic answer." },
+    });
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).not.toHaveProperty("stream_options");
+  });
+
   it("does not retry a provider policy refusal as a request-shape error", async () => {
     const bodies: Record<string, unknown>[] = [];
     const adapter = new OpenAiAdapter({

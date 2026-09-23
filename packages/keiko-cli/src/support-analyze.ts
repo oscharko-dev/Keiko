@@ -799,7 +799,9 @@ function expandedParentGroup(
       seen.add(record);
     }
   }
-  return expanded;
+  // assignOrder ranks each process lifetime by the first record it encounters. Parent-first
+  // expansion is not file order when a child request was written before the run's own line.
+  return expanded.sort((left, right) => left.fileIndex - right.fileIndex);
 }
 
 function groupByCorrelationId(records: readonly ParsedLine[]): ReadonlyMap<string, ParsedLine[]> {

@@ -1050,6 +1050,8 @@ rejection retain the same request-to-run edge for causal queries.
 The shared `unknown-correlation-id` fallback is not a unique child request identity: a run query
 includes only fallback records that individually name that run as parent, so unrelated failures
 cannot contaminate its timeline. Direct fallback-id lookup still shows all such records.
+Before ranking process lifetimes, the expanded run timeline restores original file order across
+run and request records; otherwise a parent-first join can reverse the first-seen lifetime order.
 `chat.request.dispatch` records the
 stream usage flag and tool count before the provider call; a strict OpenAI-compatible proxy's
 one-time retry without `stream_options` records `chat.request.compatibility-retry`. These lines

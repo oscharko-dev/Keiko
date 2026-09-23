@@ -1748,6 +1748,43 @@ describe("findTimeline", () => {
     ]);
     expect(findTimeline(result, ACTIVITY_LOG_UNKNOWN_CORRELATION_ID)?.lines).toHaveLength(2);
   });
+
+  it("orders linked request and run lifetimes by their first file appearance", () => {
+    const serialized = [
+      line({
+        ts: T0,
+        category: "model",
+        op: "child-a",
+        correlationId: "request-1",
+        parentCorrelationId: "run-1",
+        pid: 100,
+        instanceId: "aaaaaaaa",
+        seq: 1,
+      }),
+      line({
+        ts: T1,
+        category: "coding",
+        op: "parent-b",
+        correlationId: "run-1",
+        pid: 200,
+        instanceId: "bbbbbbbb",
+        seq: 1,
+      }),
+      line({
+        ts: T2,
+        category: "coding",
+        op: "parent-a",
+        correlationId: "run-1",
+        pid: 100,
+        instanceId: "aaaaaaaa",
+        seq: 2,
+      }),
+    ].join("\n");
+
+    expect(
+      findTimeline(analyzeLogText(`${serialized}\n`), "run-1")?.lines.map((entry) => entry.op),
+    ).toEqual(["child-a", "parent-a", "parent-b"]);
+  });
 });
 
 describe("analyzeLogText — line-splitting and value-shape edge cases", () => {
