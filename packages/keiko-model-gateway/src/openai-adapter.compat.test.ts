@@ -101,6 +101,36 @@ describe("OpenAI-compatible chat compatibility", () => {
     expect(bodies[1]).not.toHaveProperty("stream_options");
   });
 
+  it("does not retry a provider policy refusal as a request-shape error", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const adapter = new OpenAiAdapter({
+      requestId: "policy-refusal",
+      costClass: "low",
+      fetchImpl: (_url, init): Promise<Response> => {
+        bodies.push(requestBody(init));
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              error: { code: "policy_violation", message: "Request blocked by policy" },
+            }),
+            { status: 400 },
+          ),
+        );
+      },
+    });
+    const consume = async (): Promise<void> => {
+      for await (const _chunk of adapter.callStream(
+        { modelId: CONFIG.modelId, messages: [{ role: "user", content: "Synthetic prompt" }] },
+        CONFIG,
+      )) {
+        // A refused turn cannot produce a response chunk.
+      }
+    };
+
+    await expect(consume()).rejects.toMatchObject({ code: "GATEWAY_MODEL_REFUSAL" });
+    expect(bodies).toHaveLength(1);
+  });
+
   it("stops after one compatibility retry when the minimal request also fails", async () => {
     const bodies: Record<string, unknown>[] = [];
     const adapter = new OpenAiAdapter({

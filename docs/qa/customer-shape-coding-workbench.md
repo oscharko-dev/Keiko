@@ -14,8 +14,11 @@ Workbench, binds synthetic Git repositories with HTTPS and scp-like non-GitHub o
 **Ask for approval**, and starts a turn. The gateway is a local LiteLLM/vLLM-shaped twin: it rejects streamed
 `stream_options` with HTTP 400, then sends `content: null`, a ping comment, and an answer without
 usage in the accepted stream. The gate requires the answer to be visible and the Activity Log to
-contain request validation and the compatibility retry. A second installed run rejects both stream
-shapes and must show the typed provider failure in the Workbench. The failed run must also have a
+contain request validation, the compatibility retry, and the usage settlement with a closed source
+and completion count. The sidecar may request a buffered answer even when the provider supports
+streaming, so both delivery paths must settle usage. A second installed run rejects both stream
+shapes and must show the typed
+provider failure in the Workbench. The failed run must also have a
 installed-build diagnostic with frames that `keiko support analyze` can find by request
 correlation. The diagnostic links to the run through `parentCorrelationId`;
 `coding-sidecar.gateway.turn-failed` records the closed cause and whether its SSE projection was

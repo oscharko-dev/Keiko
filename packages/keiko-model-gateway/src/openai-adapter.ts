@@ -755,7 +755,15 @@ function isContextOverflow(status: number, payload: unknown): boolean {
 }
 
 function isModelRefusal(payload: unknown): boolean {
-  return /content[_ -]?filter|refus|safety|content[_ -]?policy/.test(errorSignal(payload));
+  return /content[_ -]?filter|refus|safety|policy/.test(errorSignal(payload));
+}
+
+function isOptionalStreamFieldRejection(payload: unknown): boolean {
+  const error = isRecord(payload) && isRecord(payload.error) ? payload.error : payload;
+  const param = isRecord(error) && typeof error.param === "string" ? error.param : "";
+  return /stream[_ -]?options|include[_ -]?usage/.test(
+    `${errorSignal(payload)} ${param}`.toLowerCase(),
+  );
 }
 
 function isStrictChatShapeRejection(status: number): boolean {
@@ -1367,7 +1375,10 @@ export class OpenAiAdapter implements ProviderAdapter {
     }
     try {
       const payload = await this.readErrorBody(first.response, config, secrets, first.signal);
-      if (isContextOverflow(first.response.status, payload) || isModelRefusal(payload)) {
+      if (
+        isContextOverflow(first.response.status, payload) ||
+        (isModelRefusal(payload) && !isOptionalStreamFieldRejection(payload))
+      ) {
         mapHttpError(first.response, config.modelId, secrets, payload);
       }
     } finally {

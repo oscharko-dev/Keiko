@@ -210,6 +210,16 @@ async function awaitProjectedTurnFailure(stateDir) {
   }
 }
 
+async function awaitSettledUsage(stateDir) {
+  await expect
+    .poll(
+      () =>
+        activityLines(stateDir).some((line) => line.op === "coding-sidecar.gateway.usage-settled"),
+      { timeout: 10_000 },
+    )
+    .toBe(true);
+}
+
 async function pairWorkbench(page, repository, pairingSecret) {
   await page.addInitScript((root) => {
     globalThis.localStorage.setItem(
@@ -319,7 +329,7 @@ async function runTurn(page, repository, scpRepository, pairingSecret, expectFai
   }
 }
 
-function assertGatewayEvidence(twin, lines) {
+function assertGatewayEvidence(twin, lines, expectFailure) {
   const operations = new Set(lines.map((line) => line.op));
   for (const required of [
     "coding-sidecar.gateway.request-validated",
@@ -333,6 +343,16 @@ function assertGatewayEvidence(twin, lines) {
   if (!twin.requests.some((request) => request.stream && !request.hasStreamOptions)) {
     throw new Error("twin did not receive a compatible streaming retry");
   }
+  if (expectFailure) return;
+  const usage = lines.find(
+    (line) =>
+      line.op === "coding-sidecar.gateway.usage-settled" &&
+      ["streamed-byte-estimate", "output-byte-estimate"].includes(line.source) &&
+      Number.isInteger(line.completionTokens) &&
+      line.completionTokens > 0 &&
+      typeof line.parentCorrelationId === "string",
+  );
+  if (usage === undefined) throw new Error("answered turn lacks estimated usage evidence");
 }
 
 async function qualifyInstalled(
@@ -361,8 +381,9 @@ async function qualifyInstalled(
     });
     await runTurn(page, repository, scpRepository, pairingSecret, expectFailure);
     if (expectFailure) await awaitProjectedTurnFailure(stateDir);
+    else await awaitSettledUsage(stateDir);
     const lines = activityLines(stateDir);
-    assertGatewayEvidence(twin, lines);
+    assertGatewayEvidence(twin, lines, expectFailure);
     if (expectFailure) assertAnalyzableFailure(project, stateDir, lines);
   } finally {
     await browser?.close();

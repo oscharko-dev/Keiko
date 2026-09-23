@@ -371,6 +371,8 @@ async function* streamedResponse(response: NormalizedResponse): AsyncGenerator<G
 }
 
 describe("coding-sidecar gateway", () => {
+  afterEach(resetServerLogger);
+
   it.each([
     { label: "buffered", stream: false },
     { label: "streaming", stream: true },
@@ -1615,6 +1617,7 @@ describe("coding-sidecar gateway", () => {
   });
 
   it("retains positive completion usage when a streamed proxy answer has no usage", async () => {
+    const sink = captureServerLog("info");
     const response = mockResponse({ captureBody: true });
     const record = vi.fn();
     const normalized = {
@@ -1649,9 +1652,102 @@ describe("coding-sidecar gateway", () => {
       completionTokens: 3,
       outputBytes: 62,
     });
+    const settled = sink.events.find(
+      (event) => event.op === "coding-sidecar.gateway.usage-settled",
+    );
+    expect(settled?.extra).toMatchObject({
+      source: "streamed-byte-estimate",
+      completionTokens: 3,
+    });
+    expectActivityLogProof(
+      "coding-sidecar.gateway.usage-settled.line",
+      formatActivityLogProofLine(settled ?? {}),
+    );
+  });
+
+  it("preserves a smaller positive provider token count over the stream byte estimate", async () => {
+    const sink = captureServerLog("info");
+    const response = mockResponse({ captureBody: true });
+    const record = vi.fn();
+    const normalized = {
+      ...assistantResponse("azure-coding-model"),
+      content: "hello",
+      usage: { ...assistantResponse("azure-coding-model").usage, completionTokens: 1 },
+    };
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "answer" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-reported-usage" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          streamedResponse(normalized),
+      ),
+      codingSidecarGatewayEvidenceAggregator: { record },
+    } as UiHandlerDeps;
+    expect(await handleCodingSidecarGatewayChatCompletions(context, deps)).toBe(STREAMING);
+    expect(response.body()).toContain('"completion_tokens":1');
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "accepted", completionTokens: 1 }),
+    );
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.usage-settled")?.extra,
+    ).toMatchObject({ source: "provider-reported", completionTokens: 1 });
+  });
+
+  it("accounts for a tool-call-only streamed answer without provider usage", async () => {
+    const sink = captureServerLog("info");
+    const response = mockResponse({ captureBody: true });
+    const record = vi.fn<(entry: { outcome: string; completionTokens: number }) => void>();
+    const normalized: NormalizedResponse = {
+      ...assistantResponse("azure-coding-model"),
+      content: "",
+      finishReason: "tool_calls",
+      toolCalls: [{ id: "call-1", name: "keiko_workspace_read", arguments: { relativePath: "a" } }],
+      usage: { ...assistantResponse("azure-coding-model").usage, completionTokens: 0 },
+    };
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "read" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-tool-only" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          streamedResponse(normalized),
+      ),
+      codingSidecarGatewayEvidenceAggregator: { record },
+    } as UiHandlerDeps;
+    expect(await handleCodingSidecarGatewayChatCompletions(context, deps)).toBe(STREAMING);
+    expect(response.body()).toContain('"tool_calls"');
+    const accepted = record.mock.calls.find(([entry]) => entry.outcome === "accepted")?.[0];
+    expect(accepted?.completionTokens).toBeGreaterThan(0);
+    expect(response.body()).not.toContain('"completion_tokens":0');
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.usage-settled")?.extra,
+    ).toMatchObject({
+      source: "output-byte-estimate",
+      completionTokens: accepted?.completionTokens,
+    });
   });
 
   it("synthesizes OpenAI SSE from a buffered tool-call response", async () => {
+    const sink = captureServerLog("info");
     const response = mockResponse({ captureBody: true });
     const context: RouteContext = {
       ...authenticatedContext({
@@ -1669,6 +1765,7 @@ describe("coding-sidecar gateway", () => {
       toolCalls: [
         { id: "call-1", name: "keiko_workspace_read", arguments: { relativePath: "src/a.ts" } },
       ],
+      usage: { ...assistantResponse("azure-coding-model").usage, completionTokens: 0 },
     };
 
     const result = await handleCodingSidecarGatewayChatCompletions(
@@ -1684,7 +1781,11 @@ describe("coding-sidecar gateway", () => {
     expect(response.headers.get("content-type")).toContain("text/event-stream");
     expect(response.body()).toContain('"tool_calls"');
     expect(response.body()).toContain('"finish_reason":"tool_calls"');
+    expect(response.body()).toMatch(/"completion_tokens":[1-9]/u);
     expect(response.body()).toContain("data: [DONE]");
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.usage-settled")?.extra,
+    ).toMatchObject({ source: "output-byte-estimate" });
   });
 
   it("commits the buffered SSE handshake before waiting for the provider", async () => {

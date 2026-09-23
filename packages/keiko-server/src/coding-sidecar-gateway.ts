@@ -369,6 +369,34 @@ const CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION = defineActivityLogOperation(
   releaseImpact: "patch",
 });
 
+const CODING_SIDECAR_GATEWAY_USAGE_SETTLED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.gateway.usage-settled",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-gateway.logGatewayCompletionUsage",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    completionTokens: { type: "integer", dataClass: "count", required: true },
+    outputBytes: { type: "integer", dataClass: "count", required: true },
+    source: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["provider-reported", "streamed-byte-estimate", "output-byte-estimate"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-sidecar-gateway-request"],
+  proofIds: ["coding-sidecar.gateway.usage-settled.line"],
+  releaseImpact: "patch",
+});
+
 type GatewayRejectionEvidence = Partial<{
   readonly expectedToolCount: number;
   readonly receivedToolCount: number;
@@ -1973,7 +2001,7 @@ async function dispatchGatewayChat(
       return await streamGatewayChat(ctx, dispatch);
     }
     if (parsed.stream) bufferedStream = beginBufferedOpenAiStream(ctx, modelAlias);
-    return await executeBufferedGatewayChat(dispatch, bufferedStream);
+    return await executeBufferedGatewayChat(ctx, dispatch, bufferedStream);
   } catch (error) {
     return settleFailedGatewayChat(
       ctx,
@@ -2013,6 +2041,7 @@ function settleFailedGatewayChat(
 }
 
 async function executeBufferedGatewayChat(
+  ctx: RouteContext,
   dispatch: GatewayChatDispatchContext,
   stream: BufferedOpenAiStreamSession | undefined,
 ): Promise<RouteResult | typeof STREAMING> {
@@ -2020,7 +2049,14 @@ async function executeBufferedGatewayChat(
     dispatch;
   const response = await chatFactoryFor(deps, binding.gateway)(binding.config, modelAlias)(request);
   settlePromptTokenReservation(deps, promptTokenReservation, response.usage.promptTokens);
-  const metrics = outputMetrics(response);
+  const output = outputMetrics(response);
+  const usage = completionUsage(response, output.outputBytes, 0);
+  const metrics = { ...output, completionTokens: usage.completionTokens };
+  const settledResponse = {
+    ...response,
+    usage: { ...response.usage, completionTokens: usage.completionTokens },
+  };
+  logGatewayCompletionUsage(ctx, runId, metrics, usage.source);
   if (cancellationSignal.aborted) {
     recordGatewayOutcome(deps, runId, "cancelled", metrics.completionTokens, metrics.outputBytes);
     return stream === undefined
@@ -2041,8 +2077,8 @@ async function executeBufferedGatewayChat(
   }
   recordGatewayOutcome(deps, runId, "accepted", metrics.completionTokens, metrics.outputBytes);
   return stream === undefined
-    ? openAiResponse(modelAlias, response)
-    : completeBufferedOpenAiStream(stream, response);
+    ? openAiResponse(modelAlias, settledResponse)
+    : completeBufferedOpenAiStream(stream, settledResponse);
 }
 
 // Closed stream state machine keeps iterator, cancellation, and SSE backpressure transitions together.
@@ -2238,9 +2274,7 @@ async function streamGatewayResponse(
 ): Promise<void> {
   const { ctx, id, created, modelId, request, iterator, metrics, promptTokenReservation } = session;
   const outcome = outputMetrics(response);
-  // A compatible proxy may omit usage entirely. Preserve the positive count already derived
-  // from streamed bytes; never turn an answered turn into zero completion tokens at settlement.
-  metrics.completionTokens = Math.max(outcome.completionTokens, metrics.completionTokens);
+  settleStreamCompletionUsage(session, response, outcome);
   metrics.outputBytes = Math.max(outcome.outputBytes, metrics.outputBytes);
   metrics.promptTokens = response.usage.promptTokens;
   settlePromptTokenReservation(session.deps, promptTokenReservation, response.usage.promptTokens);
@@ -2270,6 +2304,71 @@ async function streamGatewayResponse(
   }
   recordSessionOutcome(session, "accepted");
   writeSessionTerminal(session, response.finishReason);
+}
+
+function settleStreamCompletionUsage(
+  session: GatewayStreamSession,
+  response: NormalizedResponse,
+  outcome: ReturnType<typeof outputMetrics>,
+): void {
+  const { metrics, ctx, runId } = session;
+  const usage = completionUsage(response, outcome.outputBytes, metrics.completionTokens);
+  metrics.completionTokens = usage.completionTokens;
+  logGatewayCompletionUsage(
+    ctx,
+    runId,
+    {
+      completionTokens: metrics.completionTokens,
+      outputBytes: Math.max(outcome.outputBytes, metrics.outputBytes),
+    },
+    usage.source,
+  );
+}
+
+type CompletionUsageSource =
+  "provider-reported" | "streamed-byte-estimate" | "output-byte-estimate";
+
+function completionUsage(
+  response: NormalizedResponse,
+  outputBytes: number,
+  streamedCompletionTokens: number,
+): { readonly completionTokens: number; readonly source: CompletionUsageSource } {
+  if (response.usage.completionTokens > 0) {
+    return { completionTokens: response.usage.completionTokens, source: "provider-reported" };
+  }
+  if (streamedCompletionTokens > 0) {
+    return { completionTokens: streamedCompletionTokens, source: "streamed-byte-estimate" };
+  }
+  const hasOutput =
+    response.content.length > 0 ||
+    response.toolCalls.length > 0 ||
+    response.structuredOutput !== null;
+  return {
+    completionTokens: hasOutput ? Math.ceil(outputBytes / OUTPUT_BYTES_PER_TOKEN_LIMIT) : 0,
+    source: "output-byte-estimate",
+  };
+}
+
+function logGatewayCompletionUsage(
+  ctx: RouteContext,
+  runId: string,
+  metrics: { readonly completionTokens: number; readonly outputBytes: number },
+  source: CompletionUsageSource,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CODING_SIDECAR_GATEWAY_USAGE_SETTLED_OPERATION,
+      { correlationId: correlationIdOrUnknown(ctx.correlationId), parentCorrelationId: runId },
+      {
+        runId,
+        completionTokens: metrics.completionTokens,
+        outputBytes: metrics.outputBytes,
+        source,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
 }
 
 function settleGatewayStreamError(session: GatewayStreamSession): void {

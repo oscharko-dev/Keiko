@@ -1053,6 +1053,13 @@ including another failed model request at the same task revision, writes
 `coding-sidecar.gateway.turn-failed` with the closed failure code, run id, revision, state, and
 whether the event hub published it. A revision is a task-state version, not a turn identifier, so
 it must not suppress later turn failures.
+On completed buffered and streamed requests, `coding-sidecar.gateway.usage-settled` records the count and
+closed source (`provider-reported`, `streamed-byte-estimate`, or `output-byte-estimate`) beneath
+the request correlation and run parent. A positive provider count takes precedence over a byte
+estimate; a response without usage derives a count from streamed content or terminal tool output.
+Only counts and the source are logged. Generic provider policy refusals remain terminal; an error
+that identifies the optional `stream_options` or `include_usage` field may take the one-time
+compatibility retry.
 
 ### D14 — Bounded immutable segments under the OS-user filesystem boundary
 

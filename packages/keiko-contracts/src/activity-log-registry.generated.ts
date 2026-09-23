@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "0fdca59b80bed874121f90a86d8edf68fa0e504b67dfe7330d4791e1bc7d3bb6" as const;
+  "11c0cc0c60e3f03a02a6222a153ddbbbb931f86876195902e62df1bc52cb83e1" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -7362,6 +7362,54 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "failure-cluster",
     failureClasses: ["coding-sidecar-gateway-turn-failure"],
     proofIds: ["coding-sidecar.gateway.turn-failed.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "coding-sidecar.gateway.usage-settled",
+    category: "gateway",
+    owner: "keiko-server",
+    emitter: "coding-sidecar-gateway.logGatewayCompletionUsage",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      runId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: true,
+        maxLength: 128,
+      },
+      completionTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      outputBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      source: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["provider-reported", "streamed-byte-estimate", "output-byte-estimate"],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "end",
+    analyzerProjection: "timeline",
+    failureClasses: ["coding-sidecar-gateway-request"],
+    proofIds: ["coding-sidecar.gateway.usage-settled.line"],
     releaseImpact: "patch",
   },
   {
@@ -34986,11 +35034,11 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       failureClass: "coding-sidecar-gateway-request",
       requirementContract: "coding-sidecar-gateway-request",
       productSurfaces: ["keiko-server"],
-      lifecycleTransitions: ["state"],
+      lifecycleTransitions: ["end", "state"],
       lifecycleOperations: {
         start: [],
         state: ["coding-sidecar.gateway.request-validated"],
-        end: [],
+        end: ["coding-sidecar.gateway.usage-settled"],
         failure: [],
         loss: [],
       },
@@ -34999,9 +35047,16 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           op: "coding-sidecar.gateway.request-validated",
           mode: "correlation",
         },
+        {
+          op: "coding-sidecar.gateway.usage-settled",
+          mode: "correlation",
+        },
       ],
       lossSignals: [],
-      resourceSignals: ["coding-sidecar.gateway.request-validated"],
+      resourceSignals: [
+        "coding-sidecar.gateway.request-validated",
+        "coding-sidecar.gateway.usage-settled",
+      ],
       replayReferences: [],
       operations: [
         {
@@ -35049,6 +35104,54 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["coding-sidecar.gateway.request-validated.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "coding-sidecar.gateway.usage-settled",
+          owner: "keiko-server",
+          category: "gateway",
+          lifecycle: "end",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "completionTokens",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "outputBytes",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "runId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "source",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-sidecar.gateway.usage-settled.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -60208,6 +60311,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-sidecar.gateway.request-validated": "tools-workflows",
     "coding-sidecar.gateway.tool-availability": "tools-workflows",
     "coding-sidecar.gateway.turn-failed": "tools-workflows",
+    "coding-sidecar.gateway.usage-settled": "tools-workflows",
     "coding-sidecar.tool-facade.rejected": "tools-workflows",
     "coding-workbench.issue.previewed": "tools-workflows",
     "coding-workbench.issue.resolved": "tools-workflows",
