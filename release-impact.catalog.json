@@ -2398,8 +2398,8 @@
         "rationale": "The release owner requested v1.1.6 after green product gates. Issue #3596 defines the customer-shape acceptance and publication sequence; PR #3598 merged the repair to dev after all required checks, zero open review threads, and a current-head SonarCloud quality gate with zero open issues.",
         "traceability": null
       },
-      "userActionRequired": false,
-      "remediation": "no-action-required",
+      "userActionRequired": true,
+      "remediation": "restart-required",
       "traceability": null,
       "portableRuntimeArtifactContract": {
         "programEpic": 1944,
