@@ -19,7 +19,6 @@ import { ContextOverflowError, TimeoutError } from "@oscharko-dev/keiko-security
 import { TOOL_CALLING_VERIFICATION_MAX_AGE_MS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
-import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
   _classifyBadRequestReasonForTests,
@@ -2049,7 +2048,7 @@ describe("coding-sidecar gateway", () => {
   // pattern AGENTS.md §7 forbids — on the coding path. The SSE error frame still went out, but the
   // cause was recorded nowhere, so an interrupted coding turn had no diagnosable reason. The frame is
   // unchanged; the redacted cause is added and is distinguishable from a pre-stream failure by `source`.
-  it("records the mid-stream failure cause with the request correlation id", async () => {
+  it("records the mid-stream failure cause with the run correlation id", async () => {
     const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
     const eventHub = new CodingRuntimeEventHub();
     const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
@@ -2093,8 +2092,7 @@ describe("coding-sidecar gateway", () => {
       .map(([entry]) => entry)
       .filter((entry) => entry.source === "coding-sidecar-gateway.stream");
     expect(streamRecords).toHaveLength(1);
-    expect(streamRecords[0]?.correlationId).toBe("sidecar-corr-0001");
-    expect(streamRecords[0]?.parentCorrelationId).toBe("run-stream-failure");
+    expect(streamRecords[0]?.correlationId).toBe("run-stream-failure");
     expect(streamRecords[0]?.errorClass).toBe("Error");
     expect(streamRecords[0]?.code).toBe("GATEWAY_TRANSPORT");
     // Interrupted-turn token counts survive the failure instead of vanishing with the error.
@@ -2107,13 +2105,10 @@ describe("coding-sidecar gateway", () => {
     ]);
   });
 
-  // Regression: a mid-stream failure with no request correlation id in scope used to fall back to
-  // the bare literal `"unknown"` (7 characters), which fails `isValidCorrelationId`'s 8-character
-  // floor and was silently rewritten by `emitServerDiagnostic`'s sanitizer to the "hostile value"
-  // marker `"invalid-correlation-id"` — misreporting an honestly-absent id as a malformed one. The
-  // fallback is now the shape-valid sentinel `UNKNOWN_CORRELATION_ID`, which survives the sanitizer
-  // unchanged. This test fails against the old bare-`"unknown"` fallback.
-  it("falls back the stream-failure correlation id to the unknown-id sentinel, never the invalid-id marker", async () => {
+  // Regression: a mid-stream failure without a request correlation once produced bare "unknown",
+  // which the diagnostic sanitizer rewrote to "invalid-correlation-id". The authenticated run id
+  // is always available and now anchors the diagnostic directly in support analyze's run timeline.
+  it("uses the authenticated run id when the request correlation is missing", async () => {
     const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
     const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
       await Promise.resolve();
@@ -2148,7 +2143,7 @@ describe("coding-sidecar gateway", () => {
       .map(([entry]) => entry)
       .filter((entry) => entry.source === "coding-sidecar-gateway.stream");
     expect(streamRecords).toHaveLength(1);
-    expect(streamRecords[0]?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    expect(streamRecords[0]?.correlationId).toBe("run-stream-failure-no-corr");
     expect(streamRecords[0]?.correlationId).not.toBe("invalid-correlation-id");
   });
 
@@ -3424,7 +3419,7 @@ describe("coding-sidecar gateway", () => {
         errorClass: "ProviderError",
         code: "GATEWAY_PROVIDER_ERROR",
         gatewayRequestId: "gateway-request-1",
-        parentCorrelationId: "run-gateway-test",
+        correlationId: "run-gateway-test",
         message: "server-operation-failed",
       }),
     );

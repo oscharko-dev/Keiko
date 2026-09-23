@@ -133,6 +133,34 @@ function activityLines(stateDir) {
     .map((line) => JSON.parse(line));
 }
 
+function assertAnalyzableFailure(project, stateDir, lines) {
+  const diagnostic = lines.find(
+    (line) =>
+      line.op === "server.diagnostic.failure" &&
+      typeof line.correlationId === "string" &&
+      line.correlationId.startsWith("run-") &&
+      Array.isArray(line.frames) &&
+      line.frames.some((frame) => typeof frame === "string" && frame.includes("/dist/")),
+  );
+  if (diagnostic === undefined) {
+    throw new Error("failed turn lacks a correlated installed-build diagnostic with frames");
+  }
+  const bin = join(project, "node_modules", "@oscharko-dev", "keiko", "dist", "cli", "index.js");
+  const bundle = join(project, "failure-support.jsonl");
+  run(process.execPath, [bin, "support", "export", "--state-dir", stateDir, "--out", bundle], {
+    cwd: project,
+  });
+  const analyzed = run(
+    process.execPath,
+    [bin, "support", "analyze", bundle, "--correlation-id", diagnostic.correlationId, "--json"],
+    { cwd: project },
+  );
+  const report = JSON.parse(analyzed);
+  if (!JSON.stringify(report.lines).includes('"server.diagnostic.failure"')) {
+    throw new Error("support analyze omitted the failed turn's correlated diagnostic");
+  }
+}
+
 async function pairWorkbench(page, repository, pairingSecret) {
   await page.addInitScript((root) => {
     globalThis.localStorage.setItem(
@@ -201,19 +229,23 @@ async function selectAskForApproval(page) {
   await page.getByRole("button", { name: "Close Settings window", exact: true }).click();
 }
 
-async function runTurn(page, repository, scpRepository, pairingSecret) {
+async function runTurn(page, repository, scpRepository, pairingSecret, expectFailure) {
   await pairWorkbench(page, repository, pairingSecret);
   const scpBound = await page.request.post("/api/task-workspaces", {
     headers: CSRF,
     data: {
       root: scpRepository,
-      taskId: "scp-origin-qualification",
+      taskId: expectFailure ? "scp-origin-failure-proof" : "scp-origin-qualification",
       baseBranch: "main",
       requestedBy: "customer-shape-lane",
     },
   });
   if (!scpBound.ok()) throw new Error(`scp-like origin binding failed (HTTP ${scpBound.status()})`);
-  await provision(page, repository, "customer-shape-qualification");
+  await provision(
+    page,
+    repository,
+    expectFailure ? "customer-shape-failure-proof" : "customer-shape-qualification",
+  );
   await selectAskForApproval(page);
   await page
     .getByLabel("Task instructions")
@@ -227,12 +259,26 @@ async function runTurn(page, repository, scpRepository, pairingSecret) {
   const startResponse = await started;
   if (!startResponse.ok())
     throw new Error(`coding run start failed (HTTP ${startResponse.status()})`);
-  await expect(page.getByText(CUSTOMER_SHAPE_REPLY, { exact: true })).toBeVisible({
-    timeout: TURN_TIMEOUT_MS,
-  });
+  if (expectFailure) {
+    await expect(page.getByText(/The model provider rejected this turn/u).first()).toBeVisible({
+      timeout: 45_000,
+    });
+  } else {
+    await expect(page.getByText(CUSTOMER_SHAPE_REPLY, { exact: true })).toBeVisible({
+      timeout: TURN_TIMEOUT_MS,
+    });
+  }
 }
 
-async function qualifyInstalled(project, stateDir, configPath, twin, repository, scpRepository) {
+async function qualifyInstalled(
+  project,
+  stateDir,
+  configPath,
+  twin,
+  repository,
+  scpRepository,
+  expectFailure = false,
+) {
   const port = await reservePort();
   const pairingSecret = randomBytes(32).toString("hex");
   const cli = lifecycle(project, stateDir, port, configPath, pairingSecret);
@@ -248,8 +294,9 @@ async function qualifyInstalled(project, stateDir, configPath, twin, repository,
       baseURL: `http://127.0.0.1:${String(port)}`,
       viewport: { width: 1440, height: 1400 },
     });
-    await runTurn(page, repository, scpRepository, pairingSecret);
-    const operations = new Set(activityLines(stateDir).map((line) => line.op));
+    await runTurn(page, repository, scpRepository, pairingSecret, expectFailure);
+    const lines = activityLines(stateDir);
+    const operations = new Set(lines.map((line) => line.op));
     for (const required of [
       "coding-sidecar.gateway.request-validated",
       "chat.request.compatibility-retry",
@@ -262,6 +309,7 @@ async function qualifyInstalled(project, stateDir, configPath, twin, repository,
     if (!twin.requests.some((request) => request.stream && !request.hasStreamOptions)) {
       throw new Error("twin did not receive a compatible streaming retry");
     }
+    if (expectFailure) assertAnalyzableFailure(project, stateDir, lines);
   } finally {
     await browser?.close();
     if (started) cli("stop");
@@ -290,8 +338,23 @@ async function main() {
     seedVendoredRegistry(vendorTmp, undefined, artifact.manifest, seeded.vendored);
     await installIntoWithYarn(project, artifact, seeded.vendored);
     await qualifyInstalled(project, stateDir, configPath, twin, repository, scpRepository);
+    twin.rejectAllStreaming();
+    const failureStateDir = mkdtempSync(join(homedir(), ".keiko-customer-shape-failure-state-"));
+    try {
+      await qualifyInstalled(
+        project,
+        failureStateDir,
+        configPath,
+        twin,
+        repository,
+        scpRepository,
+        true,
+      );
+    } finally {
+      rmSync(failureStateDir, { recursive: true, force: true });
+    }
     process.stdout.write(
-      `customer-shape qualification ok: staged Yarn install, local LiteLLM twin, visible Workbench reply, body-free Activity Log (${Math.round(performance.now() - start)}ms).\n`,
+      `customer-shape qualification ok: staged Yarn install, local LiteLLM twin, visible Workbench reply and typed failure, body-free Activity Log (${Math.round(performance.now() - start)}ms).\n`,
     );
   } finally {
     await twin.close();

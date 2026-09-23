@@ -95,11 +95,11 @@ async function requestBody(request) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
-async function handleTwinChat(request, response, requests) {
+async function handleTwinChat(request, response, requests, behavior) {
   try {
     const body = await requestBody(request);
     requests.push({ stream: body.stream === true, hasStreamOptions: "stream_options" in body });
-    if (body.stream === true && "stream_options" in body) {
+    if (body.stream === true && ("stream_options" in body || behavior.rejectAllStreams)) {
       sendJson(response, { error: { code: "unsupported_parameter" } }, 400);
       return;
     }
@@ -110,7 +110,7 @@ async function handleTwinChat(request, response, requests) {
   }
 }
 
-function handleTwinRequest(request, response, requests) {
+function handleTwinRequest(request, response, requests, behavior) {
   const url = request.url ?? "";
   if (request.method === "GET" && url.endsWith("/model/info")) {
     sendJson(response, {
@@ -129,7 +129,7 @@ function handleTwinRequest(request, response, requests) {
     return;
   }
   if (request.method === "POST" && url.endsWith("/chat/completions")) {
-    void handleTwinChat(request, response, requests);
+    void handleTwinChat(request, response, requests, behavior);
     return;
   }
   sendJson(response, { error: { type: "not_found" } }, 404);
@@ -137,8 +137,9 @@ function handleTwinRequest(request, response, requests) {
 
 export async function startCustomerShapeLiteLlmTwin() {
   const requests = [];
+  const behavior = { rejectAllStreams: false };
   const server = createServer((request, response) =>
-    handleTwinRequest(request, response, requests),
+    handleTwinRequest(request, response, requests, behavior),
   );
   await new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -149,6 +150,9 @@ export async function startCustomerShapeLiteLlmTwin() {
   return {
     baseUrl: `http://127.0.0.1:${String(address.port)}/v1`,
     requests,
+    rejectAllStreaming: () => {
+      behavior.rejectAllStreams = true;
+    },
     close: () =>
       new Promise((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
