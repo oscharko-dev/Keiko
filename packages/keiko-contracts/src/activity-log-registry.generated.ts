@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "e5b27d407f46b754bdb0becaf60a332d03aa7fed9d105e1b9ac104f68f1dcd8b" as const;
+  "b09ada50a279cee42ebd76a639d21b34c6ce5af2fc2700eaac75c05a4d4b557d" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -1044,7 +1044,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       toolCount: {
         type: "integer",
         dataClass: "count",
-        required: true,
+        required: false,
       },
       readBudgetMs: {
         type: "number",
@@ -40717,7 +40717,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "toolCount",
               type: "integer",
               dataClass: "count",
-              required: true,
+              required: false,
             },
           ],
           evidenceClasses: [

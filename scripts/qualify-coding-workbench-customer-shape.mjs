@@ -254,8 +254,7 @@ async function qualifyInstalled(project, stateDir, configPath, twin, repository,
       "coding-sidecar.gateway.request-validated",
       "chat.request.compatibility-retry",
     ]) {
-      if (!operations.has(required))
-        throw new Error(`missing Activity Log operation ${required}`);
+      if (!operations.has(required)) throw new Error(`missing Activity Log operation ${required}`);
     }
     if (!twin.requests.some((request) => request.stream && request.hasStreamOptions)) {
       throw new Error("twin did not reject the optional streaming field");

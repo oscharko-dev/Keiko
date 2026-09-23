@@ -101,7 +101,8 @@ const CHAT_REQUEST_DISPATCH_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: false,
     },
-    toolCount: { type: "integer", dataClass: "count", required: true },
+    // Historical chat.request.dispatch lines predate this diagnostic; old bundles remain readable.
+    toolCount: { type: "integer", dataClass: "count", required: false },
     readBudgetMs: { type: "number", dataClass: "duration", required: false },
   },
   causal: "correlation",

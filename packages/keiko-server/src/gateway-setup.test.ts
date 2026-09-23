@@ -7176,6 +7176,8 @@ describe("handleGatewaySetup", () => {
       expect(seen.map((call) => call.model)).toEqual([
         "Mistral-Large-3",
         "gpt-5.4",
+        // The rejected streamed shape is retried once without optional usage metadata.
+        "Mistral-Large-3",
         "gpt-5.4",
         "gpt-5.4",
       ]);
