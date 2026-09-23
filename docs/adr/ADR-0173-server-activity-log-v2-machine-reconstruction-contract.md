@@ -1046,7 +1046,11 @@ stream usage flag and tool count before the provider call; a strict OpenAI-compa
 one-time retry without `stream_options` records `chat.request.compatibility-retry`. These lines
 contain counts, status, closed reasons, and digests only. The Workbench receives a separate
 `failure-redacted` SSE event with a closed gateway-turn cause while the runtime is still active;
-the event carries no provider response body or customer content.
+the event carries no provider response body or customer content. Each gateway turn failure,
+including another failed model request at the same task revision, writes
+`coding-sidecar.gateway.turn-failed` with the closed failure code, run id, revision, state, and
+whether the event hub published it. A revision is a task-state version, not a turn identifier, so
+it must not suppress later turn failures.
 
 ### D14 — Bounded immutable segments under the OS-user filesystem boundary
 

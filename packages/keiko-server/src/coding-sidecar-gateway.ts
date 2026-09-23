@@ -335,6 +335,40 @@ const CODING_SIDECAR_GATEWAY_REJECTED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.gateway.turn-failed",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-gateway.reportGatewayTurnFailure",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    revision: { type: "integer", dataClass: "count", required: true },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["running", "paused"],
+    },
+    failureCode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["provider-failed", "stream-incomplete", "turn-rejected"],
+    },
+    published: { type: "boolean", dataClass: "closed-enum", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-sidecar-gateway-turn-failure"],
+  proofIds: ["coding-sidecar.gateway.turn-failed.emitted-line"],
+  releaseImpact: "patch",
+});
+
 type GatewayRejectionEvidence = Partial<{
   readonly expectedToolCount: number;
   readonly receivedToolCount: number;
@@ -1295,11 +1329,30 @@ function reportGatewayTurnFailure(
 ): void {
   const snapshot = deps.codingRuntimeOrchestrator?.getSnapshot(runId);
   if (snapshot?.state !== "running" && snapshot?.state !== "paused") return;
-  deps.codingRuntimeEventHub?.publishTurnFailure(
-    runId,
-    snapshot.state,
-    snapshot.revision,
-    failureCode,
+  const published =
+    deps.codingRuntimeEventHub?.publishTurnFailure(
+      runId,
+      snapshot.state,
+      snapshot.revision,
+      failureCode,
+    ) ?? false;
+  getServerLogger().warn(
+    activityLogEvent(
+      CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION,
+      {
+        correlationId: runId,
+        errorKind: failureCode === "turn-rejected" ? "validation-failed" : "unavailable",
+      },
+      {
+        runId,
+        revision: snapshot.revision,
+        state: snapshot.state,
+        failureCode,
+        published,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
   );
 }
 
@@ -2169,11 +2222,13 @@ async function streamGatewayResponse(
 ): Promise<void> {
   const { ctx, id, created, modelId, request, iterator, metrics, promptTokenReservation } = session;
   const outcome = outputMetrics(response);
-  metrics.completionTokens = outcome.completionTokens;
-  metrics.outputBytes = outcome.outputBytes;
+  // A compatible proxy may omit usage entirely. Preserve the positive count already derived
+  // from streamed bytes; never turn an answered turn into zero completion tokens at settlement.
+  metrics.completionTokens = Math.max(outcome.completionTokens, metrics.completionTokens);
+  metrics.outputBytes = Math.max(outcome.outputBytes, metrics.outputBytes);
   metrics.promptTokens = response.usage.promptTokens;
   settlePromptTokenReservation(session.deps, promptTokenReservation, response.usage.promptTokens);
-  if (exceedsOutputBudget(outcome, request.maxOutputTokens ?? 1)) {
+  if (exceedsOutputBudget(metrics, request.maxOutputTokens ?? 1)) {
     await iterator.return?.();
     recordSessionOutcome(session, "output-limit");
     writeSessionTerminal(session, "length");

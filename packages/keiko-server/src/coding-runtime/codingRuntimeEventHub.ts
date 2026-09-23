@@ -108,7 +108,6 @@ interface RunBuffer {
   nextSequence: number;
   bytes: number;
   terminal: boolean;
-  lastTurnFailureRevision?: number;
   readonly events: RetainedEvent[];
   readonly subscribers: Set<CodingRuntimeEventHubSubscriber>;
 }
@@ -179,7 +178,7 @@ export class CodingRuntimeEventHub {
     return { ok: true, event };
   }
 
-  /** Reports one content-free gateway failure per task revision while the runtime may still retry. */
+  /** Reports each content-free gateway failure, including retries at the same task revision. */
   publishTurnFailure(
     runId: string,
     state: CodingWorkbenchRuntimeStateName,
@@ -187,7 +186,7 @@ export class CodingRuntimeEventHub {
     failureCode: CodingWorkbenchTurnFailureCode,
   ): boolean {
     const run = this.runs.get(runId);
-    if (run?.terminal === true || run?.lastTurnFailureRevision === revision) return false;
+    if (run?.terminal === true) return false;
     const result = this.publish({
       schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
       kind: "runtime-event",
@@ -197,10 +196,7 @@ export class CodingRuntimeEventHub {
       eventKind: "failure-redacted",
       failureCode,
     });
-    if (!result.ok) return false;
-    const retained = this.runs.get(runId);
-    if (retained !== undefined) retained.lastTurnFailureRevision = revision;
-    return true;
+    return result.ok;
   }
 
   replay(runId: string, lastEventId?: string): CodingRuntimeEventHubReplay {

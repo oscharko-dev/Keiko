@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "b09ada50a279cee42ebd76a639d21b34c6ce5af2fc2700eaac75c05a4d4b557d"
+    "catalogDigest": "0fdca59b80bed874121f90a86d8edf68fa0e504b67dfe7330d4791e1bc7d3bb6"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,10 +51,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 448,
-    "proofCount": 456,
-    "resolvedProofCount": 456,
-    "failureClassCount": 316,
+    "operationCount": 449,
+    "proofCount": 457,
+    "resolvedProofCount": 457,
+    "failureClassCount": 317,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -288,6 +288,7 @@
         "coding-sidecar.gateway.rejected",
         "coding-sidecar.gateway.request-validated",
         "coding-sidecar.gateway.tool-availability",
+        "coding-sidecar.gateway.turn-failed",
         "coding-sidecar.tool-facade.rejected",
         "coding-workbench.issue.previewed",
         "coding-workbench.issue.resolved",
@@ -683,6 +684,7 @@
     "coding-safe-activity-projection": ["tools-workflows.loss"],
     "coding-sidecar-gateway-readiness": ["tools-workflows.dependency-failure"],
     "coding-sidecar-gateway-rejection": ["tools-workflows.rejection"],
+    "coding-sidecar-gateway-turn-failure": ["tools-workflows.dependency-failure"],
     "coding-sidecar-gateway-request": ["tools-workflows.dependency-failure"],
     "coding-sidecar-tool-availability": ["tools-workflows.dependency-failure"],
     "coding-sidecar-tool-facade-rejection": ["tools-workflows.rejection"],
@@ -1254,6 +1256,9 @@
       "packages/keiko-server/src/coding-sidecar-gateway.test.ts"
     ],
     "coding-sidecar.gateway.tool-availability.line": [
+      "packages/keiko-server/src/coding-sidecar-gateway.test.ts"
+    ],
+    "coding-sidecar.gateway.turn-failed.emitted-line": [
       "packages/keiko-server/src/coding-sidecar-gateway.test.ts"
     ],
     "coding-sidecar.tool-facade.rejected.line": [

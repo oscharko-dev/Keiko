@@ -42,10 +42,10 @@ const recovery = (runId: string, revision: number): CodingRuntimeEventHubInput =
 });
 
 describe("CodingRuntimeEventHub", () => {
-  it("reports one redacted gateway failure per revision and retains it across replay", () => {
+  it("retains every redacted gateway failure when separate turns share a task revision", () => {
     const hub = new CodingRuntimeEventHub({ maxEvents: 3 });
     expect(hub.publishTurnFailure("run-a", "running", 1, "provider-failed")).toBe(true);
-    expect(hub.publishTurnFailure("run-a", "running", 1, "stream-incomplete")).toBe(false);
+    expect(hub.publishTurnFailure("run-a", "running", 1, "stream-incomplete")).toBe(true);
     const replay = hub.replay("run-a");
     expect(replay.ok).toBe(true);
     if (!replay.ok) return;
@@ -54,6 +54,11 @@ describe("CodingRuntimeEventHub", () => {
         kind: "runtime-event",
         eventKind: "failure-redacted",
         failureCode: "provider-failed",
+      },
+      {
+        kind: "runtime-event",
+        eventKind: "failure-redacted",
+        failureCode: "stream-incomplete",
       },
     ]);
   });

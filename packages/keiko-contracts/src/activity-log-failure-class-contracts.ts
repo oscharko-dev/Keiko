@@ -1899,6 +1899,33 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "coding-sidecar-gateway-turn-failure",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: [],
+      end: [],
+      failure: ["coding-sidecar.gateway.turn-failed"],
+      loss: [],
+    },
+    requiredCausalOperations: ["coding-sidecar.gateway.turn-failed"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["coding-sidecar.gateway.turn-failed"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: [],
+    requiredEvidenceClasses: [
+      "closed-enum",
+      "completeness-state",
+      "count",
+      "loss-state",
+      "opaque-id",
+    ],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "coding-sidecar-gateway-request",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

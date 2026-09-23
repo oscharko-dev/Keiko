@@ -1614,6 +1614,43 @@ describe("coding-sidecar gateway", () => {
     expect(frames[4]).toBe("[DONE]");
   });
 
+  it("retains positive completion usage when a streamed proxy answer has no usage", async () => {
+    const response = mockResponse({ captureBody: true });
+    const record = vi.fn();
+    const normalized = {
+      ...assistantResponse("azure-coding-model"),
+      content: "Answered.",
+      usage: { ...assistantResponse("azure-coding-model").usage, completionTokens: 0 },
+    };
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "answer" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-no-usage" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          streamedResponse(normalized),
+      ),
+      codingSidecarGatewayEvidenceAggregator: { record },
+    } as UiHandlerDeps;
+    expect(await handleCodingSidecarGatewayChatCompletions(context, deps)).toBe(STREAMING);
+    expect(response.body()).toContain('"completion_tokens":3');
+    expect(record).toHaveBeenCalledWith({
+      runId: "run-no-usage",
+      outcome: "accepted",
+      completionTokens: 3,
+      outputBytes: 62,
+    });
+  });
+
   it("synthesizes OpenAI SSE from a buffered tool-call response", async () => {
     const response = mockResponse({ captureBody: true });
     const context: RouteContext = {
@@ -3435,12 +3472,38 @@ describe("coding-sidecar gateway", () => {
 });
 
 describe("coding sidecar gateway turn failure projection", () => {
+  afterEach(resetServerLogger);
+
+  it("records a failed SSE projection for an active run when the event hub is unavailable", async () => {
+    const sink = captureServerLog("warn");
+    const deps: UiHandlerDeps = {
+      ...depsValue(
+        configValue(provider(), capability()),
+        () => () => Promise.reject(new ProviderError("synthetic unavailable", 503)),
+      ),
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 4 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    };
+    await handleCodingSidecarGatewayChatCompletions(
+      routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
+      deps,
+    );
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed"),
+    ).toMatchObject({
+      correlationId: "run-gateway-test",
+      extra: { runId: "run-gateway-test", revision: 4, published: false },
+    });
+  });
+
   it.each([
     [new ProviderError("synthetic unavailable", 503), "provider-failed"],
     [new ProviderError("empty assistant stream", 200), "stream-incomplete"],
     [new TimeoutError("synthetic timeout"), "stream-incomplete"],
     [new ContextOverflowError("synthetic context limit"), "turn-rejected"],
   ] as const)("projects %s as %s without exposing provider text", async (error, code) => {
+    const sink = captureServerLog("warn");
     const eventHub = new CodingRuntimeEventHub();
     const deps: UiHandlerDeps = {
       ...depsValue(configValue(provider(), capability()), () => () => Promise.reject(error)),
@@ -3457,6 +3520,17 @@ describe("coding sidecar gateway turn failure projection", () => {
     const replay = eventHub.replay("run-gateway-test");
     expect(replay.ok && replay.events).toMatchObject([{ failureCode: code }]);
     expect(JSON.stringify(replay)).not.toContain(error.message);
+    const projected = sink.events.find(
+      (event) => event.op === "coding-sidecar.gateway.turn-failed",
+    );
+    expect(projected).toMatchObject({
+      correlationId: "run-gateway-test",
+      extra: { runId: "run-gateway-test", revision: 2, failureCode: code, published: true },
+    });
+    expectActivityLogProof(
+      "coding-sidecar.gateway.turn-failed.emitted-line",
+      formatActivityLogProofLine(projected ?? {}),
+    );
   });
 });
 

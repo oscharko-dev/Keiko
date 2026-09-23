@@ -755,7 +755,7 @@ function isContextOverflow(status: number, payload: unknown): boolean {
 }
 
 function isModelRefusal(payload: unknown): boolean {
-  return /content[_ -]?filter|refus|safety|policy/.test(errorSignal(payload));
+  return /content[_ -]?filter|refus|safety|content[_ -]?policy/.test(errorSignal(payload));
 }
 
 function isStrictChatShapeRejection(status: number): boolean {

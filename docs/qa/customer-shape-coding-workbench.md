@@ -17,7 +17,8 @@ usage in the accepted stream. The gate requires the answer to be visible and the
 contain request validation and the compatibility retry. A second installed run rejects both stream
 shapes and must show the typed provider failure in the Workbench. The failed run must also have a
 correlated installed-build diagnostic with frames that `keiko support analyze` can find in its
-timeline. The gate reports duration and no prompt body.
+timeline. `coding-sidecar.gateway.turn-failed` records the closed cause and whether its SSE
+projection was published. The gate reports duration and no prompt body.
 
 The lane runs before `Publish package`, so a red, absent, or timed-out lane prevents publication.
 The browser and Yarn runtime are installed as release-job prerequisites. It does not call Azure or

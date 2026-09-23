@@ -66,6 +66,41 @@ describe("OpenAI-compatible chat compatibility", () => {
     expect(bodies).toHaveLength(1);
   });
 
+  it("retries optional stream metadata rejected by a proxy policy", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const adapter = new OpenAiAdapter({
+      requestId: "proxy-policy",
+      costClass: "low",
+      fetchImpl: (_url, init): Promise<Response> => {
+        const body = requestBody(init);
+        bodies.push(body);
+        return Promise.resolve(
+          "stream_options" in body
+            ? new Response(
+                JSON.stringify({ error: { message: "stream_options disabled by policy" } }),
+                {
+                  status: 400,
+                },
+              )
+            : streamedAnswer(),
+        );
+      },
+    });
+    const chunks: GatewayStreamChunk[] = [];
+    for await (const chunk of adapter.callStream(
+      { modelId: CONFIG.modelId, messages: [{ role: "user", content: "Synthetic prompt" }] },
+      CONFIG,
+    )) {
+      chunks.push(chunk);
+    }
+    expect(chunks.at(-1)).toMatchObject({
+      type: "done",
+      response: { content: "Synthetic answer." },
+    });
+    expect(bodies).toHaveLength(2);
+    expect(bodies[1]).not.toHaveProperty("stream_options");
+  });
+
   it("stops after one compatibility retry when the minimal request also fails", async () => {
     const bodies: Record<string, unknown>[] = [];
     const adapter = new OpenAiAdapter({
