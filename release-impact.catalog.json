@@ -2361,6 +2361,57 @@
     },
     {
       "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.1.6",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.1.6",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-24-keiko-1.1.6-coding-workbench-litellm-stream-recovery",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Coding Workbench turns recover when a strict OpenAI-compatible gateway rejects optional streaming usage metadata. Slow self-hosted model responses remain active, and failed or truncated turns show a closed cause with correlated body-free diagnostics. The staged Yarn project install is qualified in the browser against a LiteLLM/vLLM-shaped local gateway before publication.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Coding Workbench: recover from strict OpenAI-compatible streaming usage-field rejections, tolerate self-hosted model pauses, and show a clear cause when a turn fails or its response stream stops early. The staged Yarn install is checked against a local LiteLLM/vLLM-shaped gateway before release."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-24",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/issues/3596",
+        "rationale": "The release owner requested v1.1.6 after green product gates. Issue #3596 defines the customer-shape acceptance and publication sequence; PR #3598 merged the repair to dev after all required checks, zero open review threads, and a current-head SonarCloud quality gate with zero open issues.",
+        "traceability": null
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
       "packageVersion": "1.1.5",
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
