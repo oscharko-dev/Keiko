@@ -763,8 +763,10 @@ function isContextOverflow(status: number, payload: unknown): boolean {
   return CONTEXT_OVERFLOW_SIGNAL.test(errorSignal(payload));
 }
 
+const MODEL_REFUSAL_SIGNAL = /content[_ -]?filter|refus|safety|policy/;
+
 function isModelRefusal(payload: unknown): boolean {
-  return /content[_ -]?filter|refus|safety|policy/.test(errorSignal(payload));
+  return MODEL_REFUSAL_SIGNAL.test(errorSignal(payload));
 }
 
 function isOptionalStreamFieldRejection(payload: unknown): boolean {
@@ -775,11 +777,18 @@ function isOptionalStreamFieldRejection(payload: unknown): boolean {
   );
 }
 
+function hasNonStreamErrorParameter(payload: unknown): boolean {
+  const error = isRecord(payload) && isRecord(payload.error) ? payload.error : payload;
+  if (!isRecord(error) || typeof error.param !== "string") return false;
+  const param = error.param.trim().toLowerCase();
+  return param.length > 0 && !/stream[_ -]?options|include[_ -]?usage/.test(param);
+}
+
 function isStructuredModelRefusal(payload: unknown): boolean {
   const error = isRecord(payload) && isRecord(payload.error) ? payload.error : payload;
   if (!isRecord(error)) return false;
   return [error.code, error.type].some(
-    (value) => typeof value === "string" && /content[_ -]?filter|refus|safety|policy/.test(value),
+    (value) => typeof value === "string" && MODEL_REFUSAL_SIGNAL.test(value.toLowerCase()),
   );
 }
 
@@ -791,7 +800,9 @@ function shouldPreserveProviderRejection(status: number, payload: unknown): bool
   return (
     isContextOverflow(status, payload) ||
     (isModelRefusal(payload) &&
-      (isStructuredModelRefusal(payload) || !isOptionalStreamFieldRejection(payload)))
+      (isStructuredModelRefusal(payload) ||
+        hasNonStreamErrorParameter(payload) ||
+        !isOptionalStreamFieldRejection(payload)))
   );
 }
 

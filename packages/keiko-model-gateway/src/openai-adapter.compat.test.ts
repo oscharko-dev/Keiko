@@ -135,10 +135,46 @@ describe("OpenAI-compatible chat compatibility", () => {
     expect(bodies).toHaveLength(1);
   });
 
-  it("keeps a structured prompt-policy refusal terminal when its text mentions stream_options", async () => {
+  it.each(["policy_violation", "POLICY_VIOLATION", "ResponsibleAIPolicyViolation"])(
+    "keeps a structured %s refusal terminal when its text mentions stream_options",
+    async (code) => {
+      const bodies: Record<string, unknown>[] = [];
+      const adapter = new OpenAiAdapter({
+        requestId: `structured-policy-refusal-${code}`,
+        costClass: "low",
+        fetchImpl: (_url, init): Promise<Response> => {
+          bodies.push(requestBody(init));
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                error: {
+                  code,
+                  param: "messages",
+                  message: "Prompt text containing stream_options violates policy",
+                },
+              }),
+              { status: 400 },
+            ),
+          );
+        },
+      });
+      const consume = async (): Promise<void> => {
+        for await (const _chunk of adapter.callStream(
+          { modelId: CONFIG.modelId, messages: [{ role: "user", content: "Synthetic prompt" }] },
+          CONFIG,
+        )) {
+          // A refusal does not produce a response chunk.
+        }
+      };
+      await expect(consume()).rejects.toMatchObject({ code: "GATEWAY_MODEL_REFUSAL" });
+      expect(bodies).toHaveLength(1);
+    },
+  );
+
+  it("keeps a prompt-parameter policy refusal terminal without a structured code", async () => {
     const bodies: Record<string, unknown>[] = [];
     const adapter = new OpenAiAdapter({
-      requestId: "structured-policy-refusal",
+      requestId: "prompt-parameter-refusal",
       costClass: "low",
       fetchImpl: (_url, init): Promise<Response> => {
         bodies.push(requestBody(init));
@@ -146,7 +182,6 @@ describe("OpenAI-compatible chat compatibility", () => {
           new Response(
             JSON.stringify({
               error: {
-                code: "policy_violation",
                 param: "messages",
                 message: "Prompt text containing stream_options violates policy",
               },
@@ -161,7 +196,7 @@ describe("OpenAI-compatible chat compatibility", () => {
         { modelId: CONFIG.modelId, messages: [{ role: "user", content: "Synthetic prompt" }] },
         CONFIG,
       )) {
-        // A refusal does not produce a response chunk.
+        // A refused turn cannot produce a response chunk.
       }
     };
     await expect(consume()).rejects.toMatchObject({ code: "GATEWAY_MODEL_REFUSAL" });

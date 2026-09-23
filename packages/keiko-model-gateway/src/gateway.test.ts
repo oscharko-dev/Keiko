@@ -68,6 +68,7 @@ describe("Gateway.chat", () => {
   it("allows a slow Coding Workbench provider without changing ordinary chat timeouts", async () => {
     const timeouts: number[] = [];
     const gateway = new Gateway(config([provider({ maxRetries: 0 })]), {
+      clock: createScriptedGatewayClock(),
       adapter: fakeAdapter((_request, cfg) => {
         timeouts.push(cfg.timeoutMs);
         return Promise.resolve(okResponse(cfg.modelId));
@@ -76,6 +77,7 @@ describe("Gateway.chat", () => {
     await gateway.chat(REQUEST);
     await gateway.chat({ ...REQUEST, latencyProfile: "coding-workbench" });
     const longConfigured = new Gateway(config([provider({ timeoutMs: 120_000, maxRetries: 0 })]), {
+      clock: createScriptedGatewayClock(),
       adapter: fakeAdapter((_request, cfg) => {
         timeouts.push(cfg.timeoutMs);
         return Promise.resolve(okResponse(cfg.modelId));
