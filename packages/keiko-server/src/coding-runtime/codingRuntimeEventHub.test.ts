@@ -68,11 +68,8 @@ describe("CodingRuntimeEventHub", () => {
   });
 
   it("distinguishes terminal and capacity rejection of a turn failure", () => {
-    const capacity = new CodingRuntimeEventHub({ maxEvents: 2 });
-    expect(capacity.publishTurnFailure("run-a", "running", 1, "provider-failed")).toMatchObject({
-      ok: true,
-    });
-    expect(capacity.publishTurnFailure("run-a", "running", 1, "stream-incomplete")).toEqual({
+    const capacity = new CodingRuntimeEventHub({ maxEvents: 1 });
+    expect(capacity.publishTurnFailure("run-a", "running", 1, "provider-failed")).toEqual({
       ok: false,
       reason: "capacity-pressure",
     });
@@ -82,6 +79,36 @@ describe("CodingRuntimeEventHub", () => {
       ok: false,
       reason: "terminal-run",
     });
+  });
+
+  it("retains a later approval after a burst of turn failures", () => {
+    const hub = new CodingRuntimeEventHub({ maxEvents: 4 });
+    const received: CodingRuntimeEventHubInput[] = [];
+    const subscribed = hub.subscribe("run-a", undefined, {
+      write: (event): boolean => {
+        received.push(event);
+        return true;
+      },
+      close: (): void => undefined,
+    });
+    expect(subscribed.ok).toBe(true);
+    for (let index = 0; index < 10; index += 1) {
+      expect(hub.publishTurnFailure("run-a", "running", 1, "provider-failed").ok).toBe(true);
+    }
+    expect(hub.publish(approval("run-a", 2)).ok).toBe(true);
+    const replay = hub.replay("run-a");
+    expect(replay.ok).toBe(true);
+    if (!replay.ok) return;
+    expect(
+      replay.events.some(
+        (event) => event.kind === "runtime-event" && event.eventKind === "permission-requested",
+      ),
+    ).toBe(true);
+    expect(
+      received.some(
+        (event) => event.kind === "runtime-event" && event.eventKind === "permission-requested",
+      ),
+    ).toBe(true);
   });
 
   it("replays approval and terminal facts exactly once across three forced reconnects", () => {

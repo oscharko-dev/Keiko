@@ -111,6 +111,12 @@ interface PromptTokenReservation {
   readonly capability: string;
   readonly reservedPromptTokens: number;
   settled: boolean;
+  settlement?: PromptTokenSettlement;
+}
+
+interface PromptTokenSettlement {
+  readonly promptTokens: number;
+  readonly source: "provider-reported" | "reserved-estimate";
 }
 
 /**
@@ -125,16 +131,24 @@ function settlePromptTokenReservation(
   deps: UiHandlerDeps,
   reservation: PromptTokenReservation,
   actualPromptTokens?: number,
-): void {
-  if (reservation.settled) return;
+): PromptTokenSettlement {
+  if (reservation.settled) {
+    if (reservation.settlement === undefined) throw new TypeError("missing prompt settlement");
+    return reservation.settlement;
+  }
   reservation.settled = true;
+  const providerReported = actualPromptTokens !== undefined && actualPromptTokens > 0;
+  const promptTokens = providerReported ? actualPromptTokens : reservation.reservedPromptTokens;
   runtimeCapabilityAuthenticator(deps)?.settlePromptTokens?.(
     reservation.capability,
     reservation.reservedPromptTokens,
-    actualPromptTokens !== undefined && actualPromptTokens > 0
-      ? actualPromptTokens
-      : reservation.reservedPromptTokens,
+    promptTokens,
   );
+  reservation.settlement = {
+    promptTokens,
+    source: providerReported ? "provider-reported" : "reserved-estimate",
+  };
+  return reservation.settlement;
 }
 
 const CODING_SIDECAR_GATEWAY_ERROR_CODE = "CODING_SIDECAR_UNAVAILABLE";
@@ -395,6 +409,13 @@ const CODING_SIDECAR_GATEWAY_USAGE_SETTLED_OPERATION = defineActivityLogOperatio
   fields: {
     runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
     completionTokens: { type: "integer", dataClass: "count", required: true },
+    promptTokens: { type: "integer", dataClass: "count", required: true },
+    promptSource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["provider-reported", "reserved-estimate"],
+    },
     outputBytes: { type: "integer", dataClass: "count", required: true },
     source: {
       type: "string",
@@ -410,6 +431,34 @@ const CODING_SIDECAR_GATEWAY_USAGE_SETTLED_OPERATION = defineActivityLogOperatio
   analyzerProjection: "timeline",
   failureClasses: ["coding-sidecar-gateway-request"],
   proofIds: ["coding-sidecar.gateway.usage-settled.line"],
+  releaseImpact: "patch",
+});
+
+const CODING_SIDECAR_GATEWAY_OUTCOME_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.gateway.outcome",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-gateway.recordGatewayOutcome",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["accepted", "cancelled", "failed", "output-limit"],
+    },
+    completionTokens: { type: "integer", dataClass: "count", required: true },
+    outputBytes: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-sidecar-gateway-request"],
+  proofIds: ["coding-sidecar.gateway.outcome.line"],
   releaseImpact: "patch",
 });
 
@@ -1183,12 +1232,20 @@ function emitGatewayEvidenceAggregationDiagnostic(deps: UiHandlerDeps, runId: st
 }
 
 function recordGatewayOutcome(
+  ctx: RouteContext,
   deps: UiHandlerDeps,
   runId: string,
   outcome: CodingSidecarGatewayRunOutcome,
   completionTokens: number,
   outputBytes: number,
 ): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CODING_SIDECAR_GATEWAY_OUTCOME_OPERATION,
+      { correlationId: correlationIdOrUnknown(ctx.correlationId), parentCorrelationId: runId },
+      { runId, outcome, completionTokens, outputBytes, completeness: "complete", loss: "none" },
+    ),
+  );
   try {
     void Promise.resolve(
       evidenceAggregator(deps)?.record({ runId, outcome, completionTokens, outputBytes }),
@@ -2080,12 +2137,17 @@ function settleFailedGatewayChat(
   delivery: Pick<GatewayChatDelivery, "promptTokenReservation">,
   bufferedStream: BufferedOpenAiStreamSession | undefined,
 ): RouteResult | typeof STREAMING {
-  recordGatewayOutcome(deps, runId, cancellationSignal.aborted ? "cancelled" : "failed", 0, 0);
+  recordGatewayOutcome(ctx, deps, runId, cancellationSignal.aborted ? "cancelled" : "failed", 0, 0);
   emitGatewayFailureDiagnostic(ctx, deps, error, runId);
-  if (!cancellationSignal.aborted)
-    reportGatewayTurnFailure(ctx, deps, runId, gatewayTurnFailureCode(error));
-  settlePromptTokenReservation(deps, delivery.promptTokenReservation);
   const spendReason = gatewaySpendRejectionReason(error);
+  if (!cancellationSignal.aborted)
+    reportGatewayTurnFailure(
+      ctx,
+      deps,
+      runId,
+      spendReason === undefined ? gatewayTurnFailureCode(error) : "turn-rejected",
+    );
+  settlePromptTokenReservation(deps, delivery.promptTokenReservation);
   if (spendReason !== undefined && bufferedStream === undefined) {
     logGatewayRejection(ctx, runId, 403, spendReason);
     return forbiddenGatewayRequest();
@@ -2103,7 +2165,11 @@ async function executeBufferedGatewayChat(
   const { deps, binding, modelAlias, request, runId, cancellationSignal, promptTokenReservation } =
     dispatch;
   const response = await chatFactoryFor(deps, binding.gateway)(binding.config, modelAlias)(request);
-  settlePromptTokenReservation(deps, promptTokenReservation, response.usage.promptTokens);
+  const promptSettlement = settlePromptTokenReservation(
+    deps,
+    promptTokenReservation,
+    response.usage.promptTokens,
+  );
   const output = outputMetrics(response);
   const usage = completionUsage(response, output.outputBytes, 0);
   const metrics = { ...output, completionTokens: usage.completionTokens };
@@ -2111,29 +2177,63 @@ async function executeBufferedGatewayChat(
     ...response,
     usage: { ...response.usage, completionTokens: usage.completionTokens },
   };
-  logGatewayCompletionUsage(ctx, runId, metrics, usage.source);
+  logGatewayCompletionUsage(ctx, runId, metrics, usage.source, promptSettlement);
+  const record = (outcome: CodingSidecarGatewayRunOutcome): void => {
+    recordGatewayOutcome(ctx, deps, runId, outcome, metrics.completionTokens, metrics.outputBytes);
+  };
   if (cancellationSignal.aborted) {
-    recordGatewayOutcome(deps, runId, "cancelled", metrics.completionTokens, metrics.outputBytes);
+    record("cancelled");
     return stream === undefined
       ? unavailableError()
       : settleBufferedOpenAiStreamError(stream, "error");
   }
   if (exceedsOutputBudget(metrics, request.maxOutputTokens ?? 1)) {
-    recordGatewayOutcome(
-      deps,
-      runId,
-      "output-limit",
-      metrics.completionTokens,
-      metrics.outputBytes,
-    );
+    record("output-limit");
     return stream === undefined
       ? unavailableError()
       : settleBufferedOpenAiStreamError(stream, "length");
   }
-  recordGatewayOutcome(deps, runId, "accepted", metrics.completionTokens, metrics.outputBytes);
-  return stream === undefined
-    ? openAiResponse(modelAlias, settledResponse)
-    : completeBufferedOpenAiStream(stream, settledResponse);
+  return deliverBufferedGatewayAnswer(
+    ctx,
+    deps,
+    runId,
+    stream,
+    modelAlias,
+    settledResponse,
+    metrics,
+  );
+}
+
+function deliverBufferedGatewayAnswer(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  runId: string,
+  stream: BufferedOpenAiStreamSession | undefined,
+  modelAlias: string,
+  response: NormalizedResponse,
+  metrics: { readonly completionTokens: number; readonly outputBytes: number },
+): RouteResult | typeof STREAMING {
+  if (stream === undefined) {
+    recordGatewayOutcome(
+      ctx,
+      deps,
+      runId,
+      "accepted",
+      metrics.completionTokens,
+      metrics.outputBytes,
+    );
+    return openAiResponse(modelAlias, response);
+  }
+  completeBufferedOpenAiStream(stream, response);
+  recordGatewayOutcome(
+    ctx,
+    deps,
+    runId,
+    ctx.res.writableEnded && !ctx.res.destroyed ? "accepted" : "cancelled",
+    metrics.completionTokens,
+    metrics.outputBytes,
+  );
+  return STREAMING;
 }
 
 // Closed stream state machine keeps iterator, cancellation, and SSE backpressure transitions together.
@@ -2149,7 +2249,7 @@ async function streamGatewayChat(
       modelAlias,
     )(request)[Symbol.asyncIterator]();
   } catch (error) {
-    recordGatewayOutcome(deps, runId, "failed", 0, 0);
+    recordGatewayOutcome(ctx, deps, runId, "failed", 0, 0);
     emitGatewayFailureDiagnostic(ctx, deps, error, runId);
     reportGatewayTurnFailure(ctx, deps, runId, gatewayTurnFailureCode(error));
     settlePromptTokenReservation(deps, promptTokenReservation);
@@ -2254,8 +2354,8 @@ function recordSessionOutcome(
   session: GatewayStreamSession,
   outcome: CodingSidecarGatewayRunOutcome,
 ): void {
-  const { deps, runId, metrics } = session;
-  recordGatewayOutcome(deps, runId, outcome, metrics.completionTokens, metrics.outputBytes);
+  const { ctx, deps, runId, metrics } = session;
+  recordGatewayOutcome(ctx, deps, runId, outcome, metrics.completionTokens, metrics.outputBytes);
 }
 
 function writeSessionTerminal(
@@ -2329,10 +2429,14 @@ async function streamGatewayResponse(
 ): Promise<void> {
   const { ctx, id, created, modelId, request, iterator, metrics, promptTokenReservation } = session;
   const outcome = outputMetrics(response);
-  settleStreamCompletionUsage(session, response, outcome);
   metrics.outputBytes = Math.max(outcome.outputBytes, metrics.outputBytes);
   metrics.promptTokens = response.usage.promptTokens;
-  settlePromptTokenReservation(session.deps, promptTokenReservation, response.usage.promptTokens);
+  const promptSettlement = settlePromptTokenReservation(
+    session.deps,
+    promptTokenReservation,
+    response.usage.promptTokens,
+  );
+  settleStreamCompletionUsage(session, response, outcome, promptSettlement);
   if (exceedsOutputBudget(metrics, request.maxOutputTokens ?? 1)) {
     await iterator.return?.();
     recordSessionOutcome(session, "output-limit");
@@ -2357,14 +2461,18 @@ async function streamGatewayResponse(
       return;
     }
   }
-  recordSessionOutcome(session, "accepted");
   writeSessionTerminal(session, response.finishReason);
+  recordSessionOutcome(
+    session,
+    ctx.res.writableEnded && !ctx.res.destroyed ? "accepted" : "cancelled",
+  );
 }
 
 function settleStreamCompletionUsage(
   session: GatewayStreamSession,
   response: NormalizedResponse,
   outcome: ReturnType<typeof outputMetrics>,
+  promptSettlement: PromptTokenSettlement,
 ): void {
   const { metrics, ctx, runId } = session;
   const usage = completionUsage(response, outcome.outputBytes, metrics.completionTokens);
@@ -2377,6 +2485,7 @@ function settleStreamCompletionUsage(
       outputBytes: Math.max(outcome.outputBytes, metrics.outputBytes),
     },
     usage.source,
+    promptSettlement,
   );
 }
 
@@ -2391,13 +2500,16 @@ function completionUsage(
   if (response.usage.completionTokens > 0) {
     return { completionTokens: response.usage.completionTokens, source: "provider-reported" };
   }
+  if (response.toolCalls.length > 0 || response.structuredOutput !== null) {
+    return {
+      completionTokens: Math.ceil(outputBytes / OUTPUT_BYTES_PER_TOKEN_LIMIT),
+      source: "output-byte-estimate",
+    };
+  }
   if (streamedCompletionTokens > 0) {
     return { completionTokens: streamedCompletionTokens, source: "streamed-byte-estimate" };
   }
-  const hasOutput =
-    response.content.length > 0 ||
-    response.toolCalls.length > 0 ||
-    response.structuredOutput !== null;
+  const hasOutput = response.content.length > 0;
   return {
     completionTokens: hasOutput ? Math.ceil(outputBytes / OUTPUT_BYTES_PER_TOKEN_LIMIT) : 0,
     source: "output-byte-estimate",
@@ -2409,6 +2521,7 @@ function logGatewayCompletionUsage(
   runId: string,
   metrics: { readonly completionTokens: number; readonly outputBytes: number },
   source: CompletionUsageSource,
+  promptSettlement: PromptTokenSettlement,
 ): void {
   getServerLogger().info(
     activityLogEvent(
@@ -2417,6 +2530,8 @@ function logGatewayCompletionUsage(
       {
         runId,
         completionTokens: metrics.completionTokens,
+        promptTokens: promptSettlement.promptTokens,
+        promptSource: promptSettlement.source,
         outputBytes: metrics.outputBytes,
         source,
         completeness: "complete",

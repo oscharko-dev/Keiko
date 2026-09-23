@@ -15,7 +15,11 @@ import {
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import { providerRequestBudgetMs } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
-import { ContextOverflowError, TimeoutError } from "@oscharko-dev/keiko-security/errors/gateway";
+import {
+  ConfigInvalidError,
+  ContextOverflowError,
+  TimeoutError,
+} from "@oscharko-dev/keiko-security/errors/gateway";
 import { TOOL_CALLING_VERIFICATION_MAX_AGE_MS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
@@ -1663,6 +1667,16 @@ describe("coding-sidecar gateway", () => {
       "coding-sidecar.gateway.usage-settled.line",
       formatActivityLogProofLine(settled ?? {}),
     );
+    const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
+    expect(outcome?.extra).toMatchObject({
+      runId: "run-no-usage",
+      outcome: "accepted",
+      completionTokens: 3,
+    });
+    expectActivityLogProof(
+      "coding-sidecar.gateway.outcome.line",
+      formatActivityLogProofLine(outcome ?? {}),
+    );
   });
 
   it("preserves a smaller positive provider token count over the stream byte estimate", async () => {
@@ -1738,6 +1752,54 @@ describe("coding-sidecar gateway", () => {
     const accepted = record.mock.calls.find(([entry]) => entry.outcome === "accepted")?.[0];
     expect(accepted?.completionTokens).toBeGreaterThan(0);
     expect(response.body()).not.toContain('"completion_tokens":0');
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.usage-settled")?.extra,
+    ).toMatchObject({
+      source: "output-byte-estimate",
+      completionTokens: accepted?.completionTokens,
+    });
+  });
+
+  it("accounts for streamed text and tool arguments together when usage is absent", async () => {
+    const sink = captureServerLog("info");
+    const response = mockResponse({ captureBody: true });
+    const record = vi.fn<(entry: { outcome: string; completionTokens: number }) => void>();
+    const normalized: NormalizedResponse = {
+      ...assistantResponse("azure-coding-model"),
+      content: "hello",
+      finishReason: "tool_calls",
+      toolCalls: [
+        {
+          id: "call-1",
+          name: "keiko_workspace_read",
+          arguments: { relativePath: "a".repeat(1_000) },
+        },
+      ],
+      usage: { ...assistantResponse("azure-coding-model").usage, completionTokens: 0 },
+    };
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "read" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-mixed-output" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          streamedResponse(normalized),
+      ),
+      codingSidecarGatewayEvidenceAggregator: { record },
+    } as UiHandlerDeps;
+    expect(await handleCodingSidecarGatewayChatCompletions(context, deps)).toBe(STREAMING);
+    const accepted = record.mock.calls.find(([entry]) => entry.outcome === "accepted")?.[0];
+    expect(accepted?.completionTokens).toBeGreaterThan(250);
+    expect(response.body()).toContain(`"completion_tokens":${String(accepted?.completionTokens)}`);
     expect(
       sink.events.find((event) => event.op === "coding-sidecar.gateway.usage-settled")?.extra,
     ).toMatchObject({
@@ -3667,6 +3729,26 @@ describe("coding sidecar gateway turn failure projection", () => {
     ).toMatchObject({ published: false, publicationReason: "capacity-pressure" });
   });
 
+  it("classifies a local spend rejection as a rejected turn", async () => {
+    const sink = captureServerLog("warn");
+    const deps: UiHandlerDeps = {
+      ...depsValue(
+        configValue(provider(), capability()),
+        () => () => Promise.reject(new ConfigInvalidError("spend-budget-exceeded")),
+      ),
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 3 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    };
+    await handleCodingSidecarGatewayChatCompletions(
+      routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
+      deps,
+    );
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed")?.extra,
+    ).toMatchObject({ failureCode: "turn-rejected" });
+  });
+
   it.each([
     [new ProviderError("synthetic unavailable", 503), "provider-failed"],
     [new ProviderError("empty assistant stream", 200), "stream-incomplete"],
@@ -4360,6 +4442,7 @@ describe("coding-sidecar gateway runtime prompt-token settlement", () => {
   });
 
   it("keeps the full reservation when a successful compatible stream reports no usage", async () => {
+    const sink = captureServerLog("info");
     const answer = assistantResponse("azure-coding-model");
     const chat = vi.fn(() =>
       Promise.resolve({
@@ -4385,5 +4468,11 @@ describe("coding-sidecar gateway runtime prompt-token settlement", () => {
     const [, reserved, actual] = settlePromptTokens.mock.calls[0] ?? [];
     expect(actual).toBeGreaterThan(0);
     expect(actual).toBe(reserved);
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.usage-settled")?.extra,
+    ).toMatchObject({
+      promptTokens: actual,
+      promptSource: "reserved-estimate",
+    });
   });
 });

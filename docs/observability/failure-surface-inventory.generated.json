@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "61a2baf7bd3788b7092683f07ab3e44dc83cb9259c9701a83514b541af74d4cb"
+    "catalogDigest": "49f4cf9e344804bf3cd179aba4fd03bf3e975e09cac4696ef967f643ee46e98a"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,9 +51,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 450,
-    "proofCount": 458,
-    "resolvedProofCount": 458,
+    "operationCount": 451,
+    "proofCount": 459,
+    "resolvedProofCount": 459,
     "failureClassCount": 317,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
@@ -284,6 +284,7 @@
         "coding-runtime.verification",
         "coding-runtime.verification-summarized",
         "coding-runtime.workspace-read",
+        "coding-sidecar.gateway.outcome",
         "coding-sidecar.gateway.readiness-insufficient",
         "coding-sidecar.gateway.rejected",
         "coding-sidecar.gateway.request-validated",
@@ -1246,6 +1247,9 @@
     ],
     "coding-runtime.workspace-read.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.test.ts"
+    ],
+    "coding-sidecar.gateway.outcome.line": [
+      "packages/keiko-server/src/coding-sidecar-gateway.test.ts"
     ],
     "coding-sidecar.gateway.readiness-insufficient.line": [
       "packages/keiko-server/src/coding-sidecar-gateway.test.ts"

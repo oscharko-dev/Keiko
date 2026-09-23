@@ -18,10 +18,15 @@ import {
   seedVendoredRegistry,
 } from "./installable-package-smoke.mjs";
 import {
+  CUSTOMER_SHAPE_API_KEY,
   CUSTOMER_SHAPE_MODEL,
   CUSTOMER_SHAPE_REPLY,
   startCustomerShapeLiteLlmTwin,
 } from "./lib/customer-shape-litellm-twin.mjs";
+import {
+  completedTurnEvidence,
+  customerShapeRequestEvidence,
+} from "./lib/customer-shape-evidence.mjs";
 
 const CSRF = { "X-Keiko-CSRF": "1" };
 const TURN_TIMEOUT_MS = 120_000;
@@ -117,7 +122,7 @@ function lifecycle(project, stateDir, port, configPath, pairingSecret) {
   const env = {
     ...process.env,
     KEIKO_CONFIG_FILE: configPath,
-    KEIKO_DEFAULT_API_KEY: "synthetic-local-key",
+    KEIKO_DEFAULT_API_KEY: CUSTOMER_SHAPE_API_KEY,
     KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET: pairingSecret,
     KEIKO_CODING_DEPLOYMENT_CEILING: "autonomous-delivery",
   };
@@ -133,13 +138,14 @@ function activityLines(stateDir) {
     .map((line) => JSON.parse(line));
 }
 
-function assertAnalyzableFailure(project, stateDir, lines) {
+function assertAnalyzableFailure(project, stateDir, lines, runId) {
   // OpenCode may publish its terminal failure first. In that ordering the gateway's additional
   // turn event is suppressed; the closed publication reason explains that outcome. The browser
   // assertion above separately proves that the failure itself reached the Workbench.
   const turnFailure = lines.find(
     (line) =>
       line.op === "coding-sidecar.gateway.turn-failed" &&
+      line.runId === runId &&
       typeof line.correlationId === "string" &&
       typeof line.published === "boolean" &&
       typeof line.publicationReason === "string",
@@ -184,7 +190,7 @@ function assertAnalyzableFailure(project, stateDir, lines) {
   }
 }
 
-async function awaitProjectedTurnFailure(stateDir) {
+async function awaitProjectedTurnFailure(stateDir, runId) {
   try {
     await expect
       .poll(
@@ -192,6 +198,7 @@ async function awaitProjectedTurnFailure(stateDir) {
           activityLines(stateDir).some(
             (line) =>
               line.op === "coding-sidecar.gateway.turn-failed" &&
+              line.runId === runId &&
               typeof line.published === "boolean",
           ),
         { timeout: 10_000 },
@@ -211,13 +218,9 @@ async function awaitProjectedTurnFailure(stateDir) {
   }
 }
 
-async function awaitSettledUsage(stateDir) {
+async function awaitSettledUsage(stateDir, runId) {
   await expect
-    .poll(
-      () =>
-        activityLines(stateDir).some((line) => line.op === "coding-sidecar.gateway.usage-settled"),
-      { timeout: 10_000 },
-    )
+    .poll(() => completedTurnEvidence(activityLines(stateDir), runId), { timeout: 10_000 })
     .toBe(true);
 }
 
@@ -319,6 +322,9 @@ async function runTurn(page, repository, scpRepository, pairingSecret, expectFai
   const startResponse = await started;
   if (!startResponse.ok())
     throw new Error(`coding run start failed (HTTP ${startResponse.status()})`);
+  const startedRun = await startResponse.json();
+  if (typeof startedRun?.runId !== "string" || startedRun.runId.length === 0)
+    throw new Error("coding run start omitted the run id");
   if (expectFailure) {
     await expect(page.getByText(/The model provider rejected this turn/u).first()).toBeVisible({
       timeout: 45_000,
@@ -328,9 +334,10 @@ async function runTurn(page, repository, scpRepository, pairingSecret, expectFai
       timeout: TURN_TIMEOUT_MS,
     });
   }
+  return startedRun.runId;
 }
 
-function assertGatewayEvidence(twin, lines, expectFailure) {
+function assertGatewayEvidence(twin, firstRequest, lines, runId, expectFailure) {
   const operations = new Set(lines.map((line) => line.op));
   for (const required of [
     "coding-sidecar.gateway.request-validated",
@@ -338,10 +345,11 @@ function assertGatewayEvidence(twin, lines, expectFailure) {
   ]) {
     if (!operations.has(required)) throw new Error(`missing Activity Log operation ${required}`);
   }
-  if (!twin.requests.some((request) => request.stream && request.hasStreamOptions)) {
+  const requestEvidence = customerShapeRequestEvidence(twin.requests, firstRequest);
+  if (!requestEvidence.rejectedOptionalField) {
     throw new Error("twin did not reject the optional streaming field");
   }
-  if (!twin.requests.some((request) => request.stream && !request.hasStreamOptions)) {
+  if (!requestEvidence.compatibleRetry) {
     throw new Error("twin did not receive a compatible streaming retry");
   }
   if (expectFailure) return;
@@ -351,7 +359,7 @@ function assertGatewayEvidence(twin, lines, expectFailure) {
       ["streamed-byte-estimate", "output-byte-estimate"].includes(line.source) &&
       Number.isInteger(line.completionTokens) &&
       line.completionTokens > 0 &&
-      typeof line.parentCorrelationId === "string",
+      line.parentCorrelationId === runId,
   );
   if (usage === undefined) throw new Error("answered turn lacks estimated usage evidence");
 }
@@ -368,6 +376,7 @@ async function qualifyInstalled(
   const port = await reservePort();
   const pairingSecret = randomBytes(32).toString("hex");
   const cli = lifecycle(project, stateDir, port, configPath, pairingSecret);
+  const firstRequest = twin.requests.length;
   let started = false;
   let browser;
   try {
@@ -380,12 +389,12 @@ async function qualifyInstalled(
       baseURL: `http://127.0.0.1:${String(port)}`,
       viewport: { width: 1440, height: 1400 },
     });
-    await runTurn(page, repository, scpRepository, pairingSecret, expectFailure);
-    if (expectFailure) await awaitProjectedTurnFailure(stateDir);
-    else await awaitSettledUsage(stateDir);
+    const runId = await runTurn(page, repository, scpRepository, pairingSecret, expectFailure);
+    if (expectFailure) await awaitProjectedTurnFailure(stateDir, runId);
+    else await awaitSettledUsage(stateDir, runId);
     const lines = activityLines(stateDir);
-    assertGatewayEvidence(twin, lines, expectFailure);
-    if (expectFailure) assertAnalyzableFailure(project, stateDir, lines);
+    assertGatewayEvidence(twin, firstRequest, lines, runId, expectFailure);
+    if (expectFailure) assertAnalyzableFailure(project, stateDir, lines, runId);
   } finally {
     await browser?.close();
     if (started) cli("stop");

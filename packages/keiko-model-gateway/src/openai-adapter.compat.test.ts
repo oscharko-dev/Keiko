@@ -38,7 +38,10 @@ function streamedAnswer(): Response {
 
 describe("OpenAI-compatible chat compatibility", () => {
   beforeEach(resetChatCompatibilityMemoForTests);
-  afterEach(vi.useRealTimers);
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
 
   it("does not retry a context overflow after the provider has rejected the turn", async () => {
     const bodies: Record<string, unknown>[] = [];
@@ -132,6 +135,39 @@ describe("OpenAI-compatible chat compatibility", () => {
     expect(bodies).toHaveLength(1);
   });
 
+  it("keeps a structured prompt-policy refusal terminal when its text mentions stream_options", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const adapter = new OpenAiAdapter({
+      requestId: "structured-policy-refusal",
+      costClass: "low",
+      fetchImpl: (_url, init): Promise<Response> => {
+        bodies.push(requestBody(init));
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              error: {
+                code: "policy_violation",
+                param: "messages",
+                message: "Prompt text containing stream_options violates policy",
+              },
+            }),
+            { status: 400 },
+          ),
+        );
+      },
+    });
+    const consume = async (): Promise<void> => {
+      for await (const _chunk of adapter.callStream(
+        { modelId: CONFIG.modelId, messages: [{ role: "user", content: "Synthetic prompt" }] },
+        CONFIG,
+      )) {
+        // A refusal does not produce a response chunk.
+      }
+    };
+    await expect(consume()).rejects.toMatchObject({ code: "GATEWAY_MODEL_REFUSAL" });
+    expect(bodies).toHaveLength(1);
+  });
+
   it("stops after one compatibility retry when the minimal request also fails", async () => {
     const bodies: Record<string, unknown>[] = [];
     const adapter = new OpenAiAdapter({
@@ -208,6 +244,54 @@ describe("OpenAI-compatible chat compatibility", () => {
     expect(calls).toBe(2);
   });
 
+  it("keeps the provider timeout across both attempts without explicit read bounds", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+      const controller = new AbortController();
+      setTimeout(() => {
+        controller.abort(new DOMException("timeout", "TimeoutError"));
+      }, ms);
+      return controller.signal;
+    });
+    let calls = 0;
+    const adapter = new OpenAiAdapter({
+      requestId: "shared-provider-timeout",
+      costClass: "low",
+      fetchImpl: (_url, init): Promise<Response> => {
+        calls += 1;
+        const first = calls === 1;
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(
+            () => {
+              resolve(first ? new Response("{}", { status: 400 }) : streamedAnswer());
+            },
+            first ? 70 : 40,
+          );
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              reject(new Error(String(init.signal?.reason)));
+            },
+            { once: true },
+          );
+        });
+      },
+    });
+    const consume = async (): Promise<void> => {
+      for await (const _chunk of adapter.callStream(
+        { modelId: CONFIG.modelId, messages: [{ role: "user", content: "Synthetic prompt" }] },
+        { ...CONFIG, timeoutMs: 100 },
+      )) {
+        // The fallback cannot complete outside the original provider timeout.
+      }
+    };
+    const rejected = expect(consume()).rejects.toMatchObject({ code: "GATEWAY_TIMEOUT" });
+    await vi.advanceTimersByTimeAsync(110);
+    await rejected;
+    expect(calls).toBe(2);
+  });
+
   it("retries a strict proxy without optional streaming usage and remembers the accepted shape", async () => {
     const bodies: Record<string, unknown>[] = [];
     const events: ModelGatewayLogEvent[] = [];
@@ -263,6 +347,11 @@ describe("OpenAI-compatible chat compatibility", () => {
     expect(retries).toHaveLength(1);
     const retry = retries[0];
     if (retry === undefined) throw new TypeError("compatibility retry evidence missing");
+    expect(retry).toMatchObject({
+      correlationId: "run-compat",
+      status: 400,
+      extra: { omittedField: "stream_options" },
+    });
     expectActivityLogProof(
       "chat.request.compatibility-retry.emitted-line",
       formatActivityLogProofLine(retry),

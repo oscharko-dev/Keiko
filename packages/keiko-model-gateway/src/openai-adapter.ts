@@ -775,6 +775,14 @@ function isOptionalStreamFieldRejection(payload: unknown): boolean {
   );
 }
 
+function isStructuredModelRefusal(payload: unknown): boolean {
+  const error = isRecord(payload) && isRecord(payload.error) ? payload.error : payload;
+  if (!isRecord(error)) return false;
+  return [error.code, error.type].some(
+    (value) => typeof value === "string" && /content[_ -]?filter|refus|safety|policy/.test(value),
+  );
+}
+
 function isStrictChatShapeRejection(status: number): boolean {
   return status === 400 || status === 422;
 }
@@ -782,22 +790,22 @@ function isStrictChatShapeRejection(status: number): boolean {
 function shouldPreserveProviderRejection(status: number, payload: unknown): boolean {
   return (
     isContextOverflow(status, payload) ||
-    (isModelRefusal(payload) && !isOptionalStreamFieldRejection(payload))
+    (isModelRefusal(payload) &&
+      (isStructuredModelRefusal(payload) || !isOptionalStreamFieldRejection(payload)))
   );
 }
 
-function remainingCompatibilityBounds(
+function remainingCompatibilityBudgetMs(
   bounds: StreamReadBounds | undefined,
-  startedAt: number | undefined,
+  startedAt: number,
   now: () => number,
   config: ModelProviderConfig,
   secrets: readonly string[],
-): StreamReadBounds | undefined {
-  if (bounds === undefined || startedAt === undefined) return undefined;
-  const budgetMs = bounds.budgetMs - Math.max(0, now() - startedAt);
+): number {
+  const budgetMs = (bounds?.budgetMs ?? config.timeoutMs) - Math.max(0, now() - startedAt);
   if (budgetMs <= 0)
     throw new TimeoutError(`provider retry budget expired for '${config.modelId}'`, secrets);
-  return { ...bounds, budgetMs };
+  return budgetMs;
 }
 
 function mapHttpError(
@@ -1397,7 +1405,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     bounds?: StreamReadBounds,
   ): Promise<DispatchedResponse> {
     const url = chatCompletionsUrl(config);
-    const startedAt = bounds === undefined ? undefined : Date.now();
+    const startedAt = Date.now();
     const key = sha256Hex(
       `${url}\u0000${config.modelId}\u0000${config.apiKeyHeaderName ?? ""}\u0000${config.apiKey}`,
     );
@@ -1414,9 +1422,17 @@ export class OpenAiAdapter implements ProviderAdapter {
     } finally {
       first.dispose();
     }
-    const retryBounds = remainingCompatibilityBounds(bounds, startedAt, Date.now, config, secrets);
+    const remainingMs = remainingCompatibilityBudgetMs(
+      bounds,
+      startedAt,
+      Date.now,
+      config,
+      secrets,
+    );
+    const retryBounds = bounds === undefined ? undefined : { ...bounds, budgetMs: remainingMs };
+    const retryConfig = bounds === undefined ? { ...config, timeoutMs: remainingMs } : config;
     this.logChatCompatibilityRetry(url, config, first.response.status);
-    const retry = await this.dispatch(request, config, secrets, true, retryBounds, false);
+    const retry = await this.dispatch(request, retryConfig, secrets, true, retryBounds, false);
     if (retry.response.ok) rememberStrictStreamOptionsEndpoint(key, this.now());
     return retry;
   }

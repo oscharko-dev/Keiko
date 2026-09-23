@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "61a2baf7bd3788b7092683f07ab3e44dc83cb9259c9701a83514b541af74d4cb" as const;
+  "49f4cf9e344804bf3cd179aba4fd03bf3e975e09cac4696ef967f643ee46e98a" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -7032,6 +7032,54 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "coding-sidecar.gateway.outcome",
+    category: "gateway",
+    owner: "keiko-server",
+    emitter: "coding-sidecar-gateway.recordGatewayOutcome",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      runId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: true,
+        maxLength: 128,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["accepted", "cancelled", "failed", "output-limit"],
+      },
+      completionTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      outputBytes: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "end",
+    analyzerProjection: "timeline",
+    failureClasses: ["coding-sidecar-gateway-request"],
+    proofIds: ["coding-sidecar.gateway.outcome.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "coding-sidecar.gateway.readiness-insufficient",
     category: "gateway",
     owner: "keiko-server",
@@ -7405,6 +7453,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      promptTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      promptSource: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["provider-reported", "reserved-estimate"],
       },
       outputBytes: {
         type: "integer",
@@ -35051,11 +35110,15 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleOperations: {
         start: [],
         state: ["coding-sidecar.gateway.request-validated"],
-        end: ["coding-sidecar.gateway.usage-settled"],
+        end: ["coding-sidecar.gateway.outcome", "coding-sidecar.gateway.usage-settled"],
         failure: [],
         loss: [],
       },
       causalEdges: [
+        {
+          op: "coding-sidecar.gateway.outcome",
+          mode: "correlation",
+        },
         {
           op: "coding-sidecar.gateway.request-validated",
           mode: "correlation",
@@ -35067,11 +35130,60 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       ],
       lossSignals: [],
       resourceSignals: [
+        "coding-sidecar.gateway.outcome",
         "coding-sidecar.gateway.request-validated",
         "coding-sidecar.gateway.usage-settled",
       ],
       replayReferences: [],
       operations: [
+        {
+          op: "coding-sidecar.gateway.outcome",
+          owner: "keiko-server",
+          category: "gateway",
+          lifecycle: "end",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "completionTokens",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "outputBytes",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "runId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-sidecar.gateway.outcome.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "coding-sidecar.gateway.request-validated",
           owner: "keiko-server",
@@ -35136,6 +35248,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             },
             {
               name: "outputBytes",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "promptSource",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "promptTokens",
               type: "integer",
               dataClass: "count",
               required: true,
@@ -60325,6 +60449,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.verification": "tools-workflows",
     "coding-runtime.verification-summarized": "tools-workflows",
     "coding-runtime.workspace-read": "tools-workflows",
+    "coding-sidecar.gateway.outcome": "tools-workflows",
     "coding-sidecar.gateway.readiness-insufficient": "tools-workflows",
     "coding-sidecar.gateway.rejected": "tools-workflows",
     "coding-sidecar.gateway.request-validated": "tools-workflows",

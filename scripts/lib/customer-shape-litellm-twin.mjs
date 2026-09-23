@@ -1,8 +1,10 @@
 import { Buffer } from "node:buffer";
 import { createServer } from "node:http";
+import { apiKeyHeaderValue } from "../../packages/keiko-model-gateway/dist/index.js";
 
 export const CUSTOMER_SHAPE_MODEL = "gemma-4-31b-it";
 export const CUSTOMER_SHAPE_REPLY = "Synthetic Workbench reply.";
+export const CUSTOMER_SHAPE_API_KEY = "synthetic-local-key";
 
 function sendJson(response, payload, status = 200) {
   response.writeHead(status, { "content-type": "application/json" });
@@ -129,6 +131,13 @@ function handleTwinRequest(request, response, requests, behavior) {
     return;
   }
   if (request.method === "POST" && url.endsWith("/chat/completions")) {
+    if (
+      request.headers["x-litellm-key"] !==
+      apiKeyHeaderValue("x-litellm-key", CUSTOMER_SHAPE_API_KEY)
+    ) {
+      sendJson(response, { error: { type: "authentication_error" } }, 401);
+      return;
+    }
     void handleTwinChat(request, response, requests, behavior);
     return;
   }

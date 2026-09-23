@@ -1931,21 +1931,24 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredLifecycleOperations: {
       start: [],
       state: ["coding-sidecar.gateway.request-validated"],
-      end: ["coding-sidecar.gateway.usage-settled"],
+      end: ["coding-sidecar.gateway.outcome", "coding-sidecar.gateway.usage-settled"],
       failure: [],
       loss: [],
     },
     requiredCausalOperations: [
+      "coding-sidecar.gateway.outcome",
       "coding-sidecar.gateway.request-validated",
       "coding-sidecar.gateway.usage-settled",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
+      "coding-sidecar.gateway.outcome",
       "coding-sidecar.gateway.request-validated",
       "coding-sidecar.gateway.usage-settled",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
+      "coding-sidecar.gateway.outcome",
       "coding-sidecar.gateway.request-validated",
       "coding-sidecar.gateway.usage-settled",
     ],

@@ -101,7 +101,7 @@ export interface CodingRuntimeEventHubOptions {
 interface RetainedEvent {
   readonly event: CodingWorkbenchRuntimeSseEvent;
   readonly bytes: number;
-  readonly critical: boolean;
+  critical: boolean;
 }
 
 interface RunBuffer {
@@ -167,6 +167,7 @@ export class CodingRuntimeEventHub {
 
     // A terminal projection must not retain any potentially content-bearing live stream.
     if (isContainment(event)) this.removeLossy(run);
+    if (isTurnFailure(event)) this.demotePriorTurnFailures(run);
     if (!this.makeCapacity(run, retained)) return { ok: false, reason: "capacity-pressure" };
 
     run.nextSequence += 1;
@@ -304,6 +305,12 @@ export class CodingRuntimeEventHub {
     }
   }
 
+  private demotePriorTurnFailures(run: RunBuffer): void {
+    for (const retained of run.events) {
+      if (isTurnFailure(retained.event)) retained.critical = false;
+    }
+  }
+
   private fanOut(run: RunBuffer, event: CodingWorkbenchRuntimeSseEvent): void {
     for (const subscriber of run.subscribers) {
       if (!write(subscriber, event, event.runId, this.diagnostics))
@@ -343,6 +350,10 @@ function isCritical(event: CodingWorkbenchRuntimeSseEvent): boolean {
     (event.kind === "runtime-event" &&
       (event.eventKind === "permission-requested" || event.eventKind === "failure-redacted"))
   );
+}
+
+function isTurnFailure(event: CodingWorkbenchRuntimeSseEvent): boolean {
+  return event.kind === "runtime-event" && event.eventKind === "failure-redacted";
 }
 
 function isTerminal(event: CodingWorkbenchRuntimeSseEvent): boolean {

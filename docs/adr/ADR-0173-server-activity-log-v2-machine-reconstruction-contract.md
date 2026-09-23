@@ -1058,7 +1058,14 @@ On completed buffered and streamed requests, `coding-sidecar.gateway.usage-settl
 closed source (`provider-reported`, `streamed-byte-estimate`, or `output-byte-estimate`) beneath
 the request correlation and run parent. A positive provider count takes precedence over a byte
 estimate; a response without usage derives a count from streamed content or terminal tool output.
-Only counts and the source are logged. Generic provider policy refusals remain terminal; an error
+Mixed text and tool output uses the complete output-byte estimate.
+The same usage line records the prompt-token count actually charged to the run authority and its
+closed source (`provider-reported` or `reserved-estimate`); absent or zero provider prompt usage
+retains the pre-call reservation.
+`coding-sidecar.gateway.outcome`
+records the closed accepted, cancelled, failed, or output-limit result under that same request and
+run correlation; streamed acceptance is recorded after the terminal frame is written. Only counts,
+closed states, and the source are logged. Generic provider policy refusals remain terminal; an error
 that identifies the optional `stream_options` or `include_usage` field may take the one-time
 compatibility retry.
 
