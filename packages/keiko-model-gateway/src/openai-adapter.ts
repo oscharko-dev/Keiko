@@ -800,6 +800,15 @@ function isStructuredModelRefusal(payload: unknown): boolean {
   );
 }
 
+function isContentRefusalMessage(payload: unknown): boolean {
+  const error = isRecord(payload) && isRecord(payload.error) ? payload.error : payload;
+  if (!isRecord(error) || typeof error.message !== "string") return false;
+  // A refusal can quote the request field without rejecting that field's shape.
+  return /\bprompt\b|content[_ -]?filter|\bsafety\b|\brefus(?:al|ed|es|ing)\b/.test(
+    error.message.toLowerCase(),
+  );
+}
+
 function isStrictChatShapeRejection(status: number): boolean {
   return status === 400 || status === 422;
 }
@@ -810,6 +819,7 @@ function shouldPreserveProviderRejection(status: number, payload: unknown): bool
     (isModelRefusal(payload) &&
       (isStructuredModelRefusal(payload) ||
         hasNonStreamErrorParameter(payload) ||
+        isContentRefusalMessage(payload) ||
         !isOptionalStreamFieldRejection(payload)))
   );
 }

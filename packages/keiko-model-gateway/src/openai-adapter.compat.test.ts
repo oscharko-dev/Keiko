@@ -204,12 +204,28 @@ describe("OpenAI-compatible chat compatibility", () => {
     expect(bodies).toHaveLength(1);
   });
 
-  it.each(["absent", "null"] as const)(
-    "does not resend a message-only policy refusal with %s parameter metadata",
-    async (metadata) => {
+  it.each([
+    { metadata: "absent", refusal: "Prompt text containing stream_options violates policy" },
+    { metadata: "null", refusal: "Prompt text containing stream_options violates policy" },
+    {
+      metadata: "absent",
+      refusal: "Prompt text containing stream_options rejected by content filter",
+    },
+    {
+      metadata: "null",
+      refusal: "Prompt containing stream_options is not allowed by safety policy",
+    },
+    {
+      metadata: "field",
+      refusal: "Prompt containing stream_options is not allowed by safety policy",
+    },
+  ] as const)(
+    "does not resend a message-only refusal with $metadata parameter metadata: $refusal",
+    async ({ metadata, refusal }) => {
       const bodies: Record<string, unknown>[] = [];
       const events: ModelGatewayLogEvent[] = [];
       const correlationId = `run-policy-${metadata}`;
+      const errorParameter = metadata === "null" ? null : "stream_options";
       const gateway = new Gateway(
         {
           providers: [CONFIG],
@@ -224,8 +240,8 @@ describe("OpenAI-compatible chat compatibility", () => {
                 ? new Response(
                     JSON.stringify({
                       error: {
-                        ...(metadata === "null" ? { param: null } : {}),
-                        message: "Prompt text containing stream_options violates policy",
+                        ...(metadata === "absent" ? {} : { param: errorParameter }),
+                        message: refusal,
                       },
                     }),
                     { status: 400 },

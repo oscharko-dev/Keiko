@@ -73,6 +73,26 @@ export async function assertWorkbenchTrustLayout(
   ).toBeLessThanOrEqual(approval.y + 1);
   return { noticeHeight: notice.height, bodyTop: body.y, approvalTop: approval.y };
 }
+
+async function assertWorkbenchApprovalLayout(
+  page: Page,
+  surface: string,
+  approvalLabel: string,
+): Promise<WorkbenchTrustLayoutEvidence> {
+  const workbench = page.locator(surface);
+  // The trust notice belongs only to a workspace-script-trust pause. A commit or delivery
+  // approval is a separate bounded decision and must not advertise a script grant.
+  await expect(workbench.getByTestId("coding-workbench-trust-affordance")).toHaveCount(0);
+  const body = await visibleBox(workbench.locator(":scope > div").last(), "workbench body");
+  const approval = await visibleBox(
+    workbench.getByRole("region", { name: approvalLabel }),
+    "approval review",
+  );
+  expect(body.y, "approval review stays inside the workbench body").toBeLessThanOrEqual(
+    approval.y + 1,
+  );
+  return { noticeHeight: 0, bodyTop: body.y, approvalTop: approval.y };
+}
 const MODES: readonly ColorMode[] = [
   { name: "01-dark", theme: "dark" },
   { name: "02-light", theme: "light" },
@@ -159,7 +179,7 @@ async function captureApprovalModes(
     expect(overflow, `${mode.name} horizontal overflow`).toBe(false);
     if (mode.width === 360) await proveReviewKeyboard(kind, page, surface);
     await page.locator('section[aria-labelledby="permission-title"]').scrollIntoViewIfNeeded();
-    const trustLayout = await assertWorkbenchTrustLayout(page, surface, reviewLabel);
+    const trustLayout = await assertWorkbenchApprovalLayout(page, surface, reviewLabel);
     const screenshot = `docs/design-system/evidence/${String(issue)}/${mode.name}.png`;
     await page
       .locator(frameSelector)
@@ -192,7 +212,15 @@ async function proveReviewKeyboard(
 }
 
 async function proveDiffKeyboardScroll(page: Page, surface: string): Promise<void> {
+  const summary = page
+    .locator(surface)
+    .locator("summary")
+    .filter({
+      hasText: /^\d+ changed files$/u,
+    });
+  await summary.click();
   const viewport = page.locator(surface).locator(".rv-code").first();
+  await expect(viewport).toBeVisible();
   await viewport.focus();
   await expect(viewport).toBeFocused();
   await page.keyboard.press("ArrowRight");

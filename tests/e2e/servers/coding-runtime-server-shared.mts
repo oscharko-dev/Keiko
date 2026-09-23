@@ -199,6 +199,24 @@ function git(cwd: string, args: readonly string[]): void {
   execFileSync("git", [...args], { cwd, encoding: "utf8", timeout: GIT_HELPER_TIMEOUT_MS });
 }
 
+function configureFixtureCommitSigning(repository: string, stateDir: string, email: string): void {
+  const signingRoot = join(stateDir, "commit-signing");
+  mkdirSync(signingRoot, { recursive: true, mode: 0o700 });
+  const key = join(signingRoot, "fixture-key");
+  execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", email, "-f", key], {
+    cwd: signingRoot,
+    timeout: GIT_HELPER_TIMEOUT_MS,
+  });
+  const allowedSigners = join(signingRoot, "allowed-signers");
+  writeFileSync(allowedSigners, `${email} ${readFileSync(`${key}.pub`, "utf8").trim()}\n`, {
+    mode: 0o600,
+  });
+  git(repository, ["config", "gpg.format", "ssh"]);
+  git(repository, ["config", "gpg.ssh.allowedSignersFile", allowedSigners]);
+  git(repository, ["config", "user.signingkey", `${key}.pub`]);
+  git(repository, ["config", "commit.gpgsign", "true"]);
+}
+
 function createRepositoryFixture(config: CodingRuntimeJourneyServerConfig, stateDir: string): void {
   const repository = config.repositoryRoot(stateDir);
   mkdirSync(dirname(join(repository, config.targetRelativePath)), { recursive: true });
@@ -218,6 +236,9 @@ function createRepositoryFixture(config: CodingRuntimeJourneyServerConfig, state
   );
   git(repository, ["add", "."]);
   git(repository, ["commit", "-q", "-m", `${config.fixtureId} fixture`]);
+  if (config.commit === true) {
+    configureFixtureCommitSigning(repository, stateDir, `${config.fixtureId}@keiko.example`);
+  }
   if (config.issue !== undefined) {
     git(repository, ["remote", "add", "origin", config.issue.remoteUrl]);
     git(repository, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
@@ -578,6 +599,7 @@ function scriptedComposition(
   const commit = commitFixtureFor(config, stateDir, services, holder);
   const scripted = createScriptedOpenCodeHarness({
     generatedTools: config.commit === true,
+    pluginVersion: "v2",
     ...(commit === undefined ? {} : { observePhase: commit.observeToolPhase.bind(commit) }),
   });
   const runtimeMutationLeaseBroker = createCodingRuntimeEditorMutationLeaseBroker();
