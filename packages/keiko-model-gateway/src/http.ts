@@ -1960,11 +1960,16 @@ async function nextRead(
 }
 
 // The data payloads of complete SSE lines, up to `data: [DONE]`, which sets `ended.done`.
-function* dataPayloads(lines: readonly string[], ended: { done: boolean }): Generator {
+function* dataPayloads(
+  lines: readonly string[],
+  ended: { done: boolean },
+  onDone?: () => void,
+): Generator {
   for (const line of lines) {
     const result = parseSseLine(line);
     if (result.kind === "done") {
       ended.done = true;
+      onDone?.();
       return;
     }
     if (result.kind === "value") yield result.value;
@@ -1983,6 +1988,7 @@ async function* ssePayloads(
   maxBytes: number,
   idleTimeoutMs: number | undefined,
   signal: AbortSignal | undefined,
+  onDone?: () => void,
 ): AsyncGenerator {
   const decoder = new TextDecoder();
   const deadline = dataDeadlineFor(idleTimeoutMs);
@@ -2004,13 +2010,13 @@ async function* ssePayloads(
     buffer += decoder.decode(value, { stream: true });
     const { lines, rest } = splitSseBuffer(buffer);
     buffer = rest;
-    for (const payload of dataPayloads(lines, ended)) {
+    for (const payload of dataPayloads(lines, ended, onDone)) {
       yield payload;
       deadline?.restart();
     }
     if (ended.done) return;
   }
-  yield* dataPayloads([buffer + decoder.decode()], ended);
+  yield* dataPayloads([buffer + decoder.decode()], ended, onDone);
 }
 
 // Reads a Server-Sent-Events response as a stream of parsed JSON `data:` payloads. Incomplete lines
@@ -2022,13 +2028,14 @@ export async function* readSseStream(
   maxBytes: number = MAX_RESPONSE_BYTES,
   idleTimeoutMs?: number,
   signal?: AbortSignal,
+  onDone?: () => void,
 ): AsyncGenerator {
   if (response.body === null) {
     return;
   }
   const reader = response.body.getReader();
   try {
-    yield* ssePayloads(reader, maxBytes, idleTimeoutMs, signal);
+    yield* ssePayloads(reader, maxBytes, idleTimeoutMs, signal, onDone);
   } finally {
     // Every exit releases the body: the end of the stream, a failure, and a consumer that stops
     // early. A throw in the consumer's loop body closes this generator through return(), which

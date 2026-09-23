@@ -165,6 +165,40 @@ describe("OpenAiAdapter.callStream with read bounds: silence and budget", () => 
     });
   });
 
+  it.each([
+    ["missing finish", [delta("partial answer")], 1],
+    ["unknown finish", [delta("partial answer"), finish("future_reason")], 2],
+  ] as const)(
+    "rejects a partial answer after an abrupt close with %s",
+    async (_label, frames, dataEvents) => {
+      const log = recorder();
+      const reading = answerOf(
+        adapterWith(() => Promise.resolve(sse(frames)), log.sink).callStream(
+          REQUEST,
+          CONFIG,
+          BOUNDS,
+        ),
+      );
+
+      await expect(reading).rejects.toBeInstanceOf(ProviderError);
+      expect(streamedLine(log.events)).toMatchObject({
+        level: "warn",
+        extra: { outcome: "failed", dataEvents },
+      });
+    },
+  );
+
+  it.each([
+    ["done marker", [delta("complete answer"), DONE]],
+    ["finish reason", [delta("complete answer"), finish("stop")]],
+    ["unknown finish reason followed by done", [delta("complete answer"), finish("future"), DONE]],
+  ] as const)("accepts a completed stream signaled by the %s", async (_label, frames) => {
+    const answer = await answerOf(
+      adapterWith(() => Promise.resolve(sse(frames))).callStream(REQUEST, CONFIG, BOUNDS),
+    );
+    expect(answer).toMatchObject({ content: "complete answer", finishReason: "stop" });
+  });
+
   it("ends a stream whose provider falls silent, and releases its body", async () => {
     vi.useFakeTimers();
     const provider = drivenStream();

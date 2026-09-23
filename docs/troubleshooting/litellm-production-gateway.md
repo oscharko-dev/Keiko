@@ -23,6 +23,10 @@ request carrying optional `stream_options` may indicate a strict OpenAI-compatib
 retries once without that optional field and records `chat.request.compatibility-retry` when it
 does. The Workbench displays a closed failure cause and next step if the turn still fails. Do not
 send the raw provider response or model prompt to support.
+If a proxy closes an SSE response after partial text without a recognized finish reason or
+`data: [DONE]`, the turn reports `stream-incomplete` rather than accepting the partial reply.
+Check the correlated `chat.response.streamed` and `coding-sidecar.gateway.turn-failed` lines for
+the failed read and run event; they contain counts and closed reasons, not model text.
 
 ---
 

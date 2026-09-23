@@ -965,6 +965,7 @@ interface StreamAccumulator {
   content: string;
   refusal: string;
   finishReason: FinishReason;
+  sawFinishReason: boolean;
   prompt: number;
   completion: number;
   // The provider's own usage record, kept as it came, so the streamed answer is normalized exactly
@@ -978,6 +979,7 @@ function newStreamAccumulator(): StreamAccumulator {
     content: "",
     refusal: "",
     finishReason: "stop",
+    sawFinishReason: false,
     prompt: 0,
     completion: 0,
     usage: undefined,
@@ -1081,7 +1083,10 @@ function streamReadFields(
 // in-flight response accumulator, when present.
 function applyChunkMetadata(chunk: unknown, acc: StreamAccumulator): void {
   const finish = finishReasonFromChunk(chunk);
-  if (finish !== undefined) acc.finishReason = finish;
+  if (finish !== undefined) {
+    acc.finishReason = finish;
+    acc.sawFinishReason = true;
+  }
   const usage = usageFromChunk(chunk);
   if (usage !== undefined && isRecord(chunk) && isRecord(chunk.usage)) {
     acc.prompt = usage.prompt;
@@ -1216,8 +1221,11 @@ export class OpenAiAdapter implements ProviderAdapter {
     const buffer = { pending: "" };
     const activeSecrets = configuredSecrets(read.secrets);
     const silenceMs = read.bounds?.silenceMs ?? STREAM_IDLE_TIMEOUT_MS;
+    const completion = { sawDone: false };
     try {
-      for await (const chunk of readSseStream(response, undefined, silenceMs, read.signal)) {
+      for await (const chunk of readSseStream(response, undefined, silenceMs, read.signal, () => {
+        completion.sawDone = true;
+      })) {
         recordDataEvent(report);
         throwOnStreamedFailure(chunk, read.config.modelId, read.secrets);
         const content = deltaFromChunk(chunk);
@@ -1225,6 +1233,13 @@ export class OpenAiAdapter implements ProviderAdapter {
           yield* emitRedactedDelta(content, buffer, activeSecrets, read.secrets, acc);
         }
         applyChunkMetadata(chunk, acc);
+      }
+      if (!completion.sawDone && !acc.sawFinishReason) {
+        throw new ProviderError(
+          "provider stream ended without a terminal frame",
+          PROVIDER_EMPTY_ASSISTANT_STATUS,
+          read.secrets,
+        );
       }
       yield* flushPendingBuffer(buffer, read.secrets);
     } catch (error) {
