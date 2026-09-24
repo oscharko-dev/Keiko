@@ -296,22 +296,31 @@ export function checkWindowsPortableAuthenticodeVerifier({
   }
 }
 
-export function executeCheckCli() {
-  const options = discoverTrustedVerifierToolchain();
+function reportPinFailure(error, options, inspect, writeError) {
+  if (!(error instanceof Error) || !error.message.includes("reviewed generated-asset pin")) return;
   try {
-    checkWindowsPortableAuthenticodeVerifier(options);
+    const fingerprint = inspect(options);
+    writeError(`windows-verifier-toolchain: ${JSON.stringify(fingerprint)}\n`);
+  } catch {
+    writeError("windows-verifier-toolchain: inspection-unavailable\n");
+  }
+}
+
+export function executeCheckCli({
+  discover = discoverTrustedVerifierToolchain,
+  check = checkWindowsPortableAuthenticodeVerifier,
+  inspect = inspectVerifierToolchain,
+  writeError = (line) => process.stderr.write(line),
+  writeOutput = (line) => process.stdout.write(line),
+} = {}) {
+  const options = discover();
+  try {
+    check(options);
   } catch (error) {
-    if (error instanceof Error && error.message.includes("reviewed generated-asset pin")) {
-      try {
-        const fingerprint = inspectVerifierToolchain(options);
-        process.stderr.write(`windows-verifier-toolchain: ${JSON.stringify(fingerprint)}\n`);
-      } catch {
-        process.stderr.write("windows-verifier-toolchain: inspection-unavailable\n");
-      }
-    }
+    reportPinFailure(error, options, inspect, writeError);
     throw error;
   }
-  process.stdout.write("windows-portable-authenticode-verifier: PASS\n");
+  writeOutput("windows-portable-authenticode-verifier: PASS\n");
 }
 
 if (
