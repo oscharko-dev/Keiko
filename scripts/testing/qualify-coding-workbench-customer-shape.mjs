@@ -351,30 +351,50 @@ function assertGatewayEvidence(twin, firstRequest, lines, runId, phase) {
   ]) {
     if (!operations.has(required)) throw new Error(`missing Activity Log operation ${required}`);
   }
-  const requestEvidence = customerShapeRequestEvidence(twin.requests, firstRequest);
-  if (!requestEvidence.rejectedOptionalField) {
-    throw new Error("twin did not reject the optional streaming field");
-  }
-  if (!requestEvidence.compatibleRetry) {
-    throw new Error("twin did not receive a compatible streaming retry");
-  }
+  const requestEvidence = assertCompatibleRequests(twin, firstRequest);
   if (phase === "truncation-proof") {
     assertTruncatedStream(twin, firstRequest);
     return;
   }
   if (phase === "failure-proof") return;
+  if (phase === "proxy-reinsertion-proof") assertProxyReinsertion(twin, firstRequest, lines);
   if (phase === "qualification" && !requestEvidence.delayedAcceptedStream) {
     throw new Error("twin did not delay the accepted streaming request");
   }
   const usage = lines.find(
     (line) =>
       line.op === "coding-sidecar.gateway.usage-settled" &&
-      ["streamed-byte-estimate", "output-byte-estimate"].includes(line.source) &&
+      ["provider-reported", "streamed-byte-estimate", "output-byte-estimate"].includes(
+        line.source,
+      ) &&
       Number.isInteger(line.completionTokens) &&
       line.completionTokens > 0 &&
       line.parentCorrelationId === runId,
   );
-  if (usage === undefined) throw new Error("answered turn lacks estimated usage evidence");
+  if (usage === undefined) throw new Error("answered turn lacks settled usage evidence");
+}
+
+function assertCompatibleRequests(twin, firstRequest) {
+  const evidence = customerShapeRequestEvidence(twin.requests, firstRequest);
+  if (!evidence.rejectedOptionalField) {
+    throw new Error("twin did not reject the optional streaming field");
+  }
+  if (!evidence.compatibleRetry) {
+    throw new Error("twin did not receive a compatible streaming retry");
+  }
+  return evidence;
+}
+
+function assertProxyReinsertion(twin, firstRequest, lines) {
+  const retriedWithoutStreaming = lines.some(
+    (line) => line.op === "chat.request.compatibility-retry" && line.omittedField === "stream",
+  );
+  const acceptedBuffered = twin.requests
+    .slice(firstRequest)
+    .some((request) => request.stream === false);
+  if (!retriedWithoutStreaming || !acceptedBuffered) {
+    throw new Error("LiteLLM reinsertion did not reach a buffered answer");
+  }
 }
 
 function assertTruncatedStream(twin, firstRequest) {
@@ -450,7 +470,7 @@ async function qualifyGovernedReadTool(project, configPath, twin, repository, sc
   }
 }
 
-async function qualifyFailureScenario(
+async function qualifyScenario(
   project,
   configPath,
   twin,
@@ -468,9 +488,22 @@ async function qualifyFailureScenario(
   }
 }
 
+async function qualifyProxyReinsertion(project, configPath, twin, repository, scpRepository) {
+  await qualifyScenario(
+    project,
+    configPath,
+    twin,
+    repository,
+    scpRepository,
+    "proxy-reinsertion-proof",
+    () => twin.simulateProxyStreamOptionReinsertion(),
+  );
+  twin.stopProxyStreamOptionReinsertion();
+}
+
 function reportQualification(start) {
   process.stdout.write(
-    `customer-shape qualification ok: staged Yarn install, local LiteLLM twin, visible Workbench reply, governed read-tool round trip, truncated stream rejection, typed failure, body-free Activity Log (${Math.round(performance.now() - start)}ms).\n`,
+    `customer-shape qualification ok: staged Yarn install, local LiteLLM twin, visible Workbench reply, governed read-tool round trip, proxy stream-option reinsertion fallback, truncated stream rejection, typed failure, body-free Activity Log (${Math.round(performance.now() - start)}ms).\n`,
   );
 }
 
@@ -499,7 +532,8 @@ async function main() {
     await qualifyInstalled(project, stateDir, configPath, twin, repository, scpRepository);
     twin.delayAcceptedStreamingBy(0);
     await qualifyGovernedReadTool(project, configPath, twin, repository, scpRepository);
-    await qualifyFailureScenario(
+    await qualifyProxyReinsertion(project, configPath, twin, repository, scpRepository);
+    await qualifyScenario(
       project,
       configPath,
       twin,
@@ -508,7 +542,7 @@ async function main() {
       "truncation-proof",
       () => twin.truncateNextAcceptedStream(),
     );
-    await qualifyFailureScenario(
+    await qualifyScenario(
       project,
       configPath,
       twin,

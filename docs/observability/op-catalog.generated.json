@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "ab973ccf89e118bdfa73d5f01e50b16c28ad78c382bfcba2099b5287027ae92d",
+    "catalogDigest": "9e0cbc82f36d797c73189ab2e7d4e7367b9edd531c1091c22cac4e28aaaf9dfa",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1024,7 +1024,7 @@
             "type": "string",
             "dataClass": "closed-enum",
             "required": true,
-            "values": ["stream_options"]
+            "values": ["stream_options", "stream"]
           }
         },
         "causal": "correlation",
@@ -1034,7 +1034,7 @@
         "proofIds": ["chat.request.compatibility-retry.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:116",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:1520"]
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:1609"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1109,7 +1109,7 @@
         "proofIds": ["chat.request.dispatch.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:81",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:266"]
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:281"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1206,8 +1206,8 @@
         "failureClasses": ["gateway-stream-read"],
         "proofIds": ["chat.response.streamed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:174",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:1375"]
+        "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:189",
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:1410"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -71431,7 +71431,7 @@
     {
       "op": "<dynamic>",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:1454",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:1489",
       "package": "keiko-model-gateway"
     },
     {
@@ -71449,7 +71449,7 @@
     {
       "op": "chat.response.streamed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:177",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:192",
       "package": "keiko-model-gateway"
     },
     {

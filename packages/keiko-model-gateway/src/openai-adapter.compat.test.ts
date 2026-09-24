@@ -37,6 +37,35 @@ function streamedAnswer(): Response {
   });
 }
 
+function bufferedAnswer(): Response {
+  return Response.json({
+    choices: [
+      { message: { role: "assistant", content: "Synthetic answer." }, finish_reason: "stop" },
+    ],
+  });
+}
+
+function bufferedToolAnswer(name: string): Response {
+  return Response.json({
+    choices: [
+      {
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            {
+              id: "call-1",
+              type: "function",
+              function: { name, arguments: '{"path":"README.md"}' },
+            },
+          ],
+        },
+        finish_reason: "tool_calls",
+      },
+    ],
+  });
+}
+
 describe("OpenAI-compatible chat compatibility", () => {
   beforeEach(resetChatCompatibilityMemoForTests);
   afterEach(() => {
@@ -313,6 +342,97 @@ describe("OpenAI-compatible chat compatibility", () => {
       );
     },
   );
+
+  it("answers through LiteLLM when it reinserts stream_options downstream", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const events: ModelGatewayLogEvent[] = [];
+    const adapter = new OpenAiAdapter({
+      requestId: "proxy-reinserts-stream-options",
+      costClass: "low",
+      fetchImpl: (_url, init): Promise<Response> => {
+        const body = requestBody(init);
+        bodies.push(body);
+        return Promise.resolve(
+          body.stream === true
+            ? Response.json(
+                { error: { type: "invalid_request_error", param: "stream_options" } },
+                { status: 400 },
+              )
+            : bufferedAnswer(),
+        );
+      },
+      log: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+      logContext: { correlationId: "run-proxy-reinserts" },
+    });
+    for (let turn = 0; turn < 2; turn += 1) {
+      const chunks: GatewayStreamChunk[] = [];
+      for await (const chunk of adapter.callStream(
+        { modelId: CONFIG.modelId, messages: [{ role: "user", content: "Synthetic prompt" }] },
+        CONFIG,
+      ))
+        chunks.push(chunk);
+      expect(chunks.at(-1)).toMatchObject({
+        type: "done",
+        response: { content: "Synthetic answer." },
+      });
+    }
+    expect(bodies.map((body) => [body.stream, "stream_options" in body])).toEqual([
+      [true, true],
+      [true, false],
+      [undefined, false],
+      [undefined, false],
+    ]);
+    expect(
+      events
+        .filter((event) => event.op === "chat.request.compatibility-retry")
+        .map((event) => event.extra?.omittedField),
+    ).toEqual(["stream_options", "stream"]);
+  });
+
+  it("keeps catalog binding on the whole-body compatibility path", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    let toolName = "read_file";
+    const adapter = new OpenAiAdapter({
+      requestId: "proxy-whole-body-tools",
+      costClass: "low",
+      fetchImpl: (_url, init): Promise<Response> => {
+        const body = requestBody(init);
+        bodies.push(body);
+        return Promise.resolve(
+          body.stream === true
+            ? Response.json(
+                { error: { param: "stream_options", code: "unsupported_parameter" } },
+                { status: 400 },
+              )
+            : bufferedToolAnswer(toolName),
+        );
+      },
+    });
+    const request = {
+      modelId: CONFIG.modelId,
+      messages: [{ role: "user" as const, content: "Synthetic prompt" }],
+      toolCatalog: gatewayCatalogAdvertisement(Date.now(), ["read_file"]),
+    };
+    const chunks: GatewayStreamChunk[] = [];
+    for await (const chunk of adapter.callStream(request, CONFIG)) chunks.push(chunk);
+    expect(chunks.at(-1)).toMatchObject({
+      type: "done",
+      response: { toolCalls: [{ name: "read_file" }] },
+    });
+    expect(bodies[2]?.tools).toEqual(bodies[0]?.tools);
+    toolName = "unoffered_tool";
+    const consume = async (): Promise<void> => {
+      for await (const _chunk of adapter.callStream(request, CONFIG)) {
+        // The unoffered tool cannot become a completed answer.
+      }
+    };
+    await expect(consume()).rejects.toMatchObject({ reason: "invalid-arguments" });
+    expect(bodies[3]?.stream).toBeUndefined();
+  });
 
   it("stops after one compatibility retry when the minimal request also fails", async () => {
     const bodies: Record<string, unknown>[] = [];

@@ -143,6 +143,19 @@ async function requestBody(request) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
+function rejectsStreaming(body, behavior) {
+  return (
+    body.stream === true &&
+    ("stream_options" in body || behavior.rejectAllStreams || behavior.reinsertStreamOptions)
+  );
+}
+
+function streamRejection(behavior) {
+  return behavior.reinsertStreamOptions && !behavior.rejectAllStreams
+    ? { code: "unsupported_parameter", param: "stream_options" }
+    : { code: "unsupported_parameter" };
+}
+
 async function handleTwinChat(request, response, requests, behavior) {
   try {
     const body = await requestBody(request);
@@ -155,8 +168,8 @@ async function handleTwinChat(request, response, requests, behavior) {
       completedDiscoveryResult: hasCompletedWorkspaceDiscoveryResult(body),
     };
     requests.push(observed);
-    if (body.stream === true && ("stream_options" in body || behavior.rejectAllStreams)) {
-      sendJson(response, { error: { code: "unsupported_parameter" } }, 400);
+    if (rejectsStreaming(body, behavior)) {
+      sendJson(response, { error: streamRejection(behavior) }, 400);
       return;
     }
     if (body.stream === true) {
@@ -215,6 +228,7 @@ export async function startCustomerShapeLiteLlmTwin() {
   const requests = [];
   const behavior = {
     rejectAllStreams: false,
+    reinsertStreamOptions: false,
     acceptedStreamDelayMs: 0,
     workspaceDiscoveryPending: false,
     truncateNextAcceptedStream: false,
@@ -233,6 +247,12 @@ export async function startCustomerShapeLiteLlmTwin() {
     requests,
     rejectAllStreaming: () => {
       behavior.rejectAllStreams = true;
+    },
+    simulateProxyStreamOptionReinsertion: () => {
+      behavior.reinsertStreamOptions = true;
+    },
+    stopProxyStreamOptionReinsertion: () => {
+      behavior.reinsertStreamOptions = false;
     },
     delayAcceptedStreamingBy: (milliseconds) => {
       behavior.acceptedStreamDelayMs = milliseconds;

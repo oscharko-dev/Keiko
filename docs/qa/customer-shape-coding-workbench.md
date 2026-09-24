@@ -16,6 +16,13 @@ Workbench, binds synthetic Git repositories with HTTPS and scp-like non-GitHub o
 usage in the accepted stream after a 35-second upstream delay. The gate requires the answer to be visible and the Activity Log to
 contain request validation, the compatibility retry, usage settlement with a closed source and
 completion count, and an accepted outcome for the same run and request after terminal delivery.
+Another installed Workbench run simulates a real LiteLLM proxy reinserting `stream_options` on both
+streaming attempts before forwarding them to a strict vLLM endpoint. The twin rejects both streams
+with the named field, accepts a non-streaming request, and the gate requires a visible answer plus
+the body-free `stream` compatibility retry line. A separate local control uses the actual LiteLLM
+1.102.1 proxy with `hosted_vllm` routing and a strict synthetic backend; it verified the proxy's
+field reinsertion and the adapter's buffered fallback. The release lane itself stays hermetic and
+uses the twin, so it does not require installing Python or LiteLLM on a runner.
 The sidecar may request a buffered answer even when the provider supports
 streaming, so both delivery paths must settle usage. A separate installed run proves that a
 governed `keiko_workspace_discover` call completes and its result reaches a visible follow-up
