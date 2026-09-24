@@ -74,6 +74,7 @@ import type { OpenCodeOptionalToolName } from "./coding-runtime/opencodeLaunchPr
 import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { readJsonObject } from "./files.js";
+import { safetyMarginTokensFor } from "@oscharko-dev/keiko-contracts/context-engineering";
 import {
   ensureCodingWorkbenchContextWindows,
   isCodingWorkbenchProbePending,
@@ -211,6 +212,9 @@ const CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION = defineActivityLogOper
     maxRequestBytes: { type: "integer", dataClass: "count", required: true },
     maxPromptTokens: { type: "integer", dataClass: "count", required: true },
     estimatedPromptTokens: { type: "integer", dataClass: "count", required: true },
+    // #3591 (1.1.7): the output allowance sent with this request, clamped to the window that
+    // remains after the prompt — the value an output-exhausted turn has to be read against.
+    maxOutputTokens: { type: "integer", dataClass: "count", required: true },
     inputMessageCount: { type: "integer", dataClass: "count", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -3068,7 +3072,7 @@ async function runHandleCodingSidecarGatewayChatCompletions(
     estimatedPromptTokens,
     {
       modelAlias: resolved.result.modelAlias,
-      maxOutputTokens: resolved.result.runMetadata.maxOutputTokens,
+      maxOutputTokens: admittedOutputTokens(resolved.result.runMetadata, estimatedPromptTokens),
       upstreamStreamingSupported: upstreamGatewayStreamingSupported(
         deps,
         resolved.result.supportsStreaming,
@@ -3078,6 +3082,25 @@ async function runHandleCodingSidecarGatewayChatCompletions(
         : { reasoningEffort: authentication.reasoningEffort }),
     },
   );
+}
+
+// #3591 (1.1.7): the run's output reserve (8k for an undeclared limit) is a reserve against the
+// whole window, and the prompt admission checks the prompt against that whole window. A prompt
+// close to the window would leave the provider a request larger than its window, so the allowance
+// actually sent is what remains after the prompt and the safety margin — never below a floor that
+// still lets the model answer (and report an exhausted budget instead of failing silently).
+export const MINIMUM_ADMITTED_OUTPUT_TOKENS = 512;
+
+export function admittedOutputTokens(
+  bounds: Pick<CodingWorkbenchSidecarGatewayRunMetadata, "maxPromptTokens" | "maxOutputTokens">,
+  estimatedPromptTokens: number,
+): number {
+  const remaining =
+    bounds.maxPromptTokens -
+    estimatedPromptTokens -
+    safetyMarginTokensFor(bounds.maxPromptTokens, bounds.maxOutputTokens);
+  // The floor lifts a cramped remainder, never the run's own reserve.
+  return Math.min(bounds.maxOutputTokens, Math.max(MINIMUM_ADMITTED_OUTPUT_TOKENS, remaining));
 }
 
 function logValidatedRequestBounds(
@@ -3099,6 +3122,7 @@ function logValidatedRequestBounds(
         maxRequestBytes: bounds.maxRequestBytes,
         maxPromptTokens: bounds.maxPromptTokens,
         estimatedPromptTokens,
+        maxOutputTokens: admittedOutputTokens(bounds, estimatedPromptTokens),
         inputMessageCount: request.messages.length,
         completeness: "complete",
         loss: "none",

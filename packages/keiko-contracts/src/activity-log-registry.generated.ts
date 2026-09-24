@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "1317bcb5b305400b7fda50503eb76401bbafae1046fd0af406f3cb5f701f736b" as const;
+  "b0bec029b7b9a853136eaccafb30cfb52a3236c7cc1ce8d35a4b540a6314212d" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -1049,6 +1049,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       readBudgetMs: {
         type: "number",
         dataClass: "duration",
+        required: false,
+      },
+      maxOutputTokens: {
+        type: "integer",
+        dataClass: "count",
         required: false,
       },
     },
@@ -7274,6 +7279,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
       },
       estimatedPromptTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      maxOutputTokens: {
         type: "integer",
         dataClass: "count",
         required: true,
@@ -35240,6 +35250,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "maxOutputTokens",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
               name: "maxPromptTokens",
               type: "integer",
               dataClass: "count",
@@ -41097,6 +41113,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "digest",
               required: true,
+            },
+            {
+              name: "maxOutputTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
             },
             {
               name: "messageCount",

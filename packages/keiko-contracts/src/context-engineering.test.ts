@@ -18,6 +18,7 @@ import {
   countContextTokensForSegments,
   deriveContextProfile,
   deriveContextProfileFromCapability,
+  safetyMarginTokensFor,
   undeclaredOutputReserveTokens,
   estimateTokens,
   estimateTokensForSegments,
@@ -533,6 +534,12 @@ describe("deriveContextProfileFromCapability", () => {
     expect(wide200k.reservedOutputTokens).toBe(12_500);
     expect(undeclaredOutputReserveTokens(32_000)).toBe(8_000);
     expect(undeclaredOutputReserveTokens(16)).toBe(4);
+  });
+
+  it("scales the safety margin with the window without eating into the output reserve", () => {
+    expect(safetyMarginTokensFor(128_000, 8_000)).toBe(DEFAULT_CONTEXT_PROFILE.safetyMarginTokens);
+    expect(safetyMarginTokensFor(32_000, 8_000)).toBe(1_000);
+    expect(safetyMarginTokensFor(4_096, 4_000)).toBe(96);
   });
 
   it("keeps a declared output limit as the reserve", () => {

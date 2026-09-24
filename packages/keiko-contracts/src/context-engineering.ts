@@ -702,6 +702,20 @@ export function deriveContextProfile(input: {
 // window so a small placeholder window keeps an input budget.
 const UNDECLARED_OUTPUT_RESERVE_WINDOW_FRACTION = 4;
 
+/** The default safety margin scaled to a window, never eating into the output reserve. */
+export function safetyMarginTokensFor(
+  maxInputTokens: number,
+  reservedOutputTokens: number,
+): number {
+  return Math.min(
+    maxInputTokens - reservedOutputTokens,
+    Math.ceil(
+      (maxInputTokens * DEFAULT_CONTEXT_PROFILE.safetyMarginTokens) /
+        DEFAULT_CONTEXT_PROFILE.maxInputTokens,
+    ),
+  );
+}
+
 export function undeclaredOutputReserveTokens(maxInputTokens: number): number {
   const scaled = Math.ceil(
     (maxInputTokens * DEFAULT_CONTEXT_PROFILE.reservedOutputTokens) /
@@ -727,13 +741,7 @@ export function deriveContextProfileFromCapability(
     capability.maxOutputTokens > 0
       ? Math.min(maxInputTokens, capability.maxOutputTokens)
       : undeclaredOutputReserveTokens(maxInputTokens);
-  const safetyMarginTokens = Math.min(
-    maxInputTokens - reservedOutputTokens,
-    Math.ceil(
-      (maxInputTokens * DEFAULT_CONTEXT_PROFILE.safetyMarginTokens) /
-        DEFAULT_CONTEXT_PROFILE.maxInputTokens,
-    ),
-  );
+  const safetyMarginTokens = safetyMarginTokensFor(maxInputTokens, reservedOutputTokens);
   return {
     ...deriveContextProfile({
       maxInputTokens,

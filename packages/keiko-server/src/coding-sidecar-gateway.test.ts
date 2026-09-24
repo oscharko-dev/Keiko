@@ -36,6 +36,8 @@ import {
   handleCodingSidecarGatewayChatCompletions,
   handleCodingSidecarGatewayProfile,
   PROFILE_PROBE_WAIT_MS,
+  MINIMUM_ADMITTED_OUTPUT_TOKENS,
+  admittedOutputTokens,
 } from "./coding-sidecar-gateway.js";
 import { mockRequest, mockResponse, probeVerifiedGatewayConfig } from "./_support.js";
 import {
@@ -3239,6 +3241,8 @@ describe("coding-sidecar gateway", () => {
       loss: "none",
     });
     expect(validated?.extra?.estimatedPromptTokens).toEqual(expect.any(Number));
+    // #3591 (1.1.7): the output allowance actually sent is part of the request's evidence.
+    expect(validated?.extra?.maxOutputTokens).toEqual(expect.any(Number));
     expect(
       activityLogEventRegistration(validated as unknown as Readonly<Record<PropertyKey, unknown>>),
     ).toBeDefined();
@@ -4692,5 +4696,33 @@ describe("coding-sidecar gateway runtime prompt-token settlement", () => {
       promptSource: "reserved-estimate",
       promptSettlementStatus: "retained-after-refusal",
     });
+  });
+});
+
+// #3591 (1.1.7): the run's output reserve is a reserve against the whole window; the allowance
+// actually sent must fit into what the prompt leaves, or a 30k prompt in a 32k window would send
+// an 8k allowance and a request larger than the model window.
+describe("admittedOutputTokens", () => {
+  const bounds = { maxPromptTokens: 32_000, maxOutputTokens: 8_000 };
+
+  it("keeps the full reserve while the prompt leaves room for it", () => {
+    expect(admittedOutputTokens(bounds, 7_000)).toBe(8_000);
+  });
+
+  it("shrinks the allowance to what remains after the prompt and the safety margin", () => {
+    // 32,000 window, 1,000 safety margin at that size: 30,000 prompt leaves 1,000.
+    expect(admittedOutputTokens(bounds, 30_000)).toBe(1_000);
+  });
+
+  it("never drops below the floor that still lets the model answer", () => {
+    expect(admittedOutputTokens(bounds, 31_900)).toBe(MINIMUM_ADMITTED_OUTPUT_TOKENS);
+    expect(admittedOutputTokens(bounds, 32_000)).toBe(MINIMUM_ADMITTED_OUTPUT_TOKENS);
+  });
+
+  it("never exceeds the run's reserve, even a reserve below the floor", () => {
+    expect(admittedOutputTokens({ maxPromptTokens: 128_000, maxOutputTokens: 8_000 }, 10)).toBe(
+      8_000,
+    );
+    expect(admittedOutputTokens({ maxPromptTokens: 128_000, maxOutputTokens: 4 }, 10)).toBe(4);
   });
 });
