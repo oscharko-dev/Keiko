@@ -7,6 +7,7 @@ import {
 import {
   completedTurnEvidence,
   completedToolRoundTripEvidence,
+  customerShapeFailureSummary,
   customerShapeRequestEvidence,
   linkedFailureEvidence,
 } from "../lib/customer-shape-evidence.mjs";
@@ -145,6 +146,56 @@ describe("customer-shape LiteLLM twin", () => {
       compatibleRetry: false,
       delayedAcceptedStream: false,
     });
+  });
+
+  it("redacts unreviewed Activity Log values before printing a release failure", () => {
+    const secret = "customer-secret-token";
+    const summary = customerShapeFailureSummary(
+      [
+        {
+          op: "coding-runtime.run.settled",
+          failureCode: secret,
+          errorKind: secret,
+          outcome: secret,
+          publicationReason: secret,
+          diagnosticLineCount: 3,
+          message: secret,
+        },
+        {
+          op: "coding-sidecar.gateway.turn-failed",
+          failureCode: "provider-failed",
+          errorKind: "timeout",
+          outcome: "failed",
+          publicationReason: "terminal-run",
+        },
+        { op: `coding-runtime.${secret}`, failureCode: secret },
+      ],
+      [{ stream: secret, hasStreamOptions: true, delayed: false }],
+      0,
+    );
+    expect(summary).toMatchObject({
+      activityLineCount: 3,
+      requestCount: 1,
+      timeline: [
+        {
+          op: "coding-runtime.run.settled",
+          failureCode: "[redacted]",
+          errorKind: "[redacted]",
+          outcome: "[redacted]",
+          publicationReason: "[redacted]",
+          diagnosticLineCount: 3,
+        },
+        {
+          op: "coding-sidecar.gateway.turn-failed",
+          failureCode: "provider-failed",
+          errorKind: "timeout",
+          outcome: "failed",
+          publicationReason: "terminal-run",
+        },
+      ],
+      requests: [{ stream: false, hasStreamOptions: true, delayed: false }],
+    });
+    expect(JSON.stringify(summary)).not.toContain(secret);
   });
 
   it("records an accepted stream that entered the delayed-response branch", async () => {

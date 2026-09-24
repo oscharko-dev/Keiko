@@ -26,6 +26,7 @@ import {
 import {
   completedTurnEvidence,
   completedToolRoundTripEvidence,
+  customerShapeFailureSummary,
   customerShapeRequestEvidence,
   linkedFailureEvidence,
 } from "../lib/customer-shape-evidence.mjs";
@@ -148,39 +149,8 @@ function reportQualificationFailure(stateDir, twin, firstRequest, phase) {
     process.stderr.write(`customer-shape ${phase}: Activity Log unavailable\n`);
     return;
   }
-  const relevant = lines.filter(
-    (line) =>
-      line !== null &&
-      typeof line.op === "string" &&
-      (line.op.startsWith("coding-runtime.") ||
-        line.op.startsWith("coding-sidecar.gateway.") ||
-        line.op === "server.diagnostic.failure" ||
-        line.op === "chat.request.compatibility-retry"),
-  );
-  const timeline = relevant.slice(-24).map((line) => ({
-    op: line.op,
-    ...(typeof line.failureCode === "string" ? { failureCode: line.failureCode } : {}),
-    ...(typeof line.errorKind === "string" ? { errorKind: line.errorKind } : {}),
-    ...(typeof line.outcome === "string" ? { outcome: line.outcome } : {}),
-    ...(typeof line.publicationReason === "string"
-      ? { publicationReason: line.publicationReason }
-      : {}),
-    ...(typeof line.terminal === "boolean" ? { terminal: line.terminal } : {}),
-    ...(Number.isInteger(line.exitCode) ? { exitCode: line.exitCode } : {}),
-    ...(Number.isInteger(line.diagnosticLineCount)
-      ? { diagnosticLineCount: line.diagnosticLineCount }
-      : {}),
-  }));
-  const requestCount = twin.requests.length - firstRequest;
-  const requests = twin.requests.slice(firstRequest, firstRequest + 12).map((request) => ({
-    stream: request.stream,
-    hasStreamOptions: request.hasStreamOptions,
-    delayed: request.delayed,
-    truncated: request.truncated,
-    deliveredToolCall: request.deliveredToolCall,
-  }));
   process.stderr.write(
-    `customer-shape ${phase}: ${JSON.stringify({ activityLineCount: lines.length, timeline, requestCount, requests })}\n`,
+    `customer-shape ${phase}: ${JSON.stringify(customerShapeFailureSummary(lines, twin.requests, firstRequest))}\n`,
   );
 }
 
