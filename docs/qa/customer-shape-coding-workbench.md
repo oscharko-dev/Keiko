@@ -40,6 +40,8 @@ is introduced.
 
 The `Coding Workbench customer-shape qualification` workflow also runs this command on macOS 15
 for relevant `dev` pull requests. This measures the candidate before a release tag is requested.
+It reports closed Git attestation facts for the selected Xcode toolchain and the system Command
+Line Tools before the browser run, without printing either executable path.
 On failure, the qualifier prints a bounded summary of registered Activity Log operations, reviewed
 start or handshake codes, and local twin request flags before deleting its temporary state. Values
 outside the reviewed vocabularies are redacted. An empty request list means the turn did not reach

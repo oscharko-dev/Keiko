@@ -10,6 +10,7 @@ on:
       - "package.json"
       - "package-lock.json"
       - "packages/keiko-contracts/**"
+      - "packages/keiko-cli/**"
       - "packages/keiko-harness/**"
       - "packages/keiko-model-gateway/**"
       - "packages/keiko-server/**"
@@ -51,6 +52,8 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Build workspace packages for qualification
         run: npm run build:packages
+      - name: Inspect Darwin Git attestation prerequisites
+        run: node scripts/testing/inspect-darwin-git-host.mjs
       - name: Install Chromium for customer-shape qualification
         timeout-minutes: 10
         run: node node_modules/playwright/cli.js install --with-deps chromium

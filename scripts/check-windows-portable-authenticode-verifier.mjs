@@ -272,8 +272,12 @@ export function executeCheckCli() {
     checkWindowsPortableAuthenticodeVerifier(options);
   } catch (error) {
     if (error instanceof Error && error.message.includes("reviewed generated-asset pin")) {
-      const fingerprint = inspectVerifierToolchain(options);
-      process.stderr.write(`windows-verifier-toolchain: ${JSON.stringify(fingerprint)}\n`);
+      try {
+        const fingerprint = inspectVerifierToolchain(options);
+        process.stderr.write(`windows-verifier-toolchain: ${JSON.stringify(fingerprint)}\n`);
+      } catch {
+        process.stderr.write("windows-verifier-toolchain: inspection-unavailable\n");
+      }
     }
     throw error;
   }
