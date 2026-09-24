@@ -6,9 +6,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   COMMITTED_VERIFIER_ASSET,
+  REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN,
   assertCommittedVerifierAsset,
   discoverTrustedVerifierToolchain,
   resolveTrustedVerifierToolchain,
+  selectReviewedVerifierToolchain,
 } from "../check-windows-portable-authenticode-verifier.mjs";
 
 const roots = [];
@@ -58,6 +60,27 @@ afterEach(() => {
 });
 
 describe("committed Windows portable Authenticode verifier asset", () => {
+  it("accepts the reviewed updated compiler only with its exact distribution and references", () => {
+    expect(selectReviewedVerifierToolchain(REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN)).toBe(
+      REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN,
+    );
+    expect(() =>
+      selectReviewedVerifierToolchain({
+        ...REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN,
+        compilerDistribution: {
+          ...REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN.compilerDistribution,
+          sha256: "0".repeat(64),
+        },
+      }),
+    ).toThrow(/reviewed generated-asset pin/u);
+    expect(() =>
+      selectReviewedVerifierToolchain({
+        ...REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN,
+        compilerSha256: "0".repeat(64),
+      }),
+    ).toThrow(/reviewed generated-asset pin/u);
+  });
+
   it("binds the canonical source and exact assembly bytes to SHA-256", () => {
     expect(assertCommittedVerifierAsset(COMMITTED_VERIFIER_ASSET)).toHaveLength(
       COMMITTED_VERIFIER_ASSET.assemblyByteLength,
