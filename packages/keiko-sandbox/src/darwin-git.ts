@@ -6,6 +6,7 @@ import { dirname, isAbsolute, parse } from "node:path";
 export interface AttestedDarwinGitExecutable {
   readonly path: string;
   readonly sha256: string;
+  readonly source?: "selected" | "command-line-tools";
 }
 
 function untrustedGit(): never {
@@ -65,17 +66,39 @@ export function attestDarwinGitExecutable(candidate: string): AttestedDarwinGitE
 }
 
 /** Resolves Git through Apple's protected launcher without inheriting a caller-selected toolchain. */
-export function resolveDarwinGitExecutable(): AttestedDarwinGitExecutable {
-  const xcrun = "/usr/bin/xcrun";
-  attestDarwinGitExecutable(xcrun);
-  const resolved = spawnSync(xcrun, ["--find", "git"], {
+function resolveGitPath(developerDirectory?: string): string {
+  const resolved = spawnSync("/usr/bin/xcrun", ["--find", "git"], {
     encoding: "utf8",
-    env: { PATH: "/usr/bin:/bin" },
+    env: {
+      PATH: "/usr/bin:/bin",
+      ...(developerDirectory === undefined ? {} : { DEVELOPER_DIR: developerDirectory }),
+    },
     shell: false,
     timeout: 10_000,
   });
   if (resolved.error !== undefined || resolved.status !== 0) return untrustedGit();
   const path = resolved.stdout.trim();
   if (path.includes("\n") || path.includes("\r")) return untrustedGit();
-  return attestDarwinGitExecutable(path);
+  return path;
+}
+
+/** Chooses the selected Git only when trusted; the fixed Apple CLT root is the sole fallback. */
+export function chooseAttestedDarwinGit(
+  resolvePath: (developerDirectory?: string) => string,
+  attest: (path: string) => AttestedDarwinGitExecutable,
+): AttestedDarwinGitExecutable {
+  try {
+    return Object.freeze({ ...attest(resolvePath()), source: "selected" });
+  } catch {
+    return Object.freeze({
+      ...attest(resolvePath("/Library/Developer/CommandLineTools")),
+      source: "command-line-tools",
+    });
+  }
+}
+
+/** Resolves Git through Apple's protected launcher without inheriting a caller-selected toolchain. */
+export function resolveDarwinGitExecutable(): AttestedDarwinGitExecutable {
+  attestDarwinGitExecutable("/usr/bin/xcrun");
+  return chooseAttestedDarwinGit(resolveGitPath, attestDarwinGitExecutable);
 }

@@ -157,6 +157,10 @@ const REVIEWED_FAILURE_PATH_EXEMPTIONS = new Map([
     "A no-follow lstat probe classifies a skipped log file; the manifest attests its name and kind.",
   ],
   [
+    "packages/keiko-sandbox/src/darwin-git.ts:chooseAttestedDarwinGit",
+    "A rejected selected Git retries only the fixed Command Line Tools candidate under identical attestation. The runtime.confinement.spawned line records the chosen closed source; a second refusal still throws.",
+  ],
+  [
     "packages/keiko-cli/src/ui.ts:safeCliErrorKind",
     "The catch bounds a hostile error classifier to the closed unknown kind before durable logging.",
   ],

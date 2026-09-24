@@ -411,9 +411,10 @@ the profile admits, at every launch, instead of trusting any fixed path:
 
 - `resolveDarwinGitExecutable` shells out to `/usr/bin/xcrun --find git` — Apple's own protected
   resolution launcher, itself attested before it is invoked — rather than guessing among
-  conventional install locations. This lets Xcode/CommandLineTools selection (`xcode-select`)
-  determine which Git the host actually uses, without the caller choosing a path from an
-  attacker-influenced `PATH`.
+  conventional install locations. It first attests the Git selected by `xcode-select`. If that
+  candidate is unavailable or untrusted, it asks the same protected launcher for Git under the
+  fixed `/Library/Developer/CommandLineTools` developer directory and subjects that candidate to
+  the identical attestation. Neither attempt inherits a caller-selected `PATH` or `DEVELOPER_DIR`.
 - `attestDarwinGitExecutable` then independently qualifies the resolved path before it is allowed
   anywhere near a Seatbelt profile: the candidate must be an absolute, `\0`-free path whose
   `realpathSync` resolution is itself (no symlink indirection), a regular file with exactly one
@@ -421,7 +422,8 @@ the profile admits, at every launch, instead of trusting any fixed path:
   to the filesystem root must be a non-symlink directory, owned by `uid 0`, and not group- or
   other-writable either. Any failure — including any thrown `fs` error, e.g. the path not existing
   — is caught and converted into the single closed outcome, `throw new Error(
-  "runtime-gateway-git-untrusted")`; there is no partial-trust fallback. A qualifying executable's
+  "runtime-gateway-git-untrusted")`. If the selected candidate fails, the fixed Command Line Tools
+  candidate must pass every same check; otherwise launch still fails closed. A qualifying executable's
   SHA-256 digest is computed and returned alongside its path (`AttestedDarwinGitExecutable`).
 - `buildGatewaySeatbeltCommand` (`backends.ts`) and `buildRuntimeGatewaySeatbeltCommand`
   (`runtime-gateway.ts`) no longer carry any hardcoded Git path at all: both now take the attested
@@ -431,8 +433,9 @@ the profile admits, at every launch, instead of trusting any fixed path:
   `DevLaneRuntimeProcessBackendOptions.resolveGitExecutable`), passes its `path` into
   `planIsolatedRun`'s new `gatewayChildExecutable` field, pins the resolved executable's directory
   as the child's `PATH` (so the sidecar cannot shadow-resolve a different `git` off an inherited
-  `PATH`), and records the attested digest — never the literal path or file content — in the
-  existing `runtime.confinement.spawned` activity line's `extra.childExecutableDigest`
+  `PATH`), and records the attested digest and closed selection source — never the literal path or
+  file content — in the existing `runtime.confinement.spawned` activity line's
+  `extra.childExecutableDigest` and `extra.childExecutableSource`
   (`childExecutablePolicy: "runtime-and-attested-git-only"`). Attestation failure surfaces through
   the same existing `spawnOwnedTree` try/catch as every other confined-launch failure: a body-free
   `runtime.confinement.failed` line (`errorKind`, Keiko stack frames, cause chain, the run's

@@ -265,6 +265,12 @@ export const RUNTIME_CONFINEMENT_SPAWNED_OPERATION = defineActivityLogOperation(
       required: false,
       maxLength: 64,
     },
+    childExecutableSource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["selected", "command-line-tools"],
+    },
   },
   causal: "correlation",
   lifecycle: "start",

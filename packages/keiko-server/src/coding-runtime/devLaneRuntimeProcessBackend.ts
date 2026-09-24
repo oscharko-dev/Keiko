@@ -177,8 +177,7 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     setLaunchPhase("platform-identity");
     assertPlatformIdentity(this.platform, this.identity);
     const { executable, cwd } = resolveLaunchPaths(this.runtimeRoot, request, setLaunchPhase);
-    setLaunchPhase("git-attestation");
-    const gitExecutable = platformGitExecutable(this.identity, this.resolveGitExecutable);
+    const gitExecutable = this.attestedGit(setLaunchPhase);
     // Routed through the shared keiko-sandbox plan/backend core (ADR-0043 D14, #2951) rather than
     // the seatbelt-argv formula directly, so a host missing sandbox-exec fails this launch closed
     // instead of spawning the literal, hardcoded "/usr/bin/sandbox-exec" path unconfined.
@@ -215,12 +214,20 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       decision.attestation.backend,
       policy,
       gitExecutable?.sha256,
+      gitExecutable?.source,
     );
     const tree = ownTree(`dev-lane-opencode-${String(this.nextTreeId++)}`, child, (error) => {
       recordConfinementFailure(this.activityLog, request.runId, error);
     });
     this.ownedTrees.add(tree);
     return tree;
+  }
+
+  private attestedGit(
+    setLaunchPhase: (phase: DevLaneLaunchPhase) => void,
+  ): AttestedDarwinGitExecutable | undefined {
+    setLaunchPhase("git-attestation");
+    return platformGitExecutable(this.identity, this.resolveGitExecutable);
   }
 
   public signalTree(tree: RuntimeProcessTree, signal: RuntimeTreeSignal): void {
@@ -402,6 +409,7 @@ function recordConfinementSpawned(
   backend: string,
   policy: RuntimeGatewayConfinement,
   childExecutableDigest: string | undefined,
+  childExecutableSource: AttestedDarwinGitExecutable["source"],
 ): void {
   sink.write(
     activityLogEvent(
@@ -420,6 +428,7 @@ function recordConfinementSpawned(
             ? "namespace-inherited"
             : "runtime-and-attested-git-only",
         ...(childExecutableDigest === undefined ? {} : { childExecutableDigest }),
+        ...(childExecutableSource === undefined ? {} : { childExecutableSource }),
       },
     ),
   );
