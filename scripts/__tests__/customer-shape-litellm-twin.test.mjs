@@ -162,6 +162,7 @@ describe("customer-shape LiteLLM twin", () => {
           diagnosticOperation: secret,
           taskOutcomeStatus: secret,
           reason: secret,
+          launchPhase: secret,
           diagnosticLineCount: 3,
           message: secret,
         },
@@ -182,13 +183,19 @@ describe("customer-shape LiteLLM twin", () => {
           diagnosticOperation: "coding-runtime.handshake",
           code: "gateway-challenge",
         },
+        {
+          op: "runtime.confinement.failed",
+          launchPhase: "git-attestation",
+          message: secret,
+          frames: [secret],
+        },
         { op: `coding-runtime.${secret}`, failureCode: secret },
       ],
       [{ stream: secret, hasStreamOptions: true, delayed: false }],
       0,
     );
     expect(summary).toMatchObject({
-      activityLineCount: 5,
+      activityLineCount: 6,
       requestCount: 1,
       timeline: [
         {
@@ -201,6 +208,7 @@ describe("customer-shape LiteLLM twin", () => {
           diagnosticOperation: "[redacted]",
           taskOutcomeStatus: "[redacted]",
           reason: "[redacted]",
+          launchPhase: "[redacted]",
           diagnosticLineCount: 3,
         },
         {
@@ -220,6 +228,7 @@ describe("customer-shape LiteLLM twin", () => {
           diagnosticOperation: "coding-runtime.handshake",
           code: "gateway-challenge",
         },
+        { op: "runtime.confinement.failed", launchPhase: "git-attestation" },
       ],
       requests: [{ stream: false, hasStreamOptions: true, delayed: false }],
     });

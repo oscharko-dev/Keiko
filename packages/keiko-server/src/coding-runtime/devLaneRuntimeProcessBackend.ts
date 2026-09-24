@@ -110,6 +110,17 @@ interface DevLaneTree extends RuntimeProcessTree {
   exitCode: number | null;
 }
 
+type DevLaneLaunchPhase =
+  | "gateway-policy"
+  | "platform-identity"
+  | "runtime-path"
+  | "workspace-path"
+  | "git-attestation"
+  | "sandbox-plan"
+  | "process-spawn"
+  | "launcher-diagnostics"
+  | "tree-ownership";
+
 export function createDevLaneRuntimeProcessBackend(
   options: DevLaneRuntimeProcessBackendOptions,
 ): RuntimeProcessBackend {
@@ -143,28 +154,35 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
   ) {}
 
   public spawnOwnedTree(request: RuntimeSupervisorLaunchRequest): RuntimeProcessTree {
+    let launchPhase: DevLaneLaunchPhase = "gateway-policy";
     try {
-      return this.spawnConfinedTree(request);
+      return this.spawnConfinedTree(request, (phase) => {
+        launchPhase = phase;
+      });
     } catch (error) {
       if (isUnavailableError(error)) {
         recordConfinementUnavailable(this.activityLog, request.runId, this.identity);
       } else {
-        recordConfinementFailure(this.activityLog, request.runId, error);
+        recordConfinementFailure(this.activityLog, request.runId, error, launchPhase);
       }
       throw error;
     }
   }
 
-  private spawnConfinedTree(request: RuntimeSupervisorLaunchRequest): RuntimeProcessTree {
+  private spawnConfinedTree(
+    request: RuntimeSupervisorLaunchRequest,
+    setLaunchPhase: (phase: DevLaneLaunchPhase) => void,
+  ): RuntimeProcessTree {
     const policy = validatedGatewayConfinement(this.gatewayConfinement, request);
+    setLaunchPhase("platform-identity");
     assertPlatformIdentity(this.platform, this.identity);
-    const executable = safeRealFile(request.executable);
-    if (!pathIsContained(this.runtimeRoot, executable)) invalidRequest();
-    const cwd = safeRealDirectory(request.cwd);
+    const { executable, cwd } = resolveLaunchPaths(this.runtimeRoot, request, setLaunchPhase);
+    setLaunchPhase("git-attestation");
     const gitExecutable = platformGitExecutable(this.identity, this.resolveGitExecutable);
     // Routed through the shared keiko-sandbox plan/backend core (ADR-0043 D14, #2951) rather than
     // the seatbelt-argv formula directly, so a host missing sandbox-exec fails this launch closed
     // instead of spawning the literal, hardcoded "/usr/bin/sandbox-exec" path unconfined.
+    setLaunchPhase("sandbox-plan");
     const decision = wrappedGatewayDecision(
       request,
       executable,
@@ -174,6 +192,7 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       this.probeAvailability(),
       this.platform,
     );
+    setLaunchPhase("process-spawn");
     const child = this.spawnRuntime(decision.command, decision.args, {
       cwd,
       env: runtimeEnvironment(request.env, gitExecutable),
@@ -181,6 +200,7 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       launcherDiagnostics: linuxGatewayLauncherBackend(decision.attestation.backend),
       shell: false,
     });
+    setLaunchPhase("launcher-diagnostics");
     attachOrTerminateLinuxGatewayDiagnostics(
       child,
       this.activityLog,
@@ -188,6 +208,7 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       decision.attestation.backend,
       this.killProcessGroup,
     );
+    setLaunchPhase("tree-ownership");
     recordConfinementSpawned(
       this.activityLog,
       request.runId,
@@ -246,6 +267,19 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     if (!this.ownedTrees.has(tree)) throw new Error("dev-lane-runtime-tree-not-owned");
     return tree as DevLaneTree;
   }
+}
+
+function resolveLaunchPaths(
+  runtimeRoot: string,
+  request: RuntimeSupervisorLaunchRequest,
+  setLaunchPhase: (phase: DevLaneLaunchPhase) => void,
+): { executable: string; cwd: string } {
+  setLaunchPhase("runtime-path");
+  const executable = safeRealFile(request.executable);
+  if (!pathIsContained(runtimeRoot, executable)) invalidRequest();
+  setLaunchPhase("workspace-path");
+  const cwd = safeRealDirectory(request.cwd);
+  return { executable, cwd };
 }
 
 function validatedGatewayConfinement(
@@ -313,12 +347,21 @@ function gatewayNetworkPolicy(policy: RuntimeGatewayConfinement): NetworkGateway
   };
 }
 
-function recordConfinementFailure(sink: ServerLogSink, runId: string, error: unknown): void {
+function recordConfinementFailure(
+  sink: ServerLogSink,
+  runId: string,
+  error: unknown,
+  launchPhase?: DevLaneLaunchPhase,
+): void {
   sink.write(
     activityLogEvent(
       RUNTIME_CONFINEMENT_FAILED_OPERATION,
       { level: "error", correlationId: runId, errorKind: confinementFailureErrorKind(error) },
-      { frames: keikoStackFrames(error), causeChain: causeChain(error) },
+      {
+        ...(launchPhase === undefined ? {} : { launchPhase }),
+        frames: keikoStackFrames(error),
+        causeChain: causeChain(error),
+      },
     ),
   );
 }

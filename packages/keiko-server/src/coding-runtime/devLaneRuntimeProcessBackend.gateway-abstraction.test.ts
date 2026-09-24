@@ -405,6 +405,30 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
     expect(options.env?.[LINUX_GATEWAY_DIAGNOSTIC_FD_ENV]).toBeUndefined();
   });
 
+  it("identifies a refused Git attestation without logging the host path or error body", () => {
+    const paths = fixture();
+    const activityLog = createBufferedServerLogSink();
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      runtimeRoot: paths.runtimeRoot,
+      gatewayConfinement: gatewayConfinement(),
+      probeAvailability: () => ALL,
+      platform: "darwin",
+      resolveGitExecutable: () => {
+        throw new Error("runtime-gateway-git-untrusted: /private/customer-secret");
+      },
+      activityLog,
+      spawnRuntime: () => {
+        throw new Error("spawn must not run");
+      },
+    });
+
+    expect(() => backend.spawnOwnedTree(launchRequest(paths))).toThrow();
+    const failure = activityLog.events.find((event) => event.op === "runtime.confinement.failed");
+    expect(failure?.extra).toMatchObject({ launchPhase: "git-attestation" });
+    expect(JSON.stringify(activityLog.events)).not.toContain("customer-secret");
+  });
+
   it.each([
     ["stdout", { stdout: false }],
     ["stderr", { stderr: false }],

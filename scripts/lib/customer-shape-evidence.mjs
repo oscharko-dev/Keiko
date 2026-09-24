@@ -108,7 +108,20 @@ const DIAGNOSTIC_SOURCES = new Set([
 ]);
 const TASK_OUTCOME_STATUSES = new Set(["cancelled", "failed", "signalled", "succeeded"]);
 const DROPPED_EVENT_REASONS = new Set(["no-live-run", "run-mismatch"]);
+const LAUNCH_PHASES = new Set([
+  "gateway-policy",
+  "platform-identity",
+  "runtime-path",
+  "workspace-path",
+  "git-attestation",
+  "sandbox-plan",
+  "process-spawn",
+  "launcher-diagnostics",
+  "tree-ownership",
+]);
 const DIAGNOSTIC_OPERATIONS = new Set([
+  "runtime.confinement.failed",
+  "runtime.confinement.unavailable",
   "coding-runtime.run.started",
   "coding-runtime.dev-lane.activated",
   "coding-runtime.readiness.phase",
@@ -153,6 +166,7 @@ export function customerShapeFailureSummary(lines, requests, firstRequest) {
       ...closedField(line, "code", DIAGNOSTIC_CODES),
       ...closedField(line, "taskOutcomeStatus", TASK_OUTCOME_STATUSES),
       ...closedField(line, "reason", DROPPED_EVENT_REASONS),
+      ...closedField(line, "launchPhase", LAUNCH_PHASES),
       ...(typeof line.terminal === "boolean" ? { terminal: line.terminal } : {}),
       ...(Number.isInteger(line.exitCode) ? { exitCode: line.exitCode } : {}),
       ...(Number.isInteger(line.diagnosticLineCount)
