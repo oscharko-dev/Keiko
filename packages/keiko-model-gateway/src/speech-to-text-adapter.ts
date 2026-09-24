@@ -29,6 +29,7 @@ import {
   type ModelGatewayLogSink,
 } from "./observability.js";
 import { providerSpeechLanguage } from "./provider-language.js";
+import { GATEWAY_VOICE_TIMEOUT_FLOOR_MS } from "./resilience.js";
 import type { OutboundHttpEgressConfig, ProviderEndpointStyle } from "./types.js";
 
 const SPEECH_STT_LANGUAGE_NORMALIZED_OPERATION = defineActivityLogOperation({
@@ -214,8 +215,11 @@ function classifyStatus(status: number): SpeechToTextErrorKind | null {
 }
 
 // Distinguishes our internal-timeout abort from a caller-driven cancellation, mirroring the
-// embedding adapter so callers can tell a user Cancel apart from a hung provider.
-function classifyDispatchError(
+// embedding adapter so callers can tell a user Cancel apart from a hung provider. Exported for
+// tests (#3591): the real internal timeout is now floored to GATEWAY_VOICE_TIMEOUT_FLOOR_MS, too
+// long to fire for real inside a unit test, so the `timeoutSignal.aborted` branch is proven
+// directly against a manually-aborted signal instead.
+export function classifyDispatchError(
   error: unknown,
   timeoutSignal: AbortSignal,
   callerSignal: AbortSignal | undefined,
@@ -303,7 +307,10 @@ function buildRequest(request: SpeechToTextRequest): BuiltRequest {
     "content-length": String(body.size),
     [name]: apiKeyHeaderValue(name, request.apiKey),
   };
-  const timeoutSignal = AbortSignal.timeout(request.timeoutMs ?? 30_000);
+  // #3591: per-call floor — a slow gateway's voice call is not a broken one.
+  const timeoutSignal = AbortSignal.timeout(
+    Math.max(request.timeoutMs ?? 30_000, GATEWAY_VOICE_TIMEOUT_FLOOR_MS),
+  );
   const signal =
     request.signal !== undefined ? AbortSignal.any([timeoutSignal, request.signal]) : timeoutSignal;
   return {

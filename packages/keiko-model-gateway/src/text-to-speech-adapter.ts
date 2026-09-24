@@ -33,6 +33,7 @@ import {
   withCorrelationId,
   type ModelGatewayLogSink,
 } from "./observability.js";
+import { GATEWAY_VOICE_TIMEOUT_FLOOR_MS } from "./resilience.js";
 import type { OutboundHttpEgressConfig, ProviderEndpointStyle } from "./types.js";
 
 const SPEECH_TTS_MIME_CORRECTED_OPERATION = defineActivityLogOperation({
@@ -274,7 +275,10 @@ function buildRequest(request: TextToSpeechRequestWithVoice): BuiltRequest {
     accept: "audio/*",
     [name]: apiKeyHeaderValue(name, request.apiKey),
   };
-  const timeoutSignal = AbortSignal.timeout(request.timeoutMs ?? 30_000);
+  // #3591: per-call floor — a slow gateway's voice call is not a broken one.
+  const timeoutSignal = AbortSignal.timeout(
+    Math.max(request.timeoutMs ?? 30_000, GATEWAY_VOICE_TIMEOUT_FLOOR_MS),
+  );
   const signal =
     request.signal !== undefined ? AbortSignal.any([timeoutSignal, request.signal]) : timeoutSignal;
   return {

@@ -20,6 +20,7 @@
 
 import { apiKeyHeaderValue, trimTrailingSlash } from "./config.js";
 import { randomUUID } from "node:crypto";
+import { GATEWAY_VOICE_TIMEOUT_FLOOR_MS } from "./resilience.js";
 import {
   gatewayFetch,
   OutboundHttpEgressError,
@@ -259,7 +260,10 @@ function buildRequest(request: RealtimeNegotiationRequest): BuiltRequest {
     ),
     [name]: apiKeyHeaderValue(name, request.apiKey),
   };
-  const timeoutSignal = AbortSignal.timeout(request.timeoutMs ?? 30_000);
+  // #3591: per-call floor — a slow gateway's voice call is not a broken one.
+  const timeoutSignal = AbortSignal.timeout(
+    Math.max(request.timeoutMs ?? 30_000, GATEWAY_VOICE_TIMEOUT_FLOOR_MS),
+  );
   const signal =
     request.signal !== undefined ? AbortSignal.any([timeoutSignal, request.signal]) : timeoutSignal;
   return {

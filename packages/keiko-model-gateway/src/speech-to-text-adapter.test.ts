@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { requestSpeechToText } from "./speech-to-text-adapter.js";
+import { classifyDispatchError, requestSpeechToText } from "./speech-to-text-adapter.js";
 import { OutboundHttpEgressError } from "./http.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import {
@@ -448,23 +448,21 @@ describe("requestSpeechToText", () => {
     expect(cancelled).toEqual({ ok: false, kind: "cancelled" });
   });
 
-  it("maps a fired internal timeout signal to timeout (timeoutSignal.aborted branch)", async () => {
-    // timeoutMs is tiny and the mock resolves only after a real delay, so the adapter's internal
-    // AbortSignal.timeout fires before the throw — exercising the timeoutSignal.aborted path (a bare
-    // AbortError without TimeoutError name), which differs from the thrown-TimeoutError path above.
-    const outcome = await requestSpeechToText({
-      endpoint: ENDPOINT,
-      apiKey: SECRET_API_KEY,
-      modelId: "keiko-stt",
-      audio: AUDIO,
-      mimeType: "audio/webm",
-      timeoutMs: 1,
-      fetchImpl: mockFetch(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        throw new DOMException("aborted", "AbortError");
-      }),
-    });
-    expect(outcome).toEqual({ ok: false, kind: "timeout" });
+  // #3591: the internal AbortSignal.timeout is now floored to GATEWAY_VOICE_TIMEOUT_FLOOR_MS
+  // (120s) regardless of a smaller configured value, so it can no longer be made to fire for real
+  // inside a unit test the way a tiny `timeoutMs` used to. `classifyDispatchError` is the exact
+  // production function `requestSpeechToText` calls to map a bare AbortError onto "timeout" when
+  // its OWN internal signal (not the caller's) is the one that fired — proven directly here
+  // against a manually-aborted signal instead of waiting on the real timer.
+  it("maps a fired internal timeout signal to timeout (timeoutSignal.aborted branch)", () => {
+    const timeoutSignal = new AbortController();
+    timeoutSignal.abort();
+    const outcome = classifyDispatchError(
+      new DOMException("aborted", "AbortError"),
+      timeoutSignal.signal,
+      undefined,
+    );
+    expect(outcome).toBe("timeout");
   });
 
   it("never leaks the provider URL or credential into the outcome on failure", async () => {
