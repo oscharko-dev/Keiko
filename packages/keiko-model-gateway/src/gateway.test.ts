@@ -2,12 +2,18 @@ import { describe, expect, it } from "vitest";
 import { Gateway } from "./gateway.js";
 import { ResponseRedactionError } from "./openai-adapter.js";
 import { createScriptedGatewayClock } from "./replay.js";
-import { providerRequestBudgetMs } from "./resilience.js";
+import {
+  GATEWAY_SILENCE_FLOOR_MS,
+  providerRequestBudgetMs,
+  providerRetryConfig,
+} from "./resilience.js";
 import {
   CancelledError,
   CircuitOpenError,
   ERROR_CODES,
   GatewayEgressError,
+  ProviderError,
+  ProviderOutputExhaustedError,
   RateLimitError,
   TimeoutError,
   TransportError,
@@ -65,7 +71,12 @@ const REQUEST: GatewayRequest = {
 };
 
 describe("Gateway.chat", () => {
-  it("allows a slow Coding Workbench provider without changing ordinary chat timeouts", async () => {
+  // #3591: the silence floor now applies to every Gateway.chat() attempt, not just
+  // "coding-workbench" ones (raising CODING_WORKBENCH_PROVIDER_TIMEOUT_FLOOR_MS to match it makes
+  // that special case redundant for chat() specifically — it still matters for chatStream(), see
+  // the "uses the Workbench latency floor only for marked streaming calls" test below). A
+  // configured value already at or above the floor passes through unmodified either way.
+  it("floors every Gateway.chat() attempt to the silence floor, letting an already-generous configured value through unmodified", async () => {
     const timeouts: number[] = [];
     const gateway = new Gateway(config([provider({ maxRetries: 0 })]), {
       clock: createScriptedGatewayClock(),
@@ -76,15 +87,23 @@ describe("Gateway.chat", () => {
     });
     await gateway.chat(REQUEST);
     await gateway.chat({ ...REQUEST, latencyProfile: "coding-workbench" });
-    const longConfigured = new Gateway(config([provider({ timeoutMs: 120_000, maxRetries: 0 })]), {
-      clock: createScriptedGatewayClock(),
-      adapter: fakeAdapter((_request, cfg) => {
-        timeouts.push(cfg.timeoutMs);
-        return Promise.resolve(okResponse(cfg.modelId));
-      }),
-    });
+    const aboveFloor = GATEWAY_SILENCE_FLOOR_MS + 200_000;
+    const longConfigured = new Gateway(
+      config([provider({ timeoutMs: aboveFloor, maxRetries: 0 })]),
+      {
+        clock: createScriptedGatewayClock(),
+        adapter: fakeAdapter((_request, cfg) => {
+          timeouts.push(cfg.timeoutMs);
+          return Promise.resolve(okResponse(cfg.modelId));
+        }),
+      },
+    );
     await longConfigured.chat({ ...REQUEST, latencyProfile: "coding-workbench" });
-    expect(timeouts).toStrictEqual([30_000, 90_000, 120_000]);
+    expect(timeouts).toStrictEqual([
+      GATEWAY_SILENCE_FLOOR_MS,
+      GATEWAY_SILENCE_FLOOR_MS,
+      aboveFloor,
+    ]);
   });
 
   it("returns a response with a UUID v4 request id and exact deterministic latency", async () => {
@@ -291,7 +310,8 @@ describe("Gateway.chat", () => {
       },
     };
     let calls = 0;
-    const gateway = new Gateway(config([provider({ timeoutMs: 1000, retryBaseDelayMs: 100 })]), {
+    const providerConfig = provider({ timeoutMs: 1000, retryBaseDelayMs: 100 });
+    const gateway = new Gateway(config([providerConfig]), {
       adapter: fakeAdapter((_request, cfg) => {
         calls += 1;
         seenTimeouts.push(cfg.timeoutMs);
@@ -305,7 +325,10 @@ describe("Gateway.chat", () => {
       random: (): number => 1,
     });
     await expect(gateway.chat(REQUEST)).resolves.toMatchObject({ content: "answer" });
-    expect(seenTimeouts).toEqual([1000, 1000]);
+    // The configured 1000ms is well below the silence floor (#3591), so both attempts run under
+    // the SAME floored timeout — still a fresh one on retry, not a shrunk one.
+    const effectiveAttemptTimeoutMs = providerRetryConfig(providerConfig).attemptTimeoutMs;
+    expect(seenTimeouts).toEqual([effectiveAttemptTimeoutMs, effectiveAttemptTimeoutMs]);
   });
 
   // The invariant this pin has always guarded, restated on the budget the gateway now derives
@@ -324,12 +347,16 @@ describe("Gateway.chat", () => {
       },
     };
     let calls = 0;
-    const route = provider({ timeoutMs: 1000, maxRetries: 1, retryBaseDelayMs: 100 });
+    // #3591: timeoutMs stays above the silence floor so it is not itself floored, and the first
+    // attempt's simulated overrun (600 000ms) is chosen to leave LESS of the budget than the
+    // attempt timeout — otherwise, with the raised floor, the remaining budget would exceed the
+    // attempt timeout and this would stop proving the retry is clipped to what is left of it.
+    const route = provider({ timeoutMs: 350_000, maxRetries: 1, retryBaseDelayMs: 100 });
     const gateway = new Gateway(config([route]), {
       adapter: fakeAdapter((_request, cfg) => {
         calls += 1;
         seenTimeouts.push(cfg.timeoutMs);
-        current += calls === 1 ? 31_500 : 0; // an adapter that overran its own timeout
+        current += calls === 1 ? 600_000 : 0; // an adapter that overran its own timeout
         return calls === 1
           ? Promise.reject(new RateLimitError("slow down", 100))
           : Promise.resolve(okResponse("example-chat-model"));
@@ -338,8 +365,11 @@ describe("Gateway.chat", () => {
       random: (): number => 1,
     });
     await gateway.chat(REQUEST);
-    // 31 500 ms in the first attempt and the 100 ms Retry-After leave the rest of the budget.
-    expect(seenTimeouts).toEqual([1000, providerRequestBudgetMs(route) - 31_500 - 100]);
+    // 600 000 ms in the first attempt and the 100 ms Retry-After leave the rest of the budget.
+    expect(seenTimeouts).toEqual([
+      providerRetryConfig(route).attemptTimeoutMs,
+      providerRequestBudgetMs(route) - 600_000 - 100,
+    ]);
   });
 
   it("opens the circuit after repeated failures and then blocks without calling the adapter", async () => {
@@ -406,7 +436,7 @@ describe("Gateway.chatStream", () => {
     const gateway = new Gateway(config([provider({ maxRetries: 0 })]), { adapter });
     await collectStream(gateway.chatStream(REQUEST));
     await collectStream(gateway.chatStream({ ...REQUEST, latencyProfile: "coding-workbench" }));
-    expect(timeouts).toStrictEqual([30_000, 90_000]);
+    expect(timeouts).toStrictEqual([30_000, GATEWAY_SILENCE_FLOOR_MS]);
   });
 
   it("yields ordered deltas then a done chunk enriched with a UUID requestId and costClass", async () => {
@@ -477,6 +507,57 @@ describe("Gateway.chatStream", () => {
       clock: createScriptedGatewayClock(),
     });
     await expect(collectStream(gateway.chatStream(REQUEST))).rejects.toBeInstanceOf(CancelledError);
+    expect(gateway.circuitStatus("example-chat-model").consecutiveFailures).toBe(0);
+    expect(gateway.circuitStatus("example-chat-model").state).toBe("closed");
+  });
+
+  // #3591: a gateway that has not yet answered within its (generous) silence/budget floor is
+  // slow, not broken — five consecutive timeouts across five SEPARATE calls must never open the
+  // breaker and lock out every other caller of that model. Contrasted below with five genuine
+  // provider 5xx failures, which still open it exactly as before.
+  it("does not open the breaker after five consecutive TimeoutErrors, but five provider 5xx failures still open it", async () => {
+    const breakerConfig = { failureThreshold: 5, cooldownMs: 1000, halfOpenProbes: 1 } as const;
+    const timeoutGateway = new Gateway(
+      { providers: [provider({ maxRetries: 0 })], circuitBreaker: breakerConfig },
+      {
+        adapter: fakeAdapter(() => Promise.reject(new TimeoutError("provider did not answer"))),
+        clock: createScriptedGatewayClock(),
+      },
+    );
+    for (let i = 0; i < 5; i += 1) {
+      await expect(timeoutGateway.chat(REQUEST)).rejects.toBeInstanceOf(TimeoutError);
+    }
+    expect(timeoutGateway.circuitStatus("example-chat-model").consecutiveFailures).toBe(0);
+    expect(timeoutGateway.circuitStatus("example-chat-model").state).toBe("closed");
+
+    const failingGateway = new Gateway(
+      { providers: [provider({ maxRetries: 0 })], circuitBreaker: breakerConfig },
+      {
+        adapter: fakeAdapter(() => Promise.reject(new ProviderError("upstream failure", 503))),
+        clock: createScriptedGatewayClock(),
+      },
+    );
+    for (let i = 0; i < 5; i += 1) {
+      await expect(failingGateway.chat(REQUEST)).rejects.toBeInstanceOf(ProviderError);
+    }
+    expect(failingGateway.circuitStatus("example-chat-model").state).toBe("open");
+  });
+
+  // #3591: an HTTP 200 answer that spent its whole output budget on reasoning (finish_reason
+  // "length", no content) is a caller-fixable budget problem, not evidence the provider is
+  // failing — it must not count toward opening the breaker either.
+  it("does not count a ProviderOutputExhaustedError as a breaker fault — consecutiveFailures stays 0 and state stays closed", async () => {
+    let calls = 0;
+    const gateway = new Gateway(config([provider({ maxRetries: 3 })]), {
+      adapter: fakeAdapter(() => {
+        calls += 1;
+        return Promise.reject(new ProviderOutputExhaustedError("example-chat-model"));
+      }),
+      clock: createScriptedGatewayClock(),
+    });
+    await expect(gateway.chat(REQUEST)).rejects.toBeInstanceOf(ProviderOutputExhaustedError);
+    // Not retryable, so exactly one adapter call regardless of the configured maxRetries.
+    expect(calls).toBe(1);
     expect(gateway.circuitStatus("example-chat-model").consecutiveFailures).toBe(0);
     expect(gateway.circuitStatus("example-chat-model").state).toBe("closed");
   });

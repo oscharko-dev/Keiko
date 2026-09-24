@@ -11,6 +11,8 @@ import {
 import {
   CircuitBreaker,
   executeWithRetry,
+  GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
+  GATEWAY_SILENCE_FLOOR_MS,
   providerRequestBudgetMs,
   providerRetryConfig,
 } from "./resilience.js";
@@ -443,7 +445,10 @@ describe("providerRequestBudgetMs", () => {
   // itself, so the derivation cannot drift from the loop it bounds.
   it("covers every attempt hanging to its timeout and every retry waiting the longest it may", async () => {
     const { clock, sleeps, advance } = stubClock();
+    // #3591: the configured 1000ms is well below the silence floor, so every attempt actually
+    // runs under the FLOORED timeout — the loop's own arithmetic, not a restated literal.
     const provider = { timeoutMs: 1_000, maxRetries: 4, retryBaseDelayMs: 10_000 };
+    const effectiveAttemptTimeoutMs = providerRetryConfig(provider).attemptTimeoutMs;
     const start = clock.now();
     const seen: (number | undefined)[] = [];
     await expect(
@@ -460,15 +465,32 @@ describe("providerRequestBudgetMs", () => {
         () => 1,
       ),
     ).rejects.toBeInstanceOf(RateLimitError);
-    expect(seen).toEqual([1_000, 1_000, 1_000, 1_000, 1_000]);
+    expect(seen).toEqual(Array<number | undefined>(5).fill(effectiveAttemptTimeoutMs));
     expect(sleeps).toEqual([30_000, 30_000, 30_000, 30_000]);
     expect(clock.now() - start).toBe(providerRequestBudgetMs(provider));
   });
 
-  it("is a single attempt for a provider that never retries", () => {
+  it("is a single attempt for a provider that never retries, floored to the buffered-answer budget", () => {
+    // #3591: 120_000ms is below GATEWAY_BUFFERED_BUDGET_FLOOR_MS, so the single-attempt budget is
+    // raised to the floor rather than passed through — a buffered Gateway.chat() call never gets
+    // less than this much patience end to end, even at maxRetries: 0.
     expect(
       providerRequestBudgetMs({ timeoutMs: 120_000, maxRetries: 0, retryBaseDelayMs: 500 }),
-    ).toBe(120_000);
+    ).toBe(GATEWAY_BUFFERED_BUDGET_FLOOR_MS);
+  });
+
+  it("passes an already-generous configured budget through unmodified", () => {
+    const aboveFloor = GATEWAY_BUFFERED_BUDGET_FLOOR_MS + 100_000;
+    expect(
+      providerRequestBudgetMs({ timeoutMs: aboveFloor, maxRetries: 0, retryBaseDelayMs: 500 }),
+    ).toBe(aboveFloor);
+  });
+
+  it("floors the per-attempt timeout to the silence floor before deriving the budget", () => {
+    expect(
+      providerRetryConfig({ timeoutMs: 1_000, maxRetries: 0, retryBaseDelayMs: 500 })
+        .attemptTimeoutMs,
+    ).toBe(GATEWAY_SILENCE_FLOOR_MS);
   });
 
   // Config validation holds each term to the timer ceiling, never their sum: past it, every

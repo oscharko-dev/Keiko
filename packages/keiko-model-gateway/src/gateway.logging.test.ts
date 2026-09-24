@@ -8,7 +8,11 @@ import { TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { Gateway } from "./gateway.js";
 import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
-import { providerRequestBudgetMs } from "./resilience.js";
+import {
+  GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
+  GATEWAY_SILENCE_FLOOR_MS,
+  providerRequestBudgetMs,
+} from "./resilience.js";
 import type {
   Clock,
   GatewayConfig,
@@ -277,7 +281,9 @@ describe("Gateway.chat — activity log", () => {
     expect(started.extra).toMatchObject({
       modelId: "example-chat-model",
       endpointDigest: sha256Hex("https://provider.example"),
-      timeoutMs: 30_000,
+      // The configured 30_000ms is below the silence floor (#3591), so the line reports the
+      // EFFECTIVE deadline the attempt actually runs under.
+      timeoutMs: GATEWAY_SILENCE_FLOOR_MS,
       maxRetries: 0,
       requestBudgetMs: providerRequestBudgetMs(provider()),
       reasoningEffort: "high",
@@ -645,7 +651,14 @@ describe("Gateway — caller correlation", () => {
     await gateway.chat(request);
     const buffered = eventFor(log.events, "gateway.chat.started");
     expect(buffered.correlationId).toBe("run-slow-workbench");
-    expect(buffered.extra).toMatchObject({ timeoutMs: 90_000, requestBudgetMs: 90_000 });
+    // #3591: the Workbench floor (equal to the universal silence floor) still raises the
+    // configured 30_000ms; the end-to-end budget it derives is then itself raised to the
+    // buffered-answer floor, since a single (maxRetries: 0) attempt's budget would otherwise be
+    // smaller than that floor.
+    expect(buffered.extra).toMatchObject({
+      timeoutMs: GATEWAY_SILENCE_FLOOR_MS,
+      requestBudgetMs: GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
+    });
     expectActivityLogProof(
       "gateway.chat.started.emitted-line",
       formatActivityLogProofLine(buffered),
@@ -655,7 +668,7 @@ describe("Gateway — caller correlation", () => {
     await drainStream(gateway.chatStream(request));
     const streamed = eventFor(log.events, "gateway.stream.started");
     expect(streamed.correlationId).toBe("run-slow-workbench");
-    expect(streamed.extra).toMatchObject({ timeoutMs: 90_000 });
+    expect(streamed.extra).toMatchObject({ timeoutMs: GATEWAY_SILENCE_FLOOR_MS });
     expect(streamed.extra).not.toHaveProperty("requestBudgetMs");
     expectActivityLogProof(
       "gateway.stream.started.emitted-line",

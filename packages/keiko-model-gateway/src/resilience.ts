@@ -32,7 +32,33 @@ import type {
 } from "./types.js";
 
 const MAX_BACKOFF_MS = 30_000;
-export const CODING_WORKBENCH_PROVIDER_TIMEOUT_FLOOR_MS = 90_000;
+
+// #3591: the field customer's LiteLLM proxy in front of vLLM answers slowly at peak load — 30s,
+// 45s, 120s and longer before the first byte, with stalls between stream chunks — and Keiko must
+// stay in the request rather than abort on its own for such delays. Bounded, but generous: a slow
+// gateway is not a broken gateway. These floors are the minimum every interactive gateway surface
+// waits before treating silence or total duration as a failure; a caller's own configuration may
+// only raise them, never lower them.
+// Longest wait for the first byte, and between two stream data events.
+export const GATEWAY_SILENCE_FLOOR_MS = 300_000;
+// Longest total read of a streamed answer (`Gateway.chatStream()` — Conversation Center and any
+// other true streaming consumer).
+export const GATEWAY_STREAM_BUDGET_FLOOR_MS = 1_800_000;
+// Longest total read of a buffered answer (`Gateway.chat()` — coding-workbench and every buffered
+// call that answers a user action: commit draft, prompt enhancer, memory salience, quality judge).
+export const GATEWAY_BUFFERED_BUDGET_FLOOR_MS = 600_000;
+// Per-call floor for retrieval/indexing transports (embeddings, rerank): the actual outbound HTTP
+// deadline for ONE call, never the ladder/batch bookkeeping deadline those transports derive from
+// the caller's configured value (that bookkeeping must stay driven by what the caller asked for,
+// including an intentionally exhausted budget).
+export const GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS = 120_000;
+// Per-call floor for the voice adapters (realtime, text-to-speech, speech-to-text).
+export const GATEWAY_VOICE_TIMEOUT_FLOOR_MS = 120_000;
+
+// Kept as its own export (coding-sidecar-gateway.ts mirrors it to derive a matching deadline) but
+// now equal to the universal silence floor: a slow Coding Workbench provider gets no special
+// treatment past what every other interactive Gateway.chat() caller already receives (#3591).
+export const CODING_WORKBENCH_PROVIDER_TIMEOUT_FLOOR_MS = GATEWAY_SILENCE_FLOOR_MS;
 
 export function codingWorkbenchProviderTimeoutMs(timeoutMs: number): number {
   return Math.max(timeoutMs, CODING_WORKBENCH_PROVIDER_TIMEOUT_FLOOR_MS);
@@ -548,6 +574,13 @@ type ProviderRetryPolicy = Pick<
   "timeoutMs" | "maxRetries" | "retryBaseDelayMs"
 >;
 
+// The per-attempt bound `Gateway.chat()` runs every attempt under: the provider's configured
+// `timeoutMs`, floored to the silence floor (#3591) so a slow gateway is never cut off before it
+// has had a fair chance to answer.
+function chatAttemptTimeoutMs(provider: ProviderRetryPolicy): number {
+  return Math.max(provider.timeoutMs, GATEWAY_SILENCE_FLOOR_MS);
+}
+
 // The end-to-end budget of one buffered call to `provider`: every attempt its full `timeoutMs`
 // (ADR-0003), and before every retry the longest sleep the loop honours. The backoff cap and the
 // cap on a provider's Retry-After are both MAX_BACKOFF_MS, so a rate-limited provider keeps all its
@@ -556,12 +589,17 @@ type ProviderRetryPolicy = Pick<
 // here, so the two cannot drift apart again. They had: the provider's `timeoutMs` was passed to
 // the loop as the budget of the WHOLE call, an attempt that hung spent it, and the retry a
 // `TimeoutError` is declared retryable for never ran (coding run 23, 2026-09-11).
+//
+// The per-attempt bound is floored first (`chatAttemptTimeoutMs`), and the derived total is then
+// floored again to the buffered-answer floor (#3591): a provider configured well below either
+// floor must still get at least the floor's worth of patience end to end, not just per attempt.
 export function providerRequestBudgetMs(provider: ProviderRetryPolicy): number {
+  const attemptTimeoutMs = chatAttemptTimeoutMs(provider);
   const budgetMs =
-    (provider.maxRetries + 1) * provider.timeoutMs + provider.maxRetries * MAX_BACKOFF_MS;
+    (provider.maxRetries + 1) * attemptTimeoutMs + provider.maxRetries * MAX_BACKOFF_MS;
   // Config validation holds each term to the timer ceiling, never their sum: past it, every
   // deadline armed from this budget would fire the moment it is set (PR #3452 review).
-  return Math.min(budgetMs, MAX_TIMER_DELAY_MS);
+  return Math.min(Math.max(budgetMs, GATEWAY_BUFFERED_BUDGET_FLOOR_MS), MAX_TIMER_DELAY_MS);
 }
 
 // The retry configuration a provider's settings stand for: `timeoutMs` bounds each attempt, and
@@ -570,7 +608,7 @@ export function providerRetryConfig(provider: ProviderRetryPolicy): RetryConfig 
   return {
     maxRetries: provider.maxRetries,
     retryBaseDelayMs: provider.retryBaseDelayMs,
-    attemptTimeoutMs: provider.timeoutMs,
+    attemptTimeoutMs: chatAttemptTimeoutMs(provider),
     timeoutMs: providerRequestBudgetMs(provider),
   };
 }

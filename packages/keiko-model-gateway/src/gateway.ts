@@ -15,6 +15,8 @@ import {
   ConfigInvalidError,
   ContextOverflowError,
   GatewayError,
+  ProviderOutputExhaustedError,
+  TimeoutError,
   TransportError,
   UnknownModelError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
@@ -37,6 +39,8 @@ import {
   CircuitBreaker,
   codingWorkbenchProviderTimeoutMs,
   executeWithRetry,
+  GATEWAY_SILENCE_FLOOR_MS,
+  GATEWAY_STREAM_BUDGET_FLOOR_MS,
   providerRequestBudgetMs,
   providerRetryConfig,
   systemClock,
@@ -303,6 +307,14 @@ const GATEWAY_CHAT_FAILED_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
     },
+    // #3591: true only for a ProviderOutputExhaustedError — an HTTP 200 answer that spent its
+    // whole output budget on reasoning before any content — so an operator can tell that apart
+    // from an ordinary empty/failed provider answer without reaching for the sidecar's own record.
+    outputExhausted: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+    },
   },
   causal: "correlation",
   lifecycle: "failure",
@@ -395,6 +407,12 @@ const GATEWAY_STREAM_FAILED_OPERATION = defineActivityLogOperation({
     },
     chunkCount: { type: "integer", dataClass: "count", required: true },
     afterFirstChunk: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+    },
+    // #3591: see gateway.chat.failed's identical field.
+    outputExhausted: {
       type: "boolean",
       dataClass: "closed-enum",
       required: true,
@@ -519,12 +537,23 @@ function attachGatewayRequestId(error: unknown, requestId: string): void {
 }
 
 // Faults that never indicate the PROVIDER is unhealthy: a client-initiated cancel, our own invalid
-// configuration, or the gateway's own redaction pass refusing to walk a pathologically deep
-// response body (review finding on PR #3394 — an untyped RangeError from that last case used to
-// slip past this list and trip the breaker for an otherwise healthy model; ResponseRedactionError
-// is now thrown instead, see openai-adapter.ts's redactUnknown). A named, extensible list rather
-// than a growing chain of `&&` conditions, so the next non-provider fault is one array entry away.
-const NON_PROVIDER_FAULTS = [CancelledError, ConfigInvalidError, ResponseRedactionError] as const;
+// configuration, the gateway's own redaction pass refusing to walk a pathologically deep response
+// body (review finding on PR #3394 — an untyped RangeError from that last case used to slip past
+// this list and trip the breaker for an otherwise healthy model; ResponseRedactionError is now
+// thrown instead, see openai-adapter.ts's redactUnknown), a TimeoutError (a gateway that has not
+// yet answered within its (generous, #3591) silence or budget floor is slow, not broken), or a
+// ProviderOutputExhaustedError (an HTTP 200 with `finish_reason: "length"` and no content — the
+// model answered, it just spent its budget on reasoning; that is a caller-fixable budget problem,
+// not evidence the provider is failing). Five slow or budget-exhausted answers must never open the
+// breaker for every other caller of that model. A named, extensible list rather than a growing
+// chain of `&&` conditions, so the next non-provider fault is one array entry away.
+const NON_PROVIDER_FAULTS = [
+  CancelledError,
+  ConfigInvalidError,
+  ResponseRedactionError,
+  TimeoutError,
+  ProviderOutputExhaustedError,
+] as const;
 
 function isNonProviderFault(error: unknown): boolean {
   return NON_PROVIDER_FAULTS.some((errorClass) => error instanceof errorClass);
@@ -575,6 +604,27 @@ function streamedReadBounds(
       ? remainingBudgetMs
       : providerRequestBudgetMs(attempt.route.provider);
   return { silenceMs, budgetMs: Math.max(silenceMs, Math.floor(budgetMs)) };
+}
+
+// The effective per-attempt/per-read silence bound every `Gateway.chat()` attempt and
+// `Gateway.chatStream()` read runs under (#3591): the provider's configured `timeoutMs`, floored
+// so a slow gateway is never treated as wedged, nor its read cut off, before it has had a fair
+// chance to answer. `chat()`'s retry loop derives its own copy from the identical formula
+// (resilience.ts's private `chatAttemptTimeoutMs`) because a buffered call's attempt timeout also
+// feeds the end-to-end retry budget; this one is what the attempt/stream-started log line reports
+// and what a streamed read's bounds are built from.
+function effectiveSilenceMs(provider: ModelProviderConfig): number {
+  return Math.max(provider.timeoutMs, GATEWAY_SILENCE_FLOOR_MS);
+}
+
+// The bounds of the ONE, unretried read `chatStream()` performs (ADR-0003): floored the same way
+// every interactive gateway surface is (#3591) — a slow gateway is not a broken gateway. Unlike
+// `streamedReadBounds` (the buffered `chat()` path's per-attempt bound), there is no retry budget
+// to derive a total from, so both bounds come straight from the provider's own (possibly
+// Coding-Workbench-raised) `timeoutMs`, floored to the streamed-answer floor.
+function chatStreamBounds(provider: ModelProviderConfig): StreamReadBounds {
+  const silenceMs = effectiveSilenceMs(provider);
+  return { silenceMs, budgetMs: Math.max(silenceMs, GATEWAY_STREAM_BUDGET_FLOOR_MS) };
 }
 
 // One attempt's answer: over the provider's stream when the attempt has read bounds, whole
@@ -1028,7 +1078,7 @@ export class Gateway {
       modelId: logModelId(route.provider.modelId),
       ...(endpointDigest === undefined ? {} : { endpointDigest }),
       costClass: route.capability.costClass,
-      timeoutMs: route.provider.timeoutMs,
+      timeoutMs: effectiveSilenceMs(route.provider),
       maxRetries: route.provider.maxRetries,
       ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
     };
@@ -1066,7 +1116,12 @@ export class Gateway {
           durationMs,
           errorKind: activityLogErrorKind(error),
         },
-        { ...callIdFields(ids), modelId: logModelId(route.provider.modelId), streaming: false },
+        {
+          ...callIdFields(ids),
+          modelId: logModelId(route.provider.modelId),
+          streaming: false,
+          outputExhausted: error instanceof ProviderOutputExhaustedError,
+        },
       ),
     );
   }
@@ -1145,6 +1200,7 @@ export class Gateway {
           // A mid-stream failure has already handed tokens to the caller and cannot be retried
           // (chatStream is deliberately outside executeWithRetry); the count is how far it got.
           afterFirstChunk: chunkCount > 0,
+          outputExhausted: error instanceof ProviderOutputExhaustedError,
         },
       ),
     );
@@ -1185,7 +1241,7 @@ export class Gateway {
     ids: CallIds,
   ): AsyncGenerator<GatewayStreamChunk> {
     if (adapter.callStream !== undefined) {
-      yield* adapter.callStream(request, provider);
+      yield* adapter.callStream(request, provider, chatStreamBounds(provider));
       return;
     }
     // Degradation: this adapter has no streaming variant, so the caller gets ONE synthetic delta
