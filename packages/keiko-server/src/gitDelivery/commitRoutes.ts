@@ -26,6 +26,7 @@ import {
   type GatewayCallRequest,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
+import { ProviderOutputExhaustedError, TimeoutError } from "@oscharko-dev/keiko-security";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type {
   GitCommitChangeSummary,
@@ -111,6 +112,8 @@ export type GitDeliveryCommitErrorCode =
   | "GIT_DELIVERY_COMMIT_FORBIDDEN_PAYLOAD"
   | "GIT_DELIVERY_COMMIT_DRAFT_FAILED"
   | "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT"
+  | "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED"
+  | "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT"
   | "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE"
   | "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES"
   | "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT"
@@ -170,6 +173,8 @@ const COMMIT_DRAFT_COMPLETED_OPERATION = defineActivityLogOperation({
         "GIT_DELIVERY_COMMIT_FORBIDDEN_PAYLOAD",
         "GIT_DELIVERY_COMMIT_DRAFT_FAILED",
         "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
+        "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED",
+        "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT",
         "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE",
         "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES",
         "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT",
@@ -185,9 +190,19 @@ const COMMIT_DRAFT_COMPLETED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// #3591: an output-exhausted answer is not shape-invalid (the model simply spent its whole budget
+// before finishing), but it is just as unusable as a malformed one, so it shares the
+// "validation-failed" errorKind with GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT — the precise class
+// still survives on the record via the `failureCode` field below.
 function commitDraftErrorKind(code: GitDeliveryCommitErrorCode): ActivityLogErrorKind {
   if (code === "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE") return "unavailable";
-  if (code === "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT") return "validation-failed";
+  if (code === "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT") return "timeout";
+  if (
+    code === "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT" ||
+    code === "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED"
+  ) {
+    return "validation-failed";
+  }
   if (code === "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES") return "conflict";
   return "internal";
 }
@@ -200,6 +215,10 @@ const SAFE_MESSAGES: Readonly<Record<GitDeliveryCommitErrorCode, string>> = {
   GIT_DELIVERY_COMMIT_DRAFT_FAILED: "Keiko could not generate a commit draft from the staged diff.",
   GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT:
     "Keiko generated a commit draft that did not pass validation.",
+  GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED:
+    "Keiko's model spent its whole output budget reasoning about the change and produced no draft. Retry, or write the commit message yourself.",
+  GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT:
+    "The gateway did not answer in time; the draft was not generated. Retry, or write the message yourself.",
   GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE:
     "No compatible model is available for commit draft generation.",
   GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES:
@@ -218,8 +237,20 @@ const UTF8 = new TextEncoder();
 const KEIKO_GENERATED_FOOTER = "🤖 Generated with [Keiko](https://github.com/oscharko-dev/Keiko)";
 const COMMIT_DRAFT_DIFF_MAX_CHARS = 90_000;
 const COMMIT_DRAFT_INSTRUCTION_MAX_CHARS = 1_500;
-const COMMIT_DRAFT_MODEL_TIMEOUT_MS = 30_000;
-const COMMIT_DRAFT_MAX_OUTPUT_TOKENS = 700;
+// #3591 (1.1.7): a LiteLLM-fronted vLLM gateway at peak load can take 30-120s or longer to answer.
+// The flat 30s AbortSignal this route used to pass as `cancellationSignal` capped the WHOLE buffered
+// gateway call -- including the gateway's own internal retries -- so a healthy but slow answer was
+// reported as GIT_DELIVERY_COMMIT_DRAFT_FAILED, indistinguishable from a real outage.
+// `latencyProfile: "coding-workbench"` on the built request (buildCommitDraftModelRequest) asks the
+// gateway to apply CODING_WORKBENCH_PROVIDER_TIMEOUT_FLOOR_MS as the PER-ATTEMPT timeout floor; this
+// deadline is only the route's own backstop against a call that never returns at all, generous
+// enough to cover several such attempts, and is never the primary timeout.
+const COMMIT_DRAFT_MODEL_DEADLINE_MS = 300_000;
+// A reasoning model (gpt-oss / gemma thinking) spends output tokens on its reasoning trace before
+// its first answer token. 700 was tight enough that the whole budget was consumed by reasoning,
+// leaving `finish_reason: "length"` and no usable content (#3591). 4,000 gives a reasoning model
+// room to think AND still answer.
+const COMMIT_DRAFT_MAX_OUTPUT_TOKENS = 4_000;
 const LOCAL_USER_COMMIT_AUTHORITY: GitDeliveryAuthorityIdentity = {
   runId: "local-user-git-widget",
   envelopeDigest: "0".repeat(64),
@@ -710,6 +741,9 @@ function buildCommitDraftModelRequest(input: CommitDraftModelInput): GatewayCall
     temperature: 0.2,
     stream: false,
     logContext: { correlationId: input.correlationId },
+    // Applies the gateway's coding-workbench provider-timeout floor (#3591) — see
+    // COMMIT_DRAFT_MODEL_DEADLINE_MS above for why this route no longer sets its own flat cap.
+    latencyProfile: "coding-workbench",
   };
 }
 
@@ -744,29 +778,55 @@ function draftTextField(
   return normalized.length > 0 ? normalized : undefined;
 }
 
+type ModelCommitDraftValidation =
+  | { readonly ok: true; readonly message: string }
+  | { readonly ok: false; readonly reason: "output-exhausted" | "invalid-output" };
+
 function modelCommitMessage(
   response: NormalizedResponse,
   policy: GitCommitMessagePolicy,
-): string | undefined {
-  if (response.finishReason !== "stop" || response.toolCalls.length !== 0) return undefined;
+): ModelCommitDraftValidation {
+  // A reasoning model that spends its whole output budget before answering ends with
+  // `finish_reason: "length"`; whatever content survived to that point is a mid-thought fragment,
+  // never a complete, trustworthy commit message (#3591). Checked BEFORE parsing so a fragment that
+  // happens to close as valid JSON at the truncation boundary is never mistaken for a real answer.
+  if (response.finishReason === "length") return { ok: false, reason: "output-exhausted" };
+  if (response.finishReason !== "stop" || response.toolCalls.length !== 0) {
+    return { ok: false, reason: "invalid-output" };
+  }
   const candidate = draftCandidate(response);
-  if (!isPlainObject(candidate)) return undefined;
+  if (!isPlainObject(candidate)) return { ok: false, reason: "invalid-output" };
   const subject = draftTextField(candidate, "subject");
   const body = draftTextField(candidate, "body");
-  if (subject === undefined || body === undefined) return undefined;
+  if (subject === undefined || body === undefined) return { ok: false, reason: "invalid-output" };
   const message = appendKeikoGeneratedFooter(`${subject}\n\n${body}`);
-  return validateGitCommitMessage(message, policy).ok ? message : undefined;
+  return validateGitCommitMessage(message, policy).ok
+    ? { ok: true, message }
+    : { ok: false, reason: "invalid-output" };
+}
+
+// #3591: classifies a failed model call into the three failure classes the UI must tell apart — a
+// provider that never answered in time, a provider that answered but exhausted its output budget on
+// reasoning, and a provider that answered completely but produced something unusable. `signal` is
+// the caller's own cancellation (route deadline + client disconnect, see commitDraftCancellation
+// below); this function no longer builds its own.
+function classifyCommitDraftModelFailure(error: unknown): GitDeliveryCommitErrorCode {
+  if (error instanceof ProviderOutputExhaustedError) {
+    return "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED";
+  }
+  if (error instanceof TimeoutError) return "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT";
+  return "GIT_DELIVERY_COMMIT_DRAFT_FAILED";
 }
 
 async function generateModelCommitMessage(
   deps: UiHandlerDeps,
   input: Omit<CommitDraftModelInput, "modelId" | "useResponseFormat">,
+  signal: AbortSignal,
 ): Promise<ModelCommitDraftResult> {
   const resolved = resolveCommitDraftModel(deps);
   if (resolved === undefined) {
     return { ok: false, code: "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE" };
   }
-  const signal = AbortSignal.timeout(COMMIT_DRAFT_MODEL_TIMEOUT_MS);
   try {
     const response = await resolved.model.call(
       buildCommitDraftModelRequest({
@@ -776,12 +836,15 @@ async function generateModelCommitMessage(
       }),
       signal,
     );
-    const message = modelCommitMessage(response, input.policy);
-    return message === undefined
-      ? { ok: false, code: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT" }
-      : { ok: true, message };
+    const validated = modelCommitMessage(response, input.policy);
+    if (validated.ok) return { ok: true, message: validated.message };
+    const code: GitDeliveryCommitErrorCode =
+      validated.reason === "output-exhausted"
+        ? "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED"
+        : "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT";
+    return { ok: false, code };
   } catch (error) {
-    return { ok: false, code: "GIT_DELIVERY_COMMIT_DRAFT_FAILED", error };
+    return { ok: false, code: classifyCommitDraftModelFailure(error), error };
   }
 }
 
@@ -822,8 +885,17 @@ function draftFailureResult(
   return errResult(status, code);
 }
 
+// S7776: a Set, not `.includes()` on a constant array.
+const COMMIT_DRAFT_BAD_GATEWAY_CODES: ReadonlySet<GitDeliveryCommitErrorCode> = new Set([
+  "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
+  "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED",
+]);
+
 function commitDraftFailureStatus(code: GitDeliveryCommitErrorCode): number {
-  return code === "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT" ? 502 : 503;
+  // Matches repositoryInitializationRoutes.ts / gitRepositoryRoutes.ts: a bounded operation that
+  // did not finish in time reports 504, never the generic 503 an unavailable model reports.
+  if (code === "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT") return 504;
+  return COMMIT_DRAFT_BAD_GATEWAY_CODES.has(code) ? 502 : 503;
 }
 
 function modelDraftFailureResult(
@@ -853,6 +925,7 @@ async function computeModelCommitDraft(
   seams: GitDeliveryExecutionSeams,
   now: () => number,
   correlationId: string,
+  signal: AbortSignal,
 ): Promise<RouteResult> {
   const log = seams.activityLog ?? processServerLogSink();
   const stagedPaths = await readStagedPathsFor(workspace, seams, now, correlationId);
@@ -867,14 +940,18 @@ async function computeModelCommitDraft(
     );
   }
   const stagedDiff = await readStagedDiffFor(workspace, seams, now, correlationId);
-  const suggested = await generateModelCommitMessage(deps, {
-    policy,
-    stagedPaths,
-    summary,
-    stagedDiff,
-    instruction: req.instruction,
-    correlationId,
-  });
+  const suggested = await generateModelCommitMessage(
+    deps,
+    {
+      policy,
+      stagedPaths,
+      summary,
+      stagedDiff,
+      instruction: req.instruction,
+      correlationId,
+    },
+    signal,
+  );
   if (!suggested.ok) {
     return modelDraftFailureResult(deps, log, correlationId, summary, suggested);
   }
@@ -887,6 +964,33 @@ async function computeModelCommitDraft(
     summary,
   };
   return { status: 200, body: deps.redactor(body) };
+}
+
+// Bounds the model call by COMMIT_DRAFT_MODEL_DEADLINE_MS AND aborts it the moment the client goes
+// away — mirrors coding-sidecar-gateway.ts's `gatewayRequestCancellation` /
+// coding-sidecar-tool-facade.ts's `bindRouteDisconnect`, the established "abort-on-close" pattern in
+// this server (#3591), applied here to the one long-latency call this route makes.
+function commitDraftCancellation(ctx: RouteContext): {
+  readonly signal: AbortSignal;
+  readonly dispose: () => void;
+} {
+  const controller = new AbortController();
+  const onDisconnect = (): void => {
+    controller.abort();
+  };
+  const onResponseClosed = (): void => {
+    if (!ctx.res.writableFinished) onDisconnect();
+  };
+  ctx.req.once("aborted", onDisconnect);
+  ctx.res.once("close", onResponseClosed);
+  const deadline = AbortSignal.timeout(COMMIT_DRAFT_MODEL_DEADLINE_MS);
+  return {
+    signal: AbortSignal.any([controller.signal, deadline]),
+    dispose: (): void => {
+      ctx.req.removeListener("aborted", onDisconnect);
+      ctx.res.removeListener("close", onResponseClosed);
+    },
+  };
 }
 
 export const createHandleCommitDraft = (
@@ -911,11 +1015,23 @@ export const createHandleCommitDraft = (
       workspace.root,
       options.messagePolicy,
     );
+    const cancellation = commitDraftCancellation(ctx);
     try {
-      return await computeModelCommitDraft(deps, workspace, req, policy, seams, now, correlationId);
+      return await computeModelCommitDraft(
+        deps,
+        workspace,
+        req,
+        policy,
+        seams,
+        now,
+        correlationId,
+        cancellation.signal,
+      );
     } catch (error) {
       reportDraftWorktreeFailure(deps, correlationId, error);
       return errResult(409, "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE");
+    } finally {
+      cancellation.dispose();
     }
   };
 };

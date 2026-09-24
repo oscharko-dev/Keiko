@@ -380,6 +380,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Keiko liest den ausgewählten staged Diff erst, wenn Sie diesen Button klicken.",
   "commitComposer.draft.unavailable":
     "Diese Repository-Richtlinie benötigt Angaben, die Keiko nicht sicher entwerfen kann.",
+  "commitComposer.error.draftTimedOut":
+    "Das Gateway hat nicht rechtzeitig geantwortet; der Entwurf wurde nicht erstellt. Versuchen Sie es erneut oder schreiben Sie die Nachricht selbst.",
+  "commitComposer.error.draftOutputExhausted":
+    "Das Modell von Keiko hat sein gesamtes Ausgabebudget mit dem Nachdenken über die Änderung verbraucht und keinen Entwurf erzeugt. Versuchen Sie es erneut oder schreiben Sie die Nachricht selbst.",
   "commitComposer.copy.copied": "Kopiert",
   "commitComposer.copy.failed": "Kopieren fehlgeschlagen",
   "commitComposer.preview.messageViolations": "Verstöße gegen Nachrichtenrichtlinie",

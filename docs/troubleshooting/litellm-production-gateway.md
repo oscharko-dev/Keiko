@@ -295,3 +295,61 @@ list Keiko itself shows after a successful save: exactly 100 there is the cap in
 Enter the intended deployments explicitly in the setup form's deployment-names field — an
 explicit list bypasses discovery and is probed as given. Alternatively, use a virtual key whose
 model allowance is scoped to the models Keiko should use.
+
+---
+
+## Commit draft fails under a slow gateway or a reasoning model
+
+| Field             | Value                                                                                                       |
+| ----------------- | ----------------------------------------------------------------------------------------------------------- |
+| Severity          | Medium                                                                                                      |
+| Surface           | Git window (commit draft)                                                                                   |
+| Stable identifier | `GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT` / `GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED` / `..._INVALID_OUTPUT` |
+
+**Symptom**
+
+Clicking "Generate with Keiko" in the Git window fails. Before 1.1.7 every cause surfaced as the
+same generic "Keiko generated a commit draft that did not pass validation." regardless of whether
+the gateway never answered or answered with something unusable, so the message gave no signal on
+what to try next.
+
+**Root Cause**
+
+A LiteLLM-fronted vLLM gateway (`gemma-*-it`, `gpt-oss-120b`) can take 30-120s or longer to answer
+at peak load, and a reasoning model spends output tokens on its reasoning trace before its first
+answer token. Two distinct upstream behaviors used to collapse into one code:
+
+1. The gateway did not answer within the route's own bound.
+2. The model answered but spent its whole output-token budget reasoning, ending with
+   `finish_reason: "length"` and no usable content (or a partial, truncated fragment).
+
+The route now tells these apart from a THIRD case — a complete answer that failed the commit
+message policy/shape — and reports each with its own code and safe message:
+
+- `GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT` (HTTP 504) — the gateway did not answer in time.
+- `GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED` (HTTP 502) — the model exhausted its output budget
+  on reasoning.
+- `GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT` (HTTP 502) — a complete answer failed validation;
+  unchanged from before.
+
+**Diagnostic Steps**
+
+`keiko support export --correlation-id <id>` (the id shown with the failure) and
+`keiko support analyze <bundle> --correlation-id <id>` reconstruct the `git.commit.draft.completed`
+line for that request: its `failureCode` field names exactly one of the three codes above, and
+`errorKind` is `timeout` for the first, `validation-failed` for the other two. Neither the diff nor
+the model's raw output ever appears in the log or in the export.
+
+**Resolution**
+
+- `GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT`: retry — the route now allows a generous backstop for the
+  whole buffered call instead of a flat 30s cap, and marks the request `latencyProfile:
+"coding-workbench"` so the gateway applies its own coding-workbench provider-timeout floor. If it
+  keeps timing out, the configured provider `timeoutMs` for that model is still too low for the
+  proxy's real latency at peak load; raise it in the gateway configuration.
+- `GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED`: retry, or write the commit message yourself. The
+  route now requests a 4,000-token output budget (up from 700) specifically so a reasoning model has
+  room to both think and answer; a model whose reasoning trace still exceeds that on every attempt
+  needs a lower reasoning-effort setting on the proxy side.
+- `GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT`: unchanged — the drafted message did not meet the
+  repository's commit-message policy; edit and commit manually.

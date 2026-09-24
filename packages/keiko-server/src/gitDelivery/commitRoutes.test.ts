@@ -11,8 +11,8 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
-import type { Server, IncomingMessage, ServerResponse } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { Server, IncomingMessage } from "node:http";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   GitDeliveryApprovalClaim,
   GitDeliveryExecutionResult,
@@ -23,7 +23,13 @@ import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contract
 import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import type { GitLocalMutationAdapter, GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import {
+  CancelledError,
+  ProviderOutputExhaustedError,
+  TimeoutError,
+} from "@oscharko-dev/keiko-security";
 import { UI_HOST } from "../server.js";
+import { mockResponse } from "../_support.js";
 import { buildCspHeader } from "../csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import { startUiTestServer } from "../ui-test-server/_support.js";
@@ -318,7 +324,12 @@ function ctxFor(path: string, body: unknown): RouteContext {
   return {
     correlationId: undefined,
     req,
-    res: {} as ServerResponse,
+    // A real EventEmitter-backed stream (#3591): the commit-draft route now listens for
+    // `req.once("aborted", ...)` / `res.once("close", ...)` to cancel an in-flight model call on
+    // client disconnect (commitDraftCancellation), which a plain `{} as ServerResponse` cannot
+    // support. mockResponse() is the repository's existing genuine-stream fake (_support.ts),
+    // already used for this exact pattern elsewhere (coding-sidecar-gateway.test.ts).
+    res: mockResponse().res,
     params: {},
     url: new URL(`http://127.0.0.1${path}`),
   };
@@ -905,6 +916,218 @@ describe("commit draft — explicit model-backed generation", () => {
         failureCode: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
       },
     });
+  });
+
+  // #3591: the field customer's LiteLLM-fronted vLLM gateway takes 30-120s+ to answer at peak load.
+  // The route used to pass a flat `AbortSignal.timeout(30_000)` as the buffered call's own
+  // `cancellationSignal`, capping the WHOLE call (including the gateway's own retries) well under a
+  // healthy slow answer. `AbortSignal.timeout`'s internal timer is not one vitest's fake timers can
+  // intercept (it does not run through the public `setTimeout` fake timers patch), so the deadline
+  // is pinned by spying on the constructor call itself rather than by simulating elapsed time. Fails
+  // before the fix: old code calls `AbortSignal.timeout(30_000)` directly as the request signal, so
+  // the spy would record 30_000 and never 300_000.
+  it("raises the model-call deadline from 30s to a 300s backstop", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    try {
+      const handler = createHandleCommitDraft({
+        execution: seams({
+          stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+        }),
+      });
+      const result = await handler(
+        ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+        deps({
+          config: DRAFT_GATEWAY_CONFIG,
+          modelPortFactory: () =>
+            draftModelPort(() => draftResponse({ subject: "fix: repair", body: "Detail." })),
+        }),
+      );
+
+      expect(result.status).toBe(200);
+      expect(timeoutSpy).toHaveBeenCalledWith(300_000);
+      expect(timeoutSpy).not.toHaveBeenCalledWith(30_000);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("requests the raised reasoning-model output budget under the coding-workbench latency profile", async () => {
+    let captured: GatewayCallRequest | undefined;
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () =>
+          draftModelPort((request) => {
+            captured = request;
+            return draftResponse({ subject: "fix: repair", body: "Detail." });
+          }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(captured?.maxOutputTokens).toBe(4_000);
+    expect(captured?.latencyProfile).toBe("coding-workbench");
+  });
+
+  it("classifies a provider timeout as GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT, not a generic failure", async () => {
+    const events: ServerLogEvent[] = [];
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+      activityLog: {
+        write(event): void {
+          events.push(event);
+        },
+      },
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () => ({
+          call: (): Promise<never> =>
+            Promise.reject(new TimeoutError("provider did not answer in time")),
+        }),
+      }),
+    );
+
+    expect(res.status).toBe(504);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT" } });
+    const draftCompleted = events.find((event) => event.op === "git.commit.draft.completed");
+    expect(draftCompleted).toMatchObject({
+      status: 504,
+      errorKind: "timeout",
+      extra: { outcome: "failed", failureCode: "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT" },
+    });
+    const persisted = expectActivityLogProof(
+      "git.commit.draft.completed.emitted-line",
+      formatActivityLogProofLine(draftCompleted ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      outcome: "failed",
+      failureCode: "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT",
+    });
+  });
+
+  it("classifies a thrown ProviderOutputExhaustedError as output-exhausted, not a generic failure", async () => {
+    const events: ServerLogEvent[] = [];
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+      activityLog: {
+        write(event): void {
+          events.push(event);
+        },
+      },
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () => ({
+          call: (): Promise<never> =>
+            Promise.reject(new ProviderOutputExhaustedError("draft-model")),
+        }),
+      }),
+    );
+
+    expect(res.status).toBe(502);
+    expect(res.body).toMatchObject({
+      error: { code: "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED" },
+    });
+    const draftCompleted = events.find((event) => event.op === "git.commit.draft.completed");
+    expect(draftCompleted).toMatchObject({
+      status: 502,
+      errorKind: "validation-failed",
+      extra: { outcome: "failed", failureCode: "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED" },
+    });
+  });
+
+  // The adapter only THROWS ProviderOutputExhaustedError when content is empty; a reasoning model
+  // that produced a partial fragment before running out of budget instead returns normally with
+  // `finishReason: "length"` and truncated content. That fragment must never be trusted as a real
+  // answer even though it happens to look content-bearing.
+  it("classifies a truncated finishReason=length response as output-exhausted, never a trusted draft", async () => {
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () =>
+          draftModelPort(() => ({
+            modelId: "draft-model",
+            content: '{"subject":"fix: rep',
+            finishReason: "length",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "draft-model-request",
+              promptTokens: 100,
+              completionTokens: 4_000,
+              latencyMs: 12,
+              costClass: "low",
+            },
+          })),
+      }),
+    );
+
+    expect(res.status).toBe(502);
+    expect(res.body).toMatchObject({
+      error: { code: "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED" },
+    });
+  });
+
+  it("aborts the in-flight model call when the client disconnects", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const port: ModelPort = {
+      call: (_request, signal): Promise<NormalizedResponse> => {
+        capturedSignal = signal;
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              reject(new CancelledError("client cancelled"));
+            },
+            { once: true },
+          );
+        });
+      },
+    };
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+    });
+    const ctx = ctxFor(DRAFT, { schemaVersion: "1", projectId });
+
+    const pending = handler(
+      ctx,
+      deps({ config: DRAFT_GATEWAY_CONFIG, modelPortFactory: () => port }),
+    );
+    await vi.waitFor(() => {
+      expect(capturedSignal).toBeDefined();
+    });
+    ctx.req.emit("aborted");
+
+    const result = await pending;
+    expect(result.status).toBe(503);
+    expect(result.body).toMatchObject({ error: { code: "GIT_DELIVERY_COMMIT_DRAFT_FAILED" } });
   });
 });
 
