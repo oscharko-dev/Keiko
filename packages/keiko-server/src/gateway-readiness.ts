@@ -103,6 +103,20 @@ const GATEWAY_READINESS_MODEL_ID_FIELDS = {
   modelIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
 } as const;
 
+// #3591 (1.1.7): the bound each probe of a run actually ran under. A floor may raise it above the
+// configured provider timeout (`probeProvider`), and the long-context probe carries its own,
+// higher floor, so an operator can tell from the start line which deadline governed a probe that
+// timed out or took minutes. Absent only when no provider could be selected for the run.
+const GATEWAY_READINESS_PROBE_TIMEOUT_FIELDS = {
+  probeTimeoutMs: { type: "integer", dataClass: "duration", required: false },
+  longContextProbeTimeoutMs: { type: "integer", dataClass: "duration", required: false },
+} as const;
+
+interface ProbeTimeoutEvidence {
+  readonly probeTimeoutMs?: number;
+  readonly longContextProbeTimeoutMs?: number;
+}
+
 const GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -112,6 +126,7 @@ const GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION = defineActivityLogOperation
   emitter: "gateway-readiness.logAutomaticReadinessStarted",
   fields: {
     ...GATEWAY_READINESS_MODEL_ID_FIELDS,
+    ...GATEWAY_READINESS_PROBE_TIMEOUT_FIELDS,
     probeCount: { type: "integer", dataClass: "count", required: true },
   },
   causal: "correlation",
@@ -169,6 +184,7 @@ const GATEWAY_READINESS_STARTED_OPERATION = defineActivityLogOperation({
       required: true,
       values: ["settings"],
     },
+    ...GATEWAY_READINESS_PROBE_TIMEOUT_FIELDS,
     probeCount: { type: "integer", dataClass: "count", required: true },
   },
   causal: "correlation",
@@ -408,14 +424,31 @@ function logAutomaticReadinessStarted(
   correlationId: string,
   modelId: string,
   probeCount: number,
+  timeouts: ProbeTimeoutEvidence,
 ): void {
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION,
       { correlationId },
-      { ...modelIdEvidence(modelId), probeCount },
+      { ...modelIdEvidence(modelId), ...timeouts, probeCount },
     ),
   );
+}
+
+// The bounds the run's probes are about to run under (`probeProvider`): one for every probe but
+// the long-context one, which is recorded on its own when the run includes it.
+function probeTimeoutEvidence(
+  provider: ModelProviderConfig,
+  names: readonly GatewayReadinessProbeName[],
+  options: GatewayReadinessOptions | undefined,
+): ProbeTimeoutEvidence {
+  const probeTimeoutMs = probeProvider(provider, "chat", options).timeoutMs;
+  return names.includes("long_context")
+    ? {
+        probeTimeoutMs,
+        longContextProbeTimeoutMs: probeProvider(provider, "long_context", options).timeoutMs,
+      }
+    : { probeTimeoutMs };
 }
 
 function logAutomaticReadinessCompleted(
@@ -487,12 +520,13 @@ function logReadinessStarted(
   trigger: GatewayReadinessTrigger,
   modelId: string,
   probeCount: number,
+  timeouts: ProbeTimeoutEvidence,
 ): void {
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       GATEWAY_READINESS_STARTED_OPERATION,
       { correlationId },
-      { ...modelIdEvidence(modelId), trigger, probeCount },
+      { ...modelIdEvidence(modelId), ...timeouts, trigger, probeCount },
     ),
   );
 }
@@ -524,15 +558,35 @@ function logReadinessCompleted(
 function logReadinessRunStarted(
   deps: UiHandlerDeps,
   run: ReadinessRunEvidence,
-  modelId: string,
-  probeCount: number,
+  selection: ProviderSelection,
+  names: readonly GatewayReadinessProbeName[],
+  options: GatewayReadinessOptions | undefined,
 ): void {
+  const modelId = selection.provider.modelId;
+  const timeouts = probeTimeoutEvidence(selection.provider, names, options);
   if (run.automatic) {
-    logAutomaticReadinessStarted(deps, run.correlationId, modelId, probeCount);
+    logAutomaticReadinessStarted(deps, run.correlationId, modelId, names.length, timeouts);
     return;
   }
   if (run.trigger === undefined) return;
-  logReadinessStarted(deps, run.correlationId, run.trigger, modelId, probeCount);
+  logReadinessStarted(deps, run.correlationId, run.trigger, modelId, names.length, timeouts);
+}
+
+// The on-demand probe (one chat probe on the configured timeout) records its own start line.
+function logOnDemandProbeStarted(
+  deps: UiHandlerDeps,
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  modelId: string,
+  correlationId: string,
+): void {
+  const selection = chooseProvider(holder.current(), modelId, undefined);
+  logAutomaticReadinessStarted(
+    deps,
+    correlationId,
+    modelId,
+    1,
+    "status" in selection ? {} : probeTimeoutEvidence(selection.provider, ["chat"], undefined),
+  );
 }
 
 function logReadinessRunCompleted(
@@ -1723,7 +1777,7 @@ export async function runGatewayReadiness(
     trigger,
     startedAtMs: Date.now(),
   };
-  logReadinessRunStarted(deps, run, selection.provider.modelId, names.length);
+  logReadinessRunStarted(deps, run, selection, names, request.options);
   const probes: GatewayReadinessProbeResult[] = [];
   const chat = await runProbe("chat", deps, selection, request.options, correlationId);
   probes.push(chat);
@@ -1812,6 +1866,7 @@ interface WorkbenchProbeEntry {
   at: number;
   cooldownMs: number;
   settled: boolean;
+  outcome?: WorkbenchProbeOutcome;
 }
 const workbenchProbes = new Map<string, WorkbenchProbeEntry>();
 // ONE run at a time. Persisting a conclusion bumps the configuration generation, and a readiness
@@ -1863,10 +1918,22 @@ function workbenchProbeKey(config: GatewayConfig, modelId: string): string {
     : `${toolCallingConfigurationFingerprint(provider)}:${String(provider.timeoutMs)}`;
 }
 
-/** Whether the Workbench's automatic verification of this model is still running. */
+/**
+ * Whether the Workbench's automatic verification of this model is still open: the probe is
+ * running, or it ended without a verdict (the gateway never answered) and runs again after its
+ * short cooldown. Only a verdict — proven or refuted — closes it, so a Workbench that re-reads its
+ * profile while this holds keeps reading until the gateway has actually answered.
+ */
 export function isCodingWorkbenchProbePending(config: GatewayConfig, modelId: string): boolean {
   const entry = workbenchProbes.get(workbenchProbeKey(config, modelId));
-  return entry !== undefined && !entry.settled;
+  return entry !== undefined && (!entry.settled || entry.outcome === "inconclusive");
+}
+
+/** Whether any model the Workbench could still elect has its verification open. */
+export function isAnyCodingWorkbenchProbePending(config: GatewayConfig): boolean {
+  return workbenchProbeTargets(config).some((target) =>
+    isCodingWorkbenchProbePending(config, target.modelId),
+  );
 }
 
 function workbenchProbeOutcome(
@@ -1938,6 +2005,7 @@ function enqueueWorkbenchProbe(
     promise: workbenchProbeQueue.then(async () => {
       const outcome = await runWorkbenchProbe(deps, target, key, correlationId);
       entry.settled = true;
+      entry.outcome = outcome;
       entry.at = Date.now();
       entry.cooldownMs =
         outcome === "inconclusive"
@@ -2062,7 +2130,7 @@ async function runOnDemandReadinessProbe(
   const generation = holder.generation();
   const probeCorrelationId = correlationId ?? newCorrelationId();
   let overallStatus: GatewayReadinessReport["overallStatus"] = "failed";
-  logAutomaticReadinessStarted(deps, probeCorrelationId, modelId, 1);
+  logOnDemandProbeStarted(deps, holder, modelId, probeCorrelationId);
   try {
     const report = await runGatewayReadiness(
       { modelId, options: { probes: [] } },

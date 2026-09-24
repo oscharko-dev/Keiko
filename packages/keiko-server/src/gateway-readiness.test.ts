@@ -13,6 +13,7 @@ import { createInMemoryUiStore } from "./store/index.js";
 import {
   EMBEDDING_EVIDENCE_PATTERN,
   TESTED_CONTEXT_TOKENS_PATTERN,
+  WORKBENCH_PROBE_TIMEOUT_FLOOR_MS,
   handleGatewayReadiness,
   longContextTokens,
   runGatewayReadiness,
@@ -266,8 +267,14 @@ describe("gateway readiness route", () => {
     expect(events[0]).toMatchObject({
       op: "gateway.readiness.automatic.started",
       correlationId: "coding-readiness-0001",
-      extra: { modelIdDigest: CODING_CHAT_DIGEST, probeCount: 2 },
+      // #3591: the bound the automatic probes ran under — the Workbench floor, not the 30 s configured.
+      extra: {
+        modelIdDigest: CODING_CHAT_DIGEST,
+        probeCount: 2,
+        probeTimeoutMs: WORKBENCH_PROBE_TIMEOUT_FLOOR_MS,
+      },
     });
+    expect(events[0]?.extra).not.toHaveProperty("longContextProbeTimeoutMs");
     expect(events[1]).toMatchObject({
       op: "gateway.readiness.automatic.completed",
       correlationId: "coding-readiness-0001",
@@ -333,6 +340,8 @@ describe("gateway readiness route", () => {
         modelIdDigest: TEST_CHAT_MODEL_DIGEST,
         trigger: "settings",
         probeCount: 1,
+        // A settings check runs its chat probe on the configured timeout; no floor applies.
+        probeTimeoutMs: 30_000,
       });
       expect(
         expectActivityLogProof(

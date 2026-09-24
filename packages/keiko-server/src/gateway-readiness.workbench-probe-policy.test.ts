@@ -204,6 +204,38 @@ describe("automatic Workbench probes — inconclusive runs are retried soon", ()
     expect(calls()).toBe(1);
   });
 
+  // Review of #3591: a Workbench that re-reads its profile only while the verification is open
+  // must not stop after an inconclusive probe — the server retries after a minute, and only a
+  // verdict from the gateway closes the verification.
+  it("keeps the verification open after an inconclusive probe until the gateway answers", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
+    let answers = 0;
+    const { deps, calls } = workbenchDeps(() => {
+      answers += 1;
+      return answers === 1
+        ? Promise.reject(new TimeoutError("synthetic"))
+        : Promise.resolve(
+            new Response(JSON.stringify({ error: { message: "refused" } }), {
+              status: 400,
+              headers: { "content-type": "application/json" },
+            }),
+          );
+    });
+    const config = deps.gatewayConfig?.current();
+    if (config === undefined) throw new Error("config missing");
+
+    await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
+    await codingWorkbenchProbesSettledForTests();
+    expect(calls()).toBe(1);
+    expect(isCodingWorkbenchProbePending(config, "hosted-chat")).toBe(true);
+
+    vi.advanceTimersByTime(WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS);
+    await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
+    await codingWorkbenchProbesSettledForTests();
+    expect(calls()).toBe(2);
+    expect(isCodingWorkbenchProbePending(config, "hosted-chat")).toBe(false);
+  });
+
   it("reports the probe as pending while it runs and settled afterwards", async () => {
     let release: (() => void) | undefined;
     const { deps } = workbenchDeps(

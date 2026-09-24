@@ -181,6 +181,12 @@ const COMMIT_DRAFT_COMPLETED_OPERATION = defineActivityLogOperation({
         "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE",
       ],
     },
+    // #3591 (1.1.7): the bounds the model call ran under, present once a model was resolved — the
+    // output allowance sent (the raised draft budget, clamped to the model's declared limit) and
+    // the route's own deadline behind the gateway's floors — so an exhausted or timed-out draft
+    // can be reconstructed from this line alone.
+    maxOutputTokens: { type: "integer", dataClass: "count", required: false },
+    deadlineMs: { type: "integer", dataClass: "duration", required: false },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -245,12 +251,12 @@ const COMMIT_DRAFT_INSTRUCTION_MAX_CHARS = 1_500;
 // gateway to apply CODING_WORKBENCH_PROVIDER_TIMEOUT_FLOOR_MS as the PER-ATTEMPT timeout floor; this
 // deadline is only the route's own backstop against a call that never returns at all, generous
 // enough to cover several such attempts, and is never the primary timeout.
-const COMMIT_DRAFT_MODEL_DEADLINE_MS = 300_000;
+export const COMMIT_DRAFT_MODEL_DEADLINE_MS = 300_000;
 // A reasoning model (gpt-oss / gemma thinking) spends output tokens on its reasoning trace before
 // its first answer token. 700 was tight enough that the whole budget was consumed by reasoning,
 // leaving `finish_reason: "length"` and no usable content (#3591). 4,000 gives a reasoning model
 // room to think AND still answer.
-const COMMIT_DRAFT_MAX_OUTPUT_TOKENS = 4_000;
+export const COMMIT_DRAFT_MAX_OUTPUT_TOKENS = 4_000;
 const LOCAL_USER_COMMIT_AUTHORITY: GitDeliveryAuthorityIdentity = {
   runId: "local-user-git-widget",
   envelopeDigest: "0".repeat(64),
@@ -641,11 +647,19 @@ interface ResolvedCommitDraftModel {
   readonly model: NonNullable<ReturnType<UiHandlerDeps["modelPortFactory"]>>;
   readonly modelId: string;
   readonly useResponseFormat: boolean;
+  readonly maxOutputTokens: number;
+}
+
+// The bounds one draft's model call ran under; recorded on its `git.commit.draft.completed` line.
+interface CommitDraftBounds {
+  readonly maxOutputTokens: number;
+  readonly deadlineMs: number;
 }
 
 interface CommitDraftModelInput {
   readonly modelId: string;
   readonly useResponseFormat: boolean;
+  readonly maxOutputTokens: number;
   readonly policy: GitCommitMessagePolicy;
   readonly stagedPaths: readonly string[];
   readonly summary: GitCommitChangeSummary;
@@ -655,8 +669,13 @@ interface CommitDraftModelInput {
 }
 
 type ModelCommitDraftResult =
-  | { readonly ok: true; readonly message: string }
-  | { readonly ok: false; readonly code: GitDeliveryCommitErrorCode; readonly error?: unknown };
+  | { readonly ok: true; readonly message: string; readonly bounds: CommitDraftBounds }
+  | {
+      readonly ok: false;
+      readonly code: GitDeliveryCommitErrorCode;
+      readonly error?: unknown;
+      readonly bounds?: CommitDraftBounds;
+    };
 
 export interface GitDeliveryCommitDraftBody {
   readonly schemaVersion: "1";
@@ -693,7 +712,25 @@ function resolveCommitDraftModel(deps: UiHandlerDeps): ResolvedCommitDraftModel 
   if (modelId === undefined) return undefined;
   const model = deps.modelPortFactory(modelId);
   if (model === undefined) return undefined;
-  return { model, modelId, useResponseFormat: structuredModelId !== undefined };
+  return {
+    model,
+    modelId,
+    useResponseFormat: structuredModelId !== undefined,
+    maxOutputTokens: commitDraftOutputTokens(config.capabilities ?? [], modelId),
+  };
+}
+
+// #3591 review: the raised draft budget must not exceed what the model declares. The spend-budget
+// port refuses a request above `capability.maxOutputTokens` before any provider call, and a
+// provider would reject it; a model that declares no limit (0) keeps the full draft budget.
+function commitDraftOutputTokens(
+  capabilities: readonly { readonly id: string; readonly maxOutputTokens: number }[],
+  modelId: string,
+): number {
+  const declared = capabilities.find((capability) => capability.id === modelId)?.maxOutputTokens;
+  return declared !== undefined && declared > 0
+    ? Math.min(COMMIT_DRAFT_MAX_OUTPUT_TOKENS, declared)
+    : COMMIT_DRAFT_MAX_OUTPUT_TOKENS;
 }
 
 function boundedStagedDiff(diff: string): {
@@ -737,7 +774,7 @@ function buildCommitDraftModelRequest(input: CommitDraftModelInput): GatewayCall
       { role: "user", content: commitDraftEvidence(input) },
     ],
     ...(input.useResponseFormat ? { responseFormat: COMMIT_DRAFT_RESPONSE_FORMAT } : {}),
-    maxOutputTokens: COMMIT_DRAFT_MAX_OUTPUT_TOKENS,
+    maxOutputTokens: input.maxOutputTokens,
     temperature: 0.2,
     stream: false,
     logContext: { correlationId: input.correlationId },
@@ -820,31 +857,36 @@ function classifyCommitDraftModelFailure(error: unknown): GitDeliveryCommitError
 
 async function generateModelCommitMessage(
   deps: UiHandlerDeps,
-  input: Omit<CommitDraftModelInput, "modelId" | "useResponseFormat">,
+  input: Omit<CommitDraftModelInput, "modelId" | "useResponseFormat" | "maxOutputTokens">,
   signal: AbortSignal,
 ): Promise<ModelCommitDraftResult> {
   const resolved = resolveCommitDraftModel(deps);
   if (resolved === undefined) {
     return { ok: false, code: "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE" };
   }
+  const bounds: CommitDraftBounds = {
+    maxOutputTokens: resolved.maxOutputTokens,
+    deadlineMs: COMMIT_DRAFT_MODEL_DEADLINE_MS,
+  };
   try {
     const response = await resolved.model.call(
       buildCommitDraftModelRequest({
         ...input,
         modelId: resolved.modelId,
         useResponseFormat: resolved.useResponseFormat,
+        maxOutputTokens: resolved.maxOutputTokens,
       }),
       signal,
     );
     const validated = modelCommitMessage(response, input.policy);
-    if (validated.ok) return { ok: true, message: validated.message };
+    if (validated.ok) return { ok: true, message: validated.message, bounds };
     const code: GitDeliveryCommitErrorCode =
       validated.reason === "output-exhausted"
         ? "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED"
         : "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT";
-    return { ok: false, code };
+    return { ok: false, code, bounds };
   } catch (error) {
-    return { ok: false, code: classifyCommitDraftModelFailure(error), error };
+    return { ok: false, code: classifyCommitDraftModelFailure(error), error, bounds };
   }
 }
 
@@ -854,6 +896,7 @@ function logCommitDraft(
   summary: GitCommitChangeSummary,
   status: number,
   failureCode?: GitDeliveryCommitErrorCode,
+  bounds?: CommitDraftBounds,
 ): void {
   log.write(
     activityLogEvent(
@@ -869,6 +912,7 @@ function logCommitDraft(
         touchesTests: summary.touchesTests,
         outcome: status === 200 ? "succeeded" : "failed",
         ...(failureCode === undefined ? {} : { failureCode }),
+        ...(bounds ?? {}),
       },
     ),
   );
@@ -880,8 +924,9 @@ function draftFailureResult(
   summary: GitCommitChangeSummary,
   status: number,
   code: GitDeliveryCommitErrorCode,
+  bounds?: CommitDraftBounds,
 ): RouteResult {
-  logCommitDraft(log, correlationId, summary, status, code);
+  logCommitDraft(log, correlationId, summary, status, code, bounds);
   return errResult(status, code);
 }
 
@@ -914,6 +959,7 @@ function modelDraftFailureResult(
     summary,
     commitDraftFailureStatus(suggested.code),
     suggested.code,
+    suggested.bounds,
   );
 }
 
@@ -955,7 +1001,7 @@ async function computeModelCommitDraft(
   if (!suggested.ok) {
     return modelDraftFailureResult(deps, log, correlationId, summary, suggested);
   }
-  logCommitDraft(log, correlationId, summary, 200);
+  logCommitDraft(log, correlationId, summary, 200, undefined, suggested.bounds);
   const body: GitDeliveryCommitDraftBody = {
     schemaVersion: "1",
     status: "succeeded",

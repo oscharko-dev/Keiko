@@ -1,5 +1,5 @@
 import type { CodingWorkbenchStartOptions } from "./coding-workbench-runtime-actions";
-import { useCallback, useRef, type Dispatch, type RefObject } from "react";
+import { useCallback, useEffect, useRef, type Dispatch, type RefObject } from "react";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type {
   CodingWorkbenchCodexAuthMethod,
@@ -116,21 +116,21 @@ function useProfileRefresh(
 }
 
 // #3591 (1.1.7): while the server is still verifying the elected model against a slow gateway it
-// answers `model-context-window-verifying`; the Workbench reads the profile again after this pause
+// answers `model-verification-pending`; the Workbench reads the profile again after this pause
 // instead of leaving the operator with a refusal that a later read would have lifted.
 export const CODING_WORKBENCH_VERIFYING_REFRESH_MS = 10_000;
 
 function sourceVerificationPending(
   profile: Awaited<ReturnType<typeof fetchCodingWorkbenchSidecarGatewayProfile>>,
 ): boolean {
-  return profile.status === "unavailable" && profile.reason === "model-context-window-verifying";
+  return profile.status === "unavailable" && profile.reason === "model-verification-pending";
 }
 
 async function refreshManagedGatewaySource(
   sequenceRef: RefObject<number>,
   sequence: number,
   dispatch: RuntimeDispatch,
-  refreshAgain: () => Promise<void>,
+  scheduleReread: (sequence: number) => void,
 ): Promise<void> {
   dispatch({ kind: "profile-empty" });
   const profile = await fetchCodingWorkbenchSidecarGatewayProfile();
@@ -140,11 +140,32 @@ async function refreshManagedGatewaySource(
   requestGatewayModelCatalogRefresh();
   if (sequenceRef.current !== sequence) return;
   dispatch({ kind: "source-set", source: codingWorkbenchSourceFromManaged(profile) });
-  if (sourceVerificationPending(profile)) {
-    setTimeout(() => {
-      if (sequenceRef.current === sequence) void refreshAgain();
-    }, CODING_WORKBENCH_VERIFYING_REFRESH_MS);
-  }
+  if (sourceVerificationPending(profile)) scheduleReread(sequence);
+}
+
+// The re-read timer belongs to the mounted Workbench: a newer refresh replaces it, and unmounting
+// clears it, so a closed Workbench never keeps reading the profile (#3591 review).
+function useVerificationReread(
+  sequenceRef: RefObject<number>,
+  refreshRef: RefObject<() => Promise<void>>,
+): (sequence: number) => void {
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(
+    () => (): void => {
+      clearTimeout(timerRef.current);
+    },
+    [],
+  );
+  return useCallback(
+    (sequence: number): void => {
+      clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => {
+        timerRef.current = undefined;
+        if (sequenceRef.current === sequence) void refreshRef.current();
+      }, CODING_WORKBENCH_VERIFYING_REFRESH_MS);
+    },
+    [refreshRef, sequenceRef],
+  );
 }
 
 function useSourceRefresh(
@@ -153,15 +174,14 @@ function useSourceRefresh(
   dispatch: RuntimeDispatch,
 ): () => Promise<void> {
   const refreshRef = useRef<() => Promise<void>>(async () => undefined);
+  const scheduleReread = useVerificationReread(sequenceRef, refreshRef);
   const refresh = useCallback(async (): Promise<void> => {
     const sequence = (sequenceRef.current += 1);
     const preference = stateRef.current.runtimePreference;
     dispatch({ kind: "resource-loading", resource: "source" });
     try {
       if (preference === "managed-gateway") {
-        await refreshManagedGatewaySource(sequenceRef, sequence, dispatch, () =>
-          refreshRef.current(),
-        );
+        await refreshManagedGatewaySource(sequenceRef, sequence, dispatch, scheduleReread);
         return;
       }
       dispatch({ kind: "resource-loading", resource: "profile" });
@@ -186,7 +206,7 @@ function useSourceRefresh(
         });
       }
     }
-  }, [dispatch, sequenceRef, stateRef]);
+  }, [dispatch, scheduleReread, sequenceRef, stateRef]);
   refreshRef.current = refresh;
   return refresh;
 }

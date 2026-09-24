@@ -40,6 +40,7 @@ import {
   handleCodingSidecarGatewayProfile,
   PROFILE_PROBE_WAIT_MS,
   MINIMUM_ADMITTED_OUTPUT_TOKENS,
+  admissiblePromptTokens,
   admittedOutputTokens,
 } from "./coding-sidecar-gateway.js";
 import { mockRequest, mockResponse, probeVerifiedGatewayConfig } from "./_support.js";
@@ -2820,8 +2821,62 @@ describe("coding-sidecar gateway", () => {
       const result = await read;
       expect(result.body).toEqual({
         status: "unavailable",
-        reason: "model-context-window-verifying",
+        reason: "model-verification-pending",
       });
+    } finally {
+      vi.useRealTimers();
+      resetCodingWorkbenchContextWindowProbesForTests();
+    }
+  });
+
+  // Review of #3591: an unverified tool-calling proof answers `unavailable` before the automatic
+  // probe has run. While that probe is still open the read must say so too — the Workbench polls
+  // only that reason — instead of a refusal that stands until an unrelated refresh.
+  it("answers with a pending verification while the tool-calling probe of an unverified model runs", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    resetCodingWorkbenchContextWindowProbesForTests();
+    try {
+      const context = {
+        req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile" }),
+        res: mockResponse().res,
+        params: {},
+        url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+        correlationId: undefined,
+      } satisfies RouteContext;
+      const aged = capability({
+        toolCallingVerification: {
+          status: "verified",
+          checkedAt: new Date(
+            Date.now() - TOOL_CALLING_VERIFICATION_MAX_AGE_MS - 60_000,
+          ).toISOString(),
+          probe: "gateway-tool-calling-v1",
+          configurationFingerprint: "test-fingerprint",
+        },
+      });
+      const config = configValue(provider(), aged);
+      const deps: UiHandlerDeps = {
+        ...depsValue(config),
+        gatewayConfig: {
+          storagePath: "/dev/null",
+          current: () => config,
+          present: () => true,
+          set: () => undefined,
+          generation: () => 0,
+          verification: () => "verified",
+          recordVerification: () => undefined,
+          verifiedCapability: () => undefined,
+          recordVerifiedCapability: () => undefined,
+          clearVerifiedCapability: () => false,
+        },
+        gatewayReadinessFetch: (): Promise<Response> =>
+          new Promise<Response>(() => {
+            // The gateway never answers within the test: the tool-calling probe stays in flight.
+          }),
+      };
+      const read = handleCodingSidecarGatewayProfile(context, deps);
+      await vi.advanceTimersByTimeAsync(PROFILE_PROBE_WAIT_MS);
+      const result = await read;
+      expect(result.body).toEqual({ status: "unavailable", reason: "model-verification-pending" });
     } finally {
       vi.useRealTimers();
       resetCodingWorkbenchContextWindowProbesForTests();
@@ -3317,7 +3372,9 @@ describe("coding-sidecar gateway", () => {
       body: {
         error: {
           code: "context_length_exceeded",
-          message: "Request body estimated prompt tokens exceed profile maxPromptTokens (128000).",
+          message: expect.stringMatching(
+            /^Request body estimated prompt tokens exceed profile maxPromptTokens \(128000\) less the reserved output allowance \(\d+ admissible\)\.$/,
+          ) as string,
         },
       },
     });
@@ -3384,7 +3441,9 @@ describe("coding-sidecar gateway", () => {
       body: {
         error: {
           code: "context_length_exceeded",
-          message: "Request body estimated prompt tokens exceed profile maxPromptTokens (16).",
+          message: expect.stringMatching(
+            /^Request body estimated prompt tokens exceed profile maxPromptTokens \(16\) less the reserved output allowance \(-?\d+ admissible\)\.$/,
+          ) as string,
         },
       },
     });
@@ -4728,9 +4787,27 @@ describe("admittedOutputTokens", () => {
     expect(admittedOutputTokens(bounds, 30_000)).toBe(1_000);
   });
 
-  it("never drops below the floor that still lets the model answer", () => {
-    expect(admittedOutputTokens(bounds, 31_900)).toBe(MINIMUM_ADMITTED_OUTPUT_TOKENS);
-    expect(admittedOutputTokens(bounds, 32_000)).toBe(MINIMUM_ADMITTED_OUTPUT_TOKENS);
+  // Review of #3591 (P1): the allowance used to floor at 512 for a prompt just under the window,
+  // which sent 512 output tokens PAST the proven window. Admission now stops such a prompt, and
+  // the largest admissible prompt still gets exactly the minimum allowance.
+  it("grants the largest admissible prompt exactly the minimum allowance", () => {
+    // 32,000 window, 1,000 safety margin, 512 minimum: 30,488 is the last admissible prompt.
+    expect(admissiblePromptTokens(bounds)).toBe(30_488);
+    expect(admittedOutputTokens(bounds, admissiblePromptTokens(bounds))).toBe(
+      MINIMUM_ADMITTED_OUTPUT_TOKENS,
+    );
+    expect(
+      admissiblePromptTokens(bounds) +
+        admittedOutputTokens(bounds, admissiblePromptTokens(bounds)) +
+        1_000,
+    ).toBe(bounds.maxPromptTokens);
+  });
+
+  it("reserves the whole output budget when it is smaller than the minimum allowance", () => {
+    const tiny = { maxPromptTokens: 128_000, maxOutputTokens: 4 };
+    // 4,000 safety margin at that size, then the 4-token reserve.
+    expect(admissiblePromptTokens(tiny)).toBe(128_000 - 4_000 - 4);
+    expect(admittedOutputTokens(tiny, admissiblePromptTokens(tiny))).toBe(4);
   });
 
   it("never exceeds the run's reserve, even a reserve below the floor", () => {

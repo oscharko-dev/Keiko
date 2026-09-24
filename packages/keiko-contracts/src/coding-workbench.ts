@@ -533,7 +533,7 @@ export type CodingWorkbenchSidecarGatewayUnavailableReason =
   // Appended (#3591, 1.1.7): the automatic verification of this model (context window or tool
   // calling) is still running against a slow gateway. Transient: the Workbench re-reads its profile
   // until the probe settles, and no operator action is required.
-  | "model-context-window-verifying";
+  | "model-verification-pending";
 
 /**
  * The floor `runMetadata.maxPromptTokens` must clear before a coding run is allowed to look

@@ -123,11 +123,12 @@ beforeEach(() => {
 function renderResources(state: CodingWorkbenchRuntimeState): {
   readonly resources: ReturnType<typeof useCodingWorkbenchRuntimeResources>;
   readonly dispatch: ReturnType<typeof vi.fn>;
+  readonly unmount: () => void;
 } {
   const dispatch = vi.fn();
   const stateRef = { current: state };
   const view = renderHook(() => useCodingWorkbenchRuntimeResources(stateRef, dispatch));
-  return { resources: view.result.current, dispatch };
+  return { resources: view.result.current, dispatch, unmount: view.unmount };
 }
 
 describe("useCodingWorkbenchRuntimeResources profile refresh", () => {
@@ -221,7 +222,7 @@ describe("useCodingWorkbenchRuntimeResources source refresh", () => {
   });
 
   // #3591 (1.1.7): while the server is still verifying the elected model against a slow gateway
-  // it answers `model-context-window-verifying`; the Workbench reads again after the pause instead
+  // it answers `model-verification-pending`; the Workbench reads again after the pause instead
   // of leaving a refusal that the next read would have lifted.
   it("re-reads the managed gateway source while verification is pending", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout"] });
@@ -229,7 +230,7 @@ describe("useCodingWorkbenchRuntimeResources source refresh", () => {
       vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile)
         .mockResolvedValueOnce({
           status: "unavailable",
-          reason: "model-context-window-verifying",
+          reason: "model-verification-pending",
         } as CodingWorkbenchSidecarGatewayResult)
         .mockResolvedValueOnce({ status: "available" } as CodingWorkbenchSidecarGatewayResult);
       const { resources, dispatch } = renderResources(runtimeState());
@@ -239,7 +240,7 @@ describe("useCodingWorkbenchRuntimeResources source refresh", () => {
         kind: "source-set",
         source: expect.objectContaining({
           available: false,
-          unavailableReason: "model-context-window-verifying",
+          unavailableReason: "model-verification-pending",
         }),
       });
       await act(async () => {
@@ -250,6 +251,27 @@ describe("useCodingWorkbenchRuntimeResources source refresh", () => {
         kind: "source-set",
         source: expect.objectContaining({ available: true }),
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A closed Workbench must not keep reading the profile every ten seconds until the page closes.
+  it("stops the verification re-read when the Workbench unmounts", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mockResolvedValue({
+        status: "unavailable",
+        reason: "model-verification-pending",
+      } as CodingWorkbenchSidecarGatewayResult);
+      const { resources, unmount } = renderResources(runtimeState());
+      await act(() => resources.refreshSource());
+      expect(fetchCodingWorkbenchSidecarGatewayProfile).toHaveBeenCalledTimes(1);
+      unmount();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CODING_WORKBENCH_VERIFYING_REFRESH_MS * 3);
+      });
+      expect(fetchCodingWorkbenchSidecarGatewayProfile).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

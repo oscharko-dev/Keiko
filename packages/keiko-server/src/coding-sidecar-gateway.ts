@@ -77,6 +77,7 @@ import { readJsonObject } from "./files.js";
 import { safetyMarginTokensFor } from "@oscharko-dev/keiko-contracts/context-engineering";
 import {
   ensureCodingWorkbenchContextWindows,
+  isAnyCodingWorkbenchProbePending,
   isCodingWorkbenchProbePending,
 } from "./gateway-readiness.js";
 import { getServerLogger } from "./observability/index.js";
@@ -243,7 +244,7 @@ const CODING_SIDECAR_GATEWAY_READINESS_INSUFFICIENT_OPERATION = defineActivityLo
         "model-context-window-insufficient",
         "no-tool-calling",
         "tool-calling-unverified",
-        "model-context-window-verifying",
+        "model-verification-pending",
       ],
     },
     maxPromptTokens: { type: "integer", dataClass: "count", required: false },
@@ -1416,9 +1417,10 @@ function budgetValidationError(
       `Request body messages exceed profile maxInputMessages (${String(runMetadata.maxInputMessages)}).`,
     );
   }
-  if (estimatedPromptTokens > runMetadata.maxPromptTokens) {
+  const admissible = admissiblePromptTokens(runMetadata);
+  if (estimatedPromptTokens > admissible) {
     return contextOverflowRequest(
-      `Request body estimated prompt tokens exceed profile maxPromptTokens (${String(runMetadata.maxPromptTokens)}).`,
+      `Request body estimated prompt tokens exceed profile maxPromptTokens (${String(runMetadata.maxPromptTokens)}) less the reserved output allowance (${String(admissible)} admissible).`,
     );
   }
   return undefined;
@@ -2789,26 +2791,35 @@ function gatewayReadinessProjection(
   // is not a verdict. The profile says so, and the Workbench re-reads it instead of refusing.
   const pending = readinessProbePending(deps, result, shortfall);
   const reason: CodingWorkbenchReadinessShortfall = pending
-    ? "model-context-window-verifying"
+    ? "model-verification-pending"
     : shortfall;
   logReadinessShortfall(ctx, result, reason, pending);
-  return result.status === "available" ? { status: "unavailable", reason } : result;
+  // An open verification replaces the stored shortfall for an unavailable projection too (an
+  // unverified tool-calling proof whose probe is still running), or the Workbench would stop
+  // reading and keep the refusal until an unrelated refresh.
+  if (result.status === "available" || pending) return { status: "unavailable", reason };
+  return result;
 }
 
 type CodingWorkbenchReadinessShortfall =
   | "model-context-window-insufficient"
   | "no-tool-calling"
   | "tool-calling-unverified"
-  | "model-context-window-verifying";
+  | "model-verification-pending";
 
 function readinessProbePending(
   deps: UiHandlerDeps,
   result: CodingWorkbenchSidecarGatewayResult,
   shortfall: CodingWorkbenchReadinessShortfall,
 ): boolean {
-  if (shortfall === "no-tool-calling" || result.status !== "available") return false;
+  if (shortfall === "no-tool-calling") return false;
   const config = currentGatewayConfig(deps);
-  return config !== undefined && isCodingWorkbenchProbePending(config, result.modelAlias);
+  if (config === undefined) return false;
+  // An unavailable projection (an unverified tool-calling proof) names no model: its verification
+  // is open while any model the Workbench could still elect has an open probe.
+  return result.status === "available"
+    ? isCodingWorkbenchProbePending(config, result.modelAlias)
+    : isAnyCodingWorkbenchProbePending(config);
 }
 
 function logReadinessShortfall(
@@ -2852,7 +2863,7 @@ export async function handleCodingSidecarGatewayProfile(
   if (elected.status === "available" || elected.reason === "tool-calling-unverified") {
     // #3591 (1.1.7): the browser reads this profile with a 15 s deadline while a probe against a
     // slow gateway may take minutes. Wait a bounded moment for the elected model's proof; past it,
-    // answer with the projection (`model-context-window-verifying` while the probe runs) and let
+    // answer with the projection (`model-verification-pending` while the probe runs) and let
     // the Workbench read again — never leave the read hanging until the browser gives up.
     await Promise.race([
       ensureCodingWorkbenchContextWindows(
@@ -3085,22 +3096,43 @@ async function runHandleCodingSidecarGatewayChatCompletions(
 }
 
 // #3591 (1.1.7): the run's output reserve (8k for an undeclared limit) is a reserve against the
-// whole window, and the prompt admission checks the prompt against that whole window. A prompt
-// close to the window would leave the provider a request larger than its window, so the allowance
-// actually sent is what remains after the prompt and the safety margin — never below a floor that
-// still lets the model answer (and report an exhausted budget instead of failing silently).
+// whole window, and `maxPromptTokens` IS that whole window. A prompt close to the window would
+// leave the provider a request larger than its window, so the allowance actually sent is what
+// remains after the prompt and the safety margin — and the least allowance that still lets the
+// model answer (and report an exhausted budget instead of failing silently) is reserved at
+// admission, never added on top of a prompt that already fills the window.
 export const MINIMUM_ADMITTED_OUTPUT_TOKENS = 512;
 
-export function admittedOutputTokens(
-  bounds: Pick<CodingWorkbenchSidecarGatewayRunMetadata, "maxPromptTokens" | "maxOutputTokens">,
-  estimatedPromptTokens: number,
-): number {
+type OutputBounds = Pick<
+  CodingWorkbenchSidecarGatewayRunMetadata,
+  "maxPromptTokens" | "maxOutputTokens"
+>;
+
+// What a prompt must leave free of `maxPromptTokens`: the window's safety margin plus the minimum
+// allowance (or the whole reserve, when that is smaller).
+function reservedWindowTokens(bounds: OutputBounds): number {
+  return (
+    safetyMarginTokensFor(bounds.maxPromptTokens, bounds.maxOutputTokens) +
+    Math.min(MINIMUM_ADMITTED_OUTPUT_TOKENS, bounds.maxOutputTokens)
+  );
+}
+
+// Review of #3591 (P1): admission used to check the prompt against `maxPromptTokens` alone while
+// the allowance floored at 512, so a prompt just under the window was sent WITH 512 output tokens
+// — past the window the probe had proven, and the provider refused the turn. The prompt must
+// leave the margin and the minimum allowance free, or the turn is refused before any call.
+export function admissiblePromptTokens(bounds: OutputBounds): number {
+  return bounds.maxPromptTokens - reservedWindowTokens(bounds);
+}
+
+// The allowance an ADMITTED turn sends: the run's reserve, shrunk to what the prompt leaves after
+// the safety margin. Admission (`admissiblePromptTokens`) guarantees at least the minimum.
+export function admittedOutputTokens(bounds: OutputBounds, estimatedPromptTokens: number): number {
   const remaining =
     bounds.maxPromptTokens -
     estimatedPromptTokens -
     safetyMarginTokensFor(bounds.maxPromptTokens, bounds.maxOutputTokens);
-  // The floor lifts a cramped remainder, never the run's own reserve.
-  return Math.min(bounds.maxOutputTokens, Math.max(MINIMUM_ADMITTED_OUTPUT_TOKENS, remaining));
+  return Math.min(bounds.maxOutputTokens, remaining);
 }
 
 function logValidatedRequestBounds(

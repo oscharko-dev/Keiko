@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "48ca9552cb9dc47b3475ea7bcdf48f85810289e003f3a66a0abcdca52c79052d" as const;
+  "284aab406ff7b515b37467477477ac0d89f4c650a13dc4e70f4197eaaee2da49" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -7113,7 +7113,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "model-context-window-insufficient",
           "no-tool-calling",
           "tool-calling-unverified",
-          "model-context-window-verifying",
+          "model-verification-pending",
         ],
       },
       maxPromptTokens: {
@@ -11351,6 +11351,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         maxLength: 16,
       },
+      probeTimeoutMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
+      longContextProbeTimeoutMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
       probeCount: {
         type: "integer",
         dataClass: "count",
@@ -11442,6 +11452,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
         values: ["settings"],
+      },
+      probeTimeoutMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
+      longContextProbeTimeoutMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
       },
       probeCount: {
         type: "integer",
@@ -13298,6 +13318,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT",
           "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE",
         ],
+      },
+      maxOutputTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      deadlineMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
       },
     },
     causal: "correlation",
@@ -42050,6 +42080,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "longContextProbeTimeoutMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
               name: "modelIdDigest",
               type: "string",
               dataClass: "digest",
@@ -42061,8 +42097,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               dataClass: "count",
               required: true,
             },
+            {
+              name: "probeTimeoutMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
           ],
-          evidenceClasses: ["completeness-state", "count", "digest", "loss-state"],
+          evidenceClasses: ["completeness-state", "count", "digest", "duration", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -42122,6 +42164,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "longContextProbeTimeoutMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
               name: "modelIdDigest",
               type: "string",
               dataClass: "digest",
@@ -42134,13 +42182,26 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "probeTimeoutMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
               name: "trigger",
               type: "string",
               dataClass: "closed-enum",
               required: true,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "duration",
+            "loss-state",
+          ],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -44512,9 +44573,21 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "deadlineMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
               name: "failureCode",
               type: "string",
               dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "maxOutputTokens",
+              type: "integer",
+              dataClass: "count",
               required: false,
             },
             {
@@ -44536,7 +44609,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "duration", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,

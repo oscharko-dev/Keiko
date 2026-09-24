@@ -51,8 +51,8 @@ const SOURCE_UNAVAILABLE_REASON_KEYS: Readonly<Record<string, CodingWorkbenchMes
   "model-context-window-insufficient":
     "codingWorkbench.source.unavailableReason.model-context-window-insufficient",
   // #3591 (1.1.7): transient — the Workbench re-reads the profile until the probe settles.
-  "model-context-window-verifying":
-    "codingWorkbench.source.unavailableReason.model-context-window-verifying",
+  "model-verification-pending":
+    "codingWorkbench.source.unavailableReason.model-verification-pending",
   // PR #3452 (F73): the coding model's forced tool-call proof is missing or older than 24 h.
   "tool-calling-unverified": "codingWorkbench.source.unavailableReason.tool-calling-unverified",
 };

@@ -50,6 +50,8 @@ import type {
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   createHandleCommitApprove,
+  COMMIT_DRAFT_MAX_OUTPUT_TOKENS,
+  COMMIT_DRAFT_MODEL_DEADLINE_MS,
   createHandleCommitDraft,
   createHandleCommitExecute,
   createHandleCommitPreview,
@@ -914,6 +916,8 @@ describe("commit draft — explicit model-backed generation", () => {
         touchesTests: false,
         outcome: "failed",
         failureCode: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
+        maxOutputTokens: COMMIT_DRAFT_MAX_OUTPUT_TOKENS,
+        deadlineMs: COMMIT_DRAFT_MODEL_DEADLINE_MS,
       },
     });
   });
@@ -972,8 +976,42 @@ describe("commit draft — explicit model-backed generation", () => {
     );
 
     expect(res.status).toBe(200);
-    expect(captured?.maxOutputTokens).toBe(4_000);
+    expect(captured?.maxOutputTokens).toBe(COMMIT_DRAFT_MAX_OUTPUT_TOKENS);
     expect(captured?.latencyProfile).toBe("coding-workbench");
+  });
+
+  // Review of #3591: the raised budget must not exceed what the model declares — the spend-budget
+  // port refuses a request above `capability.maxOutputTokens` before any provider call. A model
+  // that declares no limit keeps the full budget.
+  it.each([
+    ["clamps to a smaller declared limit", 2_048, 2_048],
+    ["keeps the budget under a larger declared limit", 8_192, COMMIT_DRAFT_MAX_OUTPUT_TOKENS],
+    ["keeps the budget when the model declares no limit", 0, COMMIT_DRAFT_MAX_OUTPUT_TOKENS],
+  ])("%s", async (_label, declared, expected) => {
+    let captured: GatewayCallRequest | undefined;
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: {
+          ...DRAFT_GATEWAY_CONFIG,
+          capabilities: [{ ...DRAFT_MODEL_CAPABILITY, maxOutputTokens: declared }],
+        },
+        modelPortFactory: () =>
+          draftModelPort((request) => {
+            captured = request;
+            return draftResponse({ subject: "fix: repair", body: "Detail." });
+          }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(captured?.maxOutputTokens).toBe(expected);
   });
 
   it("classifies a provider timeout as GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT, not a generic failure", async () => {
@@ -1006,7 +1044,13 @@ describe("commit draft — explicit model-backed generation", () => {
     expect(draftCompleted).toMatchObject({
       status: 504,
       errorKind: "timeout",
-      extra: { outcome: "failed", failureCode: "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT" },
+      // The bounds the call ran under travel with the failure (#3591 review).
+      extra: {
+        outcome: "failed",
+        failureCode: "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT",
+        maxOutputTokens: COMMIT_DRAFT_MAX_OUTPUT_TOKENS,
+        deadlineMs: COMMIT_DRAFT_MODEL_DEADLINE_MS,
+      },
     });
     const persisted = expectActivityLogProof(
       "git.commit.draft.completed.emitted-line",
