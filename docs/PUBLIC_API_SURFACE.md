@@ -1,4 +1,4 @@
-# Public API surface — 1.1.6
+# Public API surface — 1.1.7
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
