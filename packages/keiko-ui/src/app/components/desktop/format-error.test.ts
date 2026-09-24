@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/api";
+import {
+  I18N_STORAGE_KEY,
+  loadLocaleMessages,
+  resetLoadedMessageCatalogs,
+  translate,
+} from "@/lib/i18n";
 import { formatUserError, toUserErrorNotice } from "./format-error";
 
 describe("formatUserError", () => {
@@ -86,6 +92,26 @@ describe("formatUserError", () => {
       remediation:
         "Nenne eine konkrete Datei, einen Identifier, eine Fehlermeldung oder eine exakte Phrase.",
     });
+  });
+
+  // PR #3602 review: title, message AND remediation of a gateway notice follow the selected locale
+  // together; a German notice must not carry an English recovery instruction.
+  it("localizes the whole gateway notice for the selected locale", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      for (const code of ["GATEWAY_TIMEOUT", "GATEWAY_OUTPUT_EXHAUSTED"] as const) {
+        const notice = toUserErrorNotice(new ApiError(code, code, 503), "Could not send message.");
+        const key = code === "GATEWAY_TIMEOUT" ? "gatewayTimeout" : "gatewayOutputExhausted";
+        expect(notice.title).toBe(translate("de", `chat.error.${key}.title`));
+        expect(notice.message).toBe(translate("de", `chat.error.${key}.message`));
+        expect(notice.remediation).toBe(translate("de", `chat.error.${key}.remediation`));
+        expect(notice.remediation).not.toBe(translate("en", `chat.error.${key}.remediation`));
+      }
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+      resetLoadedMessageCatalogs();
+    }
   });
 
   it("adds gateway timeout title and remediation for structured notices", () => {

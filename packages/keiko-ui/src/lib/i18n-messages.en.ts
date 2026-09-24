@@ -548,9 +548,13 @@ export const EN_MESSAGES = {
   "chat.error.gatewayTimeout.title": "Model gateway did not answer in time",
   "chat.error.gatewayTimeout.message":
     "The model gateway did not complete the request within Keiko's wait limit. Keiko keeps waiting for minutes on a slow gateway, so this usually means the gateway or the model stalled — not that the request was too large.",
+  "chat.error.gatewayTimeout.remediation":
+    "Retry, or check gateway URL, proxy, and deployment in Settings if it keeps happening.",
   "chat.error.gatewayOutputExhausted.title": "Model ran out of output budget",
   "chat.error.gatewayOutputExhausted.message":
     "The model used its whole output budget before producing an answer, usually on reasoning. Have the gateway declare a larger max_output_tokens for this model, or choose a model with a smaller reasoning share, then retry.",
+  "chat.error.gatewayOutputExhausted.remediation":
+    "Raise the model's max output tokens in Settings, or switch to a model with a smaller reasoning share, then retry.",
   "chat.keikoLogo": "Keiko logo",
   "chat.keikoResponding": "Keiko is responding",
   "chat.copy.copiedStatus": "Answer copied",

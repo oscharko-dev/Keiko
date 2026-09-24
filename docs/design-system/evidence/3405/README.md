@@ -1,6 +1,6 @@
 # Updater reliability evidence — #3405 / #3403
 
-The current repair evidence was regenerated on 2026-09-24 for PR #3602 after the gateway latency
+The current repair evidence was regenerated on 2026-09-25 for PR #3602 after the gateway latency
 repair added the chat gateway-error strings to the shared English and German message catalogs. No
 updater string changed. All eight
 Chromium checks passed, including the real-BFF outage journey, and refreshed the tracked updater

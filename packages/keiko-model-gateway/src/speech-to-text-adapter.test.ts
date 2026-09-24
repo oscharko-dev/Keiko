@@ -120,8 +120,10 @@ describe("requestSpeechToText", () => {
     expect(body).not.toContain("\r\n\r\nde-DE\r\n");
     // THE ATTEMPT LINE (speech.stt.request.dispatch) is always first, ahead of the narrower,
     // conditional normalization line (#3602 review — the new per-call deadline had no line
-    // recording the applied bound).
-    expect(events).toHaveLength(2);
+    // recording the applied bound), and THE COMPLETION LINE (speech.stt.request.completed) is
+    // always last (#3602 review — a timeout, a rate limit, and an invalid response were
+    // indistinguishable from a still-running call once only the dispatch line existed).
+    expect(events).toHaveLength(3);
     expect(events[0]).toMatchObject({
       level: "info",
       category: "gateway",
@@ -142,6 +144,19 @@ describe("requestSpeechToText", () => {
         primaryLanguagePreserved: true,
       },
     });
+    expect(events[2]).toMatchObject({
+      level: "info",
+      category: "gateway",
+      op: "speech.stt.request.completed",
+      correlationId: "corr-stt-language",
+      extra: {
+        modelId: "keiko-stt",
+        outcome: "succeeded",
+        timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS,
+      },
+    });
+    expect(events[2]?.extra).not.toHaveProperty("failureKind");
+    expect(events[2]?.errorKind).toBeUndefined();
 
     // Activity Log proof (#3532): the normalization line as the production file sink would
     // persist it.
@@ -162,6 +177,17 @@ describe("requestSpeechToText", () => {
     );
     expect(dispatched).toMatchObject({
       modelId: "keiko-stt",
+      timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS,
+    });
+    // The completed line as the production file sink would persist it: the outcome and the
+    // applied deadline travel together (#3602 review).
+    const completed = expectActivityLogProof(
+      "speech.stt.request.completed.emitted-line",
+      formatActivityLogProofLine(events[2] ?? {}),
+    );
+    expect(completed).toMatchObject({
+      modelId: "keiko-stt",
+      outcome: "succeeded",
       timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS,
     });
   });
@@ -189,8 +215,12 @@ describe("requestSpeechToText", () => {
 
     expect(outcome.ok).toBe(true);
     expect(body).toContain("\r\n\r\nde\r\n");
-    // Only the unconditional dispatch line — no normalization event for an already-primary tag.
-    expect(events.map((event) => event.op)).toEqual(["speech.stt.request.dispatch"]);
+    // The unconditional dispatch and completed lines — no normalization event for an
+    // already-primary tag.
+    expect(events.map((event) => event.op)).toEqual([
+      "speech.stt.request.dispatch",
+      "speech.stt.request.completed",
+    ]);
   });
 
   it("omits an empty language hint without emitting a normalization event", async () => {
@@ -212,8 +242,12 @@ describe("requestSpeechToText", () => {
 
     expect(outcome.ok).toBe(true);
     expect(body).not.toContain('name="language"');
-    // Only the unconditional dispatch line — no normalization event for an absent language hint.
-    expect(events.map((event) => event.op)).toEqual(["speech.stt.request.dispatch"]);
+    // The unconditional dispatch and completed lines — no normalization event for an absent
+    // language hint.
+    expect(events.map((event) => event.op)).toEqual([
+      "speech.stt.request.dispatch",
+      "speech.stt.request.completed",
+    ]);
   });
 
   it("normalizes a maximum-length validated language hint and logs the boundary", async () => {
@@ -236,7 +270,7 @@ describe("requestSpeechToText", () => {
 
     expect(outcome.ok).toBe(true);
     expect(body).toContain("\r\n\r\nabc\r\n");
-    expect(events).toHaveLength(2);
+    expect(events).toHaveLength(3);
     expect(events[0]).toMatchObject({ op: "speech.stt.request.dispatch" });
     expect(events[1]).toMatchObject({
       level: "info",
@@ -251,6 +285,7 @@ describe("requestSpeechToText", () => {
         primaryLanguagePreserved: true,
       },
     });
+    expect(events[2]).toMatchObject({ op: "speech.stt.request.completed" });
   });
 
   it("includes an optional domain-keyword prompt field in the multipart body", async () => {
@@ -524,6 +559,69 @@ describe("requestSpeechToText", () => {
     } finally {
       timeoutSpy.mockRestore();
     }
+  });
+
+  // THE COMPLETION LINE (review finding on PR #3602: the dispatch line alone left a timeout, a
+  // rate limit, and an invalid response indistinguishable from a still-running call). Proves the
+  // timeout path specifically, since that is the scenario the finding names.
+  it("logs the completed line with a timeout failureKind and errorKind on a timeout outcome", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const outcome = await requestSpeechToText({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-stt",
+      audio: AUDIO,
+      mimeType: "audio/webm",
+      correlationId: "corr-stt-timeout",
+      log: { write: (event): void => void events.push(event) },
+      fetchImpl: mockFetch(() => {
+        throw new DOMException("timed out", "TimeoutError");
+      }),
+    });
+    expect(outcome).toEqual({ ok: false, kind: "timeout" });
+    const completed = events.find((event) => event.op === "speech.stt.request.completed");
+    expect(completed).toMatchObject({
+      level: "warn",
+      category: "gateway",
+      op: "speech.stt.request.completed",
+      correlationId: "corr-stt-timeout",
+      errorKind: "timeout",
+      extra: {
+        outcome: "failed",
+        failureKind: "timeout",
+        timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS,
+      },
+    });
+  });
+
+  // A non-timeout failure: proves the completed line's failureKind/errorKind distinguish a rate
+  // limit from a timeout instead of collapsing every failure into one shape.
+  it("logs the completed line with a rate-limited failureKind and errorKind on a 429 outcome", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const outcome = await requestSpeechToText({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-stt",
+      audio: AUDIO,
+      mimeType: "audio/webm",
+      correlationId: "corr-stt-rate-limit",
+      log: { write: (event): void => void events.push(event) },
+      fetchImpl: mockFetch(() => new Response("", { status: 429 })),
+    });
+    expect(outcome).toEqual({ ok: false, kind: "rate-limited" });
+    const completed = events.find((event) => event.op === "speech.stt.request.completed");
+    expect(completed).toMatchObject({
+      level: "warn",
+      category: "gateway",
+      op: "speech.stt.request.completed",
+      correlationId: "corr-stt-rate-limit",
+      errorKind: "rate-limited",
+      extra: {
+        outcome: "failed",
+        failureKind: "rate-limited",
+        timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS,
+      },
+    });
   });
 
   it("never leaks the provider URL or credential into the outcome on failure", async () => {

@@ -31,12 +31,15 @@ const PROVIDER: ModelProviderConfig = {
 };
 
 // The silence bound one PROVIDER attempt actually runs under when it reads over the provider's own
-// stream (#3591, PR #3602 review): the configured `timeoutMs` floored to the silence floor. This is
-// gateway.ts's private `effectiveSilenceMs`, which streamedReadBounds now derives independently of
-// `providerRetryConfig(...).attemptTimeoutMs` — that value floors to the LARGER buffered-answer
-// floor instead (it bounds a whole-body attempt, not a streamed read's silence), so reusing it here
-// would silently pin the wrong number.
-const EFFECTIVE_SILENCE_MS = Math.max(PROVIDER.timeoutMs, GATEWAY_SILENCE_FLOOR_MS);
+// stream (#3591, PR #3602 review): PROVIDER's configured 30 s sits below the silence floor, so the
+// exported floor itself is the bound — pinned to the constant, never to a copy of gateway.ts's
+// private formula (a fixture that restated it would keep passing if that formula drifted). It is
+// NOT `providerRetryConfig(...).attemptTimeoutMs`: that value floors to the LARGER buffered-answer
+// floor (it bounds a whole-body attempt, not a streamed read's silence).
+const EFFECTIVE_SILENCE_MS = GATEWAY_SILENCE_FLOOR_MS;
+if (PROVIDER.timeoutMs >= EFFECTIVE_SILENCE_MS) {
+  throw new Error("fixture PROVIDER.timeoutMs must stay below the silence floor for these pins");
+}
 
 function capability(streaming: boolean): ModelCapability {
   return {

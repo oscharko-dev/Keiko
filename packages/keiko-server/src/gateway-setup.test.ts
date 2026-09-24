@@ -860,9 +860,16 @@ describe("handleGatewaySetup", () => {
   // pins directly: when NOTHING survives the round, `defaultGatewaySetupTester` throws exactly as it
   // always did, and a non-transient rejection (never RATE_LIMIT/a network code) must fail setup
   // closed rather than being deferred as a whole-gateway temporary admission (#3591).
-  it("fails setup and persists nothing when every chat candidate goes unanswered", async () => {
-    const uiDir = await tempDir("keiko-gw-all-unanswered-ui-");
-    const evidenceDir = await tempDir("keiko-gw-all-unanswered-ev-");
+  //
+  // PR #3602 review: this fixture answers every candidate with HTTP 400 — an ANSWERED rejection, not
+  // an unanswered one — so it only covers the all-REJECTED path. `isUnverifiedSmokeFailure` never
+  // sees this failure as kept-unverified (400 is not `transientGatewayStatus`, and the error carries
+  // no `SETUP_NETWORK_ERROR_CODES`/`RATE_LIMIT`/`CANCELLED` code), so every candidate lands in
+  // `droppedRejected`. The two tests below are this test's siblings for the all-UNANSWERED path
+  // (every candidate times out or is cancelled instead of being answered and refused).
+  it("fails setup and persists nothing when every chat candidate is answered and rejected", async () => {
+    const uiDir = await tempDir("keiko-gw-all-rejected-ui-");
+    const evidenceDir = await tempDir("keiko-gw-all-rejected-ev-");
     const originalFetch = globalThis.fetch;
     const fakeFetch: typeof fetch = () =>
       Promise.resolve(
@@ -890,6 +897,225 @@ describe("handleGatewaySetup", () => {
       expect(result.status).toBe(502);
       expect(currentGatewayConfig(deps)).toBeUndefined();
     } finally {
+      globalThis.fetch = originalFetch;
+      deps.store.close();
+    }
+  });
+
+  // PR #3602 review: the all-UNANSWERED sibling of the all-rejected test above — every candidate's
+  // smoke call never gets an answer at all; the fetch itself rejects with a
+  // `DOMException("…", "TimeoutError")`, the exact shape `openai-adapter.ts`'s
+  // `requestAbortError`/`mapDispatchError` already classifies as the gateway's own retryable
+  // `TimeoutError` (`ERROR_CODES.TIMEOUT`) — the same fixture the "keeps a chat deployment…" test
+  // above uses for a single candidate, applied to every candidate in the round.
+  //
+  // Derived from gateway-setup.ts, not asserted from memory:
+  //  - `isUnverifiedSmokeFailure` keeps a TIMEOUT-coded failure "unverified", not "dropped"
+  //    (`SETUP_NETWORK_ERROR_CODES` includes `ERROR_CODES.TIMEOUT`). With every candidate unanswered,
+  //    `admitChatSmokeCandidates` still returns `tested: []` (nothing was ever ANSWERED), so
+  //    `defaultGatewaySetupTester` throws exactly as `smokeTestCandidates` always did —
+  //    `allProbesFailedError(chatSmoke.allFailures)`.
+  //  - `mostSevereProbeFailure`/`probeCodeSeverity` classify a TIMEOUT code at severity 2 (it is in
+  //    `SETUP_NETWORK_ERROR_CODES`), so the thrown aggregate error carries `.code = GATEWAY_TIMEOUT`.
+  //  - `admitChatCandidatesOrDefer` feeds that error to `temporaryGatewaySetupFailure`, whose
+  //    `TEMPORARY_SETUP_ERROR_CODES` set includes `ERROR_CODES.TIMEOUT` — so, UNLIKE the all-rejected
+  //    case above, it DEFERS via `DeferredTemporaryChatAdmission` instead of failing closed.
+  //  - `temporaryAdmissionOrFailure` resumes that deferral through `temporaryChatAdmission`: every
+  //    candidate stays CONFIGURED but unverified — status 200, `unverifiedChatModelIds` holds every
+  //    candidate, no `droppedChatModelIds` — the same whole-gateway temporary admission the
+  //    `gatewaySetupTester`-faked ETIMEDOUT case above already proves for a single injected error.
+  //  - The resumed path never reaches `verifySetupCandidate`'s `reportChatSmokeAdmission` call (that
+  //    call sits AFTER the non-deferred `await admitChatCandidatesOrDefer`, so only the immediate,
+  //    non-deferred branch reaches it — see that function's "Emitted BEFORE the chat smoke test"
+  //    comment), so no `gateway-setup.discovery` diagnostic fires for this round; only the
+  //    per-candidate `gateway.setup.chat-smoke-probe` diagnostics (`recordChatSmokeFailure`, one per
+  //    candidate) and the aggregate `gateway.setup.provider-verify` diagnostic fire, both body-free
+  //    by construction (`bodyFreeVerificationFailure`/`describeError` never carry a model id).
+  it("keeps every chat candidate configured but unverified when every smoke call times out unanswered", async () => {
+    const uiDir = await tempDir("keiko-gw-all-timeout-ui-");
+    const evidenceDir = await tempDir("keiko-gw-all-timeout-ev-");
+    const originalFetch = globalThis.fetch;
+    const fakeFetch: typeof fetch = () =>
+      Promise.reject(new DOMException("simulated smoke-probe timeout", "TimeoutError"));
+    globalThis.fetch = fakeFetch;
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...MOCK_FETCH_EGRESS_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+    });
+    try {
+      const result = await handleGatewaySetup(
+        ctx({
+          baseUrl: "https://llm-gateway.example.com/v1",
+          apiKey: "example-secret-token",
+          deploymentNames: ["timed-out-one", "timed-out-two"],
+        }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      expect(result.body).toMatchObject({
+        testedModelIds: [],
+        unverifiedChatModelIds: ["timed-out-one", "timed-out-two"],
+      });
+      expect(result.body).not.toHaveProperty("droppedChatModelIds");
+      const config = requiredGatewayConfig(deps);
+      expect(config.providers.map((provider) => provider.modelId).sort()).toEqual([
+        "timed-out-one",
+        "timed-out-two",
+      ]);
+      for (const modelId of ["timed-out-one", "timed-out-two"]) {
+        expect(requiredCapability(config, modelId)).toMatchObject({
+          toolCalling: false,
+          toolCallingVerification: { status: "unverified", probe: "gateway-tool-calling-v1" },
+        });
+      }
+      // The whole-gateway deferral resumes straight through `temporaryChatAdmission` and never
+      // reaches `reportChatSmokeAdmission` — no `gateway-setup.discovery` line for this round.
+      expect(
+        diagnostics.find((record) => record.source === "gateway-setup.discovery"),
+      ).toBeUndefined();
+      const smokeProbeDiagnostics = diagnostics.filter(
+        (record) => record.source === "gateway.setup.chat-smoke-probe",
+      );
+      expect(smokeProbeDiagnostics).toHaveLength(2);
+      const verificationDiagnostic = diagnostics.find(
+        (record) => record.source === "gateway.setup.provider-verify",
+      );
+      expect(verificationDiagnostic).toMatchObject({
+        errorClass: "Error",
+        code: ERROR_CODES.TIMEOUT,
+      });
+      // Body-free: none of this round's diagnostics may name the candidates they classified.
+      const serializedDiagnostics = JSON.stringify(diagnostics);
+      expect(serializedDiagnostics).not.toContain("timed-out-one");
+      expect(serializedDiagnostics).not.toContain("timed-out-two");
+    } finally {
+      globalThis.fetch = originalFetch;
+      deps.store.close();
+    }
+  });
+
+  // PR #3602 review: the OTHER all-UNANSWERED sibling — every candidate's smoke call is CANCELLED
+  // rather than timed out. This reuses the exact "hung provider" fixture the discovery test below
+  // uses for ONE candidate (settle only when the dispatched request's OWN abort signal fires, never a
+  // bare rejection), applied to every candidate, with the SAME `AbortSignal.timeout` spy shortening
+  // only the candidate's own smoke deadline (`DISCOVERED_MODEL_SMOKE_TIMEOUT_MS` — every deployment
+  // name resolves to it too, since `candidateSmokeDeadlineMs` is `Math.max(provider.timeoutMs,
+  // DISCOVERED_MODEL_SMOKE_TIMEOUT_MS)` and the deployment probe timeout is the smaller of the two).
+  // That fixture already produces a genuine `CancelledError` in production, not a simulated one: once
+  // the shortened deadline fires, the dispatched attempt fails, and `resilience.ts`'s retry loop finds
+  // its OWN `cancellationSignal` (the same, now-permanently-aborted signal) already `aborted` the next
+  // time it checks — `assertNotAborted`, called unconditionally on `signal.aborted` before every
+  // attempt and before every backoff sleep — and throws `CancelledError` regardless of why the signal
+  // fired (see the `isUnverifiedSmokeFailure` doc comment above: "the deadline, not a real cancel, is
+  // what fired it"). No real backoff wait is involved: the very next check after the first failure
+  // already sees the signal aborted, so this is deterministic, not a timing race.
+  //
+  // Derived from gateway-setup.ts, not asserted from memory (PR #3602 review):
+  //  - With every candidate unanswered, `admitChatSmokeCandidates` returns `tested: []`, so
+  //    `defaultGatewaySetupTester` throws `allProbesFailedError(chatSmoke.allFailures)`.
+  //  - `probeCodeSeverity` ranks `ERROR_CODES.CANCELLED` like the network/timeout codes and
+  //    `TEMPORARY_SETUP_ERROR_CODES` lists it: the candidate's own smoke deadline surfacing as a
+  //    cancellation is the same "never answered" fact as a timeout, so the aggregate error carries
+  //    `.code = GATEWAY_CANCELLED` and `temporaryGatewaySetupFailure` defers the round exactly as the
+  //    all-timeout test above does — 200, every candidate configured but unverified, nothing dropped.
+  //    Before that repair the round failed closed with 502 although `isUnverifiedSmokeFailure`, the
+  //    per-candidate gate, already treated CANCELLED and TIMEOUT identically.
+  it("keeps every chat candidate configured but unverified when every smoke round is cancelled by its own deadline", async () => {
+    const uiDir = await tempDir("keiko-gw-all-cancelled-ui-");
+    const evidenceDir = await tempDir("keiko-gw-all-cancelled-ev-");
+    const originalFetch = globalThis.fetch;
+    const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockImplementation((ms) =>
+        nativeTimeout(ms === DISCOVERED_MODEL_SMOKE_TIMEOUT_MS ? 20 : ms),
+      );
+    const fakeFetch: typeof fetch = (_url, init) =>
+      new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal;
+        if (signal === undefined || signal === null) return;
+        // Mirrors the discovery test's own "hung provider" shape: settle only when the dispatched
+        // request's OWN signal fires, exactly like a real `fetch()` under an `AbortController`.
+        if (signal.aborted) {
+          reject(new Error("simulated smoke-probe cancellation"));
+          return;
+        }
+        signal.addEventListener(
+          "abort",
+          () => {
+            reject(new Error("simulated smoke-probe cancellation"));
+          },
+          { once: true },
+        );
+      });
+    globalThis.fetch = fakeFetch;
+    const diagnostics: ServerDiagnosticRecord[] = [];
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...MOCK_FETCH_EGRESS_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+      diagnostics: { record: (record): void => void diagnostics.push(record) },
+    });
+    try {
+      const result = await handleGatewaySetup(
+        ctx({
+          baseUrl: "https://llm-gateway.example.com/v1",
+          apiKey: "example-secret-token",
+          deploymentNames: ["cancelled-one", "cancelled-two"],
+        }),
+        deps,
+      );
+
+      expect(result.status).toBe(200);
+      expect(result.body).toMatchObject({
+        testedModelIds: [],
+        unverifiedChatModelIds: ["cancelled-one", "cancelled-two"],
+      });
+      expect(result.body).not.toHaveProperty("droppedChatModelIds");
+      const config = requiredGatewayConfig(deps);
+      expect(config.providers.map((provider) => provider.modelId).sort()).toEqual([
+        "cancelled-one",
+        "cancelled-two",
+      ]);
+      for (const modelId of ["cancelled-one", "cancelled-two"]) {
+        expect(requiredCapability(config, modelId)).toMatchObject({
+          toolCalling: false,
+          toolCallingVerification: { status: "unverified", probe: "gateway-tool-calling-v1" },
+        });
+      }
+      const smokeProbeDiagnostics = diagnostics.filter(
+        (record) => record.source === "gateway.setup.chat-smoke-probe",
+      );
+      expect(smokeProbeDiagnostics).toHaveLength(2);
+      for (const diagnostic of smokeProbeDiagnostics) {
+        expect(diagnostic).toMatchObject({
+          errorClass: "CancelledError",
+          code: ERROR_CODES.CANCELLED,
+        });
+      }
+      const verificationDiagnostic = diagnostics.find(
+        (record) => record.source === "gateway.setup.provider-verify",
+      );
+      // The aggregate error carries the deadline's cancellation code, ranked like a timeout, so the
+      // whole round is deferred instead of failed closed (see the derivation above).
+      expect(verificationDiagnostic).toMatchObject({
+        errorClass: "Error",
+        code: ERROR_CODES.CANCELLED,
+      });
+      expect(
+        diagnostics.find((record) => record.source === "gateway-setup.discovery"),
+      ).toBeUndefined();
+      // Body-free: none of this round's diagnostics may name the candidates they classified.
+      const serializedDiagnostics = JSON.stringify(diagnostics);
+      expect(serializedDiagnostics).not.toContain("cancelled-one");
+      expect(serializedDiagnostics).not.toContain("cancelled-two");
+    } finally {
+      timeoutSpy.mockRestore();
       globalThis.fetch = originalFetch;
       deps.store.close();
     }

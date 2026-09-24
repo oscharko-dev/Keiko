@@ -277,8 +277,10 @@ describe("requestTextToSpeech", () => {
     }
     // THE ATTEMPT LINE (speech.tts.request.dispatch) is always first, ahead of the narrower
     // MIME-correction line (#3602 review — the new per-call deadline had no line recording the
-    // applied bound).
-    expect(events).toHaveLength(2);
+    // applied bound), and THE COMPLETION LINE (speech.tts.request.completed) is always last
+    // (#3602 review — a timeout, a rate limit, and an invalid response were indistinguishable
+    // from a still-running call once only the dispatch line existed).
+    expect(events).toHaveLength(3);
     expect(events[0]).toMatchObject({
       level: "info",
       category: "gateway",
@@ -298,6 +300,19 @@ describe("requestTextToSpeech", () => {
         resolvedMimeClass: "opus",
       },
     });
+    expect(events[2]).toMatchObject({
+      level: "info",
+      category: "gateway",
+      op: "speech.tts.request.completed",
+      correlationId: "corr-tts-mime",
+      extra: {
+        modelId: "keiko-tts",
+        outcome: "succeeded",
+        timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS,
+      },
+    });
+    expect(events[2]?.extra).not.toHaveProperty("failureKind");
+    expect(events[2]?.errorKind).toBeUndefined();
 
     // Activity Log proof (#3532): the MIME-correction line as the production file sink would
     // persist it.
@@ -314,6 +329,17 @@ describe("requestTextToSpeech", () => {
     );
     expect(dispatched).toMatchObject({
       modelId: "keiko-tts",
+      timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS,
+    });
+    // The completed line as the production file sink would persist it: the outcome and the
+    // applied deadline travel together (#3602 review).
+    const completed = expectActivityLogProof(
+      "speech.tts.request.completed.emitted-line",
+      formatActivityLogProofLine(events[2] ?? {}),
+    );
+    expect(completed).toMatchObject({
+      modelId: "keiko-tts",
+      outcome: "succeeded",
       timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS,
     });
   });
@@ -378,8 +404,12 @@ describe("requestTextToSpeech", () => {
 
     expect(outcome.ok).toBe(true);
     if (outcome.ok) expect(outcome.value.mimeType).toBe("audio/mpeg");
-    // Only the unconditional dispatch line — no MIME-correction event for an already-correct MIME.
-    expect(events.map((event) => event.op)).toEqual(["speech.tts.request.dispatch"]);
+    // The unconditional dispatch and completed lines — no MIME-correction event for an
+    // already-correct MIME.
+    expect(events.map((event) => event.op)).toEqual([
+      "speech.tts.request.dispatch",
+      "speech.tts.request.completed",
+    ]);
   });
 
   it.each([
@@ -402,8 +432,12 @@ describe("requestTextToSpeech", () => {
     });
     expect(outcome.ok).toBe(true);
     if (outcome.ok) expect(outcome.value.mimeType).toBe("audio/pcm");
-    // Only the unconditional dispatch line — no MIME-correction event for a non-matching signature.
-    expect(events.map((event) => event.op)).toEqual(["speech.tts.request.dispatch"]);
+    // The unconditional dispatch and completed lines — no MIME-correction event for a
+    // non-matching signature.
+    expect(events.map((event) => event.op)).toEqual([
+      "speech.tts.request.dispatch",
+      "speech.tts.request.completed",
+    ]);
   });
 
   it("returns empty-audio when a 2xx response carries no audio bytes", async () => {
@@ -559,6 +593,99 @@ describe("requestTextToSpeech", () => {
     } finally {
       timeoutSpy.mockRestore();
     }
+  });
+
+  // THE COMPLETION LINE (review finding on PR #3602: the dispatch line alone left a timeout, a
+  // rate limit, and an invalid response indistinguishable from a still-running call). Proves the
+  // timeout path specifically, since that is the scenario the finding names.
+  it("logs the completed line with a timeout failureKind and errorKind on a timeout outcome", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const outcome = await requestTextToSpeech({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-tts",
+      input: ANSWER,
+      voice: "configured-voice",
+      correlationId: "corr-tts-timeout",
+      log: { write: (event): void => void events.push(event) },
+      fetchImpl: mockFetch(() => {
+        throw new DOMException("timed out", "TimeoutError");
+      }),
+    });
+    expect(outcome).toEqual({ ok: false, kind: "timeout" });
+    const completed = events.find((event) => event.op === "speech.tts.request.completed");
+    expect(completed).toMatchObject({
+      level: "warn",
+      category: "gateway",
+      op: "speech.tts.request.completed",
+      correlationId: "corr-tts-timeout",
+      errorKind: "timeout",
+      extra: {
+        outcome: "failed",
+        failureKind: "timeout",
+        timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS,
+      },
+    });
+  });
+
+  // A non-timeout failure: proves the completed line's failureKind/errorKind distinguish a rate
+  // limit from a timeout instead of collapsing every failure into one shape.
+  it("logs the completed line with a rate-limited failureKind and errorKind on a 429 outcome", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const outcome = await requestTextToSpeech({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-tts",
+      input: ANSWER,
+      voice: "configured-voice",
+      correlationId: "corr-tts-rate-limit",
+      log: { write: (event): void => void events.push(event) },
+      fetchImpl: mockFetch(() => new Response("", { status: 429 })),
+    });
+    expect(outcome).toEqual({ ok: false, kind: "rate-limited" });
+    const completed = events.find((event) => event.op === "speech.tts.request.completed");
+    expect(completed).toMatchObject({
+      level: "warn",
+      category: "gateway",
+      op: "speech.tts.request.completed",
+      correlationId: "corr-tts-rate-limit",
+      errorKind: "rate-limited",
+      extra: {
+        outcome: "failed",
+        failureKind: "rate-limited",
+        timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS,
+      },
+    });
+  });
+
+  // TTS-only failure kind (a 2xx response with no audio bytes): proves the completed line's
+  // closed vocabulary covers a value the STT adapter does not have.
+  it("logs the completed line with an empty-audio failureKind and errorKind on an empty-audio outcome", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const outcome = await requestTextToSpeech({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-tts",
+      input: ANSWER,
+      voice: "configured-voice",
+      correlationId: "corr-tts-empty-audio",
+      log: { write: (event): void => void events.push(event) },
+      fetchImpl: mockFetch(() => audioResponse(new Uint8Array(0))),
+    });
+    expect(outcome).toEqual({ ok: false, kind: "empty-audio" });
+    const completed = events.find((event) => event.op === "speech.tts.request.completed");
+    expect(completed).toMatchObject({
+      level: "warn",
+      category: "gateway",
+      op: "speech.tts.request.completed",
+      correlationId: "corr-tts-empty-audio",
+      errorKind: "validation-failed",
+      extra: {
+        outcome: "failed",
+        failureKind: "empty-audio",
+        timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS,
+      },
+    });
   });
 
   it("never leaks the api key into the URL or request body", async () => {

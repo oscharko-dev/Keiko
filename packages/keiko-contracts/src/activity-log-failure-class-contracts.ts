@@ -7085,7 +7085,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredFrameOperations: [],
     requiredCauseOperations: [],
   },
-  // #3591: every speech-to-text call leaves its dispatch line with the applied (floored) deadline.
+  // #3591: every speech-to-text call leaves its dispatch line with the applied (floored)
+  // deadline. #3602 review: the dispatch line alone left a timeout, a rate limit, and an invalid
+  // response indistinguishable from a still-running call — the completed line closes that pair.
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
@@ -7094,16 +7096,17 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredLifecycleOperations: {
       start: ["speech.stt.request.dispatch"],
       state: [],
-      end: [],
+      end: ["speech.stt.request.completed"],
       failure: [],
       loss: [],
     },
-    requiredCausalOperations: ["speech.stt.request.dispatch"],
+    requiredCausalOperations: ["speech.stt.request.completed", "speech.stt.request.dispatch"],
     requiredLossOperations: [],
-    requiredProofOperations: ["speech.stt.request.dispatch"],
+    requiredProofOperations: ["speech.stt.request.completed", "speech.stt.request.dispatch"],
     requiredReplayProofIds: [],
-    requiredResourceOperations: ["speech.stt.request.dispatch"],
+    requiredResourceOperations: ["speech.stt.request.completed", "speech.stt.request.dispatch"],
     requiredEvidenceClasses: [
+      "closed-enum",
       "completeness-state",
       "digest",
       "duration",
@@ -7113,7 +7116,9 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredFrameOperations: [],
     requiredCauseOperations: [],
   },
-  // #3591: every text-to-speech call leaves its dispatch line with the applied (floored) deadline.
+  // #3591: every text-to-speech call leaves its dispatch line with the applied (floored)
+  // deadline. #3602 review: the dispatch line alone left a timeout, a rate limit, and an invalid
+  // response indistinguishable from a still-running call — the completed line closes that pair.
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
@@ -7122,16 +7127,17 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredLifecycleOperations: {
       start: ["speech.tts.request.dispatch"],
       state: [],
-      end: [],
+      end: ["speech.tts.request.completed"],
       failure: [],
       loss: [],
     },
-    requiredCausalOperations: ["speech.tts.request.dispatch"],
+    requiredCausalOperations: ["speech.tts.request.completed", "speech.tts.request.dispatch"],
     requiredLossOperations: [],
-    requiredProofOperations: ["speech.tts.request.dispatch"],
+    requiredProofOperations: ["speech.tts.request.completed", "speech.tts.request.dispatch"],
     requiredReplayProofIds: [],
-    requiredResourceOperations: ["speech.tts.request.dispatch"],
+    requiredResourceOperations: ["speech.tts.request.completed", "speech.tts.request.dispatch"],
     requiredEvidenceClasses: [
+      "closed-enum",
       "completeness-state",
       "digest",
       "duration",

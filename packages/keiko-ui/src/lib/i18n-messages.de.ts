@@ -564,9 +564,13 @@ export const DE_MESSAGES = {
   "chat.error.gatewayTimeout.title": "Das Modell-Gateway hat nicht rechtzeitig geantwortet",
   "chat.error.gatewayTimeout.message":
     "Das Modell-Gateway hat die Anfrage nicht innerhalb von Keikos Wartezeit abgeschlossen. Keiko wartet bei einem langsamen Gateway minutenlang; das bedeutet in der Regel, dass das Gateway oder das Modell hängt – nicht, dass die Anfrage zu groß war.",
+  "chat.error.gatewayTimeout.remediation":
+    "Versuche es erneut oder prüfe in den Einstellungen Gateway-URL, Proxy und Deployment, wenn es wiederholt auftritt.",
   "chat.error.gatewayOutputExhausted.title": "Das Modell hat sein Ausgabebudget aufgebraucht",
   "chat.error.gatewayOutputExhausted.message":
     "Das Modell hat sein gesamtes Ausgabebudget verbraucht, bevor eine Antwort entstand – meist durch Reasoning. Lass das Gateway ein größeres max_output_tokens für dieses Modell melden oder wähle ein Modell mit geringerem Reasoning-Anteil, und versuche es erneut.",
+  "chat.error.gatewayOutputExhausted.remediation":
+    "Erhöhe in den Einstellungen die maximalen Ausgabe-Tokens des Modells oder wechsle zu einem Modell mit geringerem Reasoning-Anteil, und versuche es erneut.",
   "chat.keikoLogo": "Keiko-Logo",
   "chat.keikoResponding": "Keiko antwortet",
   "chat.copy.copiedStatus": "Antwort kopiert",

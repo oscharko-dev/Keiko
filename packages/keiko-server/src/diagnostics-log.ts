@@ -393,6 +393,8 @@ function diagnosticActivityLogFields(record: ServerDiagnosticRecord): Record<str
   addBoundedField(fields, "droppedEmbeddingModelCount", record.droppedEmbeddingModelCount);
   addBoundedField(fields, "unverifiedChatModelCount", record.unverifiedChatModelCount);
   addBoundedField(fields, "droppedChatModelCount", record.droppedChatModelCount);
+  addBoundedField(fields, "skippedChatModelCount", record.skippedChatModelCount);
+  addBoundedField(fields, "chatSmokeRoundDeadlineMs", record.chatSmokeRoundDeadlineMs);
   addBoundedField(fields, "semanticSkippedCount", record.semanticSkippedCount);
   addBoundedField(fields, "semanticCandidateCount", record.semanticCandidateCount);
   addBoundedField(fields, "quarantinePruneFailedCount", record.quarantinePruneFailedCount);

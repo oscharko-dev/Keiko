@@ -1813,7 +1813,14 @@ const PROBE_FAILURE_UNCLASSIFIED = 0;
 function probeCodeSeverity(code: string | undefined): number {
   if (code === ERROR_CODES.AUTHENTICATION) return 4;
   if (code === ERROR_CODES.RATE_LIMIT) return 3;
-  if (code !== undefined && SETUP_NETWORK_ERROR_CODES.has(code)) return 2;
+  // A candidate's own smoke deadline surfaces as CANCELLED when it fires while the gateway sleeps
+  // before a retry: the same "never answered" fact as a TIMEOUT, ranked the same (PR #3602 review).
+  if (
+    code !== undefined &&
+    (SETUP_NETWORK_ERROR_CODES.has(code) || code === ERROR_CODES.CANCELLED)
+  ) {
+    return 2;
+  }
   if (code === ERROR_CODES.UNKNOWN_MODEL) return 1;
   return PROBE_FAILURE_UNCLASSIFIED;
 }
@@ -5935,6 +5942,9 @@ const TEMPORARY_SETUP_ERROR_CODES: ReadonlySet<string> = new Set([
   "UND_ERR_HEADERS_TIMEOUT",
   "UND_ERR_SOCKET",
   ERROR_CODES.TIMEOUT,
+  // The per-candidate smoke deadline firing during the gateway's retry backoff (PR #3602 review):
+  // a whole round that ends this way is deferred exactly like one that timed out.
+  ERROR_CODES.CANCELLED,
 ]);
 
 function safeErrorProperty(error: unknown, property: string): unknown {

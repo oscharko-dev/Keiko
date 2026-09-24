@@ -549,6 +549,39 @@ describe("emitServerDiagnostic (RB-6)", () => {
     expect(captured[0]?.parentCorrelationId).toBe("job-parent-abc123");
   });
 
+  // PR #3602 review: registering a diagnostic field is not emitting it — the projection copies
+  // allowlisted names explicitly, so the chat smoke round's skipped count and deadline must be on
+  // the persisted line, or a skipped candidate reads like one that was probed and timed out.
+  it("projects the chat smoke round's skipped count and deadline onto the diagnostic line", () => {
+    const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const record = serverDiagnosticFromError({
+        correlationId: "cid-smoke-round-evidence",
+        operation: "unit.smoke-round-evidence",
+        source: "unit",
+        error: new Error("x"),
+        redact: identity,
+        now: () => 0,
+      });
+
+      emitServerDiagnostic(undefined, {
+        ...record,
+        skippedChatModelCount: 3,
+        chatSmokeRoundDeadlineMs: 600_000,
+      });
+
+      const [line] = stderrSpy.mock.calls[0] as [string];
+      const parsed = JSON.parse(line.replace("[keiko-server:diagnostic] ", "")) as Record<
+        string,
+        unknown
+      >;
+      expect(parsed.skippedChatModelCount).toBe(3);
+      expect(parsed.chatSmokeRoundDeadlineMs).toBe(600_000);
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+
   it("drops a content-shaped `code` at the writer, so neither the stderr line nor the file projection carries it (parity)", () => {
     // Regression: the stderr branch built its line straight from
     // `diagnosticActivityLogFields(sanitized)`, which projects onto allowlisted FIELD NAMES only
