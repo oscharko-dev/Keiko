@@ -353,3 +353,65 @@ the model's raw output ever appears in the log or in the export.
   needs a lower reasoning-effort setting on the proxy side.
 - `GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT`: unchanged — the drafted message did not meet the
   repository's commit-message policy; edit and commit manually.
+
+---
+
+## Conversation Center reports "Model gateway did not answer in time" under load, or setup drops a slow model
+
+| Field             | Value                                                              |
+| ----------------- | ------------------------------------------------------------------ |
+| Severity          | Medium                                                             |
+| Surface           | Conversation Center chat stream; first-run Gateway Setup discovery |
+| Stable identifier | `GATEWAY_TIMEOUT`                                                  |
+
+**Symptom**
+
+A chat reply in the Conversation Center fails with "The model gateway did not answer within the
+wait limit..." even though the same model answers fine at low load. During first-run Gateway
+Setup, a model that was slow to answer during discovery is silently missing from the configured
+model list afterward.
+
+**Root Cause**
+
+Before #3591, `Gateway.chatStream()` (the Conversation Center's streaming path) called the
+provider adapter with no read bounds at all, so a real adapter fell back to a flat 60s idle wait
+and the provider's own configured `timeoutMs` (30s by default) for the ENTIRE read — a live
+generation that kept producing tokens past that point was cut off and reported as a timeout, even
+though the provider was still working. Separately, the first-run setup discovery smoke test used a
+15s timeout and dropped any candidate whose probe did not answer in time, with no way to tell "the
+gateway rejected this model" apart from "the gateway was just slow" in the result.
+
+Every interactive gateway surface now floors its effective wait: at least 5 minutes before treating
+silence as a failure, at least 30 minutes total for a streamed answer and 10 minutes for a buffered
+one (`GATEWAY_SILENCE_FLOOR_MS` / `GATEWAY_STREAM_BUDGET_FLOOR_MS` / `GATEWAY_BUFFERED_BUDGET_FLOOR_MS`,
+`resilience.ts`) — a caller's own configuration may only raise these, never lower them. Setup
+discovery's smoke timeout is 120s, and a candidate the probe never gets an answer from (a timeout
+or a transport/proxy/TLS failure) is now kept in the configuration as unverified instead of being
+dropped; only a candidate the gateway actually answers with a rejection (4xx/5xx, or a malformed
+answer) is removed. Five consecutive timeouts also no longer open the model's circuit breaker —
+only a genuine provider failure does.
+
+**Diagnostic Steps**
+
+For a chat failure: `keiko support export --correlation-id <id>` and
+`keiko support analyze <bundle> --correlation-id <id>` reconstruct the `gateway.stream.started` /
+`gateway.stream.failed` (or `gateway.chat.started` / `gateway.chat.failed`) pair for that request.
+`gateway.stream.failed`'s `errorKind` is `timeout` only once the read has actually exceeded the
+floored silence or budget bound reported on the paired `chat.response.streamed` line
+(`silenceMs`, `readBudgetMs`) — never the raw configured `timeoutMs`. Neither line ever carries
+provider content.
+
+For a setup discovery drop: the response body's `unverifiedChatModelIds` names a candidate that was
+kept despite a probe failure, and `droppedChatModelIds` names one the gateway actually rejected;
+setup's `GatewayDiscoveryUnusableModels` diagnostic reports the counts of both, body-free.
+
+**Resolution**
+
+- A chat `GATEWAY_TIMEOUT` after the floored wait is a genuinely slow or unreachable gateway, not a
+  configuration bug in Keiko: check the provider's own health and load, or raise the model's
+  `timeoutMs` in Gateway Setup if it is legitimately slower than the floor.
+- A setup candidate that lands in `unverifiedChatModelIds` is configured but not smoke-verified; it
+  will be verified by the existing on-demand and automatic readiness probes the next time it is
+  used. A candidate in `droppedChatModelIds` was genuinely rejected by the gateway (wrong model id,
+  no chat capability, credential mismatch for that deployment) and must be corrected in the setup
+  form.

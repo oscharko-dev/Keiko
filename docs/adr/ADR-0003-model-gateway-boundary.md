@@ -276,7 +276,7 @@ export interface ModelProviderConfig {
   readonly modelId: string;
   readonly baseUrl: string;
   readonly apiKey: string;               // Read from env/config; never logged
-  readonly timeoutMs: number;            // One attempt; default: 30_000
+  readonly timeoutMs: number;            // One attempt; default: 120_000 (#3591)
   readonly maxRetries: number;           // Default: 3
   readonly retryBaseDelayMs: number;     // Initial backoff; doubles each attempt; default: 500
 }
@@ -511,12 +511,30 @@ Precedence order (highest wins):
 
 ### Resilience primitives
 
-**Timeout.** Each attempt creates its own timeout signal via `AbortSignal.timeout()`.
+**Timeout.** Each attempt creates its own timeout signal via `AbortSignal.timeout()` when the read
+has no silence/budget bounds (below), or a pair of plain timers (`timedAbort`) when it does.
 `config.timeoutMs` bounds one attempt, and the attempt runs under the smaller of it and what is left
 of the call's end-to-end budget (below). If the caller also supplies a `cancellationSignal`, the two
 are composed: `AbortSignal.any([timeoutSignal, cancellationSignal])` (Node 22 built-in). The
 composed signal is passed to `fetch(url, { signal })`. A signal abort triggered by timeout throws
 `TimeoutError`; triggered by cancellation throws `CancelledError`.
+
+**Silence and budget floors (#3591).** The field customer's LiteLLM proxy in front of vLLM answers
+slowly at peak load — 30s, 45s, 120s and longer before the first byte, with stalls between stream
+chunks — and Keiko must stay in the request rather than abort on its own for such delays. Every
+interactive gateway surface therefore floors its effective bound to at least the constants exported
+from `resilience.ts`: `GATEWAY_SILENCE_FLOOR_MS` (5 min — the longest wait for the first byte and
+between two stream data events), `GATEWAY_STREAM_BUDGET_FLOOR_MS` (30 min — the longest total read
+of a streamed answer, `Gateway.chatStream()`), and `GATEWAY_BUFFERED_BUDGET_FLOOR_MS` (10 min — the
+longest total read of a buffered answer, `Gateway.chat()`, including coding-workbench and every
+buffered call that answers a user action: commit draft, prompt enhancer, memory salience, quality
+judge). A caller's own configuration may only raise these bounds, never lower them; an already
+generous configured value passes through unmodified. Embeddings, rerank and the voice adapters each
+apply their own, smaller per-call floor (`GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS` /
+`GATEWAY_VOICE_TIMEOUT_FLOOR_MS`, 2 min) to the actual outbound HTTP deadline only — never to the
+embedding ladder's own bookkeeping deadline, which stays driven by exactly what the caller
+configured (including an intentionally exhausted budget of 0), or the ladder could never expire. The
+default provider `timeoutMs` (`config.ts`'s `DEFAULT_TIMEOUT_MS`) is 120s.
 
 **Reading a buffered answer over the stream.** A buffered call to a route whose capability streams
 (`streaming: true`, with an adapter that can read a stream) reads each attempt's answer over the
@@ -573,23 +591,40 @@ the last error (`gateway.retry.exhausted` with `reason: "budget"`, the delay and
 budget) instead of sleeping the rest of it away. An attempt that starts with less than `timeoutMs`
 left, which only an earlier attempt overrunning its own timeout can cause, runs under what is left.
 A caller that builds its own deadline around a gateway call derives it from the same function; the
-coding sidecar route adds a grace so the gateway settles its own timeout first. The budget never exceeds 2^31 − 1 ms (`MAX_TIMER_DELAY_MS`, `config.ts`): config validation holds each of its terms to that timer ceiling but not their sum, and a deadline armed past the ceiling fires at once, so the derivation clamps the sum, and the adapter's read deadline and the coding sidecar route clamp whatever bound they are handed (PR #3452 review). A stream read without bounds (`chatStream`) is never retried and stays bounded by one
-`timeoutMs`, with `STREAM_IDLE_TIMEOUT_MS` (60 s) as the longest wait for its next data event. Until PR #3452 (2026-09-11) the provider's
+coding sidecar route adds a grace so the gateway settles its own timeout first. The budget never exceeds 2^31 − 1 ms (`MAX_TIMER_DELAY_MS`, `config.ts`): config validation holds each of its terms to that timer ceiling but not their sum, and a deadline armed past the ceiling fires at once, so the derivation clamps the sum, and the adapter's read deadline and the coding sidecar route clamp whatever bound they are handed (PR #3452 review). A stream read (`chatStream`) is never retried, so it has no
+end-to-end budget to derive a total from; since #3591 it is NOT left unbounded either —
+`Gateway.chatStream()` builds its own `StreamReadBounds` from the provider's (possibly
+Coding-Workbench-raised) `timeoutMs`, floored to `GATEWAY_SILENCE_FLOOR_MS` for silence and
+`GATEWAY_STREAM_BUDGET_FLOOR_MS` for the total read, and passes them to `adapter.callStream()` —
+before that fix the call omitted bounds entirely, so a real adapter fell back to its own flat
+`STREAM_IDLE_TIMEOUT_MS` (60 s, `openai-adapter.ts`, unchanged as the fallback for a caller that
+still omits bounds) for silence and one whole-request `timeoutMs` for the total read, cutting off a
+live generation and reproducing coding run 30's failure on every desktop chat stream, not just the
+buffered path PR #3452 fixed. Until PR #3452 (2026-09-11) the provider's
 `timeoutMs` reached the retry loop as the budget of the whole call, so an attempt that hung to its
 timeout left no budget and a `TimeoutError` was never retried (coding run 23).
 
 The Coding Workbench uses a local `coding-workbench` latency profile on its sidecar gateway calls.
-That profile raises a provider attempt below 90 seconds to 90 seconds, including the buffered
-stream's silence bound; a larger configured timeout is retained. The sidecar route derives its
-backstop from the same effective timeout. Other gateway callers, including retrieval and indexing,
-retain their configured provider timeout. The gateway's body-free call-started line records the
-effective `timeoutMs` so a slow self-hosted provider can be distinguished from a hung turn.
+That profile (`codingWorkbenchProviderTimeoutMs`, `resilience.ts`) raises a provider attempt below
+`GATEWAY_SILENCE_FLOOR_MS` to it — the two constants are equal since #3591 raised the historical
+90-second Workbench floor to match the universal silence floor, so a slow Workbench provider now
+gets no special treatment past what every other interactive `Gateway.chat()`/`chatStream()` caller
+already receives; a larger configured timeout is retained. The sidecar route derives its backstop
+from the same effective timeout. Retrieval, indexing and voice retain their own, smaller per-call
+floor (above). The gateway's body-free call-started line records the effective `timeoutMs` so a
+slow self-hosted provider can be distinguished from a hung turn.
 
 **Circuit breaker.** One `CircuitBreaker` instance per `(modelId, baseUrl)` pair, keyed in a `Map`.
 States:
 
-- **Closed**: requests pass through. Consecutive failure counter increments on each `GatewayError`.
-  When counter reaches `failureThreshold`, transition to **Open** and record `openedAt = clock.now()`.
+- **Closed**: requests pass through. Consecutive failure counter increments on each `GatewayError`
+  except the ones in `gateway.ts`'s `NON_PROVIDER_FAULTS` list — `CancelledError`,
+  `ConfigInvalidError`, `ResponseRedactionError`, and, since #3591, `TimeoutError` and
+  `ProviderOutputExhaustedError`. A gateway that has not yet answered within its (generous) silence
+  or budget floor is slow, not broken, and a reasoning model that spends its whole output budget on
+  an HTTP 200 answer is a caller-fixable budget problem, not a provider failure — neither may open
+  the breaker and lock out every other caller of that model. When counter reaches
+  `failureThreshold`, transition to **Open** and record `openedAt = clock.now()`.
 - **Open**: any call immediately throws `CircuitOpenError` without contacting the provider.
   When `clock.now() - openedAt >= cooldownMs`, transition to **Half-Open**.
 - **Half-Open**: the next `halfOpenProbes` calls are forwarded as probes. Each success decrements the
