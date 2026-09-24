@@ -5,6 +5,7 @@ import {
   ContextOverflowError,
   ModelRefusalError,
   ProviderError,
+  ProviderOutputExhaustedError,
   RateLimitError,
   TimeoutError,
   TransportError,
@@ -403,7 +404,7 @@ const CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION = defineActivityLogOperation(
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["provider-failed", "stream-incomplete", "turn-rejected"],
+      values: ["provider-failed", "stream-incomplete", "turn-rejected", "output-exhausted"],
     },
     published: { type: "boolean", dataClass: "closed-enum", required: true },
     publicationReason: {
@@ -1550,11 +1551,10 @@ function logGatewayTurnFailure(
   );
 }
 
-function gatewayTurnFailureCode(
-  error: unknown,
-): "provider-failed" | "stream-incomplete" | "turn-rejected" {
+function gatewayTurnFailureCode(error: unknown): CodingWorkbenchTurnFailureCode {
   if (error instanceof ContextOverflowError || error instanceof ModelRefusalError)
     return "turn-rejected";
+  if (error instanceof ProviderOutputExhaustedError) return "output-exhausted";
   if (
     error instanceof TimeoutError ||
     error instanceof TransportError ||
@@ -1564,12 +1564,11 @@ function gatewayTurnFailureCode(
   return "provider-failed";
 }
 
-function gatewayStreamFailureCode(
-  error: unknown,
-): "provider-failed" | "stream-incomplete" | "turn-rejected" {
+function gatewayStreamFailureCode(error: unknown): CodingWorkbenchTurnFailureCode {
   if (gatewaySpendRejectionReason(error) !== undefined) return "turn-rejected";
   if (error instanceof ContextOverflowError || error instanceof ModelRefusalError)
     return "turn-rejected";
+  if (error instanceof ProviderOutputExhaustedError) return "output-exhausted";
   if (
     error instanceof AuthenticationError ||
     error instanceof RateLimitError ||

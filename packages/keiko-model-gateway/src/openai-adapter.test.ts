@@ -9,6 +9,7 @@ import {
   GatewayEgressError,
   ModelRefusalError,
   ProviderError,
+  ProviderOutputExhaustedError,
   RateLimitError,
   TimeoutError,
   TransportError,
@@ -781,6 +782,26 @@ describe("OpenAiAdapter.call", () => {
     const result = await adapter.call(REQUEST, CONFIG);
 
     expect(result.content).toBe("Hello from parts");
+  });
+
+  // #3591 (1.1.7): a reasoning model that spends its whole output budget before the first content
+  // token answers 200 with finish_reason "length" and no content. That is a budget to raise, not a
+  // broken stream, so it carries its own error class for the Workbench and the Git window.
+  it("reports an empty length-finished answer as an exhausted output budget", async () => {
+    const adapter = adapterWith(() =>
+      Promise.resolve(
+        jsonResponse({
+          choices: [{ message: { role: "assistant", content: "" }, finish_reason: "length" }],
+          usage: { prompt_tokens: 3_430, completion_tokens: 2_000 },
+        }),
+      ),
+    );
+
+    const failure = await adapter.call(REQUEST, CONFIG).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ProviderOutputExhaustedError);
+    expect(failure).toBeInstanceOf(ProviderError);
+    expect((failure as ProviderOutputExhaustedError).httpStatus).toBe(200);
+    expect((failure as ProviderOutputExhaustedError).retryable).toBe(false);
   });
 
   it("rejects an empty assistant response instead of normalising it to success", async () => {

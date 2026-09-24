@@ -5,6 +5,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ProviderError,
+  ProviderOutputExhaustedError,
   resolveCodingSafeSidecarGatewayProfile,
   type GatewayCallRequest,
   type GatewayConfig,
@@ -3876,6 +3877,8 @@ describe("coding sidecar gateway turn failure projection", () => {
   it.each([
     [new ProviderError("synthetic unavailable", 503), "provider-failed"],
     [new ProviderError("empty assistant stream", 200), "stream-incomplete"],
+    // #3591 (1.1.7): the budget ran out before any content — a budget to raise, not a broken stream.
+    [new ProviderOutputExhaustedError("coding"), "output-exhausted"],
     [new TimeoutError("synthetic timeout"), "stream-incomplete"],
     [new ContextOverflowError("synthetic context limit"), "turn-rejected"],
   ] as const)("projects %s as %s without exposing provider text", async (error, code) => {

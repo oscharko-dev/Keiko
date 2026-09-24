@@ -144,6 +144,22 @@ export class ProviderError extends GatewayError {
   }
 }
 
+// #3591 (1.1.7): a reasoning model that spends its whole output budget before the first content
+// token answers with HTTP 200, `finish_reason: "length"` and no content. That is neither a broken
+// stream nor a provider refusal; it is a budget the caller can raise. It keeps the provider error
+// code (no wire change) and is never retried as is — the same request would exhaust the same budget.
+export class ProviderOutputExhaustedError extends ProviderError {
+  readonly outputExhausted = true;
+
+  constructor(modelId: string, secrets: readonly string[] = []) {
+    super(
+      `provider exhausted the output budget for '${modelId}' before producing any content`,
+      200,
+      secrets,
+    );
+  }
+}
+
 export class ConfigInvalidError extends GatewayError {
   readonly code = ERROR_CODES.CONFIG_INVALID;
   readonly retryable = false;

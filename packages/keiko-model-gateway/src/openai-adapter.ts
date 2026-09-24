@@ -18,6 +18,7 @@ import {
   MalformedToolCallError,
   ModelRefusalError,
   ProviderError,
+  ProviderOutputExhaustedError,
   RateLimitError,
   TimeoutError,
   TransportError,
@@ -783,6 +784,10 @@ function assertUsableAssistantResponse(
 ): void {
   if (response.content.trim().length > 0 || response.toolCalls.length > 0) {
     return;
+  }
+  // The budget ran out before any content: a reasoning model spent it on reasoning (#3591).
+  if (response.finishReason === "length") {
+    throw new ProviderOutputExhaustedError(modelId, secrets);
   }
   throw new ProviderError(
     `provider returned an empty assistant response for '${modelId}'`,

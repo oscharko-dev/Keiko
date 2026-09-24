@@ -884,6 +884,10 @@ describe("Coding Workbench runtime API failure branches", () => {
       failureCode: "provider-failed",
     };
     expect(validateCodingWorkbenchRuntimeSseEvent(event).ok).toBe(true);
+    // #3591 (1.1.7): the exhausted output budget is a per-turn gateway cause like the others.
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent({ ...event, failureCode: "output-exhausted" }).ok,
+    ).toBe(true);
     expect(
       validateCodingWorkbenchRuntimeSseEvent({ ...event, eventKind: "task-submitted" }).ok,
     ).toBe(false);

@@ -286,6 +286,8 @@ function turnFailureDetail(
     return t("codingWorkbench.event.turnFailure.stream-incomplete");
   if (event.failureCode === "turn-rejected")
     return t("codingWorkbench.event.turnFailure.turn-rejected");
+  if (event.failureCode === "output-exhausted")
+    return t("codingWorkbench.event.turnFailure.output-exhausted");
   return "";
 }
 

@@ -299,6 +299,7 @@ export {
   MalformedToolCallError,
   ModelRefusalError,
   ProviderError,
+  ProviderOutputExhaustedError,
   RateLimitError,
   TimeoutError,
   TransportError,

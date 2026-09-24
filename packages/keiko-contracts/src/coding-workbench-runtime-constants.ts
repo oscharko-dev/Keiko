@@ -103,7 +103,12 @@ export type CodingWorkbenchRuntimeFailureCode =
 
 /** Redacted per-turn gateway causes. These are SSE-only, not durable run failure states. */
 export type CodingWorkbenchTurnFailureCode =
-  "provider-failed" | "stream-incomplete" | "turn-rejected";
+  | "provider-failed"
+  | "stream-incomplete"
+  | "turn-rejected"
+  // #3591 (1.1.7): the model spent its whole output budget (usually on reasoning) before any
+  // content or tool call — a budget to raise, not a broken stream.
+  | "output-exhausted";
 
 export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRuntimeFailureCode[] =
   Object.freeze([

@@ -939,6 +939,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The model response stream stopped before the turn completed. Check provider connectivity and retry.",
   "codingWorkbench.event.turnFailure.turn-rejected":
     "The model or a Workbench guard rejected this turn. Check the run's gateway and authority diagnostics for the cause, then adjust the model, task, or permissions before retrying.",
+  "codingWorkbench.event.turnFailure.output-exhausted":
+    "The model used its whole output budget before producing an answer, usually on reasoning. Have the gateway declare a larger max_output_tokens for this model, or choose a model with a smaller reasoning share, then retry.",
   "codingWorkbench.event.detailOutcome": "Outcome: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Untrusted content: the fetched page was quarantined as data, not instructions.",
