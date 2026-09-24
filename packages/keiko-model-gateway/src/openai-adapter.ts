@@ -216,11 +216,13 @@ const CHAT_RESPONSE_STREAMED_OPERATION = defineActivityLogOperation({
     silentForMs: { type: "number", dataClass: "duration", required: false },
     // #3591: true only when this read failed on a ProviderOutputExhaustedError — an HTTP 200
     // answer that spent its whole output budget on reasoning before any content — false on every
-    // other outcome, including a genuine success.
+    // other outcome, including a genuine success. `required: false` (PR #3602 review): a record
+    // written before this field existed (1.1.6) lacks it, and a missing REQUIRED field reads as an
+    // incomplete record to the analyzer, which this one is not.
     outputExhausted: {
       type: "boolean",
       dataClass: "closed-enum",
-      required: true,
+      required: false,
     },
   },
   causal: "correlation",

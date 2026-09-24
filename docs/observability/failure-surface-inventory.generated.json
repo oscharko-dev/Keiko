@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "284aab406ff7b515b37467477477ac0d89f4c650a13dc4e70f4197eaaee2da49"
+    "catalogDigest": "5f029c4ef620fa0aeec74209bd427b4515e3420036d614e761e52a0218ec8264"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,10 +51,10 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 451,
-    "proofCount": 459,
-    "resolvedProofCount": 459,
-    "failureClassCount": 317,
+    "operationCount": 453,
+    "proofCount": 461,
+    "resolvedProofCount": 461,
+    "failureClassCount": 319,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
   },
@@ -201,7 +201,9 @@
         "http.gateway.tls.ca-bundle-fallback",
         "http.gateway.tls.trust-failed",
         "speech.stt.language.normalized",
+        "speech.stt.request.dispatch",
         "speech.tts.mime.corrected",
+        "speech.tts.request.dispatch",
         "speech.tts.stream.peek.failed",
         "voice.live-dictation.capacity-rejected",
         "voice.live-dictation.initial-frame-timeout",
@@ -886,6 +888,8 @@
     "speech-language-normalization": ["model-gateway.dependency-failure"],
     "speech-mime-correction": ["model-gateway.dependency-failure"],
     "speech-stream-response": ["model-gateway.dependency-failure"],
+    "speech-stt-request": ["model-gateway.dependency-failure"],
+    "speech-tts-request": ["model-gateway.dependency-failure"],
     "sse-resume-decision": ["bff.dependency-failure"],
     "sse-stream": ["bff.dependency-failure"],
     "startup-recovery-failed": ["lifecycle-crash.crash"],
@@ -2022,7 +2026,13 @@
     "speech.stt.language.normalized.emitted-line": [
       "packages/keiko-model-gateway/src/speech-to-text-adapter.test.ts"
     ],
+    "speech.stt.request.dispatch.emitted-line": [
+      "packages/keiko-model-gateway/src/speech-to-text-adapter.test.ts"
+    ],
     "speech.tts.mime.corrected.emitted-line": [
+      "packages/keiko-model-gateway/src/text-to-speech-adapter.test.ts"
+    ],
+    "speech.tts.request.dispatch.emitted-line": [
       "packages/keiko-model-gateway/src/text-to-speech-adapter.test.ts"
     ],
     "speech.tts.stream.peek.failed.emitted-line": [

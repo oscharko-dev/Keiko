@@ -12,6 +12,7 @@ import {
   type ModelProviderConfig,
   type UsageMetadata,
 } from "@oscharko-dev/keiko-model-gateway";
+import { GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import { readJsonCapped, readSseStream } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import type {
   GatewayReadinessOptions,
@@ -46,6 +47,7 @@ import {
   probeUsage,
   reserveGatewayProbeSpend,
   settleGatewayProbeSpend,
+  transientGatewayStatus,
   type GatewayProbeSpendContext,
 } from "./gateway-tool-calling-probe.js";
 import {
@@ -103,18 +105,24 @@ const GATEWAY_READINESS_MODEL_ID_FIELDS = {
   modelIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
 } as const;
 
-// #3591 (1.1.7): the bound each probe of a run actually ran under. A floor may raise it above the
-// configured provider timeout (`probeProvider`), and the long-context probe carries its own,
-// higher floor, so an operator can tell from the start line which deadline governed a probe that
-// timed out or took minutes. Absent only when no provider could be selected for the run.
+// #3591 (1.1.7): the bound each probe of a run actually ran under, so an operator can tell from
+// the start line which deadline governed a probe that timed out or took minutes. The probes
+// against the selected chat provider share one bound, which a floor may raise above the
+// configured timeout (`probeProvider`); the long-context probe carries its own, higher floor; the
+// embedding and reranker probes run against their own providers under the retrieval floor. Each
+// field is present only when its probe is part of the run and its provider is configured.
 const GATEWAY_READINESS_PROBE_TIMEOUT_FIELDS = {
-  probeTimeoutMs: { type: "integer", dataClass: "duration", required: false },
+  chatProbeTimeoutMs: { type: "integer", dataClass: "duration", required: false },
   longContextProbeTimeoutMs: { type: "integer", dataClass: "duration", required: false },
+  embeddingProbeTimeoutMs: { type: "integer", dataClass: "duration", required: false },
+  rerankerProbeTimeoutMs: { type: "integer", dataClass: "duration", required: false },
 } as const;
 
-interface ProbeTimeoutEvidence {
-  readonly probeTimeoutMs?: number;
-  readonly longContextProbeTimeoutMs?: number;
+export interface ProbeTimeoutEvidence {
+  chatProbeTimeoutMs?: number;
+  longContextProbeTimeoutMs?: number;
+  embeddingProbeTimeoutMs?: number;
+  rerankerProbeTimeoutMs?: number;
 }
 
 const GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION = defineActivityLogOperation({
@@ -435,20 +443,35 @@ function logAutomaticReadinessStarted(
   );
 }
 
-// The bounds the run's probes are about to run under (`probeProvider`): one for every probe but
-// the long-context one, which is recorded on its own when the run includes it.
-function probeTimeoutEvidence(
+// The bounds the run's probes are about to run under: `probeProvider` for the chat-provider
+// probes, and the retrieval floor the embedding and rerank adapters apply to the configured
+// timeout of their own providers (`openai-embedding-adapter.ts`, `rerank-adapter.ts`).
+export function probeTimeoutEvidence(
+  config: GatewayConfig,
   provider: ModelProviderConfig,
   names: readonly GatewayReadinessProbeName[],
   options: GatewayReadinessOptions | undefined,
 ): ProbeTimeoutEvidence {
-  const probeTimeoutMs = probeProvider(provider, "chat", options).timeoutMs;
-  return names.includes("long_context")
-    ? {
-        probeTimeoutMs,
-        longContextProbeTimeoutMs: probeProvider(provider, "long_context", options).timeoutMs,
-      }
-    : { probeTimeoutMs };
+  const evidence: ProbeTimeoutEvidence = {
+    chatProbeTimeoutMs: probeProvider(provider, "chat", options).timeoutMs,
+  };
+  if (names.includes("long_context")) {
+    evidence.longContextProbeTimeoutMs = probeProvider(provider, "long_context", options).timeoutMs;
+  }
+  const embedding = names.includes("embedding") ? chooseEmbeddingProvider(config) : undefined;
+  if (embedding !== undefined) {
+    evidence.embeddingProbeTimeoutMs = Math.max(
+      embedding.timeoutMs,
+      GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS,
+    );
+  }
+  if (names.includes("reranker") && config.reranker !== undefined) {
+    evidence.rerankerProbeTimeoutMs = Math.max(
+      config.reranker.timeoutMs,
+      GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS,
+    );
+  }
+  return evidence;
 }
 
 function logAutomaticReadinessCompleted(
@@ -563,7 +586,7 @@ function logReadinessRunStarted(
   options: GatewayReadinessOptions | undefined,
 ): void {
   const modelId = selection.provider.modelId;
-  const timeouts = probeTimeoutEvidence(selection.provider, names, options);
+  const timeouts = probeTimeoutEvidence(selection.config, selection.provider, names, options);
   if (run.automatic) {
     logAutomaticReadinessStarted(deps, run.correlationId, modelId, names.length, timeouts);
     return;
@@ -579,13 +602,20 @@ function logOnDemandProbeStarted(
   modelId: string,
   correlationId: string,
 ): void {
-  const selection = chooseProvider(holder.current(), modelId, undefined);
+  const selection = chooseProvider(holder.current(), modelId, ON_DEMAND_PROBE_OPTIONS);
   logAutomaticReadinessStarted(
     deps,
     correlationId,
     modelId,
     1,
-    "status" in selection ? {} : probeTimeoutEvidence(selection.provider, ["chat"], undefined),
+    "status" in selection
+      ? {}
+      : probeTimeoutEvidence(
+          selection.config,
+          selection.provider,
+          ["chat"],
+          ON_DEMAND_PROBE_OPTIONS,
+        ),
   );
 }
 
@@ -869,10 +899,19 @@ function skipped(name: GatewayReadinessProbeName, evidence: string): GatewayRead
 // re-probe policy reads them back through `probeInconclusive`.
 const PROBE_TIMED_OUT_WARNING = "The probe timed out before the provider answered.";
 const PROBE_UNREACHABLE_WARNING = "The provider could not be reached for this probe.";
+// A gateway at peak load answers 429/503 for a while; that is no verdict on the model either
+// (#3591 review). 408 and every other 5xx but 501 (not implemented) count the same way.
+export const PROBE_GATEWAY_BUSY_WARNING =
+  "The gateway answered with a transient overload or timeout status.";
 const INCONCLUSIVE_PROBE_WARNINGS: ReadonlySet<string> = new Set([
   PROBE_TIMED_OUT_WARNING,
   PROBE_UNREACHABLE_WARNING,
+  PROBE_GATEWAY_BUSY_WARNING,
 ]);
+
+function transientStatusWarning(response: Response): string | undefined {
+  return transientGatewayStatus(response.status) ? PROBE_GATEWAY_BUSY_WARNING : undefined;
+}
 
 function inconclusiveProbeError(errorValue: unknown): string | undefined {
   if (errorValue instanceof TimeoutError) return PROBE_TIMED_OUT_WARNING;
@@ -880,10 +919,16 @@ function inconclusiveProbeError(errorValue: unknown): string | undefined {
     if (errorValue.name === "TimeoutError") return PROBE_TIMED_OUT_WARNING;
     if (errorValue.name === "AbortError") return PROBE_UNREACHABLE_WARNING;
   }
-  if (errorValue instanceof TransportError || errorValue instanceof TypeError) {
+  if (errorValue instanceof TransportError || isFetchNetworkFailure(errorValue)) {
     return PROBE_UNREACHABLE_WARNING;
   }
   return undefined;
+}
+
+// Node's fetch reports a connection-level failure as `TypeError: fetch failed`; any other
+// TypeError is a programming fault and must keep the ordinary (long) cooldown (#3591 review).
+function isFetchNetworkFailure(errorValue: unknown): boolean {
+  return errorValue instanceof TypeError && errorValue.message === "fetch failed";
 }
 
 export function probeInconclusive(probe: GatewayReadinessProbeResult): boolean {
@@ -1014,7 +1059,13 @@ async function probeChat(
       ],
     });
     if (!response.ok) {
-      return result("chat", "failed", start, unsuccessfulEvidence("Basic chat", response));
+      return result(
+        "chat",
+        "failed",
+        start,
+        unsuccessfulEvidence("Basic chat", response),
+        transientStatusWarning(response),
+      );
     }
     // Mirror the production floor exactly (openai-adapter assertUsableAssistantResponse +
     // normalize textFromContent): the extracted assistant text must be non-empty, and
@@ -1130,6 +1181,15 @@ async function probeToolCalling(
       "passed",
       start,
       "OpenAI-compatible tool call returned the expected function name.",
+    );
+  }
+  if (status === "transient") {
+    return result(
+      "tool_calling",
+      "failed",
+      start,
+      "Tool calling could not be verified: the gateway answered with a transient status.",
+      PROBE_GATEWAY_BUSY_WARNING,
     );
   }
   return toolCallingResult(status === "unsupported" ? "unsupported" : "failed", start, provider);
@@ -1482,6 +1542,7 @@ async function probeLongContext(
         status,
         start,
         `${tokens.toString()} approximate tokens were not accepted.`,
+        transientStatusWarning(response),
       );
     }
     return longContextPayloadResult(start, tokens, sentinel, await readProviderJson(response));
@@ -1513,11 +1574,17 @@ export function probeProvider(
   const floor =
     name === "long_context"
       ? LONG_CONTEXT_PROBE_TIMEOUT_FLOOR_MS
-      : options?.purpose === "coding-workbench-auto"
+      : options?.purpose === "coding-workbench-auto" || options?.purpose === "on-demand"
         ? WORKBENCH_PROBE_TIMEOUT_FLOOR_MS
         : 0;
   return provider.timeoutMs >= floor ? provider : { ...provider, timeoutMs: floor };
 }
+
+// The on-demand chat probe gates chat create/send for a model without a current observation. It
+// runs with the same floor as the automatic Workbench probes: a probe that gives up on a slow
+// gateway before it answers proves nothing and would refuse every chat until its cooldown ends
+// (#3591 review). An operator-started settings check keeps the configured timeout.
+const ON_DEMAND_PROBE_OPTIONS: GatewayReadinessOptions = { probes: [], purpose: "on-demand" };
 
 async function runProbe(
   name: GatewayReadinessProbeName,
@@ -2133,7 +2200,7 @@ async function runOnDemandReadinessProbe(
   logOnDemandProbeStarted(deps, holder, modelId, probeCorrelationId);
   try {
     const report = await runGatewayReadiness(
-      { modelId, options: { probes: [] } },
+      { modelId, options: ON_DEMAND_PROBE_OPTIONS },
       deps,
       probeCorrelationId,
     );

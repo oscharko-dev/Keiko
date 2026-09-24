@@ -271,7 +271,7 @@ describe("gateway readiness route", () => {
       extra: {
         modelIdDigest: CODING_CHAT_DIGEST,
         probeCount: 2,
-        probeTimeoutMs: WORKBENCH_PROBE_TIMEOUT_FLOOR_MS,
+        chatProbeTimeoutMs: WORKBENCH_PROBE_TIMEOUT_FLOOR_MS,
       },
     });
     expect(events[0]?.extra).not.toHaveProperty("longContextProbeTimeoutMs");
@@ -341,7 +341,7 @@ describe("gateway readiness route", () => {
         trigger: "settings",
         probeCount: 1,
         // A settings check runs its chat probe on the configured timeout; no floor applies.
-        probeTimeoutMs: 30_000,
+        chatProbeTimeoutMs: 30_000,
       });
       expect(
         expectActivityLogProof(

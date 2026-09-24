@@ -16,7 +16,6 @@ import {
   ContextOverflowError,
   GatewayError,
   ProviderOutputExhaustedError,
-  TimeoutError,
   TransportError,
   UnknownModelError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
@@ -39,6 +38,7 @@ import {
   CircuitBreaker,
   codingWorkbenchProviderTimeoutMs,
   executeWithRetry,
+  GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
   GATEWAY_SILENCE_FLOOR_MS,
   GATEWAY_STREAM_BUDGET_FLOOR_MS,
   providerRequestBudgetMs,
@@ -310,10 +310,13 @@ const GATEWAY_CHAT_FAILED_OPERATION = defineActivityLogOperation({
     // #3591: true only for a ProviderOutputExhaustedError — an HTTP 200 answer that spent its
     // whole output budget on reasoning before any content — so an operator can tell that apart
     // from an ordinary empty/failed provider answer without reaching for the sidecar's own record.
+    // `required: false` (PR #3602 review): emitted on every failure line since this field's
+    // introduction, but a record written by 1.1.6, before it existed, lacks it — a missing
+    // REQUIRED field reads as an incomplete record to the analyzer, which this field is not.
     outputExhausted: {
       type: "boolean",
       dataClass: "closed-enum",
-      required: true,
+      required: false,
     },
   },
   causal: "correlation",
@@ -411,11 +414,12 @@ const GATEWAY_STREAM_FAILED_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
     },
-    // #3591: see gateway.chat.failed's identical field.
+    // #3591: see gateway.chat.failed's identical field; `required: false` for the same reason
+    // (PR #3602 review).
     outputExhausted: {
       type: "boolean",
       dataClass: "closed-enum",
-      required: true,
+      required: false,
     },
   },
   causal: "correlation",
@@ -540,18 +544,24 @@ function attachGatewayRequestId(error: unknown, requestId: string): void {
 // configuration, the gateway's own redaction pass refusing to walk a pathologically deep response
 // body (review finding on PR #3394 — an untyped RangeError from that last case used to slip past
 // this list and trip the breaker for an otherwise healthy model; ResponseRedactionError is now
-// thrown instead, see openai-adapter.ts's redactUnknown), a TimeoutError (a gateway that has not
-// yet answered within its (generous, #3591) silence or budget floor is slow, not broken), or a
-// ProviderOutputExhaustedError (an HTTP 200 with `finish_reason: "length"` and no content — the
-// model answered, it just spent its budget on reasoning; that is a caller-fixable budget problem,
-// not evidence the provider is failing). Five slow or budget-exhausted answers must never open the
-// breaker for every other caller of that model. A named, extensible list rather than a growing
-// chain of `&&` conditions, so the next non-provider fault is one array entry away.
+// thrown instead, see openai-adapter.ts's redactUnknown), or a ProviderOutputExhaustedError (an
+// HTTP 200 with `finish_reason: "length"` and no content — the model answered, it just spent its
+// budget on reasoning; that is a caller-fixable budget problem, not evidence the provider is
+// failing). A named, extensible list rather than a growing chain of `&&` conditions, so the next
+// non-provider fault is one array entry away.
+//
+// TimeoutError is deliberately NOT here (review finding on PR #3602 — it was, briefly, during
+// #3591's development). Excluding every timeout disabled the breaker's own outage guard: an
+// upstream that never responds at all would cost every caller a full (multi-minute, with the new
+// floors) attempt before failing, and the breaker would never open for it, no matter how many
+// callers piled up. With `GATEWAY_SILENCE_FLOOR_MS`/`GATEWAY_BUFFERED_BUDGET_FLOOR_MS` this
+// generous, a `TimeoutError` means the provider produced nothing for minutes — an outage-class
+// signal, not the noise of a slow-but-alive gateway (which stays inside the floor and never times
+// out at all) — so it counts as a provider failure again, exactly as it did before this PR.
 const NON_PROVIDER_FAULTS = [
   CancelledError,
   ConfigInvalidError,
   ResponseRedactionError,
-  TimeoutError,
   ProviderOutputExhaustedError,
 ] as const;
 
@@ -559,14 +569,20 @@ function isNonProviderFault(error: unknown): boolean {
   return NON_PROVIDER_FAULTS.some((errorClass) => error instanceof errorClass);
 }
 
+// A half-open probe that ends in a non-provider fault must still release the probe slot it
+// claimed — `CircuitBreaker.recordNonProviderFault()` does exactly that, without counting the call
+// as either a success or a failure (review finding on PR #3602: leaving the slot claimed forever
+// stuck the breaker half-open, rejecting every later call once every probe slot was in this state).
 function recordProviderFailure(
   breaker: CircuitBreaker,
   error: unknown,
   correlationId: string,
 ): void {
-  if (!isNonProviderFault(error)) {
-    breaker.recordFailure(correlationId);
+  if (isNonProviderFault(error)) {
+    breaker.recordNonProviderFault();
+    return;
   }
+  breaker.recordFailure(correlationId);
 }
 
 interface RoutedCall {
@@ -590,15 +606,20 @@ function readsOverStream(route: RoutedCall, adapter: ProviderAdapter): boolean {
   return route.capability.streaming && adapter.callStream !== undefined;
 }
 
-// The bounds of one attempt's streamed read: the attempt's `timeoutMs` bounds the provider's
-// silence and what is left of the call's budget bounds the read, so a long generation that keeps
-// producing is not cut off at `timeoutMs` and generated again (coding run 30).
+// The bounds of one attempt's streamed read: its SILENCE bound comes from the route's own provider
+// config (`effectiveSilenceMs`), never from the retry loop's per-attempt `timeoutMs` — the two
+// diverge on purpose (see resilience.ts's buffered-vs-stream rule): the loop's attempt bound now
+// floors to the much larger buffered-answer floor so a WHOLE-BODY attempt is not cut off early
+// (#3591, PR #3602 review), but a read that can observe progress must still be watched for silence
+// at the shorter floor. What is left of the call's budget bounds the read's total duration, so a
+// long generation that keeps producing is not cut off at a fixed timeout and generated again
+// (coding run 30).
 function streamedReadBounds(
   attempt: BufferedChatAttempt,
-  silenceMs: number,
   remainingBudgetMs: number | undefined,
 ): StreamReadBounds | undefined {
   if (!readsOverStream(attempt.route, attempt.adapter)) return undefined;
+  const silenceMs = effectiveSilenceMs(attempt.route.provider);
   const budgetMs =
     remainingBudgetMs !== undefined && Number.isFinite(remainingBudgetMs)
       ? remainingBudgetMs
@@ -606,15 +627,35 @@ function streamedReadBounds(
   return { silenceMs, budgetMs: Math.max(silenceMs, Math.floor(budgetMs)) };
 }
 
-// The effective per-attempt/per-read silence bound every `Gateway.chat()` attempt and
-// `Gateway.chatStream()` read runs under (#3591): the provider's configured `timeoutMs`, floored
-// so a slow gateway is never treated as wedged, nor its read cut off, before it has had a fair
-// chance to answer. `chat()`'s retry loop derives its own copy from the identical formula
-// (resilience.ts's private `chatAttemptTimeoutMs`) because a buffered call's attempt timeout also
-// feeds the end-to-end retry budget; this one is what the attempt/stream-started log line reports
-// and what a streamed read's bounds are built from.
+// The effective silence bound a read that can observe progress runs under (#3591): the provider's
+// configured `timeoutMs`, floored so a slow-but-alive gateway is never treated as wedged before it
+// has had a fair chance to answer. Used for `Gateway.chatStream()`'s native read and, inside
+// `streamedReadBounds`, for a buffered `chat()` attempt that happens to read over the provider's
+// own stream.
 function effectiveSilenceMs(provider: ModelProviderConfig): number {
   return Math.max(provider.timeoutMs, GATEWAY_SILENCE_FLOOR_MS);
+}
+
+// The effective bound a WHOLE-BODY (unobservable) read runs under (#3591, PR #3602 review): the
+// provider's configured `timeoutMs`, floored to the buffered-answer floor rather than the shorter
+// silence floor, because a read that cannot observe progress has no "silence" to watch — the one
+// number that bounds it must already cover the longest legitimate generation. Used for a buffered
+// `chat()` attempt against a non-streaming adapter (mirrors resilience.ts's private
+// `chatAttemptTimeoutMs`, which floors the SAME value for the retry loop's own bookkeeping) and for
+// `chatStream()`'s buffered fallback, which degrades to the identical whole-body read.
+function effectiveBufferedAttemptMs(provider: ModelProviderConfig): number {
+  return Math.max(provider.timeoutMs, GATEWAY_BUFFERED_BUDGET_FLOOR_MS);
+}
+
+// The bound this call's own transport actually applies and reports on its attempt/started line: the
+// silence floor when it reads incrementally (`readsIncrementally` — the caller can tell the
+// provider is alive from each chunk), the buffered floor otherwise (a whole-body read, or
+// `chatStream()`'s degraded fallback for a non-streaming adapter).
+function effectiveAttemptTimeoutMs(
+  provider: ModelProviderConfig,
+  readsIncrementally: boolean,
+): number {
+  return readsIncrementally ? effectiveSilenceMs(provider) : effectiveBufferedAttemptMs(provider);
 }
 
 // The bounds of the ONE, unretried read `chatStream()` performs (ADR-0003): floored the same way
@@ -898,7 +939,7 @@ export class Gateway {
         attempt.route.capability,
         attempt.correlationId,
         provider,
-        streamedReadBounds(attempt, provider.timeoutMs, remainingBudgetMs),
+        streamedReadBounds(attempt, remainingBudgetMs),
       );
     } catch (error) {
       if (attempt.state.attemptNumber <= attempt.route.provider.maxRetries) {
@@ -993,7 +1034,10 @@ export class Gateway {
     const start = this.clock.now();
     const elapsed = logTimer();
     const adapter = this.adapterFor(ids.requestId, route, ids.correlationId);
-    this.logCallStarted(ids, route, true, request.reasoningEffort);
+    // streamFrom degrades to its buffered fallback without a native stream (#3591, PR #3602
+    // review); the started line must report the bound that branch actually applies.
+    const usesNativeStream = adapter.callStream !== undefined;
+    this.logCallStarted(ids, route, true, request.reasoningEffort, usesNativeStream);
     let reservation: GatewaySpendReservation | undefined;
     let chunkCount = 0;
     // The moment the caller saw its first actual content, timed off the same `elapsed()` as every
@@ -1062,7 +1106,10 @@ export class Gateway {
   // and no failure, so without this the gateway is silent for exactly the window an operator is
   // trying to diagnose. `timeoutMs` and `maxRetries` are on it because the pair bounds how long
   // this silence can legitimately last: an attempt line whose deadline has already passed with no
-  // outcome is a wedge, not a slow provider.
+  // outcome is a wedge, not a slow provider. `timeoutMs` reports the bound THIS call's transport
+  // actually applies (PR #3602 review) — the silence floor for a call that reads incrementally
+  // (`upstreamStreaming`), the larger buffered floor for a whole-body read or `chatStream()`'s
+  // degraded fallback, never a value the transport itself does not honour.
   private logCallStarted(
     ids: CallIds,
     route: RoutedCall,
@@ -1078,7 +1125,7 @@ export class Gateway {
       modelId: logModelId(route.provider.modelId),
       ...(endpointDigest === undefined ? {} : { endpointDigest }),
       costClass: route.capability.costClass,
-      timeoutMs: effectiveSilenceMs(route.provider),
+      timeoutMs: effectiveAttemptTimeoutMs(route.provider, upstreamStreaming),
       maxRetries: route.provider.maxRetries,
       ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
     };
@@ -1258,7 +1305,16 @@ export class Gateway {
         },
       ),
     );
-    const response = await adapter.call(request, provider);
+    // This read is whole-body and cannot observe progress, exactly like a non-streaming-capable
+    // buffered chat() attempt, so it gets the SAME buffered floor rather than the (configured, or
+    // silence-floored) `provider.timeoutMs` the fallback used to pass through unbounded (PR #3602
+    // review): a healthy 45 s answer through a 30 s-configured provider was cut off while the
+    // started line above already claimed a 300 s effective timeout.
+    const bufferedProvider: ModelProviderConfig = {
+      ...provider,
+      timeoutMs: effectiveBufferedAttemptMs(provider),
+    };
+    const response = await adapter.call(request, bufferedProvider);
     yield { type: "delta", token: response.content };
     yield { type: "done", response };
   }

@@ -15,6 +15,7 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { apiKeyHeaderValue, trimTrailingSlash } from "./config.js";
 import {
   gatewayFetch,
@@ -24,6 +25,8 @@ import {
 } from "./http.js";
 import {
   logCorrelationId,
+  logEndpointHost,
+  logModelId,
   resolveLogSink,
   withCorrelationId,
   type ModelGatewayLogSink,
@@ -55,6 +58,48 @@ const SPEECH_STT_LANGUAGE_NORMALIZED_OPERATION = defineActivityLogOperation({
   proofIds: ["speech.stt.language.normalized.emitted-line"],
   releaseImpact: "patch",
 });
+
+// THE ATTEMPT LINE for a transcription call (review finding on PR #3602: the per-call deadline
+// this module floors to `GATEWAY_VOICE_TIMEOUT_FLOOR_MS` had no activity-log line recording the
+// bound actually applied). Body-free: no audio, no transcript, no credential — an endpoint digest,
+// the model id, and the deadline this call ran under.
+const SPEECH_STT_REQUEST_DISPATCH_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "speech.stt.request.dispatch",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "speech-to-text-adapter.logDispatch",
+  fields: {
+    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    // The floored deadline (#3591) this call actually runs under, so an operator can read the
+    // applied bound instead of inferring it from the caller's configured value.
+    timeoutMs: { type: "number", dataClass: "duration", required: false },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["speech-stt-request"],
+  proofIds: ["speech.stt.request.dispatch.emitted-line"],
+  releaseImpact: "patch",
+});
+
+function logDispatch(request: SpeechToTextRequest, timeoutMs: number): void {
+  const log = withCorrelationId(resolveLogSink(request.log), request.correlationId);
+  const correlationId = logCorrelationId(log);
+  log.write(
+    activityLogEvent(
+      SPEECH_STT_REQUEST_DISPATCH_OPERATION,
+      { level: "info", ...(correlationId === undefined ? {} : { correlationId }) },
+      {
+        endpointDigest: sha256Hex(logEndpointHost(request.endpoint) ?? "invalid-endpoint"),
+        modelId: logModelId(request.modelId),
+        timeoutMs,
+      },
+    ),
+  );
+}
 
 export interface SpeechToTextRequest {
   readonly endpoint: string;
@@ -308,11 +353,11 @@ function buildRequest(request: SpeechToTextRequest): BuiltRequest {
     [name]: apiKeyHeaderValue(name, request.apiKey),
   };
   // #3591: per-call floor — a slow gateway's voice call is not a broken one.
-  const timeoutSignal = AbortSignal.timeout(
-    Math.max(request.timeoutMs ?? 30_000, GATEWAY_VOICE_TIMEOUT_FLOOR_MS),
-  );
+  const appliedTimeoutMs = Math.max(request.timeoutMs ?? 30_000, GATEWAY_VOICE_TIMEOUT_FLOOR_MS);
+  const timeoutSignal = AbortSignal.timeout(appliedTimeoutMs);
   const signal =
     request.signal !== undefined ? AbortSignal.any([timeoutSignal, request.signal]) : timeoutSignal;
+  logDispatch(request, appliedTimeoutMs);
   return {
     url: joinUrl(request),
     headers,
@@ -399,8 +444,10 @@ async function decodeSuccess(response: Response): Promise<SpeechToTextOutcome> {
 export async function requestSpeechToText(
   request: SpeechToTextRequest,
 ): Promise<SpeechToTextOutcome> {
-  logLanguageNormalization(request);
+  // THE ATTEMPT LINE first (buildRequest's logDispatch), so it is always the first line of the
+  // call — the narrower, conditional language-normalization line (when one fires) follows it.
   const built = buildRequest(request);
+  logLanguageNormalization(request);
   const dispatched = await dispatch(built, request.fetchImpl, request.egress);
   if (typeof dispatched === "string") {
     return { ok: false, kind: dispatched };

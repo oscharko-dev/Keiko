@@ -1014,6 +1014,41 @@ describe("commit draft — explicit model-backed generation", () => {
     expect(captured?.maxOutputTokens).toBe(expected);
   });
 
+  // Review of #3591: the route deadline can fire while the gateway sleeps before a retry, which
+  // the gateway reports as CancelledError. The composed signal's reason still names the deadline,
+  // so the draft must report the timeout code, not the generic failure.
+  it("classifies a route deadline that fired during retry backoff as a timeout", async () => {
+    const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockImplementation((ms) =>
+        ms === COMMIT_DRAFT_MODEL_DEADLINE_MS
+          ? AbortSignal.abort(new DOMException("route deadline", "TimeoutError"))
+          : nativeTimeout(ms),
+      );
+    try {
+      const handler = createHandleCommitDraft({
+        execution: seams({
+          stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+        }),
+      });
+      const res = await handler(
+        ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+        deps({
+          config: DRAFT_GATEWAY_CONFIG,
+          modelPortFactory: () => ({
+            call: (): Promise<never> =>
+              Promise.reject(new CancelledError("cancelled while waiting to retry")),
+          }),
+        }),
+      );
+      expect(res.status).toBe(504);
+      expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT" } });
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
   it("classifies a provider timeout as GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT, not a generic failure", async () => {
     const events: ServerLogEvent[] = [];
     const handler = createHandleCommitDraft({

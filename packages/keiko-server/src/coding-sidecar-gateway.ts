@@ -215,7 +215,7 @@ const CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION = defineActivityLogOper
     estimatedPromptTokens: { type: "integer", dataClass: "count", required: true },
     // #3591 (1.1.7): the output allowance sent with this request, clamped to the window that
     // remains after the prompt — the value an output-exhausted turn has to be read against.
-    maxOutputTokens: { type: "integer", dataClass: "count", required: true },
+    maxOutputTokens: { type: "integer", dataClass: "count", required: false },
     inputMessageCount: { type: "integer", dataClass: "count", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -389,6 +389,9 @@ const CODING_SIDECAR_GATEWAY_REJECTED_OPERATION = defineActivityLogOperation({
     },
     estimatedPromptTokens: { type: "integer", dataClass: "count", required: false },
     maxPromptTokens: { type: "integer", dataClass: "count", required: false },
+    // #3591 review: the bound the prompt was actually admitted against — `maxPromptTokens` less
+    // the safety margin and the minimum output allowance (`admissiblePromptTokens`).
+    admissiblePromptTokens: { type: "integer", dataClass: "count", required: false },
     inputMessageCount: { type: "integer", dataClass: "count", required: false },
     maxInputMessages: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
@@ -526,6 +529,7 @@ type GatewayRejectionEvidence = Partial<{
   readonly toolMismatchSha256: string;
   readonly estimatedPromptTokens: number;
   readonly maxPromptTokens: number;
+  readonly admissiblePromptTokens: number;
   readonly inputMessageCount: number;
   readonly maxInputMessages: number;
 }>;
@@ -3001,6 +3005,7 @@ function logChatRequestRejection(
       ? {
           estimatedPromptTokens: observed.estimatedPromptTokens,
           maxPromptTokens: observed.bounds.maxPromptTokens,
+          admissiblePromptTokens: admissiblePromptTokens(observed.bounds),
           inputMessageCount: observed.parsed.messages.length,
           maxInputMessages: observed.bounds.maxInputMessages,
         }

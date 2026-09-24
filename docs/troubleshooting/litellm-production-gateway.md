@@ -382,14 +382,21 @@ though the provider was still working. Separately, the first-run setup discovery
 gateway rejected this model" apart from "the gateway was just slow" in the result.
 
 Every interactive gateway surface now floors its effective wait: at least 5 minutes before treating
-silence as a failure, at least 30 minutes total for a streamed answer and 10 minutes for a buffered
-one (`GATEWAY_SILENCE_FLOOR_MS` / `GATEWAY_STREAM_BUDGET_FLOOR_MS` / `GATEWAY_BUFFERED_BUDGET_FLOOR_MS`,
-`resilience.ts`) — a caller's own configuration may only raise these, never lower them. Setup
-discovery's smoke timeout is 120s, and a candidate the probe never gets an answer from (a timeout
-or a transport/proxy/TLS failure) is now kept in the configuration as unverified instead of being
-dropped; only a candidate the gateway actually answers with a rejection (4xx/5xx, or a malformed
-answer) is removed. Five consecutive timeouts also no longer open the model's circuit breaker —
-only a genuine provider failure does.
+silence as a failure on a stream, at least 30 minutes total for a streamed answer and 10 minutes
+for a buffered one, which cannot observe progress and therefore gets the whole budget per attempt
+(`GATEWAY_SILENCE_FLOOR_MS` / `GATEWAY_STREAM_BUDGET_FLOOR_MS` / `GATEWAY_BUFFERED_BUDGET_FLOOR_MS`,
+`resilience.ts`) — a caller's own configuration may only raise these, never lower them. Readiness
+probes the product starts on its own (the Coding Workbench's automatic probes and the on-demand chat
+probe that gates a first chat) run with a 2-minute floor, the long-context probe with 5 minutes; a
+probe the gateway never answered, could not be reached for, or answered with a transient status
+(408, 429, 5xx except 501) is recorded as inconclusive and retried after one minute instead of
+holding the six-hour cooldown. Setup discovery bounds each smoke candidate by its provider timeout
+(default 120s) and the whole chat round by 10 minutes; a candidate the probe never gets an answer
+from, or that answers with a transient status, is kept in the configuration as unverified instead of
+being dropped; only a candidate the gateway actually rejects (400/404/422/501, or a malformed
+answer) is removed. A timeout still counts toward the model's circuit breaker — with these floors a
+timeout is a multi-minute silence, an outage signal — while an exhausted output budget (an HTTP 200
+answer with `finish_reason: length` and no content) does not.
 
 **Diagnostic Steps**
 

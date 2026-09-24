@@ -9,11 +9,7 @@ import { Gateway } from "./gateway.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
 import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
 import { createScriptedGatewayClock } from "./replay.js";
-import {
-  GATEWAY_SILENCE_FLOOR_MS,
-  providerRequestBudgetMs,
-  providerRetryConfig,
-} from "./resilience.js";
+import { GATEWAY_SILENCE_FLOOR_MS, providerRequestBudgetMs } from "./resilience.js";
 import type {
   GatewayConfig,
   GatewayRequest,
@@ -34,10 +30,13 @@ const PROVIDER: ModelProviderConfig = {
   retryBaseDelayMs: 1,
 };
 
-// The silence bound one PROVIDER attempt actually runs under (#3591): the configured `timeoutMs`
-// floored by `providerRetryConfig`, derived from the production formula rather than restated as a
-// literal so this pin cannot drift from it silently.
-const EFFECTIVE_SILENCE_MS = providerRetryConfig(PROVIDER).attemptTimeoutMs;
+// The silence bound one PROVIDER attempt actually runs under when it reads over the provider's own
+// stream (#3591, PR #3602 review): the configured `timeoutMs` floored to the silence floor. This is
+// gateway.ts's private `effectiveSilenceMs`, which streamedReadBounds now derives independently of
+// `providerRetryConfig(...).attemptTimeoutMs` — that value floors to the LARGER buffered-answer
+// floor instead (it bounds a whole-body attempt, not a streamed read's silence), so reusing it here
+// would silently pin the wrong number.
+const EFFECTIVE_SILENCE_MS = Math.max(PROVIDER.timeoutMs, GATEWAY_SILENCE_FLOOR_MS);
 
 function capability(streaming: boolean): ModelCapability {
   return {
@@ -160,7 +159,7 @@ describe("Gateway.chat reads over the provider's stream (provider stalls, coding
     const [first, retry] = fake.bounds;
     expect(retry?.silenceMs).toBe(EFFECTIVE_SILENCE_MS);
     expect(retry?.budgetMs).toBeLessThan(first?.budgetMs ?? 0);
-    expect(retry?.budgetMs).toBeGreaterThanOrEqual(EFFECTIVE_SILENCE_MS ?? 0);
+    expect(retry?.budgetMs).toBeGreaterThanOrEqual(EFFECTIVE_SILENCE_MS);
   });
 
   it("reads a whole body when the route does not stream", async () => {

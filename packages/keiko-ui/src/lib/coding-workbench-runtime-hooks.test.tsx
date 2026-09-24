@@ -277,6 +277,40 @@ describe("useCodingWorkbenchRuntimeResources source refresh", () => {
     }
   });
 
+  // The Workbench can close while the profile read is still in flight: the read that lands must
+  // neither dispatch into the unmounted hook nor schedule a re-read (#3591 review).
+  it("ignores a profile read that lands after the Workbench unmounted", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let release: (profile: CodingWorkbenchSidecarGatewayResult) => void = () => undefined;
+      vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = resolve;
+          }),
+      );
+      const { resources, dispatch, unmount } = renderResources(runtimeState());
+      let inFlight: Promise<void> = Promise.resolve();
+      act(() => {
+        inFlight = resources.refreshSource();
+      });
+      unmount();
+      dispatch.mockClear();
+      await act(async () => {
+        release({
+          status: "unavailable",
+          reason: "model-verification-pending",
+        } as CodingWorkbenchSidecarGatewayResult);
+        await inFlight;
+        await vi.advanceTimersByTimeAsync(CODING_WORKBENCH_VERIFYING_REFRESH_MS * 3);
+      });
+      expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "source-set" }));
+      expect(fetchCodingWorkbenchSidecarGatewayProfile).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not schedule a re-read when the source settled", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout"] });
     try {

@@ -5,10 +5,16 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TimeoutError, TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
-import type { GatewayConfig, ModelProviderConfig } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  GatewayConfig,
+  ModelCapability,
+  ModelProviderConfig,
+} from "@oscharko-dev/keiko-model-gateway";
 import type { GatewayReadinessProbeResult } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import {
   LONG_CONTEXT_PROBE_TIMEOUT_FLOOR_MS,
+  PROBE_GATEWAY_BUSY_WARNING,
   WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS,
   WORKBENCH_PROBE_TIMEOUT_FLOOR_MS,
   codingWorkbenchProbesSettledForTests,
@@ -16,6 +22,7 @@ import {
   isCodingWorkbenchProbePending,
   probeInconclusive,
   probeProvider,
+  probeTimeoutEvidence,
   resetCodingWorkbenchContextWindowProbesForTests,
 } from "./gateway-readiness.js";
 import type { UiHandlerDeps } from "./deps.js";
@@ -49,6 +56,14 @@ describe("probeProvider — probe timeout floors", () => {
     ).toBe(WORKBENCH_PROBE_TIMEOUT_FLOOR_MS);
   });
 
+  // The on-demand chat probe gates chat create/send; a 30 s probe that gives up on a slow gateway
+  // would refuse every chat until its cooldown ends (#3591 review).
+  it("raises the on-demand chat probe to the Workbench floor", () => {
+    expect(probeProvider(provider(30_000), "chat", { purpose: "on-demand" }).timeoutMs).toBe(
+      WORKBENCH_PROBE_TIMEOUT_FLOOR_MS,
+    );
+  });
+
   it("keeps a configured timeout that already clears the floor, and the same object", () => {
     const generous = provider(LONG_CONTEXT_PROBE_TIMEOUT_FLOOR_MS + 1);
     expect(probeProvider(generous, "long_context", undefined)).toBe(generous);
@@ -56,6 +71,85 @@ describe("probeProvider — probe timeout floors", () => {
 
   it("leaves an operator-started chat probe on the configured timeout", () => {
     expect(probeProvider(provider(30_000), "chat", undefined).timeoutMs).toBe(30_000);
+  });
+});
+
+// The start line records the bound each probe of the run actually runs under — one per probe
+// family, each against its own provider (#3591 review).
+describe("probeTimeoutEvidence", () => {
+  const chat = provider(30_000);
+  const embedding: ModelProviderConfig = {
+    ...provider(45_000),
+    modelId: "hosted-embedding",
+  };
+  const config: GatewayConfig = {
+    providers: [chat, embedding],
+    circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 1 },
+    capabilities: [
+      { ...embeddingCapability("hosted-chat"), kind: "chat" },
+      embeddingCapability("hosted-embedding"),
+    ],
+    reranker: {
+      modelId: "hosted-reranker",
+      baseUrl: "https://siu.llm.intern/rerank",
+      apiKey: "k",
+      timeoutMs: 20_000,
+    },
+  };
+
+  function embeddingCapability(id: string): ModelCapability {
+    return {
+      id,
+      kind: "embedding",
+      contextWindow: 8_192,
+      maxOutputTokens: 0,
+      toolCalling: false,
+      structuredOutput: false,
+      streaming: false,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      workflowEligible: false,
+      costClass: "low",
+      latencyClass: "fast",
+      throughputHint: "synthetic",
+      preferredUseCases: [],
+      knownLimitations: [],
+    };
+  }
+
+  it("records every probe family of the run under its own provider's applied bound", () => {
+    expect(
+      probeTimeoutEvidence(config, chat, ["chat", "long_context", "embedding", "reranker"], {
+        purpose: "coding-workbench-auto",
+      }),
+    ).toEqual({
+      chatProbeTimeoutMs: WORKBENCH_PROBE_TIMEOUT_FLOOR_MS,
+      longContextProbeTimeoutMs: LONG_CONTEXT_PROBE_TIMEOUT_FLOOR_MS,
+      embeddingProbeTimeoutMs: GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS,
+      rerankerProbeTimeoutMs: GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS,
+    });
+  });
+
+  it("keeps a configured retrieval timeout that clears the floor", () => {
+    const generous: GatewayConfig = {
+      ...config,
+      providers: [chat, { ...embedding, timeoutMs: GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS + 1 }],
+    };
+    expect(probeTimeoutEvidence(generous, chat, ["chat", "embedding"], undefined)).toEqual({
+      chatProbeTimeoutMs: 30_000,
+      embeddingProbeTimeoutMs: GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS + 1,
+    });
+  });
+
+  it("omits the families the run does not probe or cannot reach a provider for", () => {
+    expect(
+      probeTimeoutEvidence(
+        { ...config, reranker: undefined },
+        chat,
+        ["chat", "reranker"],
+        undefined,
+      ),
+    ).toEqual({ chatProbeTimeoutMs: 30_000 });
   });
 });
 
@@ -75,6 +169,7 @@ describe("probeInconclusive", () => {
     expect(probeInconclusive(failed("The provider could not be reached for this probe."))).toBe(
       true,
     );
+    expect(probeInconclusive(failed(PROBE_GATEWAY_BUSY_WARNING))).toBe(true);
     expect(
       probeInconclusive(
         failed("The provider could not complete this probe. Chat configuration was not changed."),
@@ -185,6 +280,26 @@ describe("automatic Workbench probes — inconclusive runs are retried soon", ()
     expect(calls()).toBe(2);
   });
 
+  // Review of #3591: a gateway at peak load answers 429/503 for a while. That is no verdict on
+  // the model; it used to be stored as one and held the six-hour cooldown.
+  it.each([429, 503])("treats a gateway that answered HTTP %s like a timeout", async (status) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
+    const { deps, calls } = workbenchDeps(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ error: { message: "busy" } }), {
+          status,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+    await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
+    await codingWorkbenchProbesSettledForTests();
+    vi.advanceTimersByTime(WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS);
+    await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
+    await codingWorkbenchProbesSettledForTests();
+    expect(calls()).toBe(2);
+  });
+
   it("keeps the long cooldown for a probe the gateway answered and refused", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
     const { deps, calls } = workbenchDeps(() =>
@@ -210,16 +325,20 @@ describe("automatic Workbench probes — inconclusive runs are retried soon", ()
   it("keeps the verification open after an inconclusive probe until the gateway answers", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
     let answers = 0;
+    let releaseSecond: (() => void) | undefined;
     const { deps, calls } = workbenchDeps(() => {
       answers += 1;
-      return answers === 1
-        ? Promise.reject(new TimeoutError("synthetic"))
-        : Promise.resolve(
+      if (answers === 1) return Promise.reject(new TimeoutError("synthetic"));
+      return new Promise<Response>((resolve) => {
+        releaseSecond = (): void => {
+          resolve(
             new Response(JSON.stringify({ error: { message: "refused" } }), {
               status: 400,
               headers: { "content-type": "application/json" },
             }),
           );
+        };
+      });
     });
     const config = deps.gatewayConfig?.current();
     if (config === undefined) throw new Error("config missing");
@@ -227,12 +346,21 @@ describe("automatic Workbench probes — inconclusive runs are retried soon", ()
     await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
     await codingWorkbenchProbesSettledForTests();
     expect(calls()).toBe(1);
+    // Settled without a verdict: still open, the retry is due after the short cooldown.
     expect(isCodingWorkbenchProbePending(config, "hosted-chat")).toBe(true);
 
     vi.advanceTimersByTime(WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS);
-    await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
-    await codingWorkbenchProbesSettledForTests();
+    const second = ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
+    await vi.waitFor(() => {
+      expect(releaseSecond).toBeDefined();
+    });
+    // The retry is in flight: still open.
     expect(calls()).toBe(2);
+    expect(isCodingWorkbenchProbePending(config, "hosted-chat")).toBe(true);
+    releaseSecond?.();
+    await second;
+    await codingWorkbenchProbesSettledForTests();
+    // The gateway answered and refused: a verdict closes the verification.
     expect(isCodingWorkbenchProbePending(config, "hosted-chat")).toBe(false);
   });
 

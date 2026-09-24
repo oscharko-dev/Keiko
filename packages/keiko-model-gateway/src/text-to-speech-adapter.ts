@@ -18,6 +18,7 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { apiKeyHeaderValue, trimTrailingSlash } from "./config.js";
 import {
   gatewayFetch,
@@ -29,6 +30,8 @@ import {
 import {
   activityLogErrorKind,
   logCorrelationId,
+  logEndpointHost,
+  logModelId,
   resolveLogSink,
   withCorrelationId,
   type ModelGatewayLogSink,
@@ -108,6 +111,49 @@ const SPEECH_TTS_STREAM_PEEK_FAILED_OPERATION = defineActivityLogOperation({
   proofIds: ["speech.tts.stream.peek.failed.emitted-line"],
   releaseImpact: "patch",
 });
+
+// THE ATTEMPT LINE for a synthesis call (review finding on PR #3602: the per-call deadline this
+// module floors to `GATEWAY_VOICE_TIMEOUT_FLOOR_MS` had no activity-log line recording the bound
+// actually applied). Body-free: no answer text, no audio, no credential — an endpoint digest, the
+// model id, and the deadline this call ran under. Shared by the buffered and streaming entry
+// points, both of which build their request through the same `buildRequest`.
+const SPEECH_TTS_REQUEST_DISPATCH_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "speech.tts.request.dispatch",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "text-to-speech-adapter.logDispatch",
+  fields: {
+    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    // The floored deadline (#3591) this call actually runs under, so an operator can read the
+    // applied bound instead of inferring it from the caller's configured value.
+    timeoutMs: { type: "number", dataClass: "duration", required: false },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["speech-tts-request"],
+  proofIds: ["speech.tts.request.dispatch.emitted-line"],
+  releaseImpact: "patch",
+});
+
+function logDispatch(request: TextToSpeechRequest, timeoutMs: number): void {
+  const log = withCorrelationId(resolveLogSink(request.log), request.correlationId);
+  const correlationId = logCorrelationId(log);
+  log.write(
+    activityLogEvent(
+      SPEECH_TTS_REQUEST_DISPATCH_OPERATION,
+      { level: "info", ...(correlationId === undefined ? {} : { correlationId }) },
+      {
+        endpointDigest: sha256Hex(logEndpointHost(request.endpoint) ?? "invalid-endpoint"),
+        modelId: logModelId(request.modelId),
+        timeoutMs,
+      },
+    ),
+  );
+}
 
 // Closed set of response formats the OpenAI-compatible `/audio/speech` contract accepts, mapped to
 // the audio container MIME type the provider returns. The adapter requests one of these and labels
@@ -276,11 +322,11 @@ function buildRequest(request: TextToSpeechRequestWithVoice): BuiltRequest {
     [name]: apiKeyHeaderValue(name, request.apiKey),
   };
   // #3591: per-call floor — a slow gateway's voice call is not a broken one.
-  const timeoutSignal = AbortSignal.timeout(
-    Math.max(request.timeoutMs ?? 30_000, GATEWAY_VOICE_TIMEOUT_FLOOR_MS),
-  );
+  const appliedTimeoutMs = Math.max(request.timeoutMs ?? 30_000, GATEWAY_VOICE_TIMEOUT_FLOOR_MS);
+  const timeoutSignal = AbortSignal.timeout(appliedTimeoutMs);
   const signal =
     request.signal !== undefined ? AbortSignal.any([timeoutSignal, request.signal]) : timeoutSignal;
+  logDispatch(request, appliedTimeoutMs);
   return {
     url: joinUrl(request),
     headers,

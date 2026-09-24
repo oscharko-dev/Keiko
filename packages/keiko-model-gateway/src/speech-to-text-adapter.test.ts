@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { classifyDispatchError, requestSpeechToText } from "./speech-to-text-adapter.js";
 import { OutboundHttpEgressError } from "./http.js";
+import { GATEWAY_VOICE_TIMEOUT_FLOOR_MS } from "./resilience.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import {
   expectActivityLogProof,
@@ -117,32 +118,51 @@ describe("requestSpeechToText", () => {
     expect(body).toContain('name="language"');
     expect(body).toContain("\r\n\r\nde\r\n");
     expect(body).not.toContain("\r\n\r\nde-DE\r\n");
-    expect(events).toEqual([
-      {
-        level: "info",
-        category: "gateway",
-        op: "speech.stt.language.normalized",
-        correlationId: "corr-stt-language",
-        extra: {
-          completeness: "complete",
-          declaredSubtagCount: 2,
-          loss: "none",
-          resolvedSubtagCount: 1,
-          primaryLanguagePreserved: true,
-        },
+    // THE ATTEMPT LINE (speech.stt.request.dispatch) is always first, ahead of the narrower,
+    // conditional normalization line (#3602 review — the new per-call deadline had no line
+    // recording the applied bound).
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      level: "info",
+      category: "gateway",
+      op: "speech.stt.request.dispatch",
+      correlationId: "corr-stt-language",
+      extra: { modelId: "keiko-stt", timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS },
+    });
+    expect(events[1]).toMatchObject({
+      level: "info",
+      category: "gateway",
+      op: "speech.stt.language.normalized",
+      correlationId: "corr-stt-language",
+      extra: {
+        completeness: "complete",
+        declaredSubtagCount: 2,
+        loss: "none",
+        resolvedSubtagCount: 1,
+        primaryLanguagePreserved: true,
       },
-    ]);
+    });
 
     // Activity Log proof (#3532): the normalization line as the production file sink would
     // persist it.
     const persisted = expectActivityLogProof(
       "speech.stt.language.normalized.emitted-line",
-      formatActivityLogProofLine(events[0] ?? {}),
+      formatActivityLogProofLine(events[1] ?? {}),
     );
     expect(persisted).toMatchObject({
       declaredSubtagCount: 2,
       resolvedSubtagCount: 1,
       primaryLanguagePreserved: true,
+    });
+    // The dispatch line as the production file sink would persist it: the applied deadline is the
+    // floor, not the caller's configured value (#3591).
+    const dispatched = expectActivityLogProof(
+      "speech.stt.request.dispatch.emitted-line",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(dispatched).toMatchObject({
+      modelId: "keiko-stt",
+      timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS,
     });
   });
 
@@ -169,7 +189,8 @@ describe("requestSpeechToText", () => {
 
     expect(outcome.ok).toBe(true);
     expect(body).toContain("\r\n\r\nde\r\n");
-    expect(events).toEqual([]);
+    // Only the unconditional dispatch line — no normalization event for an already-primary tag.
+    expect(events.map((event) => event.op)).toEqual(["speech.stt.request.dispatch"]);
   });
 
   it("omits an empty language hint without emitting a normalization event", async () => {
@@ -191,7 +212,8 @@ describe("requestSpeechToText", () => {
 
     expect(outcome.ok).toBe(true);
     expect(body).not.toContain('name="language"');
-    expect(events).toEqual([]);
+    // Only the unconditional dispatch line — no normalization event for an absent language hint.
+    expect(events.map((event) => event.op)).toEqual(["speech.stt.request.dispatch"]);
   });
 
   it("normalizes a maximum-length validated language hint and logs the boundary", async () => {
@@ -214,21 +236,21 @@ describe("requestSpeechToText", () => {
 
     expect(outcome.ok).toBe(true);
     expect(body).toContain("\r\n\r\nabc\r\n");
-    expect(events).toEqual([
-      {
-        level: "info",
-        category: "gateway",
-        op: "speech.stt.language.normalized",
-        correlationId: "corr-stt-language-boundary",
-        extra: {
-          completeness: "complete",
-          declaredSubtagCount: 5,
-          loss: "none",
-          resolvedSubtagCount: 1,
-          primaryLanguagePreserved: true,
-        },
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({ op: "speech.stt.request.dispatch" });
+    expect(events[1]).toMatchObject({
+      level: "info",
+      category: "gateway",
+      op: "speech.stt.language.normalized",
+      correlationId: "corr-stt-language-boundary",
+      extra: {
+        completeness: "complete",
+        declaredSubtagCount: 5,
+        loss: "none",
+        resolvedSubtagCount: 1,
+        primaryLanguagePreserved: true,
       },
-    ]);
+    });
   });
 
   it("includes an optional domain-keyword prompt field in the multipart body", async () => {
@@ -463,6 +485,45 @@ describe("requestSpeechToText", () => {
       undefined,
     );
     expect(outcome).toBe("timeout");
+  });
+
+  // Proves `requestSpeechToText` itself — not just `classifyDispatchError` in isolation — wires
+  // its internal deadline into the outbound fetch (review finding on PR #3602: the end-to-end pin
+  // this test replaces was deleted when the floor made it impossible to fire for real inside a
+  // unit test, leaving nothing proving the wiring still exists). `AbortSignal.timeout` is spied so
+  // the call it receives for the internal deadline can be asserted directly, then swapped for an
+  // already-fired signal so the whole request path — dispatch, classification, and the outcome
+  // `requestSpeechToText` returns — is exercised exactly as it would be for a real fired timeout.
+  it("wires the floored internal deadline into the outbound fetch and ends in a timeout outcome", async () => {
+    const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+      if (ms !== GATEWAY_VOICE_TIMEOUT_FLOOR_MS) return nativeTimeout(ms);
+      const controller = new AbortController();
+      controller.abort(new DOMException("the provider did not answer in time", "TimeoutError"));
+      return controller.signal;
+    });
+    try {
+      const outcome = await requestSpeechToText({
+        endpoint: ENDPOINT,
+        apiKey: SECRET_API_KEY,
+        modelId: "keiko-stt",
+        audio: AUDIO,
+        mimeType: "audio/webm",
+        // Below the floor: proves the CALL that reaches AbortSignal.timeout carries the floored
+        // value, not the caller's smaller configured one.
+        timeoutMs: 5_000,
+        fetchImpl: mockFetch((_url, init) => {
+          if (init.signal?.aborted === true) {
+            throw init.signal.reason as Error;
+          }
+          throw new Error("the request should have carried an already-aborted signal");
+        }),
+      });
+      expect(timeoutSpy).toHaveBeenCalledWith(GATEWAY_VOICE_TIMEOUT_FLOOR_MS);
+      expect(outcome).toEqual({ ok: false, kind: "timeout" });
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 
   it("never leaks the provider URL or credential into the outcome on failure", async () => {

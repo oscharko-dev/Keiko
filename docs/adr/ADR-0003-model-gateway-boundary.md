@@ -538,9 +538,13 @@ default provider `timeoutMs` (`config.ts`'s `DEFAULT_TIMEOUT_MS`) is 120s.
 
 **Reading a buffered answer over the stream.** A buffered call to a route whose capability streams
 (`streaming: true`, with an adapter that can read a stream) reads each attempt's answer over the
-provider's SSE stream instead of waiting for one body. The attempt's `timeoutMs` then bounds the
-provider's silence: before its response starts, until its first data event, and between two data
-events. What is left of the call's end-to-end budget bounds the whole read. A long generation that
+provider's SSE stream instead of waiting for one body. The silence bound — the configured
+`timeoutMs` floored to `GATEWAY_SILENCE_FLOOR_MS` — then bounds the provider's silence: before its
+response starts, until its first data event, and between two data events. What is left of the
+call's end-to-end budget bounds the whole read. A whole-body read (an adapter without
+`callStream`, or `chatStream()`'s buffered fallback) has no observable progress, so its single
+attempt deadline floors directly to `GATEWAY_BUFFERED_BUDGET_FLOOR_MS` instead (`chatAttemptTimeoutMs`,
+`resilience.ts`), and the gateway's call-started line records whichever bound applied. A long generation that
 keeps producing is therefore never cut off at `timeoutMs` and generated again, and a silent
 provider still ends with a retryable `TimeoutError`. A keep-alive comment (a LiteLLM proxy's
 `: ping` while it waits for its upstream) is not a data event. An error frame inside the stream
@@ -619,12 +623,12 @@ States:
 
 - **Closed**: requests pass through. Consecutive failure counter increments on each `GatewayError`
   except the ones in `gateway.ts`'s `NON_PROVIDER_FAULTS` list — `CancelledError`,
-  `ConfigInvalidError`, `ResponseRedactionError`, and, since #3591, `TimeoutError` and
-  `ProviderOutputExhaustedError`. A gateway that has not yet answered within its (generous) silence
-  or budget floor is slow, not broken, and a reasoning model that spends its whole output budget on
-  an HTTP 200 answer is a caller-fixable budget problem, not a provider failure — neither may open
-  the breaker and lock out every other caller of that model. When counter reaches
-  `failureThreshold`, transition to **Open** and record `openedAt = clock.now()`.
+  `ConfigInvalidError`, `ResponseRedactionError`, and, since #3591, `ProviderOutputExhaustedError`:
+  a reasoning model that spends its whole output budget on an HTTP 200 answer is a caller-fixable
+  budget problem, not a provider failure, and must not open the breaker and lock out every other
+  caller of that model. A `TimeoutError` DOES count: with the silence and budget floors of #3591 a
+  timeout is a multi-minute silence, which is the outage signal the breaker exists for. When counter
+  reaches `failureThreshold`, transition to **Open** and record `openedAt = clock.now()`.
 - **Open**: any call immediately throws `CircuitOpenError` without contacting the provider.
   When `clock.now() - openedAt >= cooldownMs`, transition to **Half-Open**.
 - **Half-Open**: the next `halfOpenProbes` calls are forwarded as probes. Each success decrements the

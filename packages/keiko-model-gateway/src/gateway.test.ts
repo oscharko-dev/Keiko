@@ -3,6 +3,7 @@ import { Gateway } from "./gateway.js";
 import { ResponseRedactionError } from "./openai-adapter.js";
 import { createScriptedGatewayClock } from "./replay.js";
 import {
+  GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
   GATEWAY_SILENCE_FLOOR_MS,
   providerRequestBudgetMs,
   providerRetryConfig,
@@ -71,12 +72,14 @@ const REQUEST: GatewayRequest = {
 };
 
 describe("Gateway.chat", () => {
-  // #3591: the silence floor now applies to every Gateway.chat() attempt, not just
-  // "coding-workbench" ones (raising CODING_WORKBENCH_PROVIDER_TIMEOUT_FLOOR_MS to match it makes
-  // that special case redundant for chat() specifically — it still matters for chatStream(), see
-  // the "uses the Workbench latency floor only for marked streaming calls" test below). A
-  // configured value already at or above the floor passes through unmodified either way.
-  it("floors every Gateway.chat() attempt to the silence floor, letting an already-generous configured value through unmodified", async () => {
+  // #3591 / PR #3602 review: the buffered-answer floor now applies to every whole-body
+  // Gateway.chat() attempt (this fakeAdapter has no `callStream`), not just "coding-workbench"
+  // ones (raising CODING_WORKBENCH_PROVIDER_TIMEOUT_FLOOR_MS to match the silence floor makes that
+  // special case fully redundant here — it is dominated by the larger buffered floor every attempt
+  // already gets; the Workbench pre-floor still matters for chatStream(), see the "uses the
+  // Workbench latency floor only for marked streaming calls" test below). A configured value
+  // already at or above the buffered floor passes through unmodified either way.
+  it("floors every whole-body Gateway.chat() attempt to the buffered-answer floor, letting an already-generous configured value through unmodified", async () => {
     const timeouts: number[] = [];
     const gateway = new Gateway(config([provider({ maxRetries: 0 })]), {
       clock: createScriptedGatewayClock(),
@@ -87,7 +90,7 @@ describe("Gateway.chat", () => {
     });
     await gateway.chat(REQUEST);
     await gateway.chat({ ...REQUEST, latencyProfile: "coding-workbench" });
-    const aboveFloor = GATEWAY_SILENCE_FLOOR_MS + 200_000;
+    const aboveFloor = GATEWAY_BUFFERED_BUDGET_FLOOR_MS + 200_000;
     const longConfigured = new Gateway(
       config([provider({ timeoutMs: aboveFloor, maxRetries: 0 })]),
       {
@@ -100,8 +103,8 @@ describe("Gateway.chat", () => {
     );
     await longConfigured.chat({ ...REQUEST, latencyProfile: "coding-workbench" });
     expect(timeouts).toStrictEqual([
-      GATEWAY_SILENCE_FLOOR_MS,
-      GATEWAY_SILENCE_FLOOR_MS,
+      GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
+      GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
       aboveFloor,
     ]);
   });
@@ -347,16 +350,23 @@ describe("Gateway.chat", () => {
       },
     };
     let calls = 0;
-    // #3591: timeoutMs stays above the silence floor so it is not itself floored, and the first
-    // attempt's simulated overrun (600 000ms) is chosen to leave LESS of the budget than the
-    // attempt timeout — otherwise, with the raised floor, the remaining budget would exceed the
-    // attempt timeout and this would stop proving the retry is clipped to what is left of it.
-    const route = provider({ timeoutMs: 350_000, maxRetries: 1, retryBaseDelayMs: 100 });
+    // #3591 / PR #3602 review: timeoutMs stays above the buffered-answer floor so it is not itself
+    // floored. The overrun is derived from the budget itself — enough to leave LESS of the budget
+    // than a fresh attempt timeout — rather than a hand-picked literal: a hardcoded overrun already
+    // stopped proving this once before, when the floor it needed to clear rose out from under it
+    // (previously the silence floor, now the larger buffered floor). Deriving it keeps the test
+    // correct across any future floor change.
+    const route = provider({ timeoutMs: 650_000, maxRetries: 1, retryBaseDelayMs: 100 });
+    // providerRetryConfig always sets attemptTimeoutMs; the interface merely allows a caller-built
+    // RetryConfig to omit it.
+    const attemptTimeoutMs = providerRetryConfig(route).attemptTimeoutMs ?? 0;
+    const budgetMs = providerRequestBudgetMs(route);
+    const overrunMs = budgetMs - attemptTimeoutMs + 50_000;
     const gateway = new Gateway(config([route]), {
       adapter: fakeAdapter((_request, cfg) => {
         calls += 1;
         seenTimeouts.push(cfg.timeoutMs);
-        current += calls === 1 ? 600_000 : 0; // an adapter that overran its own timeout
+        current += calls === 1 ? overrunMs : 0; // an adapter that overran its own timeout
         return calls === 1
           ? Promise.reject(new RateLimitError("slow down", 100))
           : Promise.resolve(okResponse("example-chat-model"));
@@ -365,11 +375,8 @@ describe("Gateway.chat", () => {
       random: (): number => 1,
     });
     await gateway.chat(REQUEST);
-    // 600 000 ms in the first attempt and the 100 ms Retry-After leave the rest of the budget.
-    expect(seenTimeouts).toEqual([
-      providerRetryConfig(route).attemptTimeoutMs,
-      providerRequestBudgetMs(route) - 600_000 - 100,
-    ]);
+    // `overrunMs` in the first attempt and the 100 ms Retry-After leave the rest of the budget.
+    expect(seenTimeouts).toEqual([attemptTimeoutMs, budgetMs - overrunMs - 100]);
   });
 
   it("opens the circuit after repeated failures and then blocks without calling the adapter", async () => {
@@ -437,6 +444,28 @@ describe("Gateway.chatStream", () => {
     await collectStream(gateway.chatStream(REQUEST));
     await collectStream(gateway.chatStream({ ...REQUEST, latencyProfile: "coding-workbench" }));
     expect(timeouts).toStrictEqual([30_000, GATEWAY_SILENCE_FLOOR_MS]);
+  });
+
+  // RED reasoning (review finding on PR #3602): chatStream()'s buffered fallback for a
+  // non-streaming adapter used to call adapter.call() with the route's raw `provider.timeoutMs`
+  // unbounded by any floor, while the started line already claimed the (unrelated, unapplied)
+  // silence floor. A healthy 45 s answer through a 30 s-configured provider was aborted at 30 s.
+  // The fallback must apply the SAME buffered-answer floor a whole-body Gateway.chat() attempt
+  // gets, because it degrades to the identical whole-body, unobservable read.
+  it("floors the buffered fallback's adapter.call() deadline to the buffered-answer floor", async () => {
+    const timeouts: number[] = [];
+    const adapter: ProviderAdapter = {
+      // No callStream: forces chatStream() to degrade to its buffered fallback.
+      call: (_request, cfg) => {
+        timeouts.push(cfg.timeoutMs);
+        return Promise.resolve(okResponse(cfg.modelId));
+      },
+    };
+    const gateway = new Gateway(config([provider({ timeoutMs: 30_000, maxRetries: 0 })]), {
+      adapter,
+    });
+    await collectStream(gateway.chatStream(REQUEST));
+    expect(timeouts).toStrictEqual([GATEWAY_BUFFERED_BUDGET_FLOOR_MS]);
   });
 
   it("yields ordered deltas then a done chunk enriched with a UUID requestId and costClass", async () => {
@@ -515,7 +544,13 @@ describe("Gateway.chatStream", () => {
   // slow, not broken — five consecutive timeouts across five SEPARATE calls must never open the
   // breaker and lock out every other caller of that model. Contrasted below with five genuine
   // provider 5xx failures, which still open it exactly as before.
-  it("does not open the breaker after five consecutive TimeoutErrors, but five provider 5xx failures still open it", async () => {
+  // Flipped by review finding on PR #3602: excluding every TimeoutError from NON_PROVIDER_FAULTS
+  // disabled the breaker's own outage guard — an upstream that never responds would cost every
+  // caller a full (multi-minute, with the #3591 floors) attempt and the breaker would never open
+  // for it. With the new floors this generous, a TimeoutError means minutes of genuine silence, an
+  // outage-class signal — so it counts as a provider failure again, exactly as it did before this
+  // PR (and exactly like a provider 5xx failure).
+  it("opens the breaker after five consecutive TimeoutErrors, just like five provider 5xx failures", async () => {
     const breakerConfig = { failureThreshold: 5, cooldownMs: 1000, halfOpenProbes: 1 } as const;
     const timeoutGateway = new Gateway(
       { providers: [provider({ maxRetries: 0 })], circuitBreaker: breakerConfig },
@@ -527,8 +562,8 @@ describe("Gateway.chatStream", () => {
     for (let i = 0; i < 5; i += 1) {
       await expect(timeoutGateway.chat(REQUEST)).rejects.toBeInstanceOf(TimeoutError);
     }
-    expect(timeoutGateway.circuitStatus("example-chat-model").consecutiveFailures).toBe(0);
-    expect(timeoutGateway.circuitStatus("example-chat-model").state).toBe("closed");
+    expect(timeoutGateway.circuitStatus("example-chat-model").consecutiveFailures).toBe(5);
+    expect(timeoutGateway.circuitStatus("example-chat-model").state).toBe("open");
 
     const failingGateway = new Gateway(
       { providers: [provider({ maxRetries: 0 })], circuitBreaker: breakerConfig },
@@ -561,6 +596,60 @@ describe("Gateway.chatStream", () => {
     expect(gateway.circuitStatus("example-chat-model").consecutiveFailures).toBe(0);
     expect(gateway.circuitStatus("example-chat-model").state).toBe("closed");
   });
+
+  // RED reasoning (review finding on PR #3602): before the fix, a half-open probe that ended in a
+  // non-provider fault hit neither CircuitBreaker.recordSuccess nor recordFailure, so the probe
+  // slot it claimed was never released. With halfOpenProbes: 1, that stuck the breaker half-open
+  // forever — every later call rejected with CircuitOpenError although the provider itself was
+  // never actually tested (the request was cancelled / hit its own output-budget problem, not a
+  // provider failure).
+  it.each([
+    ["CancelledError", (): CancelledError => new CancelledError("client cancelled the request")],
+    [
+      "ProviderOutputExhaustedError",
+      (): ProviderOutputExhaustedError => new ProviderOutputExhaustedError("example-chat-model"),
+    ],
+  ])(
+    "keeps admitting calls after a half-open probe ends in a %s",
+    async (_label, buildProbeFault) => {
+      let current = 0;
+      const clock: Clock = {
+        now: (): number => current,
+        sleep: (ms): Promise<void> => {
+          current += ms;
+          return Promise.resolve();
+        },
+      };
+      const breakerConfig = { failureThreshold: 1, cooldownMs: 1_000, halfOpenProbes: 1 } as const;
+      let phase: "opening" | "probe" | "recovered" = "opening";
+      const gateway = new Gateway(
+        { providers: [provider({ maxRetries: 0 })], circuitBreaker: breakerConfig },
+        {
+          adapter: fakeAdapter(() => {
+            if (phase === "opening") return Promise.reject(new TransportError("down"));
+            if (phase === "probe") return Promise.reject(buildProbeFault());
+            return Promise.resolve(okResponse("example-chat-model"));
+          }),
+          clock,
+        },
+      );
+      // One provider failure opens the breaker (failureThreshold: 1).
+      await expect(gateway.chat(REQUEST)).rejects.toBeInstanceOf(TransportError);
+      expect(gateway.circuitStatus("example-chat-model").state).toBe("open");
+
+      // Cooldown elapses; the next call is admitted as the single half-open probe and ends in the
+      // non-provider fault under test.
+      current += breakerConfig.cooldownMs;
+      phase = "probe";
+      await expect(gateway.chat(REQUEST)).rejects.toThrow(buildProbeFault().message);
+      expect(gateway.circuitStatus("example-chat-model").state).toBe("half-open");
+
+      // The freed slot admits the next call — a stuck breaker would reject this with
+      // CircuitOpenError instead of reaching the adapter.
+      phase = "recovered";
+      await expect(gateway.chat(REQUEST)).resolves.toMatchObject({ content: "answer" });
+    },
+  );
 
   it("throws UnknownModelError for an unconfigured model without touching the breaker", async () => {
     const gateway = new Gateway(config([provider()]), {

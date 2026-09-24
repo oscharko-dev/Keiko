@@ -9,6 +9,8 @@
 // memoriaviva/components/format-error).
 
 import { ApiError } from "@/lib/api";
+import { readStoredLocale, translate, type I18nTranslate } from "@/lib/i18n";
+import type { MessageKey } from "@/lib/i18n-messages.en";
 
 export interface UserErrorNotice {
   readonly title: string;
@@ -123,27 +125,43 @@ function isClarificationNeeded(code: string | undefined): boolean {
   return code === "CLARIFICATION_NEEDED";
 }
 
-// #3591: a slow gateway is not a broken gateway, and the message must say so — Keiko waits at
-// least GATEWAY_SILENCE_FLOOR_MS (resilience.ts, keiko-model-gateway) before giving up, so a
-// timeout is never a sign the prompt itself was too large. Wording is shown for every
-// GATEWAY_TIMEOUT regardless of the raw provider message, so the customer-facing text is
-// consistent and never blames prompt size.
-const GATEWAY_TIMEOUT_MESSAGE =
-  "The model gateway did not answer within the wait limit. Keiko waited at least 5 minutes for a first response before giving up — this is not a sign the request itself was too large.";
+// #3591: a slow gateway is not a broken gateway, and the message must say so — Keiko waits
+// minutes (the floors in resilience.ts, keiko-model-gateway) before giving up, so a timeout means
+// the gateway or model stalled, not that the prompt was too large. The wording makes no claim
+// about how long the wait was: a timeout can also come from the gateway's own limits, or from a
+// stream that started and then went silent. Shown for every GATEWAY_TIMEOUT regardless of the
+// raw provider message, so the customer-facing text is consistent and never blames prompt size.
+// An exhausted output budget (a reasoning model spending it before any content) gets the same
+// treatment; both texts live in the i18n catalogs (`chat.error.gateway*`), mirroring the Coding
+// Workbench's `codingWorkbench.event.turnFailure.output-exhausted` copy.
+const GATEWAY_ERROR_KEYS: Readonly<Record<string, { title: MessageKey; message: MessageKey }>> = {
+  GATEWAY_TIMEOUT: {
+    title: "chat.error.gatewayTimeout.title",
+    message: "chat.error.gatewayTimeout.message",
+  },
+  GATEWAY_OUTPUT_EXHAUSTED: {
+    title: "chat.error.gatewayOutputExhausted.title",
+    message: "chat.error.gatewayOutputExhausted.message",
+  },
+};
 
-// Mirrors coding-workbench-i18n.en.ts's "codingWorkbench.event.turnFailure.output-exhausted" copy:
-// the same underlying failure (a reasoning model spending its whole output budget before any
-// content), reported here for the desktop chat surfaces (#3591).
-const GATEWAY_OUTPUT_EXHAUSTED_MESSAGE =
-  "The model used its whole output budget before producing an answer, usually on reasoning. Have the gateway declare a larger max_output_tokens for this model, or choose a model with a smaller reasoning share, then retry.";
+// This module is not a component, so it cannot take the translate hook; it resolves the selected
+// locale itself and translates through the same pure entry point the provider uses.
+const translateForSelectedLocale: I18nTranslate = (key, values) =>
+  translate(readStoredLocale(), key, values);
+
+function gatewayErrorText(code: string | undefined, part: "title" | "message"): string | undefined {
+  const keys = code === undefined ? undefined : GATEWAY_ERROR_KEYS[code];
+  return keys === undefined ? undefined : translateForSelectedLocale(keys[part]);
+}
 
 function friendlyMessageForCode(
   message: string,
   code: string | undefined,
   fallback: string,
 ): string {
-  if (code === "GATEWAY_TIMEOUT") return GATEWAY_TIMEOUT_MESSAGE;
-  if (code === "GATEWAY_OUTPUT_EXHAUSTED") return GATEWAY_OUTPUT_EXHAUSTED_MESSAGE;
+  const gateway = gatewayErrorText(code, "message");
+  if (gateway !== undefined) return gateway;
   return message.length > 0 ? message : fallback;
 }
 
@@ -154,8 +172,8 @@ function titleForError(message: string, code: string | undefined): string {
   if (isTooBroadRepositoryQuestion(message, code)) {
     return "Narrow the connected-source question";
   }
-  if (code === "GATEWAY_TIMEOUT") return "Model gateway did not answer in time";
-  if (code === "GATEWAY_OUTPUT_EXHAUSTED") return "Model ran out of output budget";
+  const gateway = gatewayErrorText(code, "title");
+  if (gateway !== undefined) return gateway;
   if (code === "PAYLOAD_TOO_LARGE") return "Request is too large";
   if (code === "NO_MODEL") return "No model is available";
   if (code !== undefined) return "Request failed";

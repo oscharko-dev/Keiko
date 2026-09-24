@@ -4101,6 +4101,10 @@ describe("coding sidecar gateway rejection activity log", () => {
     expect(result).toMatchObject({ status: 400 });
     const estimatedPromptTokens = sink.events[0]?.extra?.estimatedPromptTokens;
     expect(typeof estimatedPromptTokens).toBe("number");
+    // The bound the prompt was admitted against sits below the raw window (#3591 review).
+    const admissible = sink.events[0]?.extra?.admissiblePromptTokens;
+    expect(typeof admissible).toBe("number");
+    expect(admissible).toBeLessThan(16);
     expect(sink.events).toEqual([
       {
         level: "warn",
@@ -4116,6 +4120,7 @@ describe("coding sidecar gateway rejection activity log", () => {
           runId: "run-gateway-test",
           estimatedPromptTokens,
           maxPromptTokens: 16,
+          admissiblePromptTokens: admissible,
           inputMessageCount: 1,
           maxInputMessages: 512,
           completeness: "complete",
@@ -4150,6 +4155,10 @@ describe("coding sidecar gateway rejection activity log", () => {
           runId: "run-gateway-test",
           estimatedPromptTokens,
           maxPromptTokens: 128_000,
+          admissiblePromptTokens: admissiblePromptTokens({
+            maxPromptTokens: 128_000,
+            maxOutputTokens: 4_096,
+          }),
           inputMessageCount: 513,
           maxInputMessages: 512,
           completeness: "complete",

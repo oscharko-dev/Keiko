@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "284aab406ff7b515b37467477477ac0d89f4c650a13dc4e70f4197eaaee2da49" as const;
+  "5f029c4ef620fa0aeec74209bd427b4515e3420036d614e761e52a0218ec8264" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -1153,7 +1153,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       outputExhausted: {
         type: "boolean",
         dataClass: "closed-enum",
-        required: true,
+        required: false,
       },
     },
     causal: "correlation",
@@ -7231,6 +7231,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      admissiblePromptTokens: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
       inputMessageCount: {
         type: "integer",
         dataClass: "count",
@@ -7291,7 +7296,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       maxOutputTokens: {
         type: "integer",
         dataClass: "count",
-        required: true,
+        required: false,
       },
       inputMessageCount: {
         type: "integer",
@@ -10738,7 +10743,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       outputExhausted: {
         type: "boolean",
         dataClass: "closed-enum",
-        required: true,
+        required: false,
       },
     },
     causal: "correlation",
@@ -11351,12 +11356,22 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
         maxLength: 16,
       },
-      probeTimeoutMs: {
+      chatProbeTimeoutMs: {
         type: "integer",
         dataClass: "duration",
         required: false,
       },
       longContextProbeTimeoutMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
+      embeddingProbeTimeoutMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
+      rerankerProbeTimeoutMs: {
         type: "integer",
         dataClass: "duration",
         required: false,
@@ -11453,12 +11468,22 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
         values: ["settings"],
       },
-      probeTimeoutMs: {
+      chatProbeTimeoutMs: {
         type: "integer",
         dataClass: "duration",
         required: false,
       },
       longContextProbeTimeoutMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
+      embeddingProbeTimeoutMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
+      rerankerProbeTimeoutMs: {
         type: "integer",
         dataClass: "duration",
         required: false,
@@ -12095,7 +12120,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       outputExhausted: {
         type: "boolean",
         dataClass: "closed-enum",
-        required: true,
+        required: false,
       },
     },
     causal: "correlation",
@@ -23929,6 +23954,49 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "speech.stt.request.dispatch",
+    category: "gateway",
+    owner: "keiko-model-gateway",
+    emitter: "speech-to-text-adapter.logDispatch",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      endpointDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+      modelId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: true,
+        maxLength: 256,
+      },
+      timeoutMs: {
+        type: "number",
+        dataClass: "duration",
+        required: false,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "start",
+    analyzerProjection: "timeline",
+    failureClasses: ["speech-stt-request"],
+    proofIds: ["speech.stt.request.dispatch.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "speech.tts.mime.corrected",
     category: "gateway",
     owner: "keiko-model-gateway",
@@ -23962,6 +24030,49 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "timeline",
     failureClasses: ["speech-mime-correction"],
     proofIds: ["speech.tts.mime.corrected.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "speech.tts.request.dispatch",
+    category: "gateway",
+    owner: "keiko-model-gateway",
+    emitter: "text-to-speech-adapter.logDispatch",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      endpointDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+      modelId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: true,
+        maxLength: 256,
+      },
+      timeoutMs: {
+        type: "number",
+        dataClass: "duration",
+        required: false,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "start",
+    analyzerProjection: "timeline",
+    failureClasses: ["speech-tts-request"],
+    proofIds: ["speech.tts.request.dispatch.emitted-line"],
     releaseImpact: "patch",
   },
   {
@@ -27346,8 +27457,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 317,
-  completeClassCount: 317,
+  supportedClassCount: 319,
+  completeClassCount: 319,
   completeness: "complete",
   classes: [
     {
@@ -35116,6 +35227,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "failure-cluster",
           safeContextFields: [
             {
+              name: "admissiblePromptTokens",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "estimatedPromptTokens",
               type: "integer",
               dataClass: "count",
@@ -35308,7 +35425,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "maxOutputTokens",
               type: "integer",
               dataClass: "count",
-              required: true,
+              required: false,
             },
             {
               name: "maxPromptTokens",
@@ -40973,7 +41090,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "outputExhausted",
               type: "boolean",
               dataClass: "closed-enum",
-              required: true,
+              required: false,
             },
             {
               name: "requestId",
@@ -42080,6 +42197,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "chatProbeTimeoutMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
+              name: "embeddingProbeTimeoutMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
               name: "longContextProbeTimeoutMs",
               type: "integer",
               dataClass: "duration",
@@ -42098,7 +42227,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
-              name: "probeTimeoutMs",
+              name: "rerankerProbeTimeoutMs",
               type: "integer",
               dataClass: "duration",
               required: false,
@@ -42164,6 +42293,18 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "chatProbeTimeoutMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
+              name: "embeddingProbeTimeoutMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
+            },
+            {
               name: "longContextProbeTimeoutMs",
               type: "integer",
               dataClass: "duration",
@@ -42182,7 +42323,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
-              name: "probeTimeoutMs",
+              name: "rerankerProbeTimeoutMs",
               type: "integer",
               dataClass: "duration",
               required: false,
@@ -42994,7 +43135,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "outputExhausted",
               type: "boolean",
               dataClass: "closed-enum",
-              required: true,
+              required: false,
             },
             {
               name: "requestId",
@@ -43166,7 +43307,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "outputExhausted",
               type: "boolean",
               dataClass: "closed-enum",
-              required: true,
+              required: false,
             },
             {
               name: "readBudgetMs",
@@ -55452,6 +55593,130 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       completeness: "complete",
     },
     {
+      failureClass: "speech-stt-request",
+      requirementContract: "speech-stt-request",
+      productSurfaces: ["keiko-model-gateway"],
+      lifecycleTransitions: ["start"],
+      lifecycleOperations: {
+        start: ["speech.stt.request.dispatch"],
+        state: [],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "speech.stt.request.dispatch",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["speech.stt.request.dispatch"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "speech.stt.request.dispatch",
+          owner: "keiko-model-gateway",
+          category: "gateway",
+          lifecycle: "start",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "endpointDigest",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "modelId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "timeoutMs",
+              type: "number",
+              dataClass: "duration",
+              required: false,
+            },
+          ],
+          evidenceClasses: ["completeness-state", "digest", "duration", "loss-state", "opaque-id"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["speech.stt.request.dispatch.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "speech-tts-request",
+      requirementContract: "speech-tts-request",
+      productSurfaces: ["keiko-model-gateway"],
+      lifecycleTransitions: ["start"],
+      lifecycleOperations: {
+        start: ["speech.tts.request.dispatch"],
+        state: [],
+        end: [],
+        failure: [],
+        loss: [],
+      },
+      causalEdges: [
+        {
+          op: "speech.tts.request.dispatch",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: [],
+      resourceSignals: ["speech.tts.request.dispatch"],
+      replayReferences: [],
+      operations: [
+        {
+          op: "speech.tts.request.dispatch",
+          owner: "keiko-model-gateway",
+          category: "gateway",
+          lifecycle: "start",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "endpointDigest",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "modelId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "timeoutMs",
+              type: "number",
+              dataClass: "duration",
+              required: false,
+            },
+          ],
+          evidenceClasses: ["completeness-state", "digest", "duration", "loss-state", "opaque-id"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["speech.tts.request.dispatch.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
       failureClass: "sse-resume-decision",
       requirementContract: "sse-resume-decision",
       productSurfaces: ["keiko-server"],
@@ -60943,7 +61208,9 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "server.diagnostic.failure": "bff",
     "server.runtime.shutdown": "lifecycle-crash",
     "speech.stt.language.normalized": "model-gateway",
+    "speech.stt.request.dispatch": "model-gateway",
     "speech.tts.mime.corrected": "model-gateway",
+    "speech.tts.request.dispatch": "model-gateway",
     "speech.tts.stream.peek.failed": "model-gateway",
     "sse.run-events.resume": "bff",
     "sse.stream.closed": "bff",

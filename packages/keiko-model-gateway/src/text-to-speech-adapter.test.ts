@@ -5,6 +5,7 @@ import {
   requestTextToSpeechStream,
 } from "./text-to-speech-adapter.js";
 import { OutboundHttpEgressError } from "./http.js";
+import { GATEWAY_VOICE_TIMEOUT_FLOOR_MS } from "./resilience.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import {
   expectActivityLogProof,
@@ -274,28 +275,47 @@ describe("requestTextToSpeech", () => {
     if (outcome.ok) {
       expect(outcome.value.mimeType).toBe("audio/ogg");
     }
-    expect(events).toEqual([
-      {
-        level: "info",
-        category: "gateway",
-        op: "speech.tts.mime.corrected",
-        correlationId: "corr-tts-mime",
-        extra: {
-          completeness: "complete",
-          declaredMimeClass: "mp3",
-          loss: "none",
-          resolvedMimeClass: "opus",
-        },
+    // THE ATTEMPT LINE (speech.tts.request.dispatch) is always first, ahead of the narrower
+    // MIME-correction line (#3602 review — the new per-call deadline had no line recording the
+    // applied bound).
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      level: "info",
+      category: "gateway",
+      op: "speech.tts.request.dispatch",
+      correlationId: "corr-tts-mime",
+      extra: { modelId: "keiko-tts", timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS },
+    });
+    expect(events[1]).toMatchObject({
+      level: "info",
+      category: "gateway",
+      op: "speech.tts.mime.corrected",
+      correlationId: "corr-tts-mime",
+      extra: {
+        completeness: "complete",
+        declaredMimeClass: "mp3",
+        loss: "none",
+        resolvedMimeClass: "opus",
       },
-    ]);
+    });
 
     // Activity Log proof (#3532): the MIME-correction line as the production file sink would
     // persist it.
     const persisted = expectActivityLogProof(
       "speech.tts.mime.corrected.emitted-line",
-      formatActivityLogProofLine(events[0] ?? {}),
+      formatActivityLogProofLine(events[1] ?? {}),
     );
     expect(persisted).toMatchObject({ declaredMimeClass: "mp3", resolvedMimeClass: "opus" });
+    // The dispatch line as the production file sink would persist it: the applied deadline is the
+    // floor, not the caller's configured value (#3591).
+    const dispatched = expectActivityLogProof(
+      "speech.tts.request.dispatch.emitted-line",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(dispatched).toMatchObject({
+      modelId: "keiko-tts",
+      timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS,
+    });
   });
 
   it.each([
@@ -326,7 +346,7 @@ describe("requestTextToSpeech", () => {
     });
     expect(outcome.ok).toBe(true);
     if (outcome.ok) expect(outcome.value.mimeType).toBe(mime);
-    expect(events[0]).toMatchObject({
+    expect(events[1]).toMatchObject({
       op: "speech.tts.mime.corrected",
       extra: { declaredMimeClass: "pcm", resolvedMimeClass: kind },
     });
@@ -358,7 +378,8 @@ describe("requestTextToSpeech", () => {
 
     expect(outcome.ok).toBe(true);
     if (outcome.ok) expect(outcome.value.mimeType).toBe("audio/mpeg");
-    expect(events).toEqual([]);
+    // Only the unconditional dispatch line — no MIME-correction event for an already-correct MIME.
+    expect(events.map((event) => event.op)).toEqual(["speech.tts.request.dispatch"]);
   });
 
   it.each([
@@ -381,7 +402,8 @@ describe("requestTextToSpeech", () => {
     });
     expect(outcome.ok).toBe(true);
     if (outcome.ok) expect(outcome.value.mimeType).toBe("audio/pcm");
-    expect(events).toEqual([]);
+    // Only the unconditional dispatch line — no MIME-correction event for a non-matching signature.
+    expect(events.map((event) => event.op)).toEqual(["speech.tts.request.dispatch"]);
   });
 
   it("returns empty-audio when a 2xx response carries no audio bytes", async () => {
@@ -500,6 +522,43 @@ describe("requestTextToSpeech", () => {
       }),
     });
     expect(cancelled).toEqual({ ok: false, kind: "cancelled" });
+  });
+
+  // Proves `requestTextToSpeech` itself wires its internal deadline into the outbound fetch
+  // (mirrors the identical regression on the speech-to-text adapter, review finding on PR #3602).
+  // `classifyDispatchError` is not exported from this module, so the assertion runs end to end:
+  // `AbortSignal.timeout` is spied to assert the floored value it is called with, then swapped for
+  // an already-fired signal so the whole request path ends in the timeout outcome for real.
+  it("wires the floored internal deadline into the outbound fetch and ends in a timeout outcome", async () => {
+    const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+      if (ms !== GATEWAY_VOICE_TIMEOUT_FLOOR_MS) return nativeTimeout(ms);
+      const controller = new AbortController();
+      controller.abort(new DOMException("the provider did not answer in time", "TimeoutError"));
+      return controller.signal;
+    });
+    try {
+      const outcome = await requestTextToSpeech({
+        endpoint: ENDPOINT,
+        apiKey: SECRET_API_KEY,
+        modelId: "keiko-tts",
+        input: ANSWER,
+        voice: "configured-voice",
+        // Below the floor: proves the CALL that reaches AbortSignal.timeout carries the floored
+        // value, not the caller's smaller configured one.
+        timeoutMs: 5_000,
+        fetchImpl: mockFetch((_url, init) => {
+          if (init.signal?.aborted === true) {
+            throw init.signal.reason as Error;
+          }
+          throw new Error("the request should have carried an already-aborted signal");
+        }),
+      });
+      expect(timeoutSpy).toHaveBeenCalledWith(GATEWAY_VOICE_TIMEOUT_FLOOR_MS);
+      expect(outcome).toEqual({ ok: false, kind: "timeout" });
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 
   it("never leaks the api key into the URL or request body", async () => {

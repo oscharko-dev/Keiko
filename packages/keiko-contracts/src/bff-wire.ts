@@ -2050,8 +2050,13 @@ export interface GatewayReadinessOptions {
   readonly probes?: readonly GatewayReadinessProbeName[] | undefined;
   readonly includeDeepProbes?: boolean | undefined;
   readonly maxContextTokens?: number | undefined;
-  /** Machine-readable origin for the bounded, automatic Coding Workbench verification flow. */
-  readonly purpose?: "coding-workbench-auto" | undefined;
+  /**
+   * Machine-readable origin of an automatic run: the bounded Coding Workbench verification flow,
+   * or the on-demand chat probe a conversation guard starts for a model without a current
+   * observation (#3591: both run with the probe floors, never with a bare setup timeout). Only the
+   * Workbench origin is accepted from the wire; the on-demand origin is set by the server itself.
+   */
+  readonly purpose?: "coding-workbench-auto" | "on-demand" | undefined;
 }
 
 export interface GatewayReadinessRequest {

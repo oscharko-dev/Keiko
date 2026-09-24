@@ -12,7 +12,6 @@ import {
   CircuitBreaker,
   executeWithRetry,
   GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
-  GATEWAY_SILENCE_FLOOR_MS,
   providerRequestBudgetMs,
   providerRetryConfig,
 } from "./resilience.js";
@@ -486,11 +485,14 @@ describe("providerRequestBudgetMs", () => {
     ).toBe(aboveFloor);
   });
 
-  it("floors the per-attempt timeout to the silence floor before deriving the budget", () => {
+  // Flipped by PR #3602 review: a buffered (whole-body) attempt cannot observe progress, so its
+  // per-attempt bound floors to the LARGER buffered-answer floor, not the silence floor — see the
+  // buffered-vs-stream rule documented above `GATEWAY_SILENCE_FLOOR_MS`.
+  it("floors the per-attempt timeout to the buffered-answer floor before deriving the budget", () => {
     expect(
       providerRetryConfig({ timeoutMs: 1_000, maxRetries: 0, retryBaseDelayMs: 500 })
         .attemptTimeoutMs,
-    ).toBe(GATEWAY_SILENCE_FLOOR_MS);
+    ).toBe(GATEWAY_BUFFERED_BUDGET_FLOOR_MS);
   });
 
   // Config validation holds each term to the timer ceiling, never their sum: past it, every
@@ -663,6 +665,67 @@ describe("CircuitBreaker", () => {
     expect(() => {
       cb.assertAllowed();
     }).toThrow(CircuitOpenError);
+  });
+
+  // RED reasoning (review finding on PR #3602): before the fix, a non-provider fault during a
+  // half-open probe hit neither `recordSuccess` nor `recordFailure`, so the slot
+  // `admitProbeOrReject` claimed was never released. Once every half-open probe slot was stuck this
+  // way, the breaker stayed half-open and rejected every later call with CircuitOpenError forever —
+  // even though the provider itself was never actually tested and may be perfectly healthy.
+  it("releases the half-open probe slot on a non-provider fault, without counting it as success or failure", () => {
+    const { clock, advance } = stubClock();
+    const cb = new CircuitBreaker(
+      "m",
+      { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 1 },
+      clock,
+    );
+    for (let i = 0; i < 5; i += 1) {
+      cb.recordFailure();
+    }
+    advance(30_000);
+    cb.assertAllowed(); // claims the single probe slot
+    cb.recordNonProviderFault(); // e.g. a client cancel or config error — never tested the provider
+    // Neither opened (still half-open, not re-opened) nor closed (still needs a real success).
+    expect(cb.status("m").state).toBe("half-open");
+    expect(cb.status("m").consecutiveFailures).toBe(5);
+    // The slot is free again: the next call is admitted rather than rejected.
+    expect(() => {
+      cb.assertAllowed();
+    }).not.toThrow();
+  });
+
+  // The same fault kind, twice, must never lock the breaker out of ever closing again: every probe
+  // slot cycling through a non-provider fault stays admissible, not exhausted.
+  it("keeps admitting probes across repeated non-provider faults until a real probe succeeds", () => {
+    const { clock, advance } = stubClock();
+    const cb = new CircuitBreaker(
+      "m",
+      { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 1 },
+      clock,
+    );
+    for (let i = 0; i < 5; i += 1) {
+      cb.recordFailure();
+    }
+    advance(30_000);
+    for (let i = 0; i < 3; i += 1) {
+      cb.assertAllowed();
+      cb.recordNonProviderFault();
+    }
+    expect(cb.status("m").state).toBe("half-open");
+    cb.assertAllowed();
+    cb.recordSuccess();
+    expect(cb.status("m").state).toBe("closed");
+  });
+
+  // A non-provider fault while CLOSED (no half-open probe in flight) is a no-op: there is no probe
+  // slot to free, and it must not perturb the ordinary failure count either.
+  it("is a no-op for a non-provider fault while closed", () => {
+    const { clock } = stubClock();
+    const cb = new CircuitBreaker("m", cbConfig, clock);
+    cb.recordFailure();
+    cb.recordNonProviderFault();
+    expect(cb.status("m").consecutiveFailures).toBe(1);
+    expect(cb.status("m").state).toBe("closed");
   });
 });
 

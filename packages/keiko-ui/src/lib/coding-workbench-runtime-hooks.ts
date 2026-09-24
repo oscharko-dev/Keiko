@@ -144,7 +144,9 @@ async function refreshManagedGatewaySource(
 }
 
 // The re-read timer belongs to the mounted Workbench: a newer refresh replaces it, and unmounting
-// clears it, so a closed Workbench never keeps reading the profile (#3591 review).
+// clears it, so a closed Workbench never keeps reading the profile (#3591 review). Unmounting also
+// retires the refresh sequence, so a read still in flight neither dispatches into the unmounted
+// hook nor schedules a re-read when it lands.
 function useVerificationReread(
   sequenceRef: RefObject<number>,
   refreshRef: RefObject<() => Promise<void>>,
@@ -153,8 +155,9 @@ function useVerificationReread(
   useEffect(
     () => (): void => {
       clearTimeout(timerRef.current);
+      sequenceRef.current += 1;
     },
-    [],
+    [sequenceRef],
   );
   return useCallback(
     (sequence: number): void => {

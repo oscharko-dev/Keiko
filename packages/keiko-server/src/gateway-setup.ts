@@ -114,7 +114,7 @@ import {
 } from "./qualityIntelligence/judgePort.js";
 import { persistSealedGatewayConfig } from "./credentialPersistence.js";
 import { bindSecurityLogCorrelation } from "@oscharko-dev/keiko-security";
-import { probeGatewayToolCalling } from "./gateway-tool-calling-probe.js";
+import { probeGatewayToolCalling, transientGatewayStatus } from "./gateway-tool-calling-probe.js";
 
 const MODEL_REASONING_EFFORT_SET: ReadonlySet<string> = new Set(MODEL_REASONING_EFFORTS);
 
@@ -135,8 +135,19 @@ const MISTRAL_TOOL_CALLING_LIMITATION =
 // raised so first-run discovery does not mistake a slow but healthy candidate for a broken one.
 // A candidate the smoke probe never gets an answer from is now KEPT unverified instead of dropped
 // (see `admitChatSmokeCandidates`) — this floor bounds how long that patience costs per candidate.
-const DISCOVERED_MODEL_SMOKE_TIMEOUT_MS = 120_000;
+// `Gateway.chat()`'s own attempt/retry floors run far longer end to end (several minutes), so this
+// value only actually bounds a probe through the per-candidate `cancellationSignal`
+// `defaultGatewaySetupTester` composes from it (PR #3602 review). Exported so tests can pin the
+// exact value instead of restating it (Issue #144 precedent — see `MAX_DISCOVERED_MODELS`).
+export const DISCOVERED_MODEL_SMOKE_TIMEOUT_MS = 120_000;
 const DEPLOYMENT_SMOKE_TIMEOUT_MS = 30_000;
+// The whole discovery smoke ROUND's own patience budget — distinct from the per-candidate ceiling
+// above. Past this deadline no further candidate probe is even started: the remaining candidates
+// are retained unverified without being called, so a large discovery batch of temporarily-transient
+// candidates (rate-limited, briefly unreachable) can never block first-run setup for an unbounded
+// time. The setup POST has no UI deadline and the server awaits the handler end to end, so this
+// round bound is what actually protects first-run setup (PR #3602 review).
+export const CHAT_SMOKE_ROUND_DEADLINE_MS = 600_000;
 
 const GATEWAY_TOOL_CALLING_VERIFICATION_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -1909,8 +1920,11 @@ export async function smokeTestCandidates(
 interface ChatSmokeAdmission {
   /** Answered the smoke probe successfully. */
   readonly tested: readonly string[];
-  /** The probe never got an answer (timeout, abort, transport/proxy/TLS failure) — KEPT,
-   *  unverified: a slow gateway is not a broken one (#3591). */
+  /** The probe never got an answer (timeout, abort, transport/proxy/TLS failure), the gateway
+   *  answered with a transient failure (rate limit or an overloaded-gateway status — 408/429/5xx
+   *  except 501, `transientGatewayStatus`), or the round's own patience budget ran out before this
+   *  candidate's probe was even started (`CHAT_SMOKE_ROUND_DEADLINE_MS`) — KEPT, unverified: a
+   *  slow or momentarily overloaded gateway is not a broken one (#3591). */
   readonly unverifiedKept: readonly string[];
   /** The gateway ANSWERED and rejected the candidate (4xx/5xx, or a malformed/unusable answer) —
    *  real evidence the candidate does not work, so it is dropped. */
@@ -1920,12 +1934,65 @@ interface ChatSmokeAdmission {
   readonly allFailures: readonly ProbeFailureEvidence[];
 }
 
-// Companion to `passingCandidates` for the discovery smoke test specifically (#3591): reuses
-// `SETUP_NETWORK_ERROR_CODES` — the exact set the "network failure" guidance below already
-// classifies as "the gateway never answered" — to tell a candidate the smoke probe timed out on
+// A per-candidate smoke failure that must be KEPT unverified rather than dropped (PR #3602
+// review): a rate limit, any existing `SETUP_NETWORK_ERROR_CODES` network-failure code (this
+// candidate's own `AbortSignal.timeout` deadline below can legitimately surface as either
+// `TimeoutError` or `CancelledError` — `Gateway.chat()`'s retry loop notices an already-fired
+// caller signal at the top of its backoff sleep and reports cancellation even though the deadline,
+// not a real cancel, is what fired it — both codes are already covered by that set), or a transient
+// HTTP status an intermediating proxy (e.g. the field customer's LiteLLM) answers with under load.
+// Reuses `transientGatewayStatus` — the SAME "gateway is overloaded, not broken" policy the
+// tool-calling probe already classifies by — instead of a second private status list. Anything else
+// is real evidence the candidate does not work and stays dropped.
+function isUnverifiedSmokeFailure(evidence: ProbeFailureEvidence): boolean {
+  const { code, httpStatus } = evidence;
+  if (code === ERROR_CODES.RATE_LIMIT || code === ERROR_CODES.CANCELLED) return true;
+  if (code !== undefined && SETUP_NETWORK_ERROR_CODES.has(code)) return true;
+  return httpStatus !== undefined && transientGatewayStatus(httpStatus);
+}
+
+// The mutable accumulators `admitChatSmokeCandidates`'s workers share, bundled so the per-failure
+// classification below can be its own function (repository per-function line ceiling, AGENTS.md §6)
+// without a long parameter list.
+interface ChatSmokeAccumulators {
+  readonly unverifiedKept: string[];
+  readonly droppedRejected: string[];
+  readonly allFailures: ProbeFailureEvidence[];
+}
+
+// One failed candidate's classification: on record in `allFailures` regardless of bucket (the same
+// body-free pattern `setupToolCallingObservations` already uses for its own per-model probe
+// failures), then sorted into kept-unverified or dropped-rejected by `isUnverifiedSmokeFailure`.
+function recordChatSmokeFailure(
+  modelId: string,
+  error: unknown,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+  accumulators: ChatSmokeAccumulators,
+): void {
+  reportSetupVerificationFailure(deps, error, correlationId, "gateway.setup.chat-smoke-probe");
+  const evidence: ProbeFailureEvidence = {
+    code: setupErrorCode(error),
+    httpStatus: setupHttpStatus(error),
+  };
+  accumulators.allFailures.push(evidence);
+  if (isUnverifiedSmokeFailure(evidence)) {
+    accumulators.unverifiedKept.push(modelId);
+  } else {
+    accumulators.droppedRejected.push(modelId);
+  }
+}
+
+// Companion to `passingCandidates` for the discovery smoke test specifically (#3591): tells a
+// candidate the smoke probe timed out or was rate-limited/overloaded on (`isUnverifiedSmokeFailure`)
 // apart from one the gateway actually rejected. Mirrors `admitEmbeddingCandidates`'s
 // retained/dropped shape, but on a different axis: THAT function splits by whether the model's ROLE
 // was asserted; this one splits by whether the PROBE was ever answered.
+//
+// `now` bounds the ROUND, not one candidate: past `CHAT_SMOKE_ROUND_DEADLINE_MS` from the first
+// call, no further candidate probe is even started — the remaining candidates are retained
+// unverified untouched, so a large discovery batch can never block first-run setup for an unbounded
+// time. Defaults to `Date.now` and is a parameter only so tests can control it deterministically.
 //
 // Every failure is ALSO recorded into `allFailures`, independent of its bucket: when NOTHING is
 // tested, `defaultGatewaySetupTester` still throws exactly as `smokeTestCandidates` always did —
@@ -1933,17 +2000,26 @@ interface ChatSmokeAdmission {
 // whole-gateway `temporaryChatAdmission` deferral both depend on that throw to try the next
 // candidate base URL or defer the whole probe round; this function only widens what happens on a
 // PARTIAL failure, never removes the total-failure signal those two callers already rely on.
-async function admitChatSmokeCandidates(
+// Exported for direct unit testing (Issue #144 precedent — see `smokeTestCandidates`): the
+// classification (`isUnverifiedSmokeFailure`) and round-deadline logic below are pure decision
+// rules over an injected `probe`/`now`, and exercising them through the full HTTP-mocked
+// `handleGatewaySetup` route would need either a real multi-minute wait or an intrusive global
+// `AbortSignal.timeout`/clock stub for every scenario (PR #3602 review).
+export async function admitChatSmokeCandidates(
   candidates: readonly string[],
   probe: (modelId: string) => Promise<void>,
   concurrency: number,
   deps: UiHandlerDeps,
   correlationId: string | undefined,
+  now: () => number = Date.now,
 ): Promise<ChatSmokeAdmission> {
   const tested = new Array<string | undefined>(candidates.length).fill(undefined);
-  const unverifiedKept: string[] = [];
-  const droppedRejected: string[] = [];
-  const allFailures: ProbeFailureEvidence[] = [];
+  const accumulators: ChatSmokeAccumulators = {
+    unverifiedKept: [],
+    droppedRejected: [],
+    allFailures: [],
+  };
+  const roundDeadlineAt = now() + CHAT_SMOKE_ROUND_DEADLINE_MS;
   let next = 0;
   async function worker(): Promise<void> {
     while (next < candidates.length) {
@@ -1951,29 +2027,15 @@ async function admitChatSmokeCandidates(
       next += 1;
       const modelId = candidates[index];
       if (modelId === undefined) continue;
+      if (now() >= roundDeadlineAt) {
+        accumulators.unverifiedKept.push(modelId);
+        continue;
+      }
       try {
         await probe(modelId);
         tested[index] = modelId;
       } catch (error) {
-        // Every probe rejection is on record — the same body-free pattern
-        // `setupToolCallingObservations` already uses for its own per-model probe failures —
-        // before this loop silently classifies and continues to the next candidate.
-        reportSetupVerificationFailure(
-          deps,
-          error,
-          correlationId,
-          "gateway.setup.chat-smoke-probe",
-        );
-        const evidence: ProbeFailureEvidence = {
-          code: setupErrorCode(error),
-          httpStatus: setupHttpStatus(error),
-        };
-        allFailures.push(evidence);
-        if (evidence.code !== undefined && SETUP_NETWORK_ERROR_CODES.has(evidence.code)) {
-          unverifiedKept.push(modelId);
-        } else {
-          droppedRejected.push(modelId);
-        }
+        recordChatSmokeFailure(modelId, error, deps, correlationId, accumulators);
       }
     }
   }
@@ -1981,9 +2043,7 @@ async function admitChatSmokeCandidates(
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
   return {
     tested: tested.filter((modelId): modelId is string => modelId !== undefined),
-    unverifiedKept,
-    droppedRejected,
-    allFailures,
+    ...accumulators,
   };
 }
 
@@ -2021,6 +2081,40 @@ async function verifyTestedChatCandidates(
   return { responseFormatModelIds, toolCallingObservations };
 }
 
+// The deadline that actually bounds ONE candidate's smoke call (PR #3602 review): `Gateway.chat()`
+// floors every attempt at the interactive silence floor (several minutes) and retries once, so the
+// candidate's configured `timeoutMs` alone no longer bounds anything — this caller-owned
+// `AbortSignal.timeout` does. Reads the SAME `timeoutMs` `probeConfigForModels` gave this exact
+// candidate's provider entry (`DISCOVERED_MODEL_SMOKE_TIMEOUT_MS` for discovery,
+// `DEPLOYMENT_SMOKE_TIMEOUT_MS` for a manually entered deployment) rather than a hardcoded literal,
+// so both smoke paths stay bounded at the timeout each already advertises; the discovery constant
+// is only the defensive fallback for a candidate somehow missing its own provider entry.
+function candidateSmokeCancellationSignal(config: GatewayConfig, modelId: string): AbortSignal {
+  const provider = config.providers.find((candidate) => candidate.modelId === modelId);
+  return AbortSignal.timeout(provider?.timeoutMs ?? DISCOVERED_MODEL_SMOKE_TIMEOUT_MS);
+}
+
+// Extracted so `defaultGatewaySetupTester` stays under the repository's per-function line ceiling
+// (AGENTS.md §6) — the probe itself is the one line that matters: a fixed "reply OK" chat call,
+// bounded by this candidate's own smoke deadline.
+function chatSmokeProbe(
+  gateway: Gateway,
+  config: GatewayConfig,
+  correlationId: string | undefined,
+): (modelId: string) => Promise<void> {
+  return async (modelId) => {
+    await gateway.chat({
+      modelId,
+      messages: [
+        { role: "system", content: CONVERSATION_SYSTEM_PROMPT },
+        { role: "user", content: "Reply with exactly: OK" },
+      ],
+      logContext: { correlationId },
+      cancellationSignal: candidateSmokeCancellationSignal(config, modelId),
+    });
+  };
+}
+
 async function defaultGatewaySetupTester(
   config: GatewayConfig,
   candidateModelIds: readonly string[],
@@ -2036,16 +2130,7 @@ async function defaultGatewaySetupTester(
   });
   const chatSmoke = await admitChatSmokeCandidates(
     candidateModelIds,
-    async (modelId) => {
-      await gateway.chat({
-        modelId,
-        messages: [
-          { role: "system", content: CONVERSATION_SYSTEM_PROMPT },
-          { role: "user", content: "Reply with exactly: OK" },
-        ],
-        logContext: { correlationId },
-      });
-    },
+    chatSmokeProbe(gateway, config, correlationId),
     SETUP_SMOKE_CONCURRENCY,
     deps,
     correlationId,
@@ -2121,7 +2206,7 @@ async function setupToolCallingObservations(
       const provider = config.providers.find((candidate) => candidate.modelId === modelId);
       // A model without a provider stays unverified; that conclusion takes the same log line below
       // as every probe result instead of being recorded silently.
-      const status =
+      const probeStatus =
         provider === undefined
           ? "unverified"
           : await probeGatewayToolCalling(
@@ -2142,6 +2227,11 @@ async function setupToolCallingObservations(
                 correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
               },
             );
+      // A `transient` probe answer (408/429/5xx-except-501, `transientGatewayStatus`) proves
+      // nothing about the model either way and must never be stored or logged as a verdict: the
+      // closed status vocabulary here and on the `gateway.tool-calling.verification` activity-log
+      // line stays exactly "verified" | "unsupported" | "unverified" (PR #3602 review).
+      const status = probeStatus === "transient" ? "unverified" : probeStatus;
       observations[index] = {
         modelId,
         status,

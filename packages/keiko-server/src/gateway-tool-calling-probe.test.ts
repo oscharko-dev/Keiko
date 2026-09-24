@@ -144,6 +144,20 @@ describe("probeGatewayToolCalling", () => {
     );
   });
 
+  // Review of #3591: an overloaded gateway's 429/503 is no verdict on the model; a 501 is.
+  it("reports a transient gateway status without a verdict", async () => {
+    for (const status of [408, 429, 502, 503, 504]) {
+      const busy: typeof fetch = () => Promise.resolve(jsonResponse({}, status));
+      await expect(probeGatewayToolCalling(CONFIG, PROVIDER, busy)).resolves.toBe("transient");
+    }
+    const notImplemented: typeof fetch = () => Promise.resolve(jsonResponse({}, 501));
+    await expect(probeGatewayToolCalling(CONFIG, PROVIDER, notImplemented)).resolves.toBe(
+      "unsupported",
+    );
+    const forbidden: typeof fetch = () => Promise.resolve(jsonResponse({}, 403));
+    await expect(probeGatewayToolCalling(CONFIG, PROVIDER, forbidden)).resolves.toBe("unverified");
+  });
+
   it("rejects malformed, incomplete, or unexpected forced-call arguments", async () => {
     const malformed: typeof fetch = () =>
       Promise.resolve(
@@ -213,20 +227,18 @@ describe("probeGatewayToolCalling", () => {
     );
   });
 
-  it("keeps transient client statuses unverified", async () => {
+  // The pin: a rate limit is never stored as a verdict. Since the #3591 review it is named for
+  // what it is (`transient`) so the caller can retry soon instead of waiting out a long cooldown.
+  it("keeps a transient client status out of the verdicts", async () => {
     const rateLimited: typeof fetch = () => Promise.resolve(jsonResponse({}, 429));
-    await expect(probeGatewayToolCalling(CONFIG, PROVIDER, rateLimited)).resolves.toBe(
-      "unverified",
-    );
+    await expect(probeGatewayToolCalling(CONFIG, PROVIDER, rateLimited)).resolves.toBe("transient");
   });
 
   it("fails closed when the gateway is unavailable", async () => {
     const unavailable: typeof fetch = () => Promise.resolve(jsonResponse({}, 503));
     const interrupted: typeof fetch = () => Promise.reject(new TypeError("fixture interruption"));
 
-    await expect(probeGatewayToolCalling(CONFIG, PROVIDER, unavailable)).resolves.toBe(
-      "unverified",
-    );
+    await expect(probeGatewayToolCalling(CONFIG, PROVIDER, unavailable)).resolves.toBe("transient");
     await expect(probeGatewayToolCalling(CONFIG, PROVIDER, interrupted)).resolves.toBe(
       "unverified",
     );

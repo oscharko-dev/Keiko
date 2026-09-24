@@ -24,7 +24,7 @@ describe("formatUserError", () => {
       "Retry",
     );
     expect(formatted).toBe(
-      "The model gateway did not answer within the wait limit. Keiko waited at least 5 minutes for a first response before giving up — this is not a sign the request itself was too large. (GATEWAY_TIMEOUT)",
+      "The model gateway did not complete the request within Keiko's wait limit. Keiko keeps waiting for minutes on a slow gateway, so this usually means the gateway or the model stalled — not that the request was too large. (GATEWAY_TIMEOUT)",
     );
     expect(formatted.toLowerCase()).not.toContain("prompt");
   });
@@ -97,7 +97,7 @@ describe("formatUserError", () => {
     expect(notice).toEqual({
       title: "Model gateway did not answer in time",
       message:
-        "The model gateway did not answer within the wait limit. Keiko waited at least 5 minutes for a first response before giving up — this is not a sign the request itself was too large.",
+        "The model gateway did not complete the request within Keiko's wait limit. Keiko keeps waiting for minutes on a slow gateway, so this usually means the gateway or the model stalled — not that the request was too large.",
       code: "GATEWAY_TIMEOUT",
       remediation:
         "Retry, or check gateway URL, proxy, and deployment in Settings if it keeps happening.",

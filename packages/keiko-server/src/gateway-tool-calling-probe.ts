@@ -13,7 +13,9 @@ import { reserveGatewaySpendForAttempt } from "./gateway-spend-budget.js";
 
 const MAX_PROVIDER_RESPONSE_BYTES = 500_000;
 
-export type GatewayToolCallingProbeStatus = "verified" | "unsupported" | "unverified";
+// `transient`: the gateway answered with an overload or timeout status (`transientGatewayStatus`),
+// which proves nothing about the model either way and must not be stored as a verdict.
+export type GatewayToolCallingProbeStatus = "verified" | "unsupported" | "unverified" | "transient";
 
 export type GatewayToolCallingProbeFailureReporter = (error: unknown) => void;
 
@@ -54,13 +56,23 @@ function hasReadinessArguments(value: unknown): boolean {
   }
 }
 
+// A gateway at peak load answers 408/429/5xx for a while; that is no verdict on the model, and a
+// Workbench that treated it as one locked itself out for hours (#3591 review). 501 (not
+// implemented) is the one 5xx that IS a verdict.
+export function transientGatewayStatus(status: number): boolean {
+  return status === 408 || status === 429 || (status >= 500 && status !== 501);
+}
+
 function rejectedStatus(response: Response): GatewayToolCallingProbeStatus {
-  return response.status === 400 ||
+  if (
+    response.status === 400 ||
     response.status === 404 ||
     response.status === 422 ||
     response.status === 501
-    ? "unsupported"
-    : "unverified";
+  ) {
+    return "unsupported";
+  }
+  return transientGatewayStatus(response.status) ? "transient" : "unverified";
 }
 
 function toolCallingBody(): Readonly<Record<string, unknown>> {

@@ -847,12 +847,25 @@ function modelCommitMessage(
 // reasoning, and a provider that answered completely but produced something unusable. `signal` is
 // the caller's own cancellation (route deadline + client disconnect, see commitDraftCancellation
 // below); this function no longer builds its own.
-function classifyCommitDraftModelFailure(error: unknown): GitDeliveryCommitErrorCode {
+function classifyCommitDraftModelFailure(
+  error: unknown,
+  signal: AbortSignal,
+): GitDeliveryCommitErrorCode {
   if (error instanceof ProviderOutputExhaustedError) {
     return "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED";
   }
-  if (error instanceof TimeoutError) return "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT";
+  if (error instanceof TimeoutError || routeDeadlineFired(signal)) {
+    return "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT";
+  }
   return "GIT_DELIVERY_COMMIT_DRAFT_FAILED";
+}
+
+// The route deadline firing while the gateway sleeps before a retry surfaces as the gateway's
+// CancelledError, not as TimeoutError; the composed signal's reason still names the deadline
+// (#3591 review). A client disconnect aborts without that reason and stays a generic failure.
+function routeDeadlineFired(signal: AbortSignal): boolean {
+  const reason: unknown = signal.reason;
+  return signal.aborted && reason instanceof DOMException && reason.name === "TimeoutError";
 }
 
 async function generateModelCommitMessage(
@@ -886,7 +899,7 @@ async function generateModelCommitMessage(
         : "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT";
     return { ok: false, code, bounds };
   } catch (error) {
-    return { ok: false, code: classifyCommitDraftModelFailure(error), error, bounds };
+    return { ok: false, code: classifyCommitDraftModelFailure(error, signal), error, bounds };
   }
 }
 

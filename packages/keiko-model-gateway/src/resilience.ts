@@ -39,6 +39,22 @@ const MAX_BACKOFF_MS = 30_000;
 // gateway is not a broken gateway. These floors are the minimum every interactive gateway surface
 // waits before treating silence or total duration as a failure; a caller's own configuration may
 // only raise them, never lower them.
+//
+// The buffered-vs-stream rule (review finding on PR #3602): a STREAMED read can prove it is alive
+// as it goes — a chunk every so often is the provider saying "still here" — so it only needs to be
+// watched for SILENCE (no data for `GATEWAY_SILENCE_FLOOR_MS`) while its total duration is allowed
+// to run to the much larger stream/budget floor below. A BUFFERED (whole-body) read cannot observe
+// progress at all: an OpenAI-compatible endpoint sends nothing, headers included, until the whole
+// generation is ready, so there is no "silence" to watch — the single number that bounds it must
+// already cover the longest legitimate generation. That is why `chatAttemptTimeoutMs` below floors
+// a buffered `Gateway.chat()` attempt to `GATEWAY_BUFFERED_BUDGET_FLOOR_MS`, the SAME floor as the
+// end-to-end budget, rather than to the shorter silence floor: with `maxRetries: 0` the one attempt
+// IS the whole call, and flooring it to the silence floor left a healthy six-minute buffered answer
+// aborted at five minutes while the budget "advertised" ten (PR #3602 review). A `chat()` attempt
+// that happens to read over the provider's own stream keeps the silence floor for that read
+// instead (`gateway.ts`'s `effectiveSilenceMs`, threaded through `streamedReadBounds`) — only the
+// WHOLE-BODY case, and `chatStream()`'s own buffered fallback for a non-streaming adapter (same
+// reasoning: no incremental progress to observe), use the buffered floor as their per-attempt bound.
 // Longest wait for the first byte, and between two stream data events.
 export const GATEWAY_SILENCE_FLOOR_MS = 300_000;
 // Longest total read of a streamed answer (`Gateway.chatStream()` — Conversation Center and any
@@ -574,11 +590,17 @@ type ProviderRetryPolicy = Pick<
   "timeoutMs" | "maxRetries" | "retryBaseDelayMs"
 >;
 
-// The per-attempt bound `Gateway.chat()` runs every attempt under: the provider's configured
-// `timeoutMs`, floored to the silence floor (#3591) so a slow gateway is never cut off before it
-// has had a fair chance to answer.
+// The per-attempt bound `Gateway.chat()` runs a BUFFERED (whole-body) attempt under: the
+// provider's configured `timeoutMs`, floored to the BUFFERED budget floor, never the shorter
+// silence floor (#3591, PR #3602 review — see the buffered-vs-stream rule above). A buffered read
+// cannot observe progress, so with `maxRetries: 0` this one attempt IS the whole call: flooring it
+// to the silence floor left a healthy six-minute answer cut off at five. A `chat()` attempt that
+// reads over the provider's own stream is bounded differently by its caller (`gateway.ts`'s
+// `effectiveSilenceMs`/`streamedReadBounds`) and does not use this value for its read deadline —
+// this function only floors the WHOLE-BODY read and the retry loop's own bookkeeping (attempt
+// scheduling, the end-to-end budget derived below).
 function chatAttemptTimeoutMs(provider: ProviderRetryPolicy): number {
-  return Math.max(provider.timeoutMs, GATEWAY_SILENCE_FLOOR_MS);
+  return Math.max(provider.timeoutMs, GATEWAY_BUFFERED_BUDGET_FLOOR_MS);
 }
 
 // The end-to-end budget of one buffered call to `provider`: every attempt its full `timeoutMs`
@@ -590,9 +612,10 @@ function chatAttemptTimeoutMs(provider: ProviderRetryPolicy): number {
 // the loop as the budget of the WHOLE call, an attempt that hung spent it, and the retry a
 // `TimeoutError` is declared retryable for never ran (coding run 23, 2026-09-11).
 //
-// The per-attempt bound is floored first (`chatAttemptTimeoutMs`), and the derived total is then
-// floored again to the buffered-answer floor (#3591): a provider configured well below either
-// floor must still get at least the floor's worth of patience end to end, not just per attempt.
+// The per-attempt bound is floored first (`chatAttemptTimeoutMs`, now the SAME buffered floor this
+// function floors to), so the trailing `Math.max` below is a provable no-op today — kept as an
+// explicit invariant ("this budget is never less than the buffered floor, however the per-attempt
+// term is computed") rather than relying on the reader to re-derive that from the arithmetic.
 export function providerRequestBudgetMs(provider: ProviderRetryPolicy): number {
   const attemptTimeoutMs = chatAttemptTimeoutMs(provider);
   const budgetMs =
@@ -748,6 +771,20 @@ export class CircuitBreaker {
     if (this.consecutiveFailures >= this.config.failureThreshold) {
       this.open(correlationId);
     }
+  }
+
+  // A non-provider fault (a client cancel, our own invalid configuration, the gateway's own
+  // redaction limit, a caller-fixable output-budget exhaustion) never tested whether the provider
+  // recovered, so it must move the breaker NEITHER toward open (mistaking the caller's own fault
+  // for a fresh outage) nor toward closed (mistaking an untested call for a health signal) — but a
+  // half-open probe still claimed one of the limited `probesInFlight` slots in `admitProbeOrReject`,
+  // and neither `recordSuccess` nor `recordFailure` is the right call to release it. Left
+  // unreleased, the slot stays occupied forever: once every half-open probe is stuck this way the
+  // breaker rejects every later call with `CircuitOpenError` although the provider may be healthy
+  // (review finding on PR #3602). A no-op while closed or open: there is no probe slot to free.
+  recordNonProviderFault(): void {
+    if (this.state !== "half-open") return;
+    this.probesInFlight = Math.max(0, this.probesInFlight - 1);
   }
 
   status(modelId: string): CircuitBreakerStatus {
