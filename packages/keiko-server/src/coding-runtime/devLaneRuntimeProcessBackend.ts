@@ -217,7 +217,7 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       gitExecutable?.source,
     );
     const tree = ownTree(`dev-lane-opencode-${String(this.nextTreeId++)}`, child, (error) => {
-      recordConfinementFailure(this.activityLog, request.runId, error);
+      recordChildConfinementFailure(this.activityLog, request.runId, child, error);
     });
     this.ownedTrees.add(tree);
     return tree;
@@ -370,6 +370,20 @@ function recordConfinementFailure(
         causeChain: causeChain(error),
       },
     ),
+  );
+}
+
+function recordChildConfinementFailure(
+  sink: ServerLogSink,
+  runId: string,
+  child: DevLaneRuntimeChildProcess,
+  error: unknown,
+): void {
+  recordConfinementFailure(
+    sink,
+    runId,
+    error,
+    child.pid === undefined ? "process-spawn" : undefined,
   );
 }
 

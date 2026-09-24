@@ -13,6 +13,7 @@ on:
       - "packages/keiko-cli/**"
       - "packages/keiko-harness/**"
       - "packages/keiko-model-gateway/**"
+      - "packages/keiko-sandbox/**"
       - "packages/keiko-server/**"
       - "packages/keiko-tools/**"
       - "packages/keiko-ui/**"

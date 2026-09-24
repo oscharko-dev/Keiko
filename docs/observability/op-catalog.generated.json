@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "f2a3a93c41d30b86dc2f8cd5d9bf68c7adfa24cc8d59b6e9e54ed99280d913ff",
+    "catalogDigest": "ab973ccf89e118bdfa73d5f01e50b16c28ad78c382bfcba2099b5287027ae92d",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -22396,7 +22396,7 @@
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:179",
         "emitterSites": [
           "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:364",
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:453",
+          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:467",
           "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts:206"
         ]
       },
@@ -22487,7 +22487,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:226",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:415"
+          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:429"
         ]
       },
       {
@@ -22540,7 +22540,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeActivityOperations.ts:186",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:398",
+          "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:412",
           "packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts:232"
         ]
       },

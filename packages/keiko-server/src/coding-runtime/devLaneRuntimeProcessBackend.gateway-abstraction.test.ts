@@ -434,6 +434,51 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
     expect(JSON.stringify(activityLog.events)).not.toContain("customer-secret");
   });
 
+  it("records the process-spawn phase when the child asynchronously fails to start", async () => {
+    const paths = fixture();
+    const control = spawnedChild();
+    const activityLog = createBufferedServerLogSink();
+    spawnMock.mockReturnValue(control.child);
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      runtimeRoot: paths.runtimeRoot,
+      gatewayConfinement: gatewayConfinement(),
+      activityLog,
+      probeAvailability: () => ALL,
+      platform: "darwin",
+      resolveGitExecutable: () => ATTESTED_GIT,
+    });
+
+    const tree = backend.spawnOwnedTree(launchRequest(paths));
+    control.child.emit("error", new Error("spawn ENOENT: /private/customer-secret"));
+    const failure = activityLog.events.find((event) => event.op === "runtime.confinement.failed");
+    expect(failure?.extra).toMatchObject({ launchPhase: "process-spawn" });
+    expect(JSON.stringify(activityLog.events)).not.toContain("customer-secret");
+    await expect(backend.reconcileTreeExit(tree)).resolves.toBe(true);
+  });
+
+  it("does not label an error from a running child as a spawn failure", async () => {
+    const paths = fixture();
+    const control = spawnedChild({ pid: 4711 });
+    const activityLog = createBufferedServerLogSink();
+    spawnMock.mockReturnValue(control.child);
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      runtimeRoot: paths.runtimeRoot,
+      gatewayConfinement: gatewayConfinement(),
+      activityLog,
+      probeAvailability: () => ALL,
+      platform: "darwin",
+      resolveGitExecutable: () => ATTESTED_GIT,
+    });
+
+    const tree = backend.spawnOwnedTree(launchRequest(paths));
+    control.child.emit("error", new Error("kill EPERM"));
+    const failure = activityLog.events.find((event) => event.op === "runtime.confinement.failed");
+    expect(failure?.extra).not.toHaveProperty("launchPhase");
+    await expect(backend.reconcileTreeExit(tree)).resolves.toBe(false);
+  });
+
   it.each([
     ["stdout", { stdout: false }],
     ["stderr", { stderr: false }],
