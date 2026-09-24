@@ -1004,7 +1004,15 @@ describe("runUiCli", () => {
       },
     };
     try {
-      const code = await runUiCli([], io, { KEIKO_STATE_DIR: ".keiko/runtime" }, deps);
+      const code = await runUiCli(
+        [],
+        io,
+        {
+          KEIKO_STATE_DIR: ".keiko/runtime",
+          KEIKO_CLI_BIN_PATH: join(cwd, "missing-cli-entry.js"),
+        },
+        deps,
+      );
       expect(err.join("")).toBe("");
       expect(code).toBe(0);
       // Relative, so it resolves against the launch cwd — not against the process working

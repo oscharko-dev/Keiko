@@ -3064,7 +3064,10 @@ describe("buildUiHandlerDeps — coding-runtime ceiling and unavailable reason (
     return buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("ev-ceiling-"),
-      env,
+      // A prepared npm runtime package may be present beside this checkout after a staged
+      // qualification run. Pin the absent CLI entry so this test always exercises the
+      // platform-unqualified branch, independently of local install artifacts.
+      env: { KEIKO_CLI_BIN_PATH: join(tmp("missing-cli-entry-"), "entry.js"), ...env },
       uiDbPath: join(tmp("ceiling-state-"), "keiko-ui.db"),
       ...(ceilingOption === undefined ? {} : { codingRuntimeDeploymentCeiling: ceilingOption }),
     });
