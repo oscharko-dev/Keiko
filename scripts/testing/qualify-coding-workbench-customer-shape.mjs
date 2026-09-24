@@ -140,6 +140,50 @@ function activityLines(stateDir) {
     .map((line) => JSON.parse(line));
 }
 
+function reportQualificationFailure(stateDir, twin, firstRequest, phase) {
+  let lines;
+  try {
+    lines = activityLines(stateDir);
+  } catch {
+    process.stderr.write(`customer-shape ${phase}: Activity Log unavailable\n`);
+    return;
+  }
+  const relevant = lines.filter(
+    (line) =>
+      line !== null &&
+      typeof line.op === "string" &&
+      (line.op.startsWith("coding-runtime.") ||
+        line.op.startsWith("coding-sidecar.gateway.") ||
+        line.op === "server.diagnostic.failure" ||
+        line.op === "chat.request.compatibility-retry"),
+  );
+  const timeline = relevant.slice(-24).map((line) => ({
+    op: line.op,
+    ...(typeof line.failureCode === "string" ? { failureCode: line.failureCode } : {}),
+    ...(typeof line.errorKind === "string" ? { errorKind: line.errorKind } : {}),
+    ...(typeof line.outcome === "string" ? { outcome: line.outcome } : {}),
+    ...(typeof line.publicationReason === "string"
+      ? { publicationReason: line.publicationReason }
+      : {}),
+    ...(typeof line.terminal === "boolean" ? { terminal: line.terminal } : {}),
+    ...(Number.isInteger(line.exitCode) ? { exitCode: line.exitCode } : {}),
+    ...(Number.isInteger(line.diagnosticLineCount)
+      ? { diagnosticLineCount: line.diagnosticLineCount }
+      : {}),
+  }));
+  const requestCount = twin.requests.length - firstRequest;
+  const requests = twin.requests.slice(firstRequest, firstRequest + 12).map((request) => ({
+    stream: request.stream,
+    hasStreamOptions: request.hasStreamOptions,
+    delayed: request.delayed,
+    truncated: request.truncated,
+    deliveredToolCall: request.deliveredToolCall,
+  }));
+  process.stderr.write(
+    `customer-shape ${phase}: ${JSON.stringify({ activityLineCount: lines.length, timeline, requestCount, requests })}\n`,
+  );
+}
+
 function assertAnalyzableFailure(project, stateDir, lines, runId) {
   // OpenCode may publish its terminal failure first. In that ordering the gateway's additional
   // turn event is suppressed; the closed publication reason explains that outcome. The browser
@@ -409,6 +453,9 @@ async function qualifyInstalled(
     assertGatewayEvidence(twin, firstRequest, lines, runId, phase);
     if (expectToolCall) assertToolRoundTrip(twin, firstRequest);
     if (expectFailure) assertAnalyzableFailure(project, stateDir, lines, runId);
+  } catch (error) {
+    reportQualificationFailure(stateDir, twin, firstRequest, phase);
+    throw error;
   } finally {
     await browser?.close();
     if (started) cli("stop");
