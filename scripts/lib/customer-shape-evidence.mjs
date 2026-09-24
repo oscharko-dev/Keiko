@@ -177,13 +177,16 @@ export function customerShapeFailureSummary(lines, requests, firstRequest) {
     activityLineCount: lines.length,
     timeline,
     requestCount: requests.length - firstRequest,
-    requests: requests.slice(firstRequest, firstRequest + 12).map((request) => ({
-      stream: request.stream === true,
-      hasStreamOptions: request.hasStreamOptions === true,
-      delayed: request.delayed === true,
-      truncated: request.truncated === true,
-      deliveredToolCall: request.deliveredToolCall === true,
-    })),
+    requests: requests.slice(firstRequest, firstRequest + 12).map((request) => {
+      const fields = request !== null && typeof request === "object" ? request : {};
+      return {
+        stream: fields.stream === true,
+        hasStreamOptions: fields.hasStreamOptions === true,
+        delayed: fields.delayed === true,
+        truncated: fields.truncated === true,
+        deliveredToolCall: fields.deliveredToolCall === true,
+      };
+    }),
   };
 }
 

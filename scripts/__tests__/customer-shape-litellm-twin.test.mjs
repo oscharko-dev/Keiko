@@ -235,6 +235,41 @@ describe("customer-shape LiteLLM twin", () => {
     expect(JSON.stringify(summary)).not.toContain(secret);
   });
 
+  it("reports empty failure evidence without inventing activity or requests", () => {
+    expect(customerShapeFailureSummary([], [], 0)).toEqual({
+      activityLineCount: 0,
+      timeline: [],
+      requestCount: 0,
+      requests: [],
+    });
+  });
+
+  it("bounds malformed failure evidence to 24 activity lines and 12 requests", () => {
+    const lines = [
+      null,
+      "malformed",
+      { op: "unknown-operation", failureCode: "private-content" },
+      ...Array.from({ length: 27 }, (_, exitCode) => ({
+        op: "coding-runtime.run.settled",
+        exitCode,
+      })),
+    ];
+    const requests = [
+      null,
+      "malformed",
+      ...Array.from({ length: 13 }, (_, index) => ({ stream: index === 12 })),
+    ];
+    const summary = customerShapeFailureSummary(lines, requests, 0);
+    expect(summary.activityLineCount).toBe(30);
+    expect(summary.timeline).toHaveLength(24);
+    expect(summary.timeline[0]).toMatchObject({ exitCode: 3 });
+    expect(summary.timeline.at(-1)).toMatchObject({ exitCode: 26 });
+    expect(summary.requestCount).toBe(15);
+    expect(summary.requests).toHaveLength(12);
+    expect(summary.requests.every((request) => request.stream === false)).toBe(true);
+    expect(JSON.stringify(summary)).not.toContain("private-content");
+  });
+
   it("records an accepted stream that entered the delayed-response branch", async () => {
     const twin = await startCustomerShapeLiteLlmTwin();
     try {

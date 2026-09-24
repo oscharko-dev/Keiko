@@ -28,6 +28,51 @@ describe("Darwin Git executable attestation", () => {
     expect(attempted).toEqual(["selected", "/Library/Developer/CommandLineTools"]);
   });
 
+  it("falls back when selected Git resolution fails", () => {
+    const attempted: string[] = [];
+    const resolved = chooseAttestedDarwinGit(
+      (developerDirectory) => {
+        attempted.push(developerDirectory ?? "selected");
+        if (developerDirectory === undefined) throw new Error("selected-git-resolution-failed");
+        return "/trusted/command-line-tools/git";
+      },
+      (path) => ({ path, sha256: "a".repeat(64) }),
+    );
+    expect(resolved).toMatchObject({
+      path: "/trusted/command-line-tools/git",
+      source: "command-line-tools",
+    });
+    expect(attempted).toEqual(["selected", "/Library/Developer/CommandLineTools"]);
+  });
+
+  it("rejects an empty selected path before attestation and uses Command Line Tools Git", () => {
+    const attempted: string[] = [];
+    const resolved = chooseAttestedDarwinGit(
+      (developerDirectory) => {
+        attempted.push(developerDirectory ?? "selected");
+        return developerDirectory === undefined ? "" : "/trusted/command-line-tools/git";
+      },
+      (path) => ({ path, sha256: "a".repeat(64) }),
+    );
+    expect(resolved).toMatchObject({
+      path: "/trusted/command-line-tools/git",
+      source: "command-line-tools",
+    });
+    expect(attempted).toEqual(["selected", "/Library/Developer/CommandLineTools"]);
+  });
+
+  it("fails closed when Command Line Tools Git resolves to an empty path", () => {
+    expect(() =>
+      chooseAttestedDarwinGit(
+        (developerDirectory) => {
+          if (developerDirectory === undefined) throw new Error("selected-git-resolution-failed");
+          return "";
+        },
+        (path) => ({ path, sha256: "a".repeat(64) }),
+      ),
+    ).toThrow("runtime-gateway-git-untrusted");
+  });
+
   it("fails closed when neither selected nor Command Line Tools Git is trusted", () => {
     const attempted: string[] = [];
     expect(() =>

@@ -87,11 +87,16 @@ export function chooseAttestedDarwinGit(
   resolvePath: (developerDirectory?: string) => string,
   attest: (path: string) => AttestedDarwinGitExecutable,
 ): AttestedDarwinGitExecutable {
+  const attestResolvedPath = (developerDirectory?: string): AttestedDarwinGitExecutable => {
+    const path = resolvePath(developerDirectory);
+    if (path.trim().length === 0) return untrustedGit();
+    return attest(path);
+  };
   try {
-    return Object.freeze({ ...attest(resolvePath()), source: "selected" });
+    return Object.freeze({ ...attestResolvedPath(), source: "selected" });
   } catch {
     return Object.freeze({
-      ...attest(resolvePath("/Library/Developer/CommandLineTools")),
+      ...attestResolvedPath("/Library/Developer/CommandLineTools"),
       source: "command-line-tools",
     });
   }
