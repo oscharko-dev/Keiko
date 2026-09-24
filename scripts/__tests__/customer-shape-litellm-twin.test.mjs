@@ -158,6 +158,10 @@ describe("customer-shape LiteLLM twin", () => {
           errorKind: secret,
           outcome: secret,
           publicationReason: secret,
+          code: secret,
+          diagnosticOperation: secret,
+          taskOutcomeStatus: secret,
+          reason: secret,
           diagnosticLineCount: 3,
           message: secret,
         },
@@ -168,13 +172,23 @@ describe("customer-shape LiteLLM twin", () => {
           outcome: "failed",
           publicationReason: "terminal-run",
         },
+        {
+          op: "server.diagnostic.failure",
+          diagnosticOperation: "coding-runtime.start",
+          code: "stage=start:reason=initial-turn-dispatch",
+        },
+        {
+          op: "server.diagnostic.failure",
+          diagnosticOperation: "coding-runtime.handshake",
+          code: "gateway-challenge",
+        },
         { op: `coding-runtime.${secret}`, failureCode: secret },
       ],
       [{ stream: secret, hasStreamOptions: true, delayed: false }],
       0,
     );
     expect(summary).toMatchObject({
-      activityLineCount: 3,
+      activityLineCount: 5,
       requestCount: 1,
       timeline: [
         {
@@ -183,6 +197,10 @@ describe("customer-shape LiteLLM twin", () => {
           errorKind: "[redacted]",
           outcome: "[redacted]",
           publicationReason: "[redacted]",
+          code: "[redacted]",
+          diagnosticOperation: "[redacted]",
+          taskOutcomeStatus: "[redacted]",
+          reason: "[redacted]",
           diagnosticLineCount: 3,
         },
         {
@@ -191,6 +209,16 @@ describe("customer-shape LiteLLM twin", () => {
           errorKind: "timeout",
           outcome: "failed",
           publicationReason: "terminal-run",
+        },
+        {
+          op: "server.diagnostic.failure",
+          diagnosticOperation: "coding-runtime.start",
+          code: "stage=start:reason=initial-turn-dispatch",
+        },
+        {
+          op: "server.diagnostic.failure",
+          diagnosticOperation: "coding-runtime.handshake",
+          code: "gateway-challenge",
         },
       ],
       requests: [{ stream: false, hasStreamOptions: true, delayed: false }],
