@@ -9,6 +9,7 @@ import {
   DEFAULT_VERIFIER_SOURCE,
   FRAMEWORK_REFERENCE_NAMES,
   generateVerifierAsset,
+  inspectVerifierToolchain,
   sha256,
 } from "./generate-windows-portable-authenticode-verifier.mjs";
 import {
@@ -267,7 +268,15 @@ export function checkWindowsPortableAuthenticodeVerifier({
 
 export function executeCheckCli() {
   const options = discoverTrustedVerifierToolchain();
-  checkWindowsPortableAuthenticodeVerifier(options);
+  try {
+    checkWindowsPortableAuthenticodeVerifier(options);
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("reviewed generated-asset pin")) {
+      const fingerprint = inspectVerifierToolchain(options);
+      process.stderr.write(`windows-verifier-toolchain: ${JSON.stringify(fingerprint)}\n`);
+    }
+    throw error;
+  }
   process.stdout.write("windows-portable-authenticode-verifier: PASS\n");
 }
 
