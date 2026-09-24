@@ -123,14 +123,27 @@ function isClarificationNeeded(code: string | undefined): boolean {
   return code === "CLARIFICATION_NEEDED";
 }
 
+// #3591: a slow gateway is not a broken gateway, and the message must say so — Keiko waits at
+// least GATEWAY_SILENCE_FLOOR_MS (resilience.ts, keiko-model-gateway) before giving up, so a
+// timeout is never a sign the prompt itself was too large. Wording is shown for every
+// GATEWAY_TIMEOUT regardless of the raw provider message, so the customer-facing text is
+// consistent and never blames prompt size.
+const GATEWAY_TIMEOUT_MESSAGE =
+  "The model gateway did not answer within the wait limit. Keiko waited at least 5 minutes for a first response before giving up — this is not a sign the request itself was too large.";
+
+// Mirrors coding-workbench-i18n.en.ts's "codingWorkbench.event.turnFailure.output-exhausted" copy:
+// the same underlying failure (a reasoning model spending its whole output budget before any
+// content), reported here for the desktop chat surfaces (#3591).
+const GATEWAY_OUTPUT_EXHAUSTED_MESSAGE =
+  "The model used its whole output budget before producing an answer, usually on reasoning. Have the gateway declare a larger max_output_tokens for this model, or choose a model with a smaller reasoning share, then retry.";
+
 function friendlyMessageForCode(
   message: string,
   code: string | undefined,
   fallback: string,
 ): string {
-  if (code === "GATEWAY_TIMEOUT" && (message.length === 0 || message === code)) {
-    return "The model gateway timed out before the model returned a response.";
-  }
+  if (code === "GATEWAY_TIMEOUT") return GATEWAY_TIMEOUT_MESSAGE;
+  if (code === "GATEWAY_OUTPUT_EXHAUSTED") return GATEWAY_OUTPUT_EXHAUSTED_MESSAGE;
   return message.length > 0 ? message : fallback;
 }
 
@@ -141,7 +154,8 @@ function titleForError(message: string, code: string | undefined): string {
   if (isTooBroadRepositoryQuestion(message, code)) {
     return "Narrow the connected-source question";
   }
-  if (code === "GATEWAY_TIMEOUT") return "Model gateway timed out";
+  if (code === "GATEWAY_TIMEOUT") return "Model gateway did not answer in time";
+  if (code === "GATEWAY_OUTPUT_EXHAUSTED") return "Model ran out of output budget";
   if (code === "PAYLOAD_TOO_LARGE") return "Request is too large";
   if (code === "NO_MODEL") return "No model is available";
   if (code !== undefined) return "Request failed";
@@ -156,7 +170,10 @@ function remediationForError(message: string, code: string | undefined): string 
     return "Ask about a specific file, folder, symbol, identifier, or exact phrase. For broad questions over large project folders, narrow the Files scope first.";
   }
   if (code === "GATEWAY_TIMEOUT") {
-    return "Retry. If it repeats, use a smaller prompt or another model, then check gateway URL, proxy, and deployment in Settings.";
+    return "Retry, or check gateway URL, proxy, and deployment in Settings if it keeps happening.";
+  }
+  if (code === "GATEWAY_OUTPUT_EXHAUSTED") {
+    return "Raise the model's max output tokens in Settings, or switch to a model with a smaller reasoning share, then retry.";
   }
   if (code === "PAYLOAD_TOO_LARGE") {
     return "Reduce the selected scope or remove large attachments before retrying.";

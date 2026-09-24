@@ -1226,7 +1226,7 @@ function GatewayTimeoutField({
         className="gw-input mono"
         inputMode="numeric"
         value={value}
-        placeholder={preserveExisting ? "Leave blank to keep stored timeout" : "30000"}
+        placeholder={preserveExisting ? "Leave blank to keep stored timeout" : "120000"}
         autoComplete="off"
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
