@@ -1,4 +1,5 @@
 import type { IncomingMessage } from "node:http";
+import { TimeoutError, TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
   isConversationEligibleModel,
   listConfiguredCapabilities,
@@ -808,11 +809,42 @@ function skipped(name: GatewayReadinessProbeName, evidence: string): GatewayRead
   return { name, status: "skipped", latencyMs: 0, evidence };
 }
 
-function providerWarning(errorValue: unknown): string {
-  if (errorValue instanceof DOMException && errorValue.name === "TimeoutError") {
-    return "The probe timed out before the provider answered.";
+// #3591 (1.1.7): a probe the gateway never answered (timed out, aborted, unreachable) is
+// INCONCLUSIVE — it proves nothing about the model and must not be held against it the way an
+// answered failure is. The two sentences are this module's own closed vocabulary; the Workbench
+// re-probe policy reads them back through `probeInconclusive`.
+const PROBE_TIMED_OUT_WARNING = "The probe timed out before the provider answered.";
+const PROBE_UNREACHABLE_WARNING = "The provider could not be reached for this probe.";
+const INCONCLUSIVE_PROBE_WARNINGS: ReadonlySet<string> = new Set([
+  PROBE_TIMED_OUT_WARNING,
+  PROBE_UNREACHABLE_WARNING,
+]);
+
+function inconclusiveProbeError(errorValue: unknown): string | undefined {
+  if (errorValue instanceof TimeoutError) return PROBE_TIMED_OUT_WARNING;
+  if (errorValue instanceof DOMException) {
+    if (errorValue.name === "TimeoutError") return PROBE_TIMED_OUT_WARNING;
+    if (errorValue.name === "AbortError") return PROBE_UNREACHABLE_WARNING;
   }
-  return "The provider could not complete this probe. Chat configuration was not changed.";
+  if (errorValue instanceof TransportError || errorValue instanceof TypeError) {
+    return PROBE_UNREACHABLE_WARNING;
+  }
+  return undefined;
+}
+
+export function probeInconclusive(probe: GatewayReadinessProbeResult): boolean {
+  return (
+    probe.status === "failed" &&
+    probe.warning !== undefined &&
+    INCONCLUSIVE_PROBE_WARNINGS.has(probe.warning)
+  );
+}
+
+function providerWarning(errorValue: unknown): string {
+  return (
+    inconclusiveProbeError(errorValue) ??
+    "The provider could not complete this probe. Chat configuration was not changed."
+  );
 }
 
 // Every probe's `catch` used to collapse an actionable cause — an auth rejection, a DNS/TLS failure,
@@ -1411,6 +1443,28 @@ async function probeLongContext(
   }
 }
 
+// #3591 (1.1.7): the long-context probe carries 21k–32k prompt tokens and the Workbench's
+// automatic probes run while an operator waits; at peak load the field customer's gateway needs
+// minutes for that prefill. The setup default of 30 s is a guess for a chat turn, not a probe
+// budget, and a probe that abandons a slow gateway proves nothing and used to lock the Workbench
+// out for six hours. The floors below are lower bounds on the configured provider timeout.
+export const LONG_CONTEXT_PROBE_TIMEOUT_FLOOR_MS = 300_000;
+export const WORKBENCH_PROBE_TIMEOUT_FLOOR_MS = 120_000;
+
+export function probeProvider(
+  provider: ModelProviderConfig,
+  name: GatewayReadinessProbeName,
+  options: GatewayReadinessOptions | undefined,
+): ModelProviderConfig {
+  const floor =
+    name === "long_context"
+      ? LONG_CONTEXT_PROBE_TIMEOUT_FLOOR_MS
+      : options?.purpose === "coding-workbench-auto"
+        ? WORKBENCH_PROBE_TIMEOUT_FLOOR_MS
+        : 0;
+  return provider.timeoutMs >= floor ? provider : { ...provider, timeoutMs: floor };
+}
+
 async function runProbe(
   name: GatewayReadinessProbeName,
   deps: UiHandlerDeps,
@@ -1418,7 +1472,8 @@ async function runProbe(
   options: GatewayReadinessOptions | undefined,
   correlationId: string,
 ): Promise<GatewayReadinessProbeResult> {
-  const { config, provider } = selection;
+  const { config } = selection;
+  const provider = probeProvider(selection.provider, name, options);
   if (name === "chat") return probeChat(deps, config, provider, correlationId);
   if (name === "streaming") return probeStreaming(deps, config, provider, correlationId);
   if (name === "tool_calling") return probeToolCalling(deps, config, provider, correlationId);
@@ -1747,7 +1802,18 @@ function reconcileContextWindowReadiness(
 // that really is short-context, or a gateway that is down, is not probed on every read — and a
 // model that never claimed tool calling is never probed from here at all.
 const WORKBENCH_REPROBE_COOLDOWN_MS = 6 * 60 * 60 * 1_000;
-const workbenchProbes = new Map<string, { readonly promise: Promise<void>; at: number }>();
+// #3591 (1.1.7): a probe the gateway never answered is not a verdict. It used to hold the six-hour
+// cooldown, so one slow answer at peak load locked the Workbench out with no operator remedy but
+// a restart. An inconclusive run is retried on the next Workbench read after this much quiet.
+export const WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS = 60_000;
+type WorkbenchProbeOutcome = "proven" | "refuted" | "inconclusive";
+interface WorkbenchProbeEntry {
+  readonly promise: Promise<void>;
+  at: number;
+  cooldownMs: number;
+  settled: boolean;
+}
+const workbenchProbes = new Map<string, WorkbenchProbeEntry>();
 // ONE run at a time. Persisting a conclusion bumps the configuration generation, and a readiness
 // run that started under the previous generation has its conclusion discarded as stale: probing
 // six models at once would store the first to finish and silently drop the other five. A queue
@@ -1788,9 +1854,32 @@ function workbenchProbeTargets(config: GatewayConfig): readonly WorkbenchProbeTa
 
 // Keyed by the deployment's identity, not the configuration generation: every conclusion this
 // persists bumps the generation, which would otherwise lift the cooldown of every other model.
+// The configured timeout is part of the key (#3591): an operator who raises it after a timed-out
+// probe has changed what the probe can prove and gets a fresh attempt at once.
 function workbenchProbeKey(config: GatewayConfig, modelId: string): string {
   const provider = config.providers.find((candidate) => candidate.modelId === modelId);
-  return provider === undefined ? modelId : toolCallingConfigurationFingerprint(provider);
+  return provider === undefined
+    ? modelId
+    : `${toolCallingConfigurationFingerprint(provider)}:${String(provider.timeoutMs)}`;
+}
+
+/** Whether the Workbench's automatic verification of this model is still running. */
+export function isCodingWorkbenchProbePending(config: GatewayConfig, modelId: string): boolean {
+  const entry = workbenchProbes.get(workbenchProbeKey(config, modelId));
+  return entry !== undefined && !entry.settled;
+}
+
+function workbenchProbeOutcome(
+  report: Awaited<ReturnType<typeof runGatewayReadiness>>,
+  target: WorkbenchProbeTarget,
+): WorkbenchProbeOutcome {
+  if ("status" in report) return "inconclusive";
+  const results = target.probes.map((name) => report.probes.find((probe) => probe.name === name));
+  if (results.every((probe) => probe?.status === "passed")) return "proven";
+  // The gating chat probe runs first and a target probe is skipped when it fails: a gateway that
+  // never answered the chat probe has not refuted anything either.
+  if (report.probes.some(probeInconclusive)) return "inconclusive";
+  return results.some((probe) => probe === undefined) ? "inconclusive" : "refuted";
 }
 
 async function runWorkbenchProbe(
@@ -1798,7 +1887,7 @@ async function runWorkbenchProbe(
   target: WorkbenchProbeTarget,
   key: string,
   correlationId: string,
-): Promise<void> {
+): Promise<WorkbenchProbeOutcome> {
   try {
     const report = await runGatewayReadiness(
       {
@@ -1808,11 +1897,7 @@ async function runWorkbenchProbe(
       deps,
       correlationId,
     );
-    const proven =
-      !("status" in report) &&
-      target.probes.every((name) =>
-        report.probes.some((probe) => probe.name === name && probe.status === "passed"),
-      );
+    const outcome = workbenchProbeOutcome(report, target);
     const config = deps.gatewayConfig?.current();
     const stillNeeded =
       config !== undefined &&
@@ -1820,7 +1905,8 @@ async function runWorkbenchProbe(
     // Proven, yet not stored: the configuration changed under the run and the conclusion was
     // discarded as stale. Lift the cooldown so the next read proves it again instead of leaving
     // the model unusable for hours.
-    if (proven && stillNeeded) workbenchProbes.delete(key);
+    if (outcome === "proven" && stillNeeded) workbenchProbes.delete(key);
+    return outcome;
   } catch (error) {
     emitServerDiagnostic(
       deps.diagnostics,
@@ -1833,6 +1919,7 @@ async function runWorkbenchProbe(
         redact: (message): string => String(deps.redactor(message)),
       }),
     );
+    return "inconclusive";
   }
 }
 
@@ -1844,15 +1931,26 @@ function enqueueWorkbenchProbe(
 ): Promise<void> {
   const key = workbenchProbeKey(config, target.modelId);
   const known = workbenchProbes.get(key);
-  if (known !== undefined && Date.now() - known.at < WORKBENCH_REPROBE_COOLDOWN_MS) {
+  if (known !== undefined && Date.now() - known.at < known.cooldownMs) {
     return known.promise;
   }
-  const promise = workbenchProbeQueue.then(() =>
-    runWorkbenchProbe(deps, target, key, correlationId),
-  );
-  workbenchProbeQueue = promise;
-  workbenchProbes.set(key, { promise, at: Date.now() });
-  return promise;
+  const entry: WorkbenchProbeEntry = {
+    promise: workbenchProbeQueue.then(async () => {
+      const outcome = await runWorkbenchProbe(deps, target, key, correlationId);
+      entry.settled = true;
+      entry.at = Date.now();
+      entry.cooldownMs =
+        outcome === "inconclusive"
+          ? WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS
+          : WORKBENCH_REPROBE_COOLDOWN_MS;
+    }),
+    at: Date.now(),
+    cooldownMs: WORKBENCH_REPROBE_COOLDOWN_MS,
+    settled: false,
+  };
+  workbenchProbeQueue = entry.promise;
+  workbenchProbes.set(key, entry);
+  return entry.promise;
 }
 
 export async function ensureCodingWorkbenchContextWindows(

@@ -1,3 +1,4 @@
+import { resetCodingWorkbenchContextWindowProbesForTests } from "./gateway-readiness.js";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
@@ -34,6 +35,7 @@ import {
   createOpenCodeGatewayReadinessRegistry,
   handleCodingSidecarGatewayChatCompletions,
   handleCodingSidecarGatewayProfile,
+  PROFILE_PROBE_WAIT_MS,
 } from "./coding-sidecar-gateway.js";
 import { mockRequest, mockResponse, probeVerifiedGatewayConfig } from "./_support.js";
 import {
@@ -2761,6 +2763,53 @@ describe("coding-sidecar gateway", () => {
     });
 
     expect(verified.body).toMatchObject({ status: "available", verification: "verified" });
+  });
+
+  // #3591 (1.1.7): the browser reads this profile with a 15 s deadline. While the automatic probe
+  // of a slow gateway is still running, the read must answer within the bounded wait and say that
+  // the verification is pending, instead of hanging until the browser gives up or refusing.
+  it("answers within the bounded wait with a pending verification while the probe still runs", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    resetCodingWorkbenchContextWindowProbesForTests();
+    try {
+      const context = {
+        req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile" }),
+        res: mockResponse().res,
+        params: {},
+        url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+        correlationId: undefined,
+      } satisfies RouteContext;
+      const config = configValue(provider(), capability({ contextWindow: 4_096 }));
+      const deps: UiHandlerDeps = {
+        ...depsValue(config),
+        gatewayConfig: {
+          storagePath: "/dev/null",
+          current: () => config,
+          present: () => true,
+          set: () => undefined,
+          generation: () => 0,
+          verification: () => "verified",
+          recordVerification: () => undefined,
+          verifiedCapability: () => undefined,
+          recordVerifiedCapability: () => undefined,
+          clearVerifiedCapability: () => false,
+        },
+        gatewayReadinessFetch: (): Promise<Response> =>
+          new Promise<Response>(() => {
+            // The gateway never answers within the test: the probe stays in flight.
+          }),
+      };
+      const read = handleCodingSidecarGatewayProfile(context, deps);
+      await vi.advanceTimersByTimeAsync(PROFILE_PROBE_WAIT_MS);
+      const result = await read;
+      expect(result.body).toEqual({
+        status: "unavailable",
+        reason: "model-context-window-verifying",
+      });
+    } finally {
+      vi.useRealTimers();
+      resetCodingWorkbenchContextWindowProbesForTests();
+    }
   });
 
   it("fails closed through the profile route when the injected model source is subscription-backed", async () => {

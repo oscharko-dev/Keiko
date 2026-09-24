@@ -68,6 +68,8 @@ const CODING_WORKBENCH_SIDECAR_UNAVAILABLE_REASONS = new Set([
   "model-context-window-insufficient",
   // PR #3452 (F73): the coding model's forced tool-call proof has aged out or is missing.
   "tool-calling-unverified",
+  // #3591 (1.1.7): the automatic verification is still running against a slow gateway.
+  "model-context-window-verifying",
 ]);
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

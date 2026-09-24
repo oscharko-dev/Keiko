@@ -529,7 +529,11 @@ export type CodingWorkbenchSidecarGatewayUnavailableReason =
   | "model-context-window-insufficient"
   // Appended (PR #3452, F73): the coding model qualifies in every other respect, but its forced
   // tool-call proof is missing or older than 24 h. The remedy is a new probe, not another model.
-  | "tool-calling-unverified";
+  | "tool-calling-unverified"
+  // Appended (#3591, 1.1.7): the automatic verification of this model (context window or tool
+  // calling) is still running against a slow gateway. Transient: the Workbench re-reads its profile
+  // until the probe settles, and no operator action is required.
+  | "model-context-window-verifying";
 
 /**
  * The floor `runMetadata.maxPromptTokens` must clear before a coding run is allowed to look

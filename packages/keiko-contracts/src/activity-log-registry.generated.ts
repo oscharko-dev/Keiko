@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "8e7cf33ece4567c0bc0b2a99f60bbe6953f60474d78d4a9a9abd46d6631accd9" as const;
+  "1317bcb5b305400b7fda50503eb76401bbafae1046fd0af406f3cb5f701f736b" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -7099,7 +7099,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["model-context-window-insufficient", "no-tool-calling", "tool-calling-unverified"],
+        values: [
+          "model-context-window-insufficient",
+          "no-tool-calling",
+          "tool-calling-unverified",
+          "model-context-window-verifying",
+        ],
       },
       maxPromptTokens: {
         type: "integer",
@@ -7115,7 +7120,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["passive"],
+        values: ["passive", "pending"],
       },
     },
     causal: "correlation",
@@ -13261,6 +13266,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "GIT_DELIVERY_COMMIT_FORBIDDEN_PAYLOAD",
           "GIT_DELIVERY_COMMIT_DRAFT_FAILED",
           "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
+          "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED",
+          "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT",
           "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE",
           "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES",
           "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT",

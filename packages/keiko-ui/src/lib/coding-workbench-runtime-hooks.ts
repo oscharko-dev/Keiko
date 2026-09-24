@@ -115,26 +115,53 @@ function useProfileRefresh(
   }, [dispatch, sequenceRef, stateRef]);
 }
 
+// #3591 (1.1.7): while the server is still verifying the elected model against a slow gateway it
+// answers `model-context-window-verifying`; the Workbench reads the profile again after this pause
+// instead of leaving the operator with a refusal that a later read would have lifted.
+export const CODING_WORKBENCH_VERIFYING_REFRESH_MS = 10_000;
+
+function sourceVerificationPending(
+  profile: Awaited<ReturnType<typeof fetchCodingWorkbenchSidecarGatewayProfile>>,
+): boolean {
+  return profile.status === "unavailable" && profile.reason === "model-context-window-verifying";
+}
+
+async function refreshManagedGatewaySource(
+  sequenceRef: RefObject<number>,
+  sequence: number,
+  dispatch: RuntimeDispatch,
+  refreshAgain: () => Promise<void>,
+): Promise<void> {
+  dispatch({ kind: "profile-empty" });
+  const profile = await fetchCodingWorkbenchSidecarGatewayProfile();
+  // The server verifies on this read what the Workbench needs (an expired tool-call proof, an
+  // unproven context window) and stores it, so the model catalog the picker filters may have
+  // changed underneath: a catalog fetched before the read would show an empty picker.
+  requestGatewayModelCatalogRefresh();
+  if (sequenceRef.current !== sequence) return;
+  dispatch({ kind: "source-set", source: codingWorkbenchSourceFromManaged(profile) });
+  if (sourceVerificationPending(profile)) {
+    setTimeout(() => {
+      if (sequenceRef.current === sequence) void refreshAgain();
+    }, CODING_WORKBENCH_VERIFYING_REFRESH_MS);
+  }
+}
+
 function useSourceRefresh(
   sequenceRef: RefObject<number>,
   stateRef: RefObject<CodingWorkbenchRuntimeState>,
   dispatch: RuntimeDispatch,
 ): () => Promise<void> {
-  return useCallback(async (): Promise<void> => {
+  const refreshRef = useRef<() => Promise<void>>(async () => undefined);
+  const refresh = useCallback(async (): Promise<void> => {
     const sequence = (sequenceRef.current += 1);
     const preference = stateRef.current.runtimePreference;
     dispatch({ kind: "resource-loading", resource: "source" });
     try {
       if (preference === "managed-gateway") {
-        dispatch({ kind: "profile-empty" });
-        const profile = await fetchCodingWorkbenchSidecarGatewayProfile();
-        // The server verifies on this read what the Workbench needs (an expired tool-call proof, an
-        // unproven context window) and stores it, so the model catalog the picker filters may have
-        // changed underneath: a catalog fetched before the read would show an empty picker.
-        requestGatewayModelCatalogRefresh();
-        if (sequenceRef.current === sequence) {
-          dispatch({ kind: "source-set", source: codingWorkbenchSourceFromManaged(profile) });
-        }
+        await refreshManagedGatewaySource(sequenceRef, sequence, dispatch, () =>
+          refreshRef.current(),
+        );
         return;
       }
       dispatch({ kind: "resource-loading", resource: "profile" });
@@ -160,6 +187,8 @@ function useSourceRefresh(
       }
     }
   }, [dispatch, sequenceRef, stateRef]);
+  refreshRef.current = refresh;
+  return refresh;
 }
 
 function setCodexSubscriptionSource(

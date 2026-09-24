@@ -525,6 +525,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The subscription source is selected; the gateway is not in use.",
   "codingWorkbench.source.unavailableReason.model-context-window-insufficient":
     "The configured model's context window is too small for a coding run (minimum 32,000 tokens). Keiko checked it automatically and could not confirm 32,000 tokens. Choose a larger model, or have the gateway declare this model's max_input_tokens.",
+  "codingWorkbench.source.unavailableReason.model-context-window-verifying":
+    "Keiko is verifying this model's context window with the gateway (a coding run needs 32,000 tokens). On a busy gateway this can take a few minutes; the Workbench refreshes by itself when the check settles.",
   "codingWorkbench.source.unavailableReason.tool-calling-unverified":
     "The coding model's automatic tool-calling check did not complete successfully. Review the latest readiness result in Settings → Models.",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",

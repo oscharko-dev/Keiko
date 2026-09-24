@@ -29,6 +29,7 @@ import {
 import {
   useCodingWorkbenchRuntimeMutations,
   useCodingWorkbenchRuntimeResources,
+  CODING_WORKBENCH_VERIFYING_REFRESH_MS,
 } from "./coding-workbench-runtime-hooks";
 
 vi.mock("./coding-workbench-provider-api", async (importOriginal) => {
@@ -217,6 +218,59 @@ describe("useCodingWorkbenchRuntimeResources source refresh", () => {
         available: true,
       },
     });
+  });
+
+  // #3591 (1.1.7): while the server is still verifying the elected model against a slow gateway
+  // it answers `model-context-window-verifying`; the Workbench reads again after the pause instead
+  // of leaving a refusal that the next read would have lifted.
+  it("re-reads the managed gateway source while verification is pending", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile)
+        .mockResolvedValueOnce({
+          status: "unavailable",
+          reason: "model-context-window-verifying",
+        } as CodingWorkbenchSidecarGatewayResult)
+        .mockResolvedValueOnce({ status: "available" } as CodingWorkbenchSidecarGatewayResult);
+      const { resources, dispatch } = renderResources(runtimeState());
+      await act(() => resources.refreshSource());
+      expect(fetchCodingWorkbenchSidecarGatewayProfile).toHaveBeenCalledTimes(1);
+      expect(dispatch).toHaveBeenCalledWith({
+        kind: "source-set",
+        source: expect.objectContaining({
+          available: false,
+          unavailableReason: "model-context-window-verifying",
+        }),
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CODING_WORKBENCH_VERIFYING_REFRESH_MS);
+      });
+      expect(fetchCodingWorkbenchSidecarGatewayProfile).toHaveBeenCalledTimes(2);
+      expect(dispatch).toHaveBeenLastCalledWith({
+        kind: "source-set",
+        source: expect.objectContaining({ available: true }),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not schedule a re-read when the source settled", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mockResolvedValue({
+        status: "unavailable",
+        reason: "model-context-window-insufficient",
+      } as CodingWorkbenchSidecarGatewayResult);
+      const { resources } = renderResources(runtimeState());
+      await act(() => resources.refreshSource());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CODING_WORKBENCH_VERIFYING_REFRESH_MS * 3);
+      });
+      expect(fetchCodingWorkbenchSidecarGatewayProfile).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("projects a disconnected subscription source with its reason", async () => {

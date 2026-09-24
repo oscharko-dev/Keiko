@@ -74,7 +74,10 @@ import type { OpenCodeOptionalToolName } from "./coding-runtime/opencodeLaunchPr
 import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { readJsonObject } from "./files.js";
-import { ensureCodingWorkbenchContextWindows } from "./gateway-readiness.js";
+import {
+  ensureCodingWorkbenchContextWindows,
+  isCodingWorkbenchProbePending,
+} from "./gateway-readiness.js";
 import { getServerLogger } from "./observability/index.js";
 import { STREAMING, errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import { startSseHeartbeat } from "./sse.js";
@@ -232,11 +235,21 @@ const CODING_SIDECAR_GATEWAY_READINESS_INSUFFICIENT_OPERATION = defineActivityLo
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["model-context-window-insufficient", "no-tool-calling", "tool-calling-unverified"],
+      values: [
+        "model-context-window-insufficient",
+        "no-tool-calling",
+        "tool-calling-unverified",
+        "model-context-window-verifying",
+      ],
     },
     maxPromptTokens: { type: "integer", dataClass: "count", required: false },
     minimumRequiredPromptTokens: { type: "integer", dataClass: "count", required: false },
-    probeMode: { type: "string", dataClass: "closed-enum", required: true, values: ["passive"] },
+    probeMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["passive", "pending"],
+    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -2760,14 +2773,46 @@ function gatewayReadinessProjection(
     result.runMetadata.maxPromptTokens >= CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS
   )
     return result;
-  const reason =
+  const shortfall =
     result.status === "available" ? "model-context-window-insufficient" : result.reason;
   if (
-    reason !== "model-context-window-insufficient" &&
-    reason !== "no-tool-calling" &&
-    reason !== "tool-calling-unverified"
+    shortfall !== "model-context-window-insufficient" &&
+    shortfall !== "no-tool-calling" &&
+    shortfall !== "tool-calling-unverified"
   )
     return result;
+  // #3591 (1.1.7): while the automatic probe is still running against a slow gateway the shortfall
+  // is not a verdict. The profile says so, and the Workbench re-reads it instead of refusing.
+  const pending = readinessProbePending(deps, result, shortfall);
+  const reason: CodingWorkbenchReadinessShortfall = pending
+    ? "model-context-window-verifying"
+    : shortfall;
+  logReadinessShortfall(ctx, result, reason, pending);
+  return result.status === "available" ? { status: "unavailable", reason } : result;
+}
+
+type CodingWorkbenchReadinessShortfall =
+  | "model-context-window-insufficient"
+  | "no-tool-calling"
+  | "tool-calling-unverified"
+  | "model-context-window-verifying";
+
+function readinessProbePending(
+  deps: UiHandlerDeps,
+  result: CodingWorkbenchSidecarGatewayResult,
+  shortfall: CodingWorkbenchReadinessShortfall,
+): boolean {
+  if (shortfall === "no-tool-calling" || result.status !== "available") return false;
+  const config = currentGatewayConfig(deps);
+  return config !== undefined && isCodingWorkbenchProbePending(config, result.modelAlias);
+}
+
+function logReadinessShortfall(
+  ctx: RouteContext,
+  result: CodingWorkbenchSidecarGatewayResult,
+  reason: CodingWorkbenchReadinessShortfall,
+  pending: boolean,
+): void {
   getServerLogger().warn(
     activityLogEvent(
       CODING_SIDECAR_GATEWAY_READINESS_INSUFFICIENT_OPERATION,
@@ -2777,7 +2822,7 @@ function gatewayReadinessProjection(
       },
       {
         reason,
-        probeMode: "passive",
+        probeMode: pending ? "pending" : "passive",
         ...(result.status === "available"
           ? {
               maxPromptTokens: result.runMetadata.maxPromptTokens,
@@ -2789,9 +2834,6 @@ function gatewayReadinessProjection(
       },
     ),
   );
-  return result.status === "available"
-    ? { status: "unavailable", reason: "model-context-window-insufficient" }
-    : result;
 }
 
 export async function handleCodingSidecarGatewayProfile(
@@ -2804,13 +2846,30 @@ export async function handleCodingSidecarGatewayProfile(
   // Only while the gateway is the usable source: a subscription source, a disabled policy or a
   // missing configuration must never cause a paid provider probe (ADR-0124 D5).
   if (elected.status === "available" || elected.reason === "tool-calling-unverified") {
-    await ensureCodingWorkbenchContextWindows(
-      deps,
-      elected.status === "available" ? elected.modelAlias : undefined,
-      ctx.correlationId,
-    );
+    // #3591 (1.1.7): the browser reads this profile with a 15 s deadline while a probe against a
+    // slow gateway may take minutes. Wait a bounded moment for the elected model's proof; past it,
+    // answer with the projection (`model-context-window-verifying` while the probe runs) and let
+    // the Workbench read again — never leave the read hanging until the browser gives up.
+    await Promise.race([
+      ensureCodingWorkbenchContextWindows(
+        deps,
+        elected.status === "available" ? elected.modelAlias : undefined,
+        ctx.correlationId,
+      ),
+      boundedProfileWait(),
+    ]);
   }
   return { status: 200, body: gatewayReadinessProjection(ctx, deps) };
+}
+
+// Under the browser's 15 s read deadline for this profile (keiko-ui `DEFAULT_READ_TIMEOUT_MS`).
+export const PROFILE_PROBE_WAIT_MS = 8_000;
+
+function boundedProfileWait(): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, PROFILE_PROBE_WAIT_MS);
+    timer.unref();
+  });
 }
 
 function upstreamGatewayStreamingSupported(
