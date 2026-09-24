@@ -37,3 +37,10 @@ own workspace packages before importing the publisher. The lane does not call Az
 a customer's LiteLLM endpoint, and it does not need a customer repository, credentials, or export.
 The same staged package and Yarn machinery are used by `smoke:install`; no second packaging format
 is introduced.
+
+The `Coding Workbench customer-shape qualification` workflow also runs this command on macOS 15
+for relevant `dev` pull requests. This measures the candidate before a release tag is requested.
+On failure, the qualifier prints a bounded summary of registered Activity Log operations, reviewed
+start or handshake codes, and local twin request flags before deleting its temporary state. Values
+outside the reviewed vocabularies are redacted. An empty request list means the turn did not reach
+the local LiteLLM twin; inspect the runtime start or handshake code before changing the gateway.
