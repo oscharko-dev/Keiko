@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "9e0cbc82f36d797c73189ab2e7d4e7367b9edd531c1091c22cac4e28aaaf9dfa",
+    "catalogDigest": "494b6d281e42d3d26ac5a267c6f4ce874b2f6d096bf535050f342fb7b13d5b6d",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1034,7 +1034,7 @@
         "proofIds": ["chat.request.compatibility-retry.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:116",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:1609"]
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:1624"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1109,7 +1109,7 @@
         "proofIds": ["chat.request.dispatch.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:81",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:281"]
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:282"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1207,7 +1207,7 @@
         "proofIds": ["chat.response.streamed.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:189",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:1410"]
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:1424"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -71431,7 +71431,7 @@
     {
       "op": "<dynamic>",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:1489",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:1504",
       "package": "keiko-model-gateway"
     },
     {

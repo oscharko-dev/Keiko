@@ -3,7 +3,12 @@ import { Gateway } from "./gateway.js";
 import { OpenAiAdapter, resetChatCompatibilityMemoForTests } from "./openai-adapter.js";
 import { gatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
-import type { GatewayStreamChunk, ModelProviderConfig } from "./types.js";
+import type {
+  GatewayStreamChunk,
+  ModelProviderConfig,
+  NormalizedResponse,
+  StreamReadBounds,
+} from "./types.js";
 import {
   expectActivityLogProof,
   formatActivityLogProofLine,
@@ -43,6 +48,49 @@ function bufferedAnswer(): Response {
       { message: { role: "assistant", content: "Synthetic answer." }, finish_reason: "stop" },
     ],
   });
+}
+
+// A strict LiteLLM/vLLM pair that rejects every streamed shape for its stream option. A buffered
+// upstream sends no header before its generation ends, so the buffered answer's headers arrive
+// only `bufferedDelayMs()` after its request, and never once that request is aborted.
+function strictStreamProxy(
+  bodies: Record<string, unknown>[],
+  bufferedDelayMs: () => number,
+): typeof fetch {
+  return (_url, init) => {
+    const body = requestBody(init);
+    bodies.push(body);
+    if (body.stream === true) {
+      return Promise.resolve(
+        Response.json(
+          { error: { param: "stream_options", code: "unsupported_parameter" } },
+          { status: 400 },
+        ),
+      );
+    }
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        resolve(bufferedAnswer());
+      }, bufferedDelayMs());
+      init?.signal?.addEventListener(
+        "abort",
+        () => {
+          clearTimeout(timer);
+          reject(new Error(String(init.signal?.reason)));
+        },
+        { once: true },
+      );
+    });
+  };
+}
+
+async function answerOf(stream: AsyncIterable<GatewayStreamChunk>): Promise<NormalizedResponse> {
+  let answer: NormalizedResponse | undefined;
+  for await (const chunk of stream) {
+    if (chunk.type === "done") answer = chunk.response;
+  }
+  if (answer === undefined) throw new TypeError("the stream ended without a done chunk");
+  return answer;
 }
 
 function bufferedToolAnswer(name: string): Response {
@@ -620,6 +668,88 @@ describe("OpenAI-compatible chat compatibility", () => {
     await vi.advanceTimersByTimeAsync(110);
     await rejected;
     expect(calls).toBe(2);
+  });
+
+  // A buffered answer sends nothing, headers included, until its generation ends: its read budget
+  // bounds its start, never the silence bound of a streamed read (PR #3600 review).
+  describe("a buffered answer under read bounds", () => {
+    const BOUNDS: StreamReadBounds = { silenceMs: 100, budgetMs: 1_000 };
+    const PROMPT = {
+      modelId: CONFIG.modelId,
+      messages: [{ role: "user" as const, content: "Synthetic prompt" }],
+    };
+
+    it("waits the remaining budget, not the silence bound, for the buffered retry", async () => {
+      vi.useFakeTimers();
+      const bodies: Record<string, unknown>[] = [];
+      const events: ModelGatewayLogEvent[] = [];
+      const adapter = new OpenAiAdapter({
+        requestId: "buffered-retry-start",
+        costClass: "low",
+        fetchImpl: strictStreamProxy(bodies, () => 250),
+        log: {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+        logContext: { correlationId: "run-buffered-retry-start" },
+      });
+      const answer = answerOf(adapter.callStream(PROMPT, CONFIG, BOUNDS));
+      await vi.advanceTimersByTimeAsync(250);
+
+      await expect(answer).resolves.toMatchObject({ content: "Synthetic answer." });
+      expect(bodies.map((body) => body.stream)).toEqual([true, true, undefined]);
+      const dispatch = events.filter((event) => event.op === "chat.request.dispatch").at(-1);
+      expect(dispatch).toMatchObject({
+        correlationId: "run-buffered-retry-start",
+        extra: { stream: false, timeoutMs: 1_000, readBudgetMs: 1_000 },
+      });
+      expectActivityLogProof(
+        "chat.request.dispatch.emitted-line",
+        formatActivityLogProofLine(dispatch ?? {}),
+      );
+    });
+
+    it("waits the budget, not the silence bound, at a remembered buffered endpoint", async () => {
+      vi.useFakeTimers();
+      const bodies: Record<string, unknown>[] = [];
+      let bufferedDelayMs = 0;
+      const adapter = new OpenAiAdapter({
+        requestId: "buffered-memo-start",
+        costClass: "low",
+        fetchImpl: strictStreamProxy(bodies, () => bufferedDelayMs),
+      });
+      const learned = answerOf(adapter.callStream(PROMPT, CONFIG, BOUNDS));
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(learned).resolves.toMatchObject({ content: "Synthetic answer." });
+      bufferedDelayMs = 250;
+      const remembered = answerOf(adapter.callStream(PROMPT, CONFIG, BOUNDS));
+      await vi.advanceTimersByTimeAsync(250);
+
+      await expect(remembered).resolves.toMatchObject({ content: "Synthetic answer." });
+      expect(bodies.map((body) => body.stream)).toEqual([true, true, undefined, undefined]);
+    });
+
+    it("still ends a buffered answer that has not started within the budget", async () => {
+      vi.useFakeTimers();
+      const bodies: Record<string, unknown>[] = [];
+      const adapter = new OpenAiAdapter({
+        requestId: "buffered-budget-end",
+        costClass: "low",
+        fetchImpl: strictStreamProxy(bodies, () => 5_000),
+      });
+      let settled = false;
+      const answer = answerOf(adapter.callStream(PROMPT, CONFIG, BOUNDS)).finally(() => {
+        settled = true;
+      });
+      const rejected = expect(answer).rejects.toMatchObject({ code: "GATEWAY_TIMEOUT" });
+      await vi.advanceTimersByTimeAsync(BOUNDS.budgetMs - 1);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+
+      await rejected;
+      expect(bodies).toHaveLength(3);
+    });
   });
 
   it("retries a strict proxy without optional streaming usage and remembers the accepted shape", async () => {

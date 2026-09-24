@@ -258,7 +258,8 @@ interface ChatDispatchFields {
   // UTF-8 BYTES on the wire, not `String.length`'s UTF-16 code units — see the identical note on
   // `EmbeddingDispatchFields`.
   readonly bodyBytes: number;
-  // A read with bounds (ADR-0003): `timeoutMs` is then its silence bound, `readBudgetMs` its budget.
+  // A read with bounds (ADR-0003): `timeoutMs` is then the bound on its start (the silence bound of
+  // a streamed read, the budget of a buffered one), `readBudgetMs` its budget.
   readonly timeoutMs: number;
   readonly stream: boolean;
   readonly streamUsageRequested?: boolean;
@@ -395,6 +396,19 @@ function timedAbort(
       clearTimeout(timer);
     },
   };
+}
+
+// The bounds one dispatched request runs under. A buffered (`stream: false`) answer sends nothing,
+// headers included, until its generation ends, so only the read budget bounds when it starts; the
+// silence bound belongs to a streamed read, whose provider proves it is alive as it goes (PR #3600
+// review).
+function dispatchedReadBounds(
+  stream: boolean,
+  bounds: StreamReadBounds | undefined,
+): StreamReadBounds | undefined {
+  return stream || bounds === undefined
+    ? bounds
+    : { silenceMs: bounds.budgetMs, budgetMs: bounds.budgetMs };
 }
 
 function requestDeadline(
@@ -1486,11 +1500,12 @@ export class OpenAiAdapter implements ProviderAdapter {
       "content-type": "application/json",
       ...apiKeyHeaders(config),
     };
+    const readBounds = dispatchedReadBounds(stream, bounds);
     logChatDispatch(
       this.log,
-      chatDispatchFields(url, request, config, body, stream, includeUsage, bounds),
+      chatDispatchFields(url, request, config, body, stream, includeUsage, readBounds),
     );
-    const deadline = requestDeadline(config.timeoutMs, bounds, request.cancellationSignal);
+    const deadline = requestDeadline(config.timeoutMs, readBounds, request.cancellationSignal);
     try {
       const response = await gatewayFetch(url, {
         method: "POST",
