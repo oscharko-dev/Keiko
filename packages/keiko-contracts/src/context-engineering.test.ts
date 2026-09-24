@@ -18,6 +18,7 @@ import {
   countContextTokensForSegments,
   deriveContextProfile,
   deriveContextProfileFromCapability,
+  undeclaredOutputReserveTokens,
   estimateTokens,
   estimateTokensForSegments,
   maxUtf8BytesForTokenBudget,
@@ -515,6 +516,30 @@ describe("deriveContextProfileFromCapability", () => {
     ).toMatchObject({
       model: { id: "gpt-bank" },
     });
+  });
+
+  // #3591 (1.1.7): a 32k window whose gateway declares no output limit reserved 2,000 output
+  // tokens, which a reasoning model spends on reasoning before any content — every coding turn
+  // ended as an empty answer. The undeclared reserve is at least the default 8k, bounded to a
+  // quarter of the window.
+  it("reserves at least the default output budget when the gateway declares no output limit", () => {
+    const probed32k = deriveContextProfileFromCapability(chatCapability("hosted-32k", 32_000, 0));
+    expect(probed32k.reservedOutputTokens).toBe(DEFAULT_CONTEXT_PROFILE.reservedOutputTokens);
+    expect(probed32k.effectiveInputBudget).toBe(32_000 - 8_000 - 1_000);
+    const placeholder4k = deriveContextProfileFromCapability(chatCapability("hosted-4k", 4_096, 0));
+    expect(placeholder4k.reservedOutputTokens).toBe(1_024);
+    expect(placeholder4k.effectiveInputBudget).toBeGreaterThan(0);
+    const wide200k = deriveContextProfileFromCapability(chatCapability("hosted-200k", 200_000, 0));
+    expect(wide200k.reservedOutputTokens).toBe(12_500);
+    expect(undeclaredOutputReserveTokens(32_000)).toBe(8_000);
+    expect(undeclaredOutputReserveTokens(16)).toBe(4);
+  });
+
+  it("keeps a declared output limit as the reserve", () => {
+    expect(
+      deriveContextProfileFromCapability(chatCapability("declared-32k", 32_000, 2_048))
+        .reservedOutputTokens,
+    ).toBe(2_048);
   });
 
   it("falls back to the default profile geometry for placeholder runtime capabilities", () => {

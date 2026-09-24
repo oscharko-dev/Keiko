@@ -694,6 +694,26 @@ export function deriveContextProfile(input: {
   };
 }
 
+// A gateway that declares no output limit (the field customer's `hosted_vllm` models report none)
+// used to have the default 8k reserve scaled down with its window: a window probed to exactly
+// 32,000 tokens left 2,000 output tokens, which a reasoning model spends on its reasoning before
+// the first content token, so every coding turn ended as an empty answer (#3591, 1.1.7). The
+// reserve for an undeclared limit is therefore at least the default, bounded to a quarter of the
+// window so a small placeholder window keeps an input budget.
+const UNDECLARED_OUTPUT_RESERVE_WINDOW_FRACTION = 4;
+
+export function undeclaredOutputReserveTokens(maxInputTokens: number): number {
+  const scaled = Math.ceil(
+    (maxInputTokens * DEFAULT_CONTEXT_PROFILE.reservedOutputTokens) /
+      DEFAULT_CONTEXT_PROFILE.maxInputTokens,
+  );
+  const floor = Math.min(
+    DEFAULT_CONTEXT_PROFILE.reservedOutputTokens,
+    Math.floor(maxInputTokens / UNDECLARED_OUTPUT_RESERVE_WINDOW_FRACTION),
+  );
+  return Math.max(scaled, floor);
+}
+
 // Derives a model-keyed ContextProfile from a configured chat capability. Unknown/placeholder
 // runtime capabilities (0 window / 0 output) fall back to the DEFAULT_CONTEXT_PROFILE geometry.
 export function deriveContextProfileFromCapability(
@@ -706,10 +726,7 @@ export function deriveContextProfileFromCapability(
   const reservedOutputTokens =
     capability.maxOutputTokens > 0
       ? Math.min(maxInputTokens, capability.maxOutputTokens)
-      : Math.ceil(
-          (maxInputTokens * DEFAULT_CONTEXT_PROFILE.reservedOutputTokens) /
-            DEFAULT_CONTEXT_PROFILE.maxInputTokens,
-        );
+      : undeclaredOutputReserveTokens(maxInputTokens);
   const safetyMarginTokens = Math.min(
     maxInputTokens - reservedOutputTokens,
     Math.ceil(
