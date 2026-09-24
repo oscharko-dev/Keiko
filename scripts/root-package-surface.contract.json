@@ -687,7 +687,8 @@
     "WorkspaceNotFoundError",
     "WorkspaceReadError",
     "WorkspaceStat",
-    "WorkspaceSummary"
+    "WorkspaceSummary",
+    "ProviderOutputExhaustedError"
   ],
   "packageExports": {
     ".": {
@@ -774,6 +775,7 @@
     "PrDescription",
     "PromptEnhancer",
     "ProviderError",
+    "ProviderOutputExhaustedError",
     "QualityIntelligence",
     "QualityIntelligenceSafeErrorException",
     "REALTIME_AUTH_MODES",

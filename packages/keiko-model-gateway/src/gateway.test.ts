@@ -74,7 +74,7 @@ const REQUEST: GatewayRequest = {
 describe("Gateway.chat", () => {
   // #3591 / PR #3602 review: the buffered-answer floor now applies to every whole-body
   // Gateway.chat() attempt (this fakeAdapter has no `callStream`), not just "coding-workbench"
-  // ones (raising CODING_WORKBENCH_PROVIDER_TIMEOUT_FLOOR_MS to match the silence floor makes that
+  // ones (raising the Workbench provider floor to the silence floor makes that
   // special case fully redundant here — it is dominated by the larger buffered floor every attempt
   // already gets; the Workbench pre-floor still matters for chatStream(), see the "uses the
   // Workbench latency floor only for marked streaming calls" test below). A configured value

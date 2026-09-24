@@ -71,13 +71,12 @@ export const GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS = 120_000;
 // Per-call floor for the voice adapters (realtime, text-to-speech, speech-to-text).
 export const GATEWAY_VOICE_TIMEOUT_FLOOR_MS = 120_000;
 
-// Kept as its own export (coding-sidecar-gateway.ts mirrors it to derive a matching deadline) but
-// now equal to the universal silence floor: a slow Coding Workbench provider gets no special
-// treatment past what every other interactive Gateway.chat() caller already receives (#3591).
-export const CODING_WORKBENCH_PROVIDER_TIMEOUT_FLOOR_MS = GATEWAY_SILENCE_FLOOR_MS;
-
+// The provider timeout a coding-workbench-profiled call runs under: the configured value, never
+// below the universal silence floor. A slow Coding Workbench provider gets no special treatment
+// past what every other interactive Gateway.chat() caller already receives (#3591); the route
+// deadlines behind such calls (`gateway-route-deadline.ts` in keiko-server) derive from it.
 export function codingWorkbenchProviderTimeoutMs(timeoutMs: number): number {
-  return Math.max(timeoutMs, CODING_WORKBENCH_PROVIDER_TIMEOUT_FLOOR_MS);
+  return Math.max(timeoutMs, GATEWAY_SILENCE_FLOOR_MS);
 }
 
 const GATEWAY_RETRY_BUDGET_EXHAUSTED_OPERATION = defineActivityLogOperation({
