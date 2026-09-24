@@ -70,6 +70,8 @@ const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
     droppedEmbeddingModelCount: { type: "integer", dataClass: "count", required: false },
     unverifiedChatModelCount: { type: "integer", dataClass: "count", required: false },
     droppedChatModelCount: { type: "integer", dataClass: "count", required: false },
+    skippedChatModelCount: { type: "integer", dataClass: "count", required: false },
+    chatSmokeRoundDeadlineMs: { type: "integer", dataClass: "duration", required: false },
     semanticSkippedCount: { type: "integer", dataClass: "count", required: false },
     semanticCandidateCount: { type: "integer", dataClass: "count", required: false },
     quarantinePruneFailedCount: { type: "integer", dataClass: "count", required: false },
@@ -240,6 +242,10 @@ export interface ServerDiagnosticRecord {
   // (timeout, transport/proxy/TLS) and stay configured; `dropped` were answered and rejected.
   readonly unverifiedChatModelCount?: number | undefined;
   readonly droppedChatModelCount?: number | undefined;
+  // Of the unverified chat candidates, how many the smoke round's deadline never tried, and that
+  // deadline (PR #3602 review): a skipped model is not one that timed out.
+  readonly skippedChatModelCount?: number | undefined;
+  readonly chatSmokeRoundDeadlineMs?: number | undefined;
   // How many candidate memories the conversation-retrieval semantic reranker skipped for a stored
   // embedding whose identity did not match the query's, and how many candidates were in play when
   // it did. Bounded counts only; never a memory id, model id, or embedding vector.

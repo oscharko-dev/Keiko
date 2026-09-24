@@ -619,12 +619,15 @@ function streamedReadBounds(
   remainingBudgetMs: number | undefined,
 ): StreamReadBounds | undefined {
   if (!readsOverStream(attempt.route, attempt.adapter)) return undefined;
-  const silenceMs = effectiveSilenceMs(attempt.route.provider);
   const budgetMs =
     remainingBudgetMs !== undefined && Number.isFinite(remainingBudgetMs)
-      ? remainingBudgetMs
+      ? Math.max(1, Math.floor(remainingBudgetMs))
       : providerRequestBudgetMs(attempt.route.provider);
-  return { silenceMs, budgetMs: Math.max(silenceMs, Math.floor(budgetMs)) };
+  // The silence bound never grants more than what is left of the call's budget: a retry that
+  // starts with 120 s left is watched for 120 s, not for the 300 s floor, so the call can never
+  // overrun the `requestBudgetMs` its own lines report (PR #3602 review).
+  const silenceMs = Math.min(effectiveSilenceMs(attempt.route.provider), budgetMs);
+  return { silenceMs, budgetMs };
 }
 
 // The effective silence bound a read that can observe progress runs under (#3591): the provider's

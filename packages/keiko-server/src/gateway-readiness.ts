@@ -164,6 +164,9 @@ const GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION = defineActivityLogOperati
     // Tokens the long-context probe proved. Present only when that probe ran and passed; a stored
     // context window below it is raised to it by the same run, so the raise is reconstructable.
     verifiedContextTokens: { type: "integer", dataClass: "count", required: false },
+    // #3591: probes that ended without a verdict (timed out, unreachable, or a transient gateway
+    // status). They decide the short re-probe cooldown, so the decision is reconstructable.
+    inconclusiveProbeCount: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -225,6 +228,7 @@ const GATEWAY_READINESS_COMPLETED_OPERATION = defineActivityLogOperation({
       values: ["ready", "partial", "failed"],
     },
     probeCount: { type: "integer", dataClass: "count", required: true },
+    inconclusiveProbeCount: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -485,8 +489,13 @@ function logAutomaticReadinessCompleted(
     report.modelId,
     report.overallStatus,
     report.probes.length,
+    inconclusiveProbeCount(report),
     report.verifiedCapabilities.testedContextTokens,
   );
+}
+
+function inconclusiveProbeCount(report: GatewayReadinessReport): number {
+  return report.probes.filter(probeInconclusive).length;
 }
 
 function logAutomaticReadinessJoined(
@@ -521,6 +530,7 @@ function logAutomaticReadinessOutcome(
   modelId: string,
   overallStatus: GatewayReadinessReport["overallStatus"],
   probeCount: number,
+  inconclusiveProbes: number,
   verifiedContextTokens?: number,
 ): void {
   (deps.activityLog ?? processServerLogSink()).write(
@@ -531,6 +541,7 @@ function logAutomaticReadinessOutcome(
         ...modelIdEvidence(modelId),
         overallStatus,
         probeCount,
+        inconclusiveProbeCount: inconclusiveProbes,
         ...(verifiedContextTokens === undefined ? {} : { verifiedContextTokens }),
       },
     ),
@@ -570,6 +581,7 @@ function logReadinessCompleted(
         trigger,
         overallStatus: report.overallStatus,
         probeCount: report.probes.length,
+        inconclusiveProbeCount: inconclusiveProbeCount(report),
       },
     ),
   );
@@ -2194,26 +2206,33 @@ export async function ensureOnDemandConversationReadiness(
   await probe;
 }
 
-async function runOnDemandReadinessProbe(
+interface OnDemandProbeOutcome {
+  readonly overallStatus: GatewayReadinessReport["overallStatus"];
+  readonly inconclusiveProbes: number;
+}
+
+// Runs the one chat probe and records its completed line whatever happens: a failure lands as a
+// redacted operator diagnostic with the correlation id, never silently, and the route still
+// answers with the honest unready result.
+async function observeOnDemandProbe(
   deps: UiHandlerDeps,
-  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
   modelId: string,
-  correlationId?: string,
+  probeCorrelationId: string,
 ): Promise<void> {
-  const generation = holder.generation();
-  const probeCorrelationId = correlationId ?? newCorrelationId();
-  let overallStatus: GatewayReadinessReport["overallStatus"] = "failed";
-  logOnDemandProbeStarted(deps, holder, modelId, probeCorrelationId);
+  let outcome: OnDemandProbeOutcome = { overallStatus: "failed", inconclusiveProbes: 0 };
   try {
     const report = await runGatewayReadiness(
       { modelId, options: ON_DEMAND_PROBE_OPTIONS },
       deps,
       probeCorrelationId,
     );
-    if (!("status" in report)) overallStatus = report.overallStatus;
+    if (!("status" in report)) {
+      outcome = {
+        overallStatus: report.overallStatus,
+        inconclusiveProbes: inconclusiveProbeCount(report),
+      };
+    }
   } catch (error) {
-    // The route still answers with the honest unready result — but never silently: the
-    // underlying failure lands as a redacted operator diagnostic with a correlation id.
     emitServerDiagnostic(
       deps.diagnostics,
       serverDiagnosticFromError({
@@ -2226,8 +2245,27 @@ async function runOnDemandReadinessProbe(
       }),
     );
   } finally {
-    logAutomaticReadinessOutcome(deps, probeCorrelationId, modelId, overallStatus, 1);
+    logAutomaticReadinessOutcome(
+      deps,
+      probeCorrelationId,
+      modelId,
+      outcome.overallStatus,
+      1,
+      outcome.inconclusiveProbes,
+    );
   }
+}
+
+async function runOnDemandReadinessProbe(
+  deps: UiHandlerDeps,
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  modelId: string,
+  correlationId?: string,
+): Promise<void> {
+  const generation = holder.generation();
+  const probeCorrelationId = correlationId ?? newCorrelationId();
+  logOnDemandProbeStarted(deps, holder, modelId, probeCorrelationId);
+  await observeOnDemandProbe(deps, modelId, probeCorrelationId);
   // A failed report CLEARS the capability entry; without a current-generation observation
   // every subsequent chat attempt would probe the provider again. Persist an explicit
   // not-ready so retries hit the guard instead of the wire (the settings probe replaces it).

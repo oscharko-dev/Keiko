@@ -593,6 +593,11 @@ export interface GatewaySetupTestResult {
    */
   readonly unverifiedModelIds?: readonly string[] | undefined;
   /**
+   * The subset of `unverifiedModelIds` the chat smoke round's own deadline skipped before their
+   * probe ever started (PR #3602 review): kept configured but unverified, never tried.
+   */
+  readonly skippedModelIds?: readonly string[] | undefined;
+  /**
    * Candidates the gateway actually answered and rejected (4xx/5xx, or a malformed/unusable
    * answer) — real evidence the candidate does not work, so it is not configured (#3591).
    */

@@ -42,6 +42,7 @@ import type {
 } from "@oscharko-dev/keiko-model-gateway";
 import {
   admitChatSmokeCandidates,
+  candidateSmokeDeadlineMs,
   handleApplyGatewayVerifiedCapabilities,
   handleGatewaySetup,
   defaultGatewayEmbeddingProbe,
@@ -840,6 +841,9 @@ describe("handleGatewaySetup", () => {
         code: "GATEWAY_DISCOVERY_UNUSABLE_MODELS",
         unverifiedChatModelCount: 1,
         droppedChatModelCount: 1,
+        // The slow candidate was tried and timed out; nothing was skipped by the round deadline.
+        skippedChatModelCount: 0,
+        chatSmokeRoundDeadlineMs: CHAT_SMOKE_ROUND_DEADLINE_MS,
       });
       // Body-free: the diagnostic carries counts only, never the rejected/unverified model ids.
       const serializedDiagnostic = JSON.stringify(discoveryDiagnostic);
@@ -10077,6 +10081,39 @@ describe("admitChatSmokeCandidates", () => {
     }
   });
 
+  // PR #3602 review: a manually entered deployment's 30 s timeout must not cut a setup probe short
+  // on a gateway that answers in 45 s; the smoke deadline never drops below the discovery floor.
+  it.each([
+    ["a manually entered deployment", 30_000, DISCOVERED_MODEL_SMOKE_TIMEOUT_MS],
+    [
+      "a discovered candidate",
+      DISCOVERED_MODEL_SMOKE_TIMEOUT_MS,
+      DISCOVERED_MODEL_SMOKE_TIMEOUT_MS,
+    ],
+    ["a generously configured deployment", 180_000, 180_000],
+  ])(
+    "bounds the smoke probe of %s by at least the discovery floor",
+    (_label, timeoutMs, expected) => {
+      const config: GatewayConfig = {
+        providers: [
+          {
+            modelId: "smoke-model",
+            baseUrl: "https://gateway.example.invalid/v1",
+            apiKey: "k",
+            timeoutMs,
+            maxRetries: 0,
+            retryBaseDelayMs: 0,
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 1 },
+      };
+      expect(candidateSmokeDeadlineMs(config, "smoke-model")).toBe(expected);
+      expect(candidateSmokeDeadlineMs(config, "unknown-model")).toBe(
+        DISCOVERED_MODEL_SMOKE_TIMEOUT_MS,
+      );
+    },
+  );
+
   it("keeps every candidate past the round's own deadline unverified without ever probing them", async () => {
     const deps = await unitTestDeps("keiko-gw-smoke-round-deadline");
     const probed: string[] = [];
@@ -10100,6 +10137,8 @@ describe("admitChatSmokeCandidates", () => {
       expect(probed).toEqual(["first"]);
       expect(result.tested).toEqual(["first"]);
       expect(result.unverifiedKept).toEqual(["second", "third"]);
+      // Told apart from candidates that were tried and timed out (PR #3602 review).
+      expect(result.skippedByDeadline).toEqual(["second", "third"]);
       expect(result.droppedRejected).toEqual([]);
     } finally {
       deps.store.close();

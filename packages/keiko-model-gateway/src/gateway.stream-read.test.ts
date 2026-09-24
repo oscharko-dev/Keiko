@@ -162,6 +162,25 @@ describe("Gateway.chat reads over the provider's stream (provider stalls, coding
     expect(retry?.budgetMs).toBeGreaterThanOrEqual(EFFECTIVE_SILENCE_MS);
   });
 
+  // PR #3602 review: the silence floor must never grant a retry more than what is left of the
+  // call's budget, or the call could overrun the `requestBudgetMs` its own lines report. The
+  // scripted clock spends most of the budget in the backoff before the retry.
+  it("clips a retry's silence bound to what is left of the budget", async () => {
+    const fake = streamingFake([new TimeoutError("the provider fell silent")]);
+    const budgetMs = providerRequestBudgetMs(PROVIDER);
+    const leftMs = EFFECTIVE_SILENCE_MS - 60_000;
+    const gateway = new Gateway(config(true), {
+      adapter: fake.adapter,
+      clock: createScriptedGatewayClock({ sleepMs: [budgetMs - leftMs] }),
+    });
+
+    await expect(gateway.chat(REQUEST)).resolves.toMatchObject({ content: "answer" });
+
+    const [, retry] = fake.bounds;
+    expect(retry?.budgetMs).toBeLessThan(EFFECTIVE_SILENCE_MS);
+    expect(retry?.silenceMs).toBe(retry?.budgetMs);
+  });
+
   it("reads a whole body when the route does not stream", async () => {
     const fake = streamingFake();
     const log = recorder();

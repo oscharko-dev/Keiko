@@ -1932,6 +1932,8 @@ interface ChatSmokeAdmission {
   /** Classification evidence for EVERY failed candidate (both buckets above), for
    *  `allProbesFailedError` — used only when NOTHING was tested (see `defaultGatewaySetupTester`). */
   readonly allFailures: readonly ProbeFailureEvidence[];
+  /** The candidates in `unverifiedKept` the round deadline skipped without probing them. */
+  readonly skippedByDeadline: readonly string[];
 }
 
 // A per-candidate smoke failure that must be KEPT unverified rather than dropped (PR #3602
@@ -1958,6 +1960,9 @@ interface ChatSmokeAccumulators {
   readonly unverifiedKept: string[];
   readonly droppedRejected: string[];
   readonly allFailures: ProbeFailureEvidence[];
+  // The subset of `unverifiedKept` the round's deadline skipped before their probe ever started;
+  // recorded so the admission diagnostic can tell them from candidates that were tried.
+  readonly skippedByDeadline: string[];
 }
 
 // One failed candidate's classification: on record in `allFailures` regardless of bucket (the same
@@ -2018,6 +2023,7 @@ export async function admitChatSmokeCandidates(
     unverifiedKept: [],
     droppedRejected: [],
     allFailures: [],
+    skippedByDeadline: [],
   };
   const roundDeadlineAt = now() + CHAT_SMOKE_ROUND_DEADLINE_MS;
   let next = 0;
@@ -2029,6 +2035,7 @@ export async function admitChatSmokeCandidates(
       if (modelId === undefined) continue;
       if (now() >= roundDeadlineAt) {
         accumulators.unverifiedKept.push(modelId);
+        accumulators.skippedByDeadline.push(modelId);
         continue;
       }
       try {
@@ -2090,8 +2097,15 @@ async function verifyTestedChatCandidates(
 // so both smoke paths stay bounded at the timeout each already advertises; the discovery constant
 // is only the defensive fallback for a candidate somehow missing its own provider entry.
 function candidateSmokeCancellationSignal(config: GatewayConfig, modelId: string): AbortSignal {
+  return AbortSignal.timeout(candidateSmokeDeadlineMs(config, modelId));
+}
+
+// Never below the discovery smoke floor: a manually entered deployment keeps its shorter configured
+// timeout for later calls, but a setup probe that gave up at 30 s on a gateway that answers in 45 s
+// would leave a working model unverified (PR #3602 review). Exported for direct unit testing.
+export function candidateSmokeDeadlineMs(config: GatewayConfig, modelId: string): number {
   const provider = config.providers.find((candidate) => candidate.modelId === modelId);
-  return AbortSignal.timeout(provider?.timeoutMs ?? DISCOVERED_MODEL_SMOKE_TIMEOUT_MS);
+  return Math.max(provider?.timeoutMs ?? 0, DISCOVERED_MODEL_SMOKE_TIMEOUT_MS);
 }
 
 // Extracted so `defaultGatewaySetupTester` stays under the repository's per-function line ceiling
@@ -2162,6 +2176,9 @@ async function defaultGatewaySetupTester(
     ],
     ...(chatSmoke.unverifiedKept.length > 0
       ? { unverifiedModelIds: chatSmoke.unverifiedKept }
+      : {}),
+    ...(chatSmoke.skippedByDeadline.length > 0
+      ? { skippedModelIds: chatSmoke.skippedByDeadline }
       : {}),
     ...(chatSmoke.droppedRejected.length > 0 ? { droppedModelIds: chatSmoke.droppedRejected } : {}),
   };
@@ -5238,6 +5255,8 @@ interface ChatAdmission {
   readonly testResult: GatewaySetupTestResult;
   readonly configuredModelIds: readonly string[];
   readonly unverifiedModelIds: readonly string[];
+  /** The unverified candidates the smoke round's deadline never tried (PR #3602 review). */
+  readonly skippedModelIds: readonly string[];
   /** Candidates the gateway answered and rejected — not configured (#3591). */
   readonly droppedModelIds: readonly string[];
 }
@@ -5270,6 +5289,7 @@ function temporaryChatAdmission(
     },
     configuredModelIds: candidateModels.chatModelIds,
     unverifiedModelIds: candidateModels.chatModelIds,
+    skippedModelIds: [],
     droppedModelIds: [],
   };
 }
@@ -5301,6 +5321,7 @@ async function admitChatCandidates(
     // asserted embedding model that failed its probe (#3591).
     configuredModelIds: [...testResult.testedModelIds, ...unverifiedModelIds],
     unverifiedModelIds,
+    skippedModelIds: testResult.skippedModelIds ?? [],
     droppedModelIds: testResult.droppedModelIds ?? [],
   };
 }
@@ -5534,6 +5555,10 @@ function reportChatSmokeAdmission(
     code: "GATEWAY_DISCOVERY_UNUSABLE_MODELS",
     unverifiedChatModelCount: unverified,
     droppedChatModelCount: dropped,
+    // How many of the unverified candidates the round's deadline never tried, and the deadline
+    // that applied, so a skipped model is not mistaken for one that timed out (PR #3602 review).
+    skippedChatModelCount: chatAdmission.skippedModelIds.length,
+    chatSmokeRoundDeadlineMs: CHAT_SMOKE_ROUND_DEADLINE_MS,
   });
 }
 

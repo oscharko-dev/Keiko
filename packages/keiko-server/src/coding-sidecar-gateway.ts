@@ -27,11 +27,7 @@ import {
   countGatewayPromptTokens,
   type ModelTokenAccounting,
 } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
-import {
-  codingWorkbenchProviderTimeoutMs,
-  providerRequestBudgetMs,
-} from "@oscharko-dev/keiko-model-gateway/internal/resilience";
-import { MAX_TIMER_DELAY_MS } from "./abort-race.js";
+import { gatewayRouteDeadlineMs } from "./gateway-route-deadline.js";
 import type {
   CodingWorkbenchModelSource,
   CodingWorkbenchSidecarGatewayRunMetadata,
@@ -2032,29 +2028,16 @@ interface GatewayRequestCancellation {
 }
 
 // The route's deadline is a backstop BEHIND the gateway's own end-to-end budget, never the budget
-// itself. It used to be the provider's per-attempt `timeoutMs`: the first attempt that hung spent
-// it, and this deadline, armed before the gateway started its own clock, aborted the retry the
-// gateway had just scheduled, so a provider timeout surfaced as a cancellation nobody had asked
-// for and failed the run (coding run 23, 2026-09-11). The grace lets the gateway settle its own
-// timeout or exhausted-retry error first.
-const GATEWAY_ROUTE_DEADLINE_GRACE_MS = 1_000;
-
+// itself (`gateway-route-deadline.ts`, shared with the commit draft since the #3602 review). It used
+// to be the provider's per-attempt `timeoutMs`: the first attempt that hung spent it, and this
+// deadline, armed before the gateway started its own clock, aborted the retry the gateway had just
+// scheduled, so a provider timeout surfaced as a cancellation nobody had asked for and failed the
+// run (coding run 23, 2026-09-11).
 export function codingSidecarGatewayRequestDeadlineMs(
   config: GatewayConfig,
   modelId: string,
 ): number {
-  const provider = config.providers.find((candidate) => candidate.modelId === modelId);
-  // An unconfigured model is refused before any provider call; 30 s only bounds that refusal.
-  const budget =
-    provider === undefined
-      ? 30_000
-      : providerRequestBudgetMs({
-          ...provider,
-          timeoutMs: codingWorkbenchProviderTimeoutMs(provider.timeoutMs),
-        });
-  // Armed with AbortSignal.timeout, which fires at once past 2^31 - 1 ms: an absurd budget must not
-  // turn the backstop into an immediate abort.
-  return Math.min(budget + GATEWAY_ROUTE_DEADLINE_GRACE_MS, MAX_TIMER_DELAY_MS);
+  return gatewayRouteDeadlineMs(config, modelId);
 }
 
 function gatewayRequestCancellation(

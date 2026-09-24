@@ -51,7 +51,6 @@ import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   createHandleCommitApprove,
   COMMIT_DRAFT_MAX_OUTPUT_TOKENS,
-  COMMIT_DRAFT_MODEL_DEADLINE_MS,
   createHandleCommitDraft,
   createHandleCommitExecute,
   createHandleCommitPreview,
@@ -59,6 +58,7 @@ import {
   type GitDeliveryCommitDraftBody,
   type GitDeliveryCommitPreviewBody,
 } from "./commitRoutes.js";
+import { gatewayRouteDeadlineMs } from "../gateway-route-deadline.js";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryExecutionSeams } from "./execution.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
@@ -142,6 +142,9 @@ const DRAFT_GATEWAY_CONFIG: GatewayConfig = {
   circuitBreaker: { failureThreshold: 3, cooldownMs: 1_000, halfOpenProbes: 1 },
   capabilities: [DRAFT_MODEL_CAPABILITY],
 };
+
+// The route deadline the draft arms for this fixture's model, taken from the production derivation.
+const DRAFT_ROUTE_DEADLINE_MS = gatewayRouteDeadlineMs(DRAFT_GATEWAY_CONFIG, "draft-model");
 
 function draftResponse(candidate: Readonly<Record<string, string>>): NormalizedResponse {
   return {
@@ -917,7 +920,7 @@ describe("commit draft — explicit model-backed generation", () => {
         outcome: "failed",
         failureCode: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
         maxOutputTokens: COMMIT_DRAFT_MAX_OUTPUT_TOKENS,
-        deadlineMs: COMMIT_DRAFT_MODEL_DEADLINE_MS,
+        deadlineMs: DRAFT_ROUTE_DEADLINE_MS,
       },
     });
   });
@@ -929,8 +932,10 @@ describe("commit draft — explicit model-backed generation", () => {
   // intercept (it does not run through the public `setTimeout` fake timers patch), so the deadline
   // is pinned by spying on the constructor call itself rather than by simulating elapsed time. Fails
   // before the fix: old code calls `AbortSignal.timeout(30_000)` directly as the request signal, so
-  // the spy would record 30_000 and never 300_000.
-  it("raises the model-call deadline from 30s to a 300s backstop", async () => {
+  // the spy would record 30_000 and never the route deadline derived from the gateway's own retry
+  // budget for the resolved model (`gatewayRouteDeadlineMs`, PR #3602 review: a fixed 300 s
+  // backstop sat under the 600 s buffered attempt the gateway now allows).
+  it("arms the route deadline behind the gateway's own retry budget for the resolved model", async () => {
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     try {
       const handler = createHandleCommitDraft({
@@ -948,7 +953,8 @@ describe("commit draft — explicit model-backed generation", () => {
       );
 
       expect(result.status).toBe(200);
-      expect(timeoutSpy).toHaveBeenCalledWith(300_000);
+      expect(timeoutSpy).toHaveBeenCalledWith(DRAFT_ROUTE_DEADLINE_MS);
+      expect(DRAFT_ROUTE_DEADLINE_MS).toBeGreaterThan(300_000);
       expect(timeoutSpy).not.toHaveBeenCalledWith(30_000);
     } finally {
       timeoutSpy.mockRestore();
@@ -1022,7 +1028,7 @@ describe("commit draft — explicit model-backed generation", () => {
     const timeoutSpy = vi
       .spyOn(AbortSignal, "timeout")
       .mockImplementation((ms) =>
-        ms === COMMIT_DRAFT_MODEL_DEADLINE_MS
+        ms === DRAFT_ROUTE_DEADLINE_MS
           ? AbortSignal.abort(new DOMException("route deadline", "TimeoutError"))
           : nativeTimeout(ms),
       );
@@ -1084,7 +1090,7 @@ describe("commit draft — explicit model-backed generation", () => {
         outcome: "failed",
         failureCode: "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT",
         maxOutputTokens: COMMIT_DRAFT_MAX_OUTPUT_TOKENS,
-        deadlineMs: COMMIT_DRAFT_MODEL_DEADLINE_MS,
+        deadlineMs: DRAFT_ROUTE_DEADLINE_MS,
       },
     });
     const persisted = expectActivityLogProof(

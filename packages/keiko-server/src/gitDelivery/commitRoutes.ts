@@ -55,6 +55,7 @@ import {
   type GitWorktreeSnapshot,
 } from "@oscharko-dev/keiko-tools";
 import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { gatewayRouteDeadlineMs } from "../gateway-route-deadline.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -248,10 +249,9 @@ const COMMIT_DRAFT_INSTRUCTION_MAX_CHARS = 1_500;
 // gateway call -- including the gateway's own internal retries -- so a healthy but slow answer was
 // reported as GIT_DELIVERY_COMMIT_DRAFT_FAILED, indistinguishable from a real outage.
 // `latencyProfile: "coding-workbench"` on the built request (buildCommitDraftModelRequest) asks the
-// gateway to apply CODING_WORKBENCH_PROVIDER_TIMEOUT_FLOOR_MS as the PER-ATTEMPT timeout floor; this
-// deadline is only the route's own backstop against a call that never returns at all, generous
-// enough to cover several such attempts, and is never the primary timeout.
-export const COMMIT_DRAFT_MODEL_DEADLINE_MS = 300_000;
+// gateway to apply the coding-workbench PER-ATTEMPT floor; the route's own backstop is derived from
+// that same retry budget (`gatewayRouteDeadlineMs`, shared with the Coding Workbench route) so it
+// always sits BEHIND the gateway's clock and never becomes the shorter, primary timeout.
 // A reasoning model (gpt-oss / gemma thinking) spends output tokens on its reasoning trace before
 // its first answer token. 700 was tight enough that the whole budget was consumed by reasoning,
 // leaving `finish_reason: "length"` and no usable content (#3591). 4,000 gives a reasoning model
@@ -648,6 +648,8 @@ interface ResolvedCommitDraftModel {
   readonly modelId: string;
   readonly useResponseFormat: boolean;
   readonly maxOutputTokens: number;
+  // The route's backstop behind the gateway's own retry budget for this model.
+  readonly deadlineMs: number;
 }
 
 // The bounds one draft's model call ran under; recorded on its `git.commit.draft.completed` line.
@@ -717,6 +719,7 @@ function resolveCommitDraftModel(deps: UiHandlerDeps): ResolvedCommitDraftModel 
     modelId,
     useResponseFormat: structuredModelId !== undefined,
     maxOutputTokens: commitDraftOutputTokens(config.capabilities ?? [], modelId),
+    deadlineMs: gatewayRouteDeadlineMs(config, modelId),
   };
 }
 
@@ -879,8 +882,11 @@ async function generateModelCommitMessage(
   }
   const bounds: CommitDraftBounds = {
     maxOutputTokens: resolved.maxOutputTokens,
-    deadlineMs: COMMIT_DRAFT_MODEL_DEADLINE_MS,
+    deadlineMs: resolved.deadlineMs,
   };
+  // The route deadline is armed only now, for THIS model's budget, and composed with the client
+  // disconnect signal; its reason (a TimeoutError DOMException) tells the two apart below.
+  const callSignal = AbortSignal.any([signal, AbortSignal.timeout(resolved.deadlineMs)]);
   try {
     const response = await resolved.model.call(
       buildCommitDraftModelRequest({
@@ -889,7 +895,7 @@ async function generateModelCommitMessage(
         useResponseFormat: resolved.useResponseFormat,
         maxOutputTokens: resolved.maxOutputTokens,
       }),
-      signal,
+      callSignal,
     );
     const validated = modelCommitMessage(response, input.policy);
     if (validated.ok) return { ok: true, message: validated.message, bounds };
@@ -899,7 +905,7 @@ async function generateModelCommitMessage(
         : "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT";
     return { ok: false, code, bounds };
   } catch (error) {
-    return { ok: false, code: classifyCommitDraftModelFailure(error, signal), error, bounds };
+    return { ok: false, code: classifyCommitDraftModelFailure(error, callSignal), error, bounds };
   }
 }
 
@@ -1049,9 +1055,10 @@ function commitDraftCancellation(ctx: RouteContext): {
   };
   ctx.req.once("aborted", onDisconnect);
   ctx.res.once("close", onResponseClosed);
-  const deadline = AbortSignal.timeout(COMMIT_DRAFT_MODEL_DEADLINE_MS);
+  // The route deadline itself is armed per model, behind that model's gateway budget, where the
+  // model is resolved (`generateModelCommitMessage`); this signal only carries the disconnect.
   return {
-    signal: AbortSignal.any([controller.signal, deadline]),
+    signal: controller.signal,
     dispose: (): void => {
       ctx.req.removeListener("aborted", onDisconnect);
       ctx.res.removeListener("close", onResponseClosed);

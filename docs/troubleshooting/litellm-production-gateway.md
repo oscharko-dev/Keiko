@@ -390,8 +390,8 @@ probes the product starts on its own (the Coding Workbench's automatic probes an
 probe that gates a first chat) run with a 2-minute floor, the long-context probe with 5 minutes; a
 probe the gateway never answered, could not be reached for, or answered with a transient status
 (408, 429, 5xx except 501) is recorded as inconclusive and retried after one minute instead of
-holding the six-hour cooldown. Setup discovery bounds each smoke candidate by its provider timeout
-(default 120s) and the whole chat round by 10 minutes; a candidate the probe never gets an answer
+holding the six-hour cooldown. Setup discovery bounds each smoke candidate by its provider timeout,
+never below 120s, and the whole chat round by 10 minutes; a candidate the probe never gets an answer
 from, or that answers with a transient status, is kept in the configuration as unverified instead of
 being dropped; only a candidate the gateway actually rejects (400/404/422/501, or a malformed
 answer) is removed. A timeout still counts toward the model's circuit breaker — with these floors a
