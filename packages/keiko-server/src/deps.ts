@@ -587,6 +587,16 @@ export interface GatewaySetupTestResult {
   readonly responseFormatModelIds: readonly string[];
   /** One body-free live-tool-call observation per successfully chat-probed deployment. */
   readonly toolCallingObservations?: readonly GatewaySetupToolCallingObservation[] | undefined;
+  /**
+   * Candidates the smoke probe never got an answer from (timeout, transport/proxy/TLS failure) —
+   * kept configured but unverified, distinct from `testedModelIds` (#3591).
+   */
+  readonly unverifiedModelIds?: readonly string[] | undefined;
+  /**
+   * Candidates the gateway actually answered and rejected (4xx/5xx, or a malformed/unusable
+   * answer) — real evidence the candidate does not work, so it is not configured (#3591).
+   */
+  readonly droppedModelIds?: readonly string[] | undefined;
 }
 
 export interface GatewaySetupToolCallingObservation {

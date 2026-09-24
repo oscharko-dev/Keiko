@@ -701,6 +701,75 @@ describe("handleGatewaySetup", () => {
     deps.store.close();
   });
 
+  // #3591: the WHOLE-gateway defer above (`temporaryChatAdmission`) fires when EVERY candidate's
+  // probe fails to answer. This is the individual, per-candidate counterpart: the base URL is
+  // known-reachable here (one candidate DID answer normally), so a lone slow candidate must be kept
+  // unverified rather than silently dropped — mirroring the shape `admitEmbeddingCandidates` already
+  // gives embedding models that fail their probe but stay configured.
+  it("keeps a chat deployment the smoke probe never got an answer from, alongside one that answered normally", async () => {
+    const uiDir = await tempDir("keiko-gw-partial-timeout-ui-");
+    const evidenceDir = await tempDir("keiko-gw-partial-timeout-ev-");
+    const originalFetch = globalThis.fetch;
+    const seenModels: string[] = [];
+    const fakeFetch: typeof fetch = (_url, init) => {
+      const body = JSON.parse((init?.body as string | undefined) ?? "{}") as { model?: string };
+      if (body.model !== undefined) seenModels.push(body.model);
+      if (body.model === "slow-model") {
+        // The exact shape a fired internal AbortSignal.timeout produces (openai-adapter.ts's
+        // requestAbortError / mapDispatchError): a DOMException named "TimeoutError".
+        return Promise.reject(new DOMException("simulated smoke-probe timeout", "TimeoutError"));
+      }
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { role: "assistant", content: "OK" }, finish_reason: "stop" }],
+            usage: { prompt_tokens: 3, completion_tokens: 1 },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    };
+    globalThis.fetch = fakeFetch;
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { ...MOCK_FETCH_EGRESS_ENV },
+      uiDbPath: join(uiDir, "keiko-ui.db"),
+    });
+    try {
+      const result = await handleGatewaySetup(
+        ctx({
+          baseUrl: "https://llm-gateway.example.com/v1",
+          apiKey: "example-secret-token",
+          deploymentNames: ["slow-model", "fast-model"],
+        }),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      expect(seenModels).toContain("slow-model");
+      expect(seenModels).toContain("fast-model");
+      expect(result.body).toMatchObject({
+        testedModelIds: ["fast-model"],
+        unverifiedChatModelIds: ["slow-model"],
+      });
+      expect(result.body).not.toHaveProperty("droppedChatModelIds");
+      const config = requiredGatewayConfig(deps);
+      // Both stay CONFIGURED — a slow candidate is not lost, only unverified.
+      expect(config.providers.map((provider) => provider.modelId).sort()).toEqual([
+        "fast-model",
+        "slow-model",
+      ]);
+      expect(requiredCapability(config, "slow-model")).toMatchObject({
+        toolCalling: false,
+        toolCallingVerification: { status: "unverified", probe: "gateway-tool-calling-v1" },
+      });
+      expect(requiredCapability(config, "fast-model")).toMatchObject({ toolCalling: false });
+    } finally {
+      globalThis.fetch = originalFetch;
+      deps.store.close();
+    }
+  });
+
   it("rejects DNS setup failures without persisting an unverified chat deployment", async () => {
     const uiDir = await tempDir("keiko-gw-dns-setup-ui-");
     const deps = buildUiHandlerDeps({

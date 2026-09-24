@@ -131,7 +131,11 @@ const MAX_DEPLOYMENT_NAMES = 100;
 const MAX_MODEL_ID_LENGTH = 160;
 const MISTRAL_TOOL_CALLING_LIMITATION =
   "Tool calling is disabled by default for Mistral deployments until endpoint readiness verifies it";
-const DISCOVERED_MODEL_SMOKE_TIMEOUT_MS = 15_000;
+// #3591: the field customer's LiteLLM/vLLM gateway can take well over 15s to answer at peak load;
+// raised so first-run discovery does not mistake a slow but healthy candidate for a broken one.
+// A candidate the smoke probe never gets an answer from is now KEPT unverified instead of dropped
+// (see `admitChatSmokeCandidates`) — this floor bounds how long that patience costs per candidate.
+const DISCOVERED_MODEL_SMOKE_TIMEOUT_MS = 120_000;
 const DEPLOYMENT_SMOKE_TIMEOUT_MS = 30_000;
 
 const GATEWAY_TOOL_CALLING_VERIFICATION_OPERATION = defineActivityLogOperation({
@@ -1902,33 +1906,97 @@ export async function smokeTestCandidates(
   return accepted;
 }
 
-async function defaultGatewaySetupTester(
+interface ChatSmokeAdmission {
+  /** Answered the smoke probe successfully. */
+  readonly tested: readonly string[];
+  /** The probe never got an answer (timeout, abort, transport/proxy/TLS failure) — KEPT,
+   *  unverified: a slow gateway is not a broken one (#3591). */
+  readonly unverifiedKept: readonly string[];
+  /** The gateway ANSWERED and rejected the candidate (4xx/5xx, or a malformed/unusable answer) —
+   *  real evidence the candidate does not work, so it is dropped. */
+  readonly droppedRejected: readonly string[];
+  /** Classification evidence for EVERY failed candidate (both buckets above), for
+   *  `allProbesFailedError` — used only when NOTHING was tested (see `defaultGatewaySetupTester`). */
+  readonly allFailures: readonly ProbeFailureEvidence[];
+}
+
+// Companion to `passingCandidates` for the discovery smoke test specifically (#3591): reuses
+// `SETUP_NETWORK_ERROR_CODES` — the exact set the "network failure" guidance below already
+// classifies as "the gateway never answered" — to tell a candidate the smoke probe timed out on
+// apart from one the gateway actually rejected. Mirrors `admitEmbeddingCandidates`'s
+// retained/dropped shape, but on a different axis: THAT function splits by whether the model's ROLE
+// was asserted; this one splits by whether the PROBE was ever answered.
+//
+// Every failure is ALSO recorded into `allFailures`, independent of its bucket: when NOTHING is
+// tested, `defaultGatewaySetupTester` still throws exactly as `smokeTestCandidates` always did —
+// `verifyAndSaveGatewaySetup`'s multi-base-URL fallback (`attemptSetupCandidates`) and the
+// whole-gateway `temporaryChatAdmission` deferral both depend on that throw to try the next
+// candidate base URL or defer the whole probe round; this function only widens what happens on a
+// PARTIAL failure, never removes the total-failure signal those two callers already rely on.
+async function admitChatSmokeCandidates(
+  candidates: readonly string[],
+  probe: (modelId: string) => Promise<void>,
+  concurrency: number,
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): Promise<ChatSmokeAdmission> {
+  const tested = new Array<string | undefined>(candidates.length).fill(undefined);
+  const unverifiedKept: string[] = [];
+  const droppedRejected: string[] = [];
+  const allFailures: ProbeFailureEvidence[] = [];
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < candidates.length) {
+      const index = next;
+      next += 1;
+      const modelId = candidates[index];
+      if (modelId === undefined) continue;
+      try {
+        await probe(modelId);
+        tested[index] = modelId;
+      } catch (error) {
+        // Every probe rejection is on record — the same body-free pattern
+        // `setupToolCallingObservations` already uses for its own per-model probe failures —
+        // before this loop silently classifies and continues to the next candidate.
+        reportSetupVerificationFailure(
+          deps,
+          error,
+          correlationId,
+          "gateway.setup.chat-smoke-probe",
+        );
+        const evidence: ProbeFailureEvidence = {
+          code: setupErrorCode(error),
+          httpStatus: setupHttpStatus(error),
+        };
+        allFailures.push(evidence);
+        if (evidence.code !== undefined && SETUP_NETWORK_ERROR_CODES.has(evidence.code)) {
+          unverifiedKept.push(modelId);
+        } else {
+          droppedRejected.push(modelId);
+        }
+      }
+    }
+  }
+  const workerCount = Math.max(1, Math.min(concurrency, candidates.length));
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return {
+    tested: tested.filter((modelId): modelId is string => modelId !== undefined),
+    unverifiedKept,
+    droppedRejected,
+    allFailures,
+  };
+}
+
+// The response-format and tool-calling verification rounds, run only over VERIFIED candidates
+// (`chatSmoke.tested`) — extracted so `defaultGatewaySetupTester` stays under the repository's
+// per-function line ceiling (AGENTS.md §6).
+async function verifyTestedChatCandidates(
+  gateway: Gateway,
   config: GatewayConfig,
-  candidateModelIds: readonly string[],
+  testedModelIds: readonly string[],
   correlationId: string | undefined,
   deps: UiHandlerDeps,
-): Promise<GatewaySetupTestResult> {
-  // Wired to the process activity log: first-run setup is where an operator's endpoint is wrong
-  // in a way no UI message can name (a proxy that blocks CONNECT, a provider that answers 404 for
-  // every model). Without the sink the smoke loop's retries and rejections are invisible.
-  const gateway = new Gateway(config, {
-    log: processServerLogSink(),
-    spendBudget: gatewaySpendBudgetForEnv(deps.env),
-  });
-  const testedModelIds = await smokeTestCandidates(
-    candidateModelIds,
-    async (modelId) => {
-      await gateway.chat({
-        modelId,
-        messages: [
-          { role: "system", content: CONVERSATION_SYSTEM_PROMPT },
-          { role: "user", content: "Reply with exactly: OK" },
-        ],
-        logContext: { correlationId },
-      });
-    },
-    SETUP_SMOKE_CONCURRENCY,
-  );
+): Promise<Pick<GatewaySetupTestResult, "responseFormatModelIds" | "toolCallingObservations">> {
   const responseFormatModelIds = await passingCandidates(
     testedModelIds,
     async (modelId) => {
@@ -1950,7 +2018,89 @@ async function defaultGatewaySetupTester(
     correlationId,
     deps,
   );
-  return { testedModelIds, responseFormatModelIds, toolCallingObservations };
+  return { responseFormatModelIds, toolCallingObservations };
+}
+
+async function defaultGatewaySetupTester(
+  config: GatewayConfig,
+  candidateModelIds: readonly string[],
+  correlationId: string | undefined,
+  deps: UiHandlerDeps,
+): Promise<GatewaySetupTestResult> {
+  // Wired to the process activity log: first-run setup is where an operator's endpoint is wrong
+  // in a way no UI message can name (a proxy that blocks CONNECT, a provider that answers 404 for
+  // every model). Without the sink the smoke loop's retries and rejections are invisible.
+  const gateway = new Gateway(config, {
+    log: processServerLogSink(),
+    spendBudget: gatewaySpendBudgetForEnv(deps.env),
+  });
+  const chatSmoke = await admitChatSmokeCandidates(
+    candidateModelIds,
+    async (modelId) => {
+      await gateway.chat({
+        modelId,
+        messages: [
+          { role: "system", content: CONVERSATION_SYSTEM_PROMPT },
+          { role: "user", content: "Reply with exactly: OK" },
+        ],
+        logContext: { correlationId },
+      });
+    },
+    SETUP_SMOKE_CONCURRENCY,
+    deps,
+    correlationId,
+  );
+  // Nothing was verified: the historic "no discovered model accepted the chat-completions smoke
+  // test" case, thrown exactly as `smokeTestCandidates` always did — even when some candidates were
+  // merely kept unverified rather than dropped, because `verifyAndSaveGatewaySetup`'s multi-base-URL
+  // fallback and the whole-gateway `temporaryChatAdmission` deferral both need this throw to try the
+  // next base URL / defer the round; only reached with zero survivors does the caller ever see it.
+  // Once at least ONE candidate is genuinely tested, the base URL is known-reachable and a peer
+  // candidate that merely timed out is kept unverified instead of dropped (#3591) — see below.
+  if (chatSmoke.tested.length === 0) {
+    throw allProbesFailedError(chatSmoke.allFailures);
+  }
+  const testedModelIds = chatSmoke.tested;
+  const { responseFormatModelIds, toolCallingObservations } = await verifyTestedChatCandidates(
+    gateway,
+    config,
+    testedModelIds,
+    correlationId,
+    deps,
+  );
+  return {
+    testedModelIds,
+    responseFormatModelIds,
+    toolCallingObservations: [
+      ...(toolCallingObservations ?? []),
+      ...unverifiedKeptToolCallingObservations(config, chatSmoke.unverifiedKept, correlationId),
+    ],
+    ...(chatSmoke.unverifiedKept.length > 0
+      ? { unverifiedModelIds: chatSmoke.unverifiedKept }
+      : {}),
+    ...(chatSmoke.droppedRejected.length > 0 ? { droppedModelIds: chatSmoke.droppedRejected } : {}),
+  };
+}
+
+// A candidate the smoke probe never got an answer from is kept but was never actually chat-probed,
+// so its tool-calling status is "unverified" by definition — the SAME record and the SAME closed
+// vocabulary `temporaryChatAdmission` already uses when the whole gateway defers, just per-candidate
+// instead of gateway-wide (#3591).
+function unverifiedKeptToolCallingObservations(
+  config: GatewayConfig,
+  unverifiedKept: readonly string[],
+  correlationId: string | undefined,
+): readonly GatewaySetupToolCallingObservation[] {
+  const checkedAt = new Date().toISOString();
+  return unverifiedKept.map((modelId) => {
+    logToolCallingVerification(
+      config,
+      modelId,
+      "unverified",
+      correlationId ?? UNKNOWN_CORRELATION_ID,
+    );
+    return { modelId, status: "unverified", checkedAt };
+  });
 }
 
 async function setupToolCallingObservations(
@@ -4452,7 +4602,8 @@ function reportSetupVerificationFailure(
   source:
     | "gateway.setup.figma-verify"
     | "gateway.setup.provider-verify"
-    | "gateway.setup.tool-calling-probe",
+    | "gateway.setup.tool-calling-probe"
+    | "gateway.setup.chat-smoke-probe",
 ): void {
   emitServerDiagnostic(
     deps.diagnostics,
@@ -4479,6 +4630,8 @@ interface VerifiedSetup {
   readonly droppedEmbeddingModelIds?: readonly string[];
   /** Chat deployments retained after a transient verification failure; tool calling remains false. */
   readonly unverifiedChatModelIds?: readonly string[];
+  /** Chat candidates the gateway answered and rejected — not configured (#3591). */
+  readonly droppedChatModelIds?: readonly string[];
 }
 
 interface SetupVerificationInput {
@@ -4995,6 +5148,8 @@ interface ChatAdmission {
   readonly testResult: GatewaySetupTestResult;
   readonly configuredModelIds: readonly string[];
   readonly unverifiedModelIds: readonly string[];
+  /** Candidates the gateway answered and rejected — not configured (#3591). */
+  readonly droppedModelIds: readonly string[];
 }
 
 function temporaryChatAdmission(
@@ -5025,6 +5180,7 @@ function temporaryChatAdmission(
     },
     configuredModelIds: candidateModels.chatModelIds,
     unverifiedModelIds: candidateModels.chatModelIds,
+    droppedModelIds: [],
   };
 }
 
@@ -5048,10 +5204,14 @@ async function admitChatCandidates(
   const testResult = normalizeSetupTestResult(
     await input.tester(candidateConfig, candidateModels.chatModelIds),
   );
+  const unverifiedModelIds = testResult.unverifiedModelIds ?? [];
   return {
     testResult,
-    configuredModelIds: testResult.testedModelIds,
-    unverifiedModelIds: [],
+    // A candidate kept unverified (timeout/transport) is still CONFIGURED, exactly like an
+    // asserted embedding model that failed its probe (#3591).
+    configuredModelIds: [...testResult.testedModelIds, ...unverifiedModelIds],
+    unverifiedModelIds,
+    droppedModelIds: testResult.droppedModelIds ?? [],
   };
 }
 
@@ -5262,6 +5422,31 @@ function reportUnusableDiscoveredModels(
   });
 }
 
+// Chat counterpart of `reportUnusableDiscoveredModels`, emitted separately because the chat smoke
+// test itself decides whether setup fails closed (an all-rejected gateway throws before this point
+// is ever reached) — see `verifySetupCandidate`. Body-free: counts only, never a model id (#3591).
+function reportChatSmokeAdmission(
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string | undefined,
+  chatAdmission: ChatAdmission,
+): void {
+  const unverified = chatAdmission.unverifiedModelIds.length;
+  const dropped = chatAdmission.droppedModelIds.length;
+  if (unverified === 0 && dropped === 0) return;
+  emitServerDiagnostic(diagnostics, {
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    timestamp: new Date().toISOString(),
+    operation: "POST /api/gateway/setup",
+    source: "gateway-setup.discovery",
+    errorClass: "GatewayDiscoveryUnusableModels",
+    message:
+      "Setup kept chat candidates the smoke test never got an answer from and dropped candidates the gateway answered and rejected.",
+    code: "GATEWAY_DISCOVERY_UNUSABLE_MODELS",
+    unverifiedChatModelCount: unverified,
+    droppedChatModelCount: dropped,
+  });
+}
+
 // KEIKO-0884 (#3333): every non-public egress target class (private, link-local, metadata)
 // requires an explicit env opt-in to be accepted by Gateway Setup; loopback is the only class
 // silently accepted with no configuration signal, no log line, and no opt-in trail — a deliberate
@@ -5350,6 +5535,7 @@ async function verifySetupCandidate(input: SetupVerificationInput): Promise<Veri
     candidateConfig,
     embeddingAdmission,
   );
+  reportChatSmokeAdmission(input.diagnostics, input.correlationId, chatAdmission);
   return verifiedSetupFromChatAdmission(
     input,
     candidateModels,
@@ -5420,6 +5606,9 @@ function verifiedSetupResult(
       : {}),
     ...(chatAdmission.unverifiedModelIds.length > 0
       ? { unverifiedChatModelIds: chatAdmission.unverifiedModelIds }
+      : {}),
+    ...(chatAdmission.droppedModelIds.length > 0
+      ? { droppedChatModelIds: chatAdmission.droppedModelIds }
       : {}),
   };
 }
@@ -5537,6 +5726,7 @@ interface SetupDiscoveryReport {
   readonly unverifiedEmbeddingModelIds?: readonly string[];
   readonly droppedEmbeddingModelIds?: readonly string[];
   readonly unverifiedChatModelIds?: readonly string[];
+  readonly droppedChatModelIds?: readonly string[];
 }
 
 function setupSuccessResult(
@@ -5566,6 +5756,9 @@ function setupSuccessResult(
         : {}),
       ...(discoveryReport.unverifiedChatModelIds !== undefined
         ? { unverifiedChatModelIds: discoveryReport.unverifiedChatModelIds }
+        : {}),
+      ...(discoveryReport.droppedChatModelIds !== undefined
+        ? { droppedChatModelIds: discoveryReport.droppedChatModelIds }
         : {}),
       providerCount: config.providers.length,
       models: listConfiguredCapabilities(config),
@@ -5816,6 +6009,9 @@ function finalizeVerifiedCandidate(
       : {}),
     ...(verified.unverifiedChatModelIds !== undefined
       ? { unverifiedChatModelIds: verified.unverifiedChatModelIds }
+      : {}),
+    ...(verified.droppedChatModelIds !== undefined
+      ? { droppedChatModelIds: verified.droppedChatModelIds }
       : {}),
   });
 }
