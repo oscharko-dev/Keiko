@@ -1054,7 +1054,9 @@ Before ranking process lifetimes, the expanded run timeline restores original fi
 run and request records; otherwise a parent-first join can reverse the first-seen lifetime order.
 `chat.request.dispatch` records the
 stream usage flag and tool count before the provider call; a strict OpenAI-compatible proxy's
-one-time retry without `stream_options` records `chat.request.compatibility-retry`. These lines
+one-time retry without `stream_options`, and the one bounded `stream: false` retry after a second
+rejection naming that field, each record `chat.request.compatibility-retry` with the closed
+`omittedField` (`stream_options` or `stream`). These lines
 contain counts, status, closed reasons, and digests only. The Workbench receives a separate
 `failure-redacted` SSE event with a closed gateway-turn cause while the runtime is still active;
 the event carries no provider response body or customer content. Each gateway turn failure,
@@ -1079,8 +1081,8 @@ records the closed accepted, cancelled, failed, or output-limit result under tha
 run correlation; streamed acceptance is recorded after the terminal frame is written. These records
 contain request and run correlations, counts, closed states, and the source, without message bodies.
 Generic provider policy refusals remain terminal; an error
-that identifies the optional `stream_options` or `include_usage` field may take the one-time
-compatibility retry.
+that identifies the optional `stream_options` or `include_usage` field may take the bounded
+compatibility retries that ADR-0003 describes.
 
 ### D14 — Bounded immutable segments under the OS-user filesystem boundary
 

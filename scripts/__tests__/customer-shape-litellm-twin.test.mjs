@@ -7,6 +7,7 @@ import {
 import {
   completedTurnEvidence,
   completedToolRoundTripEvidence,
+  customerShapeFailureSummary,
   customerShapeRequestEvidence,
   linkedFailureEvidence,
 } from "../lib/customer-shape-evidence.mjs";
@@ -145,6 +146,128 @@ describe("customer-shape LiteLLM twin", () => {
       compatibleRetry: false,
       delayedAcceptedStream: false,
     });
+  });
+
+  it("redacts unreviewed Activity Log values before printing a release failure", () => {
+    const secret = "customer-secret-token";
+    const summary = customerShapeFailureSummary(
+      [
+        {
+          op: "coding-runtime.run.settled",
+          failureCode: secret,
+          errorKind: secret,
+          outcome: secret,
+          publicationReason: secret,
+          code: secret,
+          diagnosticOperation: secret,
+          taskOutcomeStatus: secret,
+          reason: secret,
+          launchPhase: secret,
+          diagnosticLineCount: 3,
+          message: secret,
+        },
+        {
+          op: "coding-sidecar.gateway.turn-failed",
+          failureCode: "provider-failed",
+          errorKind: "timeout",
+          outcome: "failed",
+          publicationReason: "terminal-run",
+        },
+        {
+          op: "server.diagnostic.failure",
+          diagnosticOperation: "coding-runtime.start",
+          code: "stage=start:reason=initial-turn-dispatch",
+        },
+        {
+          op: "server.diagnostic.failure",
+          diagnosticOperation: "coding-runtime.handshake",
+          code: "gateway-challenge",
+        },
+        {
+          op: "runtime.confinement.failed",
+          launchPhase: "git-attestation",
+          message: secret,
+          frames: [secret],
+        },
+        { op: `coding-runtime.${secret}`, failureCode: secret },
+      ],
+      [{ stream: secret, hasStreamOptions: true, delayed: false }],
+      0,
+    );
+    expect(summary).toMatchObject({
+      activityLineCount: 6,
+      requestCount: 1,
+      timeline: [
+        {
+          op: "coding-runtime.run.settled",
+          failureCode: "[redacted]",
+          errorKind: "[redacted]",
+          outcome: "[redacted]",
+          publicationReason: "[redacted]",
+          code: "[redacted]",
+          diagnosticOperation: "[redacted]",
+          taskOutcomeStatus: "[redacted]",
+          reason: "[redacted]",
+          launchPhase: "[redacted]",
+          diagnosticLineCount: 3,
+        },
+        {
+          op: "coding-sidecar.gateway.turn-failed",
+          failureCode: "provider-failed",
+          errorKind: "timeout",
+          outcome: "failed",
+          publicationReason: "terminal-run",
+        },
+        {
+          op: "server.diagnostic.failure",
+          diagnosticOperation: "coding-runtime.start",
+          code: "stage=start:reason=initial-turn-dispatch",
+        },
+        {
+          op: "server.diagnostic.failure",
+          diagnosticOperation: "coding-runtime.handshake",
+          code: "gateway-challenge",
+        },
+        { op: "runtime.confinement.failed", launchPhase: "git-attestation" },
+      ],
+      requests: [{ stream: false, hasStreamOptions: true, delayed: false }],
+    });
+    expect(JSON.stringify(summary)).not.toContain(secret);
+  });
+
+  it("reports empty failure evidence without inventing activity or requests", () => {
+    expect(customerShapeFailureSummary([], [], 0)).toEqual({
+      activityLineCount: 0,
+      timeline: [],
+      requestCount: 0,
+      requests: [],
+    });
+  });
+
+  it("bounds malformed failure evidence to 24 activity lines and 12 requests", () => {
+    const lines = [
+      null,
+      "malformed",
+      { op: "unknown-operation", failureCode: "private-content" },
+      ...Array.from({ length: 27 }, (_, exitCode) => ({
+        op: "coding-runtime.run.settled",
+        exitCode,
+      })),
+    ];
+    const requests = [
+      null,
+      "malformed",
+      ...Array.from({ length: 13 }, (_, index) => ({ stream: index === 12 })),
+    ];
+    const summary = customerShapeFailureSummary(lines, requests, 0);
+    expect(summary.activityLineCount).toBe(30);
+    expect(summary.timeline).toHaveLength(24);
+    expect(summary.timeline[0]).toMatchObject({ exitCode: 3 });
+    expect(summary.timeline.at(-1)).toMatchObject({ exitCode: 26 });
+    expect(summary.requestCount).toBe(15);
+    expect(summary.requests).toHaveLength(12);
+    expect(summary.requests.every((request) => request.stream === false)).toBe(true);
+    expect(JSON.stringify(summary)).not.toContain("private-content");
   });
 
   it("records an accepted stream that entered the delayed-response branch", async () => {

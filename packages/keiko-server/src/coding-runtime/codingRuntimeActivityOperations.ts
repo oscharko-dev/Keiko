@@ -139,6 +139,22 @@ const RUNTIME_CONFINEMENT_FAILED_BASE = {
 } as const;
 
 const RUNTIME_CONFINEMENT_FAILED_FIELDS = {
+  launchPhase: {
+    type: "string",
+    dataClass: "closed-enum",
+    required: false,
+    values: [
+      "gateway-policy",
+      "platform-identity",
+      "runtime-path",
+      "workspace-path",
+      "git-attestation",
+      "sandbox-plan",
+      "process-spawn",
+      "launcher-diagnostics",
+      "tree-ownership",
+    ],
+  },
   backend: {
     type: "string",
     dataClass: "closed-enum",
@@ -248,6 +264,12 @@ export const RUNTIME_CONFINEMENT_SPAWNED_OPERATION = defineActivityLogOperation(
       dataClass: "digest",
       required: false,
       maxLength: 64,
+    },
+    childExecutableSource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["selected", "command-line-tools"],
     },
   },
   causal: "correlation",

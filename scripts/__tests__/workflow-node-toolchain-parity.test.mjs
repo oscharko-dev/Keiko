@@ -209,8 +209,9 @@ describe("workflow Node toolchain parity", () => {
     // request and authorize lanes and release-advance.yml's event-driven start lane: the owner's
     // release-button run authorizes the commit, so the automation's github-actions[bot] dispatch
     // carries out an existing human decision instead of making one. The customer-shape release
-    // qualification lane added for #3591 brings the setup-node total to 32.
-    expect(withSetupNode).toHaveLength(32);
+    // qualification lane added for #3591 brings the setup-node total to 32; its independent
+    // macOS 15 pull-request replay brings the total to 33.
+    expect(withSetupNode).toHaveLength(33);
   });
 
   it("pins every actions/setup-node step to an approved exact Node version", () => {

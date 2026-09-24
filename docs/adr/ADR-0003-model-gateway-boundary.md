@@ -540,6 +540,17 @@ provider error instead of turning the partial text into a successful assistant r
 finish reason can still complete when the proxy sends `[DONE]`. An explicit refusal delta retains
 its refusal classification on early close instead of being masked by the generic incomplete-stream
 error.
+An OpenAI-compatible endpoint that explicitly rejects optional `stream_options` receives one
+streaming retry without that field. LiteLLM can reinsert the field between Keiko and vLLM, so a
+second explicit rejection naming `stream_options` receives one bounded `stream: false` retry. The
+buffered answer passes through the same capped body reader, secret redaction, normalization, and
+tool-catalog binding as a streamed answer, and the retries share the original deadline. A buffered
+upstream sends no header before its generation ends, so the silence bound never applies to a
+`stream: false` request: what is left of the read budget bounds when its answer starts, and its
+dispatch line records that bound as `timeoutMs` (PR #3600 review). A credential-scoped
+compatibility memo avoids repeating rejected shapes for 15 minutes. Generic errors, rejections of
+another field, and model or content refusals remain terminal; the body-free compatibility line
+records only which field was omitted.
 Coding run 30 (2026-09-11): two gpt-5.4 generations of 4.8k to 5.9k output tokens at 27 to 45
 tokens per second were cut off at 120 s and generated a second time; Azure answered both with
 HTTP 200.

@@ -127,7 +127,7 @@ const CHAT_REQUEST_COMPATIBILITY_RETRY_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["stream_options"],
+      values: ["stream_options", "stream"],
     },
   },
   causal: "correlation",
@@ -140,35 +140,50 @@ const CHAT_REQUEST_COMPATIBILITY_RETRY_OPERATION = defineActivityLogOperation({
 
 // A provider config object already carries the credential identity. Weak keys keep the memo scoped
 // to that config without deriving, storing, or logging any digest of its secret material.
-let strictStreamOptionsEndpoints = new WeakMap<object, Map<string, number>>();
+type ChatCompatibilityMode = "omit-usage" | "whole-body";
+interface ChatCompatibilityMemo {
+  readonly mode: ChatCompatibilityMode;
+  readonly expiresAt: number;
+}
+
+let chatCompatibilityEndpoints = new WeakMap<object, Map<string, ChatCompatibilityMemo>>();
 const MAX_STRICT_STREAM_OPTIONS_ENDPOINTS = 256;
 const STRICT_STREAM_OPTIONS_REPROBE_MS = 15 * 60_000;
 
-function hasStrictStreamOptionsMemo(scope: object, url: string, now: () => number): boolean {
-  const endpoints = strictStreamOptionsEndpoints.get(scope);
-  const expiresAt = endpoints?.get(url);
-  if (expiresAt === undefined) return false;
-  if (expiresAt > now()) return true;
+function chatCompatibilityMode(
+  scope: object,
+  url: string,
+  now: () => number,
+): ChatCompatibilityMode | undefined {
+  const endpoints = chatCompatibilityEndpoints.get(scope);
+  const memo = endpoints?.get(url);
+  if (memo === undefined) return undefined;
+  if (memo.expiresAt > now()) return memo.mode;
   endpoints?.delete(url);
-  return false;
+  return undefined;
 }
 
-function rememberStrictStreamOptionsEndpoint(scope: object, url: string, now: number): void {
-  let endpoints = strictStreamOptionsEndpoints.get(scope);
+function rememberChatCompatibility(
+  scope: object,
+  url: string,
+  mode: ChatCompatibilityMode,
+  now: number,
+): void {
+  let endpoints = chatCompatibilityEndpoints.get(scope);
   if (endpoints === undefined) {
-    endpoints = new Map<string, number>();
-    strictStreamOptionsEndpoints.set(scope, endpoints);
+    endpoints = new Map<string, ChatCompatibilityMemo>();
+    chatCompatibilityEndpoints.set(scope, endpoints);
   }
   if (endpoints.has(url)) endpoints.delete(url);
   if (endpoints.size >= MAX_STRICT_STREAM_OPTIONS_ENDPOINTS) {
     const oldest = endpoints.keys().next().value;
     if (oldest !== undefined) endpoints.delete(oldest);
   }
-  endpoints.set(url, now + STRICT_STREAM_OPTIONS_REPROBE_MS);
+  endpoints.set(url, { mode, expiresAt: now + STRICT_STREAM_OPTIONS_REPROBE_MS });
 }
 
 export function resetChatCompatibilityMemoForTests(): void {
-  strictStreamOptionsEndpoints = new WeakMap<object, Map<string, number>>();
+  chatCompatibilityEndpoints = new WeakMap<object, Map<string, ChatCompatibilityMemo>>();
 }
 
 const CHAT_RESPONSE_STREAMED_OPERATION = defineActivityLogOperation({
@@ -243,7 +258,8 @@ interface ChatDispatchFields {
   // UTF-8 BYTES on the wire, not `String.length`'s UTF-16 code units — see the identical note on
   // `EmbeddingDispatchFields`.
   readonly bodyBytes: number;
-  // A read with bounds (ADR-0003): `timeoutMs` is then its silence bound, `readBudgetMs` its budget.
+  // A read with bounds (ADR-0003): `timeoutMs` is then the bound on its start (the silence bound of
+  // a streamed read, the budget of a buffered one), `readBudgetMs` its budget.
   readonly timeoutMs: number;
   readonly stream: boolean;
   readonly streamUsageRequested?: boolean;
@@ -335,6 +351,16 @@ interface DispatchedResponse {
   readonly dispose: () => void;
 }
 
+interface ChatCompatibilityContext {
+  readonly request: ProviderGatewayRequest;
+  readonly config: ModelProviderConfig;
+  readonly secrets: readonly string[];
+  readonly bounds: StreamReadBounds | undefined;
+  readonly startedAt: number;
+  readonly memoScope: object;
+  readonly url: string;
+}
+
 // A request's deadline. Without read bounds it is the attempt's `timeoutMs` for the whole request,
 // as always. With them (ADR-0003) the provider must START its response within `silenceMs` and the
 // whole read ends at `budgetMs`, however live: a long generation that keeps producing is no longer
@@ -370,6 +396,19 @@ function timedAbort(
       clearTimeout(timer);
     },
   };
+}
+
+// The bounds one dispatched request runs under. A buffered (`stream: false`) answer sends nothing,
+// headers included, until its generation ends, so only the read budget bounds when it starts; the
+// silence bound belongs to a streamed read, whose provider proves it is alive as it goes (PR #3600
+// review).
+function dispatchedReadBounds(
+  stream: boolean,
+  bounds: StreamReadBounds | undefined,
+): StreamReadBounds | undefined {
+  return stream || bounds === undefined
+    ? bounds
+    : { silenceMs: bounds.budgetMs, budgetMs: bounds.budgetMs };
 }
 
 function requestDeadline(
@@ -793,6 +832,16 @@ function isOptionalStreamFieldRejection(payload: unknown): boolean {
     /(?:unsupported|unknown|unrecognized|invalid|prohibited|rejected).{0,48}(?:stream[_ -]?options|include[_ -]?usage)/.test(
       message,
     )
+  );
+}
+
+function isNamedStreamFieldRejection(payload: unknown): boolean {
+  const error = isRecord(payload) && isRecord(payload.error) ? payload.error : payload;
+  if (!isRecord(error) || !isOptionalStreamFieldRejection(payload)) return false;
+  const field = /stream[_ -]?options|include[_ -]?usage/;
+  return (
+    (typeof error.param === "string" && field.test(error.param.toLowerCase())) ||
+    (typeof error.message === "string" && field.test(error.message.toLowerCase()))
   );
 }
 
@@ -1451,11 +1500,12 @@ export class OpenAiAdapter implements ProviderAdapter {
       "content-type": "application/json",
       ...apiKeyHeaders(config),
     };
+    const readBounds = dispatchedReadBounds(stream, bounds);
     logChatDispatch(
       this.log,
-      chatDispatchFields(url, request, config, body, stream, includeUsage, bounds),
+      chatDispatchFields(url, request, config, body, stream, includeUsage, readBounds),
     );
-    const deadline = requestDeadline(config.timeoutMs, bounds, request.cancellationSignal);
+    const deadline = requestDeadline(config.timeoutMs, readBounds, request.cancellationSignal);
     try {
       const response = await gatewayFetch(url, {
         method: "POST",
@@ -1483,18 +1533,41 @@ export class OpenAiAdapter implements ProviderAdapter {
     const url = chatCompletionsUrl(config);
     const startedAt = Date.now();
     const memoScope = this.deps.compatibilityMemoScope ?? config;
-    const includeUsage = !hasStrictStreamOptionsMemo(memoScope, url, this.now);
+    const context: ChatCompatibilityContext = {
+      request,
+      config,
+      secrets,
+      bounds,
+      startedAt,
+      memoScope,
+      url,
+    };
+    const mode = chatCompatibilityMode(memoScope, url, this.now);
+    if (mode === "whole-body") return this.dispatch(request, config, secrets, false, bounds);
+    const includeUsage = mode !== "omit-usage";
     const first = await this.dispatch(request, config, secrets, true, bounds, includeUsage);
-    if (first.response.ok || !includeUsage || !isStrictChatShapeRejection(first.response.status)) {
-      return first;
+    if (first.response.ok || !isStrictChatShapeRejection(first.response.status)) return first;
+    if (!includeUsage) return this.retryWithoutStreamingIfNamed(first, context);
+    const retry = await this.retryWithoutUsage(first, context);
+    if (retry.response.ok) {
+      rememberChatCompatibility(memoScope, url, "omit-usage", this.now());
+      return retry;
     }
+    return this.retryWithoutStreamingIfNamed(retry, context);
+  }
+
+  private async retryWithoutUsage(
+    failed: DispatchedResponse,
+    context: ChatCompatibilityContext,
+  ): Promise<DispatchedResponse> {
+    const { request, config, secrets, bounds, startedAt, url } = context;
     try {
-      const payload = await this.readErrorBody(first.response, config, secrets, first.signal);
-      if (shouldPreserveProviderRejection(first.response.status, payload)) {
-        mapHttpError(first.response, config.modelId, secrets, payload);
+      const payload = await this.readErrorBody(failed.response, config, secrets, failed.signal);
+      if (shouldPreserveProviderRejection(failed.response.status, payload)) {
+        mapHttpError(failed.response, config.modelId, secrets, payload);
       }
     } finally {
-      first.dispose();
+      failed.dispose();
     }
     const remainingMs = remainingCompatibilityBudgetMs(
       bounds,
@@ -1505,9 +1578,39 @@ export class OpenAiAdapter implements ProviderAdapter {
     );
     const retryBounds = bounds === undefined ? undefined : { ...bounds, budgetMs: remainingMs };
     const retryConfig = bounds === undefined ? { ...config, timeoutMs: remainingMs } : config;
-    this.logChatCompatibilityRetry(url, config, first.response.status);
-    const retry = await this.dispatch(request, retryConfig, secrets, true, retryBounds, false);
-    if (retry.response.ok) rememberStrictStreamOptionsEndpoint(memoScope, url, this.now());
+    this.logChatCompatibilityRetry(url, config, failed.response.status, "stream_options");
+    return this.dispatch(request, retryConfig, secrets, true, retryBounds, false);
+  }
+
+  private async retryWithoutStreamingIfNamed(
+    failed: DispatchedResponse,
+    context: ChatCompatibilityContext,
+  ): Promise<DispatchedResponse> {
+    const { request, config, secrets, bounds, startedAt, memoScope, url } = context;
+    if (!isStrictChatShapeRejection(failed.response.status)) return failed;
+    try {
+      const payload = await this.readErrorBody(failed.response, config, secrets, failed.signal);
+      if (
+        shouldPreserveProviderRejection(failed.response.status, payload) ||
+        !isNamedStreamFieldRejection(payload)
+      ) {
+        mapHttpError(failed.response, config.modelId, secrets, payload);
+      }
+    } finally {
+      failed.dispose();
+    }
+    const remainingMs = remainingCompatibilityBudgetMs(
+      bounds,
+      startedAt,
+      Date.now,
+      config,
+      secrets,
+    );
+    const retryBounds = bounds === undefined ? undefined : { ...bounds, budgetMs: remainingMs };
+    const retryConfig = bounds === undefined ? { ...config, timeoutMs: remainingMs } : config;
+    this.logChatCompatibilityRetry(url, config, failed.response.status, "stream");
+    const retry = await this.dispatch(request, retryConfig, secrets, false, retryBounds);
+    if (retry.response.ok) rememberChatCompatibility(memoScope, url, "whole-body", this.now());
     return retry;
   }
 
@@ -1515,6 +1618,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     url: string,
     config: ModelProviderConfig,
     status: number,
+    omittedField: "stream_options" | "stream",
   ): void {
     this.log.write(
       activityLogEvent(
@@ -1523,7 +1627,7 @@ export class OpenAiAdapter implements ProviderAdapter {
         {
           endpointDigest: sha256Hex(logEndpointHost(url) ?? "invalid-endpoint"),
           modelId: logModelId(config.modelId),
-          omittedField: "stream_options",
+          omittedField,
         },
       ),
     );

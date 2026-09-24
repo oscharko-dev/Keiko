@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "4db02210769394074154dfd3c28c15a9c4afb72f2b99057d33e843703f22d554" as const;
+  "494b6d281e42d3d26ac5a267c6f4ce874b2f6d096bf535050f342fb7b13d5b6d" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -976,7 +976,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["stream_options"],
+        values: ["stream_options", "stream"],
       },
     },
     causal: "correlation",
@@ -21263,6 +21263,22 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "loss-state",
         required: true,
       },
+      launchPhase: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "gateway-policy",
+          "platform-identity",
+          "runtime-path",
+          "workspace-path",
+          "git-attestation",
+          "sandbox-plan",
+          "process-spawn",
+          "launcher-diagnostics",
+          "tree-ownership",
+        ],
+      },
       backend: {
         type: "string",
         dataClass: "closed-enum",
@@ -21388,6 +21404,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "digest",
         required: false,
         maxLength: 64,
+      },
+      childExecutableSource: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["selected", "command-line-tools"],
       },
     },
     causal: "correlation",
@@ -53680,6 +53702,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               dataClass: "opaque-id",
               required: false,
             },
+            {
+              name: "launchPhase",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
           ],
           evidenceClasses: [
             "closed-enum",
@@ -53727,6 +53755,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "childExecutableSource",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
             },
             {
               name: "modelProfileDigest",

@@ -1,0 +1,63 @@
+name: Coding Workbench customer-shape qualification
+
+on:
+  pull_request:
+    branches:
+      - dev
+    paths:
+      - ".github/workflows/coding-workbench-customer-shape.yml"
+      - ".github/workflows/release.yml"
+      - "package.json"
+      - "package-lock.json"
+      - "packages/keiko-contracts/**"
+      - "packages/keiko-cli/**"
+      - "packages/keiko-harness/**"
+      - "packages/keiko-model-gateway/**"
+      - "packages/keiko-sandbox/**"
+      - "packages/keiko-server/**"
+      - "packages/keiko-tools/**"
+      - "packages/keiko-ui/**"
+      - "scripts/**"
+      - "src/**"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  qualify:
+    name: Qualify staged Coding Workbench on macOS 15
+    runs-on: macos-15
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify checked-out commit
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Build workspace packages for qualification
+        run: npm run build:packages
+      - name: Inspect Darwin Git attestation prerequisites
+        run: node scripts/testing/inspect-darwin-git-host.mjs
+      - name: Install Chromium for customer-shape qualification
+        timeout-minutes: 10
+        run: node node_modules/playwright/cli.js install --with-deps chromium
+      - name: Run customer-shape qualification
+        timeout-minutes: 25
+        run: npm run qualify:coding-workbench:customer-shape

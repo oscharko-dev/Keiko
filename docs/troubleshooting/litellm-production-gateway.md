@@ -26,9 +26,14 @@ retries once without that optional field and records `chat.request.compatibility
 does. The Workbench displays a closed failure cause and next step if the turn still fails. Do not
 send the raw provider response or model prompt to support.
 A local control with LiteLLM 1.102.1 showed that it can add `stream_options` to its own
-`hosted_vllm` upstream request even when Keiko omits it. If the retry still fails for that reason,
-inspect the LiteLLM-to-vLLM configuration; Keiko cannot remove a field that the proxy inserts
-after receiving the request.
+`hosted_vllm` upstream request even when Keiko omits it. When the second rejection again names
+that field, Keiko sends one bounded `stream: false` request and records a second
+`chat.request.compatibility-retry` with `omittedField: stream`. The turn then answers as one
+buffered reply within the remaining request budget instead of streaming as it is generated, and
+later requests with the same provider credentials to that endpoint use the buffered shape for 15
+minutes. To restore streaming, fix the LiteLLM-to-vLLM configuration; Keiko cannot remove a field
+that the proxy inserts after receiving the request. If the buffered request also fails, the turn
+reports the provider failure with its closed cause.
 If a proxy closes an SSE response after partial text without a recognized finish reason or
 `data: [DONE]`, the turn reports `stream-incomplete` rather than accepting the partial reply.
 Check the correlated `chat.response.streamed` and `coding-sidecar.gateway.turn-failed` lines for

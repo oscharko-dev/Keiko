@@ -1,3 +1,195 @@
+import { ACTIVITY_LOG_ERROR_KINDS } from "../../packages/keiko-contracts/dist/observability.js";
+
+// The release failure report is printed to public CI logs. Only reviewed closed values may cross
+// that boundary; a future producer that changes its vocabulary is redacted until reviewed here.
+const FAILURE_CODES = new Set([
+  "runtime-unavailable",
+  "active-run-conflict",
+  "invalid-intent",
+  "approval-activation-failed",
+  "authority-resolution-failed",
+  "authority-expired",
+  "authority-replayed",
+  "task-drift",
+  "workspace-drift",
+  "project-drift",
+  "branch-drift",
+  "scope-drift",
+  "budget-drift",
+  "authority-budget-exceeded",
+  "source-drift",
+  "runtime-failed",
+  "revoked",
+  "recovery-required",
+  "replay-cap-exhausted",
+  "issue-context-unavailable",
+  "question-answer-rejected",
+  "delivery-not-evidenced",
+  "model-unavailable",
+  "workspace-unqualified",
+  "provider-failed",
+  "stream-incomplete",
+  "turn-rejected",
+]);
+const ERROR_KINDS = new Set(ACTIVITY_LOG_ERROR_KINDS);
+const OUTCOMES = new Set(["accepted", "cancelled", "failed", "output-limit"]);
+const PUBLICATION_REASONS = new Set([
+  "published",
+  "event-hub-unavailable",
+  "terminal-run",
+  "invalid-event",
+  "sequence-exhausted",
+  "capacity-pressure",
+]);
+const START_DIAGNOSTIC_CODES = [
+  "adapter-profile-mismatch",
+  "archive-digest-mismatch",
+  "egress-unqualified",
+  "env-secret-denied",
+  "executable-tree-digest-mismatch",
+  "gateway-non-loopback",
+  "history-initialization",
+  "host-unavailable",
+  "initial-turn-dispatch",
+  "initial-turn-recovery",
+  "launch-resolution",
+  "manager-exception",
+  "model-unavailable",
+  "payload-missing",
+  "platform-unsupported",
+  "protocol-schema-mismatch",
+  "qualification-missing",
+  "redistribution-unapproved",
+  "repository-unavailable",
+  "run-mismatch",
+  "runtime-already-running",
+  "runtime-crashed",
+  "runtime-profile-open",
+  "runtime-reap-unproven",
+  "runtime-run-mismatch",
+  "spawn-failed",
+  "start-aborted",
+  "start-timeout",
+  "sidecar-missing",
+  "sidecar-unmanaged",
+  "runtime-state-unavailable",
+  "runtime-unqualified",
+  "runtime-version-mismatch",
+  "signature-unverified",
+  "workspace-root-denied",
+  "workspace-unqualified",
+].map((reason) => `stage=start:reason=${reason}`);
+const HANDSHAKE_DIAGNOSTIC_CODES = [
+  "target-attestation",
+  "config-materialization",
+  "endpoint",
+  "authenticated-health",
+  "authenticated-health-version",
+  "unauthenticated-health",
+  "openapi-digest",
+  "gateway-challenge",
+  "tool-facade-challenge",
+  "sse-history-reconciliation",
+  "session-echo",
+  "endpoint-invalid",
+  "preparation-missing",
+  "readiness-failed",
+  "handshake-rejected",
+  "timeout",
+  "unclassified",
+];
+const DIAGNOSTIC_CODES = new Set([...START_DIAGNOSTIC_CODES, ...HANDSHAKE_DIAGNOSTIC_CODES]);
+const DIAGNOSTIC_SOURCES = new Set([
+  "coding-runtime.start",
+  "coding-runtime.history",
+  "coding-runtime.handshake",
+  "coding-runtime.exit",
+  "coding-runtime.stderr",
+]);
+const TASK_OUTCOME_STATUSES = new Set(["cancelled", "failed", "signalled", "succeeded"]);
+const DROPPED_EVENT_REASONS = new Set(["no-live-run", "run-mismatch"]);
+const LAUNCH_PHASES = new Set([
+  "gateway-policy",
+  "platform-identity",
+  "runtime-path",
+  "workspace-path",
+  "git-attestation",
+  "sandbox-plan",
+  "process-spawn",
+  "launcher-diagnostics",
+  "tree-ownership",
+]);
+const DIAGNOSTIC_OPERATIONS = new Set([
+  "runtime.confinement.failed",
+  "runtime.confinement.unavailable",
+  "coding-runtime.run.started",
+  "coding-runtime.dev-lane.activated",
+  "coding-runtime.readiness.phase",
+  "coding-runtime.readiness.failed",
+  "coding-runtime.initial-turn.dispatch-failed",
+  "coding-runtime.run.settled",
+  "coding-runtime.run.shutdown",
+  "coding-runtime.safe-activity",
+  "coding-runtime.event.dropped",
+  "coding-runtime.operation.refused",
+  "coding-sidecar.gateway.request-validated",
+  "coding-sidecar.gateway.tool-availability",
+  "coding-sidecar.gateway.rejected",
+  "coding-sidecar.gateway.turn-failed",
+  "coding-sidecar.gateway.outcome",
+  "coding-sidecar.gateway.usage-settled",
+  "server.diagnostic.failure",
+  "chat.request.compatibility-retry",
+]);
+
+function closedField(line, name, values) {
+  const value = line[name];
+  if (typeof value !== "string") return {};
+  return { [name]: values.has(value) ? value : "[redacted]" };
+}
+
+function relevantFailureLine(line) {
+  return line !== null && typeof line === "object" && DIAGNOSTIC_OPERATIONS.has(line.op);
+}
+
+export function customerShapeFailureSummary(lines, requests, firstRequest) {
+  const timeline = lines
+    .filter(relevantFailureLine)
+    .slice(-24)
+    .map((line) => ({
+      op: line.op,
+      ...closedField(line, "failureCode", FAILURE_CODES),
+      ...closedField(line, "errorKind", ERROR_KINDS),
+      ...closedField(line, "outcome", OUTCOMES),
+      ...closedField(line, "publicationReason", PUBLICATION_REASONS),
+      ...closedField(line, "diagnosticOperation", DIAGNOSTIC_SOURCES),
+      ...closedField(line, "code", DIAGNOSTIC_CODES),
+      ...closedField(line, "taskOutcomeStatus", TASK_OUTCOME_STATUSES),
+      ...closedField(line, "reason", DROPPED_EVENT_REASONS),
+      ...closedField(line, "launchPhase", LAUNCH_PHASES),
+      ...(typeof line.terminal === "boolean" ? { terminal: line.terminal } : {}),
+      ...(Number.isInteger(line.exitCode) ? { exitCode: line.exitCode } : {}),
+      ...(Number.isInteger(line.diagnosticLineCount)
+        ? { diagnosticLineCount: line.diagnosticLineCount }
+        : {}),
+    }));
+  return {
+    activityLineCount: lines.length,
+    timeline,
+    requestCount: requests.length - firstRequest,
+    requests: requests.slice(firstRequest, firstRequest + 12).map((request) => {
+      const fields = request !== null && typeof request === "object" ? request : {};
+      return {
+        stream: fields.stream === true,
+        hasStreamOptions: fields.hasStreamOptions === true,
+        delayed: fields.delayed === true,
+        truncated: fields.truncated === true,
+        deliveredToolCall: fields.deliveredToolCall === true,
+      };
+    }),
+  };
+}
+
 export function customerShapeRequestEvidence(requests, firstRequest) {
   const current = requests.slice(firstRequest);
   return {

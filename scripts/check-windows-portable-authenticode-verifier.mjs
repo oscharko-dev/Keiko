@@ -8,7 +8,10 @@ import {
   DEFAULT_GENERATED_ASSET,
   DEFAULT_VERIFIER_SOURCE,
   FRAMEWORK_REFERENCE_NAMES,
+  assertPinnedToolchain,
   generateVerifierAsset,
+  inspectVerifierToolchain,
+  renderGeneratedVerifierAsset,
   sha256,
 } from "./generate-windows-portable-authenticode-verifier.mjs";
 import {
@@ -223,6 +226,31 @@ export const COMMITTED_VERIFIER_ASSET = Object.freeze({
   sourceSha256: WINDOWS_RFC3161_VERIFIER_SOURCE_SHA256,
 });
 
+// GitHub's reviewed win25-vs2026/20260922.246 image updated VS 2026 to 18.10.12210.168.
+// This exact toolchain is accepted only if it regenerates the committed assembly byte for byte.
+export const REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN = Object.freeze({
+  compilerSha256: "0597f6c927a68bff955d80a3432d72cdee8f448f42cb98cedae5174176c62f1a",
+  compilerDistribution: Object.freeze({
+    fileCount: 111,
+    sha256: "d71f3981a031950d9cc94b9fdcc7443479524c8d16853fcf04633a8c9eb9d3a1",
+    totalBytes: 38642728,
+  }),
+  referenceSha256: COMMITTED_VERIFIER_ASSET.referenceSha256,
+});
+
+export function selectReviewedVerifierToolchain(observed) {
+  const expected =
+    observed.compilerSha256 === REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN.compilerSha256
+      ? REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN
+      : {
+          compilerSha256: COMMITTED_VERIFIER_ASSET.compilerSha256,
+          compilerDistribution: COMMITTED_VERIFIER_ASSET.compilerDistribution,
+          referenceSha256: COMMITTED_VERIFIER_ASSET.referenceSha256,
+        };
+  assertPinnedToolchain(observed, expected);
+  return expected;
+}
+
 export function checkWindowsPortableAuthenticodeVerifier({
   compilerPath,
   referenceDirectory,
@@ -237,11 +265,9 @@ export function checkWindowsPortableAuthenticodeVerifier({
   ) {
     throw new Error("canonical verifier source does not match the generated asset");
   }
-  const expectedToolchain = {
-    compilerSha256: COMMITTED_VERIFIER_ASSET.compilerSha256,
-    compilerDistribution: COMMITTED_VERIFIER_ASSET.compilerDistribution,
-    referenceSha256: COMMITTED_VERIFIER_ASSET.referenceSha256,
-  };
+  const expectedToolchain = selectReviewedVerifierToolchain(
+    inspectVerifierToolchain({ compilerPath, referenceDirectory }),
+  );
   const first = generateVerifierAsset({
     compilerPath,
     expectedToolchain,
@@ -260,15 +286,41 @@ export function checkWindowsPortableAuthenticodeVerifier({
   if (!first.assembly.equals(committedAssembly)) {
     throw new Error("regenerated verifier assembly does not match the committed asset");
   }
-  if (readFileSync(generatedAssetPath, "utf8") !== first.asset) {
+  const canonicalAsset = renderGeneratedVerifierAsset({
+    assembly: committedAssembly,
+    source: canonicalSource,
+    toolchain: COMMITTED_VERIFIER_ASSET,
+  });
+  if (readFileSync(generatedAssetPath, "utf8") !== canonicalAsset) {
     throw new Error("generated verifier TypeScript asset is stale");
   }
 }
 
-export function executeCheckCli() {
-  const options = discoverTrustedVerifierToolchain();
-  checkWindowsPortableAuthenticodeVerifier(options);
-  process.stdout.write("windows-portable-authenticode-verifier: PASS\n");
+function reportPinFailure(error, options, inspect, writeError) {
+  if (!(error instanceof Error) || !error.message.includes("reviewed generated-asset pin")) return;
+  try {
+    const fingerprint = inspect(options);
+    writeError(`windows-verifier-toolchain: ${JSON.stringify(fingerprint)}\n`);
+  } catch {
+    writeError("windows-verifier-toolchain: inspection-unavailable\n");
+  }
+}
+
+export function executeCheckCli({
+  discover = discoverTrustedVerifierToolchain,
+  check = checkWindowsPortableAuthenticodeVerifier,
+  inspect = inspectVerifierToolchain,
+  writeError = (line) => process.stderr.write(line),
+  writeOutput = (line) => process.stdout.write(line),
+} = {}) {
+  const options = discover();
+  try {
+    check(options);
+  } catch (error) {
+    reportPinFailure(error, options, inspect, writeError);
+    throw error;
+  }
+  writeOutput("windows-portable-authenticode-verifier: PASS\n");
 }
 
 if (

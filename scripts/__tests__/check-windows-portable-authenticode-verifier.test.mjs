@@ -6,9 +6,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   COMMITTED_VERIFIER_ASSET,
+  REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN,
   assertCommittedVerifierAsset,
   discoverTrustedVerifierToolchain,
+  executeCheckCli,
   resolveTrustedVerifierToolchain,
+  selectReviewedVerifierToolchain,
 } from "../check-windows-portable-authenticode-verifier.mjs";
 
 const roots = [];
@@ -58,6 +61,108 @@ afterEach(() => {
 });
 
 describe("committed Windows portable Authenticode verifier asset", () => {
+  it("preserves the pin failure when optional toolchain inspection fails", () => {
+    const pinError = new Error(
+      "C# compiler digest does not match the reviewed generated-asset pin",
+    );
+    const diagnostics = [];
+    expect(() =>
+      executeCheckCli({
+        discover: () => ({ compilerPath: "/trusted/csc", referenceDirectory: "/trusted/refs" }),
+        check: () => {
+          throw pinError;
+        },
+        inspect: () => {
+          throw new Error("diagnostic read failed");
+        },
+        writeError: (line) => diagnostics.push(line),
+        writeOutput: () => {
+          throw new Error("success must not be reported");
+        },
+      }),
+    ).toThrow(pinError);
+    expect(diagnostics).toEqual(["windows-verifier-toolchain: inspection-unavailable\n"]);
+  });
+
+  it("reports a reviewed fingerprint but still throws the original pin failure", () => {
+    const pinError = new Error(
+      "C# compiler digest does not match the reviewed generated-asset pin",
+    );
+    const fingerprint = { compilerSha256: "a".repeat(64) };
+    const output = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      expect(() =>
+        executeCheckCli({
+          discover: () => ({ compilerPath: "/trusted/csc", referenceDirectory: "/trusted/refs" }),
+          check: () => {
+            throw pinError;
+          },
+          inspect: () => fingerprint,
+        }),
+      ).toThrow(pinError);
+      expect(output).toHaveBeenCalledWith(
+        `windows-verifier-toolchain: ${JSON.stringify(fingerprint)}\n`,
+      );
+    } finally {
+      output.mockRestore();
+    }
+  });
+
+  it("does not inspect unrelated failures or report success", () => {
+    const failure = new Error("unrelated verifier failure");
+    const inspect = vi.fn();
+    const writeError = vi.fn();
+    const writeOutput = vi.fn();
+    expect(() =>
+      executeCheckCli({
+        discover: () => ({ compilerPath: "/trusted/csc", referenceDirectory: "/trusted/refs" }),
+        check: () => {
+          throw failure;
+        },
+        inspect,
+        writeError,
+        writeOutput,
+      }),
+    ).toThrow(failure);
+    expect(inspect).not.toHaveBeenCalled();
+    expect(writeError).not.toHaveBeenCalled();
+    expect(writeOutput).not.toHaveBeenCalled();
+  });
+
+  it("reports a verified success", () => {
+    const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      executeCheckCli({
+        discover: () => ({ compilerPath: "/trusted/csc", referenceDirectory: "/trusted/refs" }),
+        check: () => undefined,
+      });
+      expect(output).toHaveBeenCalledWith("windows-portable-authenticode-verifier: PASS\n");
+    } finally {
+      output.mockRestore();
+    }
+  });
+
+  it("accepts the reviewed updated compiler only with its exact distribution and references", () => {
+    expect(selectReviewedVerifierToolchain(REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN)).toBe(
+      REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN,
+    );
+    expect(() =>
+      selectReviewedVerifierToolchain({
+        ...REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN,
+        compilerDistribution: {
+          ...REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN.compilerDistribution,
+          sha256: "0".repeat(64),
+        },
+      }),
+    ).toThrow(/reviewed generated-asset pin/u);
+    expect(() =>
+      selectReviewedVerifierToolchain({
+        ...REVIEWED_WINDOWS_2025_VS2026_TOOLCHAIN,
+        compilerSha256: "0".repeat(64),
+      }),
+    ).toThrow(/reviewed generated-asset pin/u);
+  });
+
   it("binds the canonical source and exact assembly bytes to SHA-256", () => {
     expect(assertCommittedVerifierAsset(COMMITTED_VERIFIER_ASSET)).toHaveLength(
       COMMITTED_VERIFIER_ASSET.assemblyByteLength,
