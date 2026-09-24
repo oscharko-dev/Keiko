@@ -16,7 +16,10 @@ import {
   type ModelProviderConfig,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
-import { providerRequestBudgetMs } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
+import {
+  codingWorkbenchProviderTimeoutMs,
+  providerRequestBudgetMs,
+} from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import {
   AuthenticationError,
   CircuitOpenError,
@@ -1964,11 +1967,14 @@ describe("coding-sidecar gateway", () => {
     }
   });
 
+  // #3591: a 30 s configured timeout no longer bounds a Workbench turn. The one attempt is held to
+  // the 300 s silence floor, the buffered call to the 600 s budget floor, and the route adds its
+  // one-second grace behind that budget.
   it("keeps a slow Coding Workbench turn alive past a 30-second provider spike", () => {
     const slow = provider({ timeoutMs: 30_000, maxRetries: 0 });
     expect(
       codingSidecarGatewayRequestDeadlineMs(configValue(slow, capability()), slow.modelId),
-    ).toBe(91_000);
+    ).toBe(601_000);
   });
 
   // A timer armed with more than 2^31 - 1 ms fires at once: a budget that large must not turn the
@@ -2034,7 +2040,8 @@ describe("coding-sidecar gateway", () => {
         }),
         deps,
       );
-      await vi.advanceTimersByTimeAsync(90_050);
+      // The hung attempt ends at the floored Workbench timeout, not at the configured 50 ms.
+      await vi.advanceTimersByTimeAsync(codingWorkbenchProviderTimeoutMs(50) + 50);
       const result = await pending;
       assertRouteResult(result);
       expect(result.status).toBe(200);
@@ -2122,10 +2129,18 @@ describe("coding-sidecar gateway", () => {
   });
 
   it("passes the sidecar deadline through to an in-flight provider call", async () => {
+    // No retries: the route deadline is the floored single attempt plus the route's grace. The
+    // value is taken from the route's own derivation so the mock follows the floors, not a literal.
+    const deadlineProvider = provider({ timeoutMs: 10, maxRetries: 0 });
+    const deadlineConfig = configValue(deadlineProvider, capability());
+    const routeDeadlineMs = codingSidecarGatewayRequestDeadlineMs(
+      deadlineConfig,
+      deadlineProvider.modelId,
+    );
     const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
     const timeoutSpy = vi
       .spyOn(AbortSignal, "timeout")
-      .mockImplementation((ms) => nativeTimeout(ms === 91_000 ? 10 : ms));
+      .mockImplementation((ms) => nativeTimeout(ms === routeDeadlineMs ? 10 : ms));
     let seenSignal: AbortSignal | undefined;
     let observeAbort: (() => void) | undefined;
     const providerAborted = new Promise<void>((resolve) => {
@@ -2150,8 +2165,7 @@ describe("coding-sidecar gateway", () => {
         () => ({ ok: true, binding: { runId: "run-deadline" } }),
         () => chat,
       ),
-      // No retries: the route deadline is one 10 ms attempt plus the route's grace.
-      config: configValue(provider({ timeoutMs: 10, maxRetries: 0 }), capability()),
+      config: deadlineConfig,
     } as UiHandlerDeps;
 
     try {

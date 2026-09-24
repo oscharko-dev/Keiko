@@ -5,7 +5,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TimeoutError, TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
-import type { ModelProviderConfig } from "@oscharko-dev/keiko-model-gateway";
+import type { GatewayConfig, ModelProviderConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { GatewayReadinessProbeResult } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   LONG_CONTEXT_PROBE_TIMEOUT_FLOOR_MS,
@@ -248,13 +248,13 @@ describe("automatic Workbench probes — inconclusive runs are retried soon", ()
     expect(calls()).toBe(1);
     const current = deps.gatewayConfig?.current();
     if (current === undefined) throw new Error("config missing");
-    const raised = {
+    const raised: GatewayConfig = {
       ...current,
       providers: current.providers.map((entry) => ({ ...entry, timeoutMs: 120_000 })),
     };
     const holder = deps.gatewayConfig;
     if (holder === undefined) throw new Error("holder missing");
-    (holder as { current: () => typeof raised }).current = (): typeof raised => raised;
+    holder.current = (): GatewayConfig => raised;
     await ensureCodingWorkbenchContextWindows(deps, "hosted-chat");
     await codingWorkbenchProbesSettledForTests();
     expect(calls()).toBe(2);
