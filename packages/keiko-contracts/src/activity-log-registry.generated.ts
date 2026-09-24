@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "b0bec029b7b9a853136eaccafb30cfb52a3236c7cc1ce8d35a4b540a6314212d" as const;
+  "48ca9552cb9dc47b3475ea7bcdf48f85810289e003f3a66a0abcdca52c79052d" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -1149,6 +1149,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "number",
         dataClass: "duration",
         required: false,
+      },
+      outputExhausted: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
       },
     },
     causal: "correlation",
@@ -10730,6 +10735,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: true,
       },
+      outputExhausted: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
     },
     causal: "correlation",
     lifecycle: "failure",
@@ -12058,6 +12068,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: true,
       },
       afterFirstChunk: {
+        type: "boolean",
+        dataClass: "closed-enum",
+        required: true,
+      },
+      outputExhausted: {
         type: "boolean",
         dataClass: "closed-enum",
         required: true,
@@ -23625,6 +23640,16 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         required: false,
       },
       droppedEmbeddingModelCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      unverifiedChatModelCount: {
+        type: "integer",
+        dataClass: "count",
+        required: false,
+      },
+      droppedChatModelCount: {
         type: "integer",
         dataClass: "count",
         required: false,
@@ -40915,6 +40940,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "outputExhausted",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
               name: "requestId",
               type: "string",
               dataClass: "opaque-id",
@@ -42899,6 +42930,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: true,
             },
             {
+              name: "outputExhausted",
+              type: "boolean",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
               name: "requestId",
               type: "string",
               dataClass: "opaque-id",
@@ -43061,6 +43098,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             {
               name: "outcome",
               type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "outputExhausted",
+              type: "boolean",
               dataClass: "closed-enum",
               required: true,
             },
@@ -54809,6 +54852,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "droppedChatModelCount",
+              type: "integer",
+              dataClass: "count",
+              required: false,
+            },
+            {
               name: "droppedEmbeddingModelCount",
               type: "integer",
               dataClass: "count",
@@ -54902,6 +54951,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "unsupportedReasons",
               type: "string-array",
               dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "unverifiedChatModelCount",
+              type: "integer",
+              dataClass: "count",
               required: false,
             },
             {
