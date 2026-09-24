@@ -1566,17 +1566,23 @@ async function probeLongContext(
 export const LONG_CONTEXT_PROBE_TIMEOUT_FLOOR_MS = 300_000;
 export const WORKBENCH_PROBE_TIMEOUT_FLOOR_MS = 120_000;
 
+function probeTimeoutFloorMs(
+  name: GatewayReadinessProbeName,
+  options: GatewayReadinessOptions | undefined,
+): number {
+  if (name === "long_context") return LONG_CONTEXT_PROBE_TIMEOUT_FLOOR_MS;
+  if (options?.purpose === "coding-workbench-auto" || options?.purpose === "on-demand") {
+    return WORKBENCH_PROBE_TIMEOUT_FLOOR_MS;
+  }
+  return 0;
+}
+
 export function probeProvider(
   provider: ModelProviderConfig,
   name: GatewayReadinessProbeName,
   options: GatewayReadinessOptions | undefined,
 ): ModelProviderConfig {
-  const floor =
-    name === "long_context"
-      ? LONG_CONTEXT_PROBE_TIMEOUT_FLOOR_MS
-      : options?.purpose === "coding-workbench-auto" || options?.purpose === "on-demand"
-        ? WORKBENCH_PROBE_TIMEOUT_FLOOR_MS
-        : 0;
+  const floor = probeTimeoutFloorMs(name, options);
   return provider.timeoutMs >= floor ? provider : { ...provider, timeoutMs: floor };
 }
 
@@ -2013,7 +2019,7 @@ function workbenchProbeOutcome(
   // The gating chat probe runs first and a target probe is skipped when it fails: a gateway that
   // never answered the chat probe has not refuted anything either.
   if (report.probes.some(probeInconclusive)) return "inconclusive";
-  return results.some((probe) => probe === undefined) ? "inconclusive" : "refuted";
+  return results.includes(undefined) ? "inconclusive" : "refuted";
 }
 
 async function runWorkbenchProbe(

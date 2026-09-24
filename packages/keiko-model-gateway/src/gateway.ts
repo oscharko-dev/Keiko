@@ -647,17 +647,6 @@ function effectiveBufferedAttemptMs(provider: ModelProviderConfig): number {
   return Math.max(provider.timeoutMs, GATEWAY_BUFFERED_BUDGET_FLOOR_MS);
 }
 
-// The bound this call's own transport actually applies and reports on its attempt/started line: the
-// silence floor when it reads incrementally (`readsIncrementally` — the caller can tell the
-// provider is alive from each chunk), the buffered floor otherwise (a whole-body read, or
-// `chatStream()`'s degraded fallback for a non-streaming adapter).
-function effectiveAttemptTimeoutMs(
-  provider: ModelProviderConfig,
-  readsIncrementally: boolean,
-): number {
-  return readsIncrementally ? effectiveSilenceMs(provider) : effectiveBufferedAttemptMs(provider);
-}
-
 // The bounds of the ONE, unretried read `chatStream()` performs (ADR-0003): floored the same way
 // every interactive gateway surface is (#3591) — a slow gateway is not a broken gateway. Unlike
 // `streamedReadBounds` (the buffered `chat()` path's per-attempt bound), there is no retry budget
@@ -1125,7 +1114,12 @@ export class Gateway {
       modelId: logModelId(route.provider.modelId),
       ...(endpointDigest === undefined ? {} : { endpointDigest }),
       costClass: route.capability.costClass,
-      timeoutMs: effectiveAttemptTimeoutMs(route.provider, upstreamStreaming),
+      // The bound this call's transport actually applies: the silence floor when it reads
+      // incrementally (each chunk proves the provider alive), the buffered floor for a whole-body
+      // read or `chatStream()`'s degraded fallback for a non-streaming adapter.
+      timeoutMs: upstreamStreaming
+        ? effectiveSilenceMs(route.provider)
+        : effectiveBufferedAttemptMs(route.provider),
       maxRetries: route.provider.maxRetries,
       ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
     };

@@ -925,7 +925,7 @@ function logCommitDraft(
         touchesTests: summary.touchesTests,
         outcome: status === 200 ? "succeeded" : "failed",
         ...(failureCode === undefined ? {} : { failureCode }),
-        ...(bounds ?? {}),
+        ...bounds,
       },
     ),
   );
@@ -976,6 +976,13 @@ function modelDraftFailureResult(
   );
 }
 
+// One draft request's identity and its cancellation: the correlation id every line of the draft
+// carries, and the signal that ends the model call on a client disconnect or the route deadline.
+interface CommitDraftRun {
+  readonly correlationId: string;
+  readonly signal: AbortSignal;
+}
+
 async function computeModelCommitDraft(
   deps: UiHandlerDeps,
   workspace: WorkspaceInfo,
@@ -983,9 +990,9 @@ async function computeModelCommitDraft(
   policy: GitCommitMessagePolicy,
   seams: GitDeliveryExecutionSeams,
   now: () => number,
-  correlationId: string,
-  signal: AbortSignal,
+  run: CommitDraftRun,
 ): Promise<RouteResult> {
+  const { correlationId, signal } = run;
   const log = seams.activityLog ?? processServerLogSink();
   const stagedPaths = await readStagedPathsFor(workspace, seams, now, correlationId);
   const summary = summarizeStagedChangeset(stagedPaths);
@@ -1076,16 +1083,10 @@ export const createHandleCommitDraft = (
     );
     const cancellation = commitDraftCancellation(ctx);
     try {
-      return await computeModelCommitDraft(
-        deps,
-        workspace,
-        req,
-        policy,
-        seams,
-        now,
+      return await computeModelCommitDraft(deps, workspace, req, policy, seams, now, {
         correlationId,
-        cancellation.signal,
-      );
+        signal: cancellation.signal,
+      });
     } catch (error) {
       reportDraftWorktreeFailure(deps, correlationId, error);
       return errResult(409, "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE");
