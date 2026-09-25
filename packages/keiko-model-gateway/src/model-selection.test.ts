@@ -709,7 +709,14 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
             retryBaseDelayMs: 500,
           },
         ],
-        [codingSidecarCapability("no-tools", { toolCalling: false })],
+        // Disabled means refuted by the forced probe: a demoted verified proof is one to renew
+        // instead (config.test.ts, "leaves a lapsed or moved proof renewable").
+        [
+          codingSidecarCapability("no-tools", {
+            toolCalling: false,
+            toolCallingVerification: { ...verifiedToolCallingProof(), status: "unsupported" },
+          }),
+        ],
       ),
       reason: "no-tool-calling" as const,
     },
@@ -768,6 +775,7 @@ describe("resolveCodingSafeSidecarGatewayProfile — tool-calling proof age", ()
         codingSidecarCapability("gpt-5.4", { toolCallingVerification: proof }),
         codingSidecarCapability("mistral-large", {
           toolCalling: false,
+          toolCallingVerification: { ...proof, status: "unsupported" },
           workflowEligible: false,
           preferredUseCases: ["Chat"],
         }),

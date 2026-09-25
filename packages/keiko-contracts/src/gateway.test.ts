@@ -177,6 +177,39 @@ describe("isCodingWorkbenchModel", () => {
     );
   });
 
+  // 1.1.8 lab: the gateway config loader stores a proof that aged out, or one bound to another
+  // deployment configuration, as `toolCalling: false`. That model still claims tool calling and its
+  // remedy is a new probe; only a refuted or never concluded proof claims nothing.
+  it("reads a proof the loader demoted as one to renew", () => {
+    const checkedAt = Date.parse("2026-09-24T08:00:00.000Z");
+    const proof = (
+      status: "verified" | "unsupported" | "unverified",
+    ): ModelCapability["toolCallingVerification"] => ({
+      status,
+      checkedAt: new Date(checkedAt).toISOString(),
+      probe: "gateway-tool-calling-v1",
+      configurationFingerprint: "test-fingerprint",
+    });
+    const young = { nowMs: checkedAt + 60_000 };
+    const aged = { nowMs: checkedAt + TOOL_CALLING_VERIFICATION_MAX_AGE_MS + 1 };
+    const demoted = cap({ toolCalling: false, toolCallingVerification: proof("verified") });
+
+    expect(codingWorkbenchModelEligibility(demoted, aged)).toBe("tool-calling-unverified");
+    expect(codingWorkbenchModelEligibility(demoted, young)).toBe("tool-calling-unverified");
+    expect(isCodingWorkbenchModel(demoted)).toBe(false);
+    expect(
+      codingWorkbenchModelEligibility(cap({ toolCallingVerification: proof("verified") }), young),
+    ).toBe("eligible");
+    for (const status of ["unsupported", "unverified"] as const) {
+      const refused = cap({ toolCalling: false, toolCallingVerification: proof(status) });
+      expect(codingWorkbenchModelEligibility(refused, young)).toBe("ineligible");
+    }
+    const neverProbed = cap({ toolCalling: false, toolCallingVerification: undefined });
+    expect(codingWorkbenchModelEligibility(neverProbed, young)).toBe("ineligible");
+    const embedding = cap({ kind: "embedding", toolCalling: false });
+    expect(codingWorkbenchModelEligibility(embedding, young)).toBe("ineligible");
+  });
+
   // Coding run 25 (2026-09-11): the Coding Workbench builds its picker with
   // `models.filter(isCodingWorkbenchModel)`. While the rule took an optional numeric instant,
   // Array.filter handed it each element's index, so every model was judged as of the epoch and the

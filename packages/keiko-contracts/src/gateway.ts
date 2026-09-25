@@ -362,13 +362,27 @@ export function selectCodingWorkbenchReadinessCandidate(
   return listCodingWorkbenchReadinessCandidates(capabilities).at(0);
 }
 
+/**
+ * Whether the model claims tool calling: it is admitted to call tools, or Keiko's forced tool-call
+ * probe verified it before. The gateway config loader stores a proof that aged out, or that no
+ * longer matches the deployment's configuration, as `toolCalling: false`, so the flag alone read a
+ * lapsed proof as a model that never called tools: after a restart the day after setup nothing
+ * renewed the proof and the Workbench stayed blocked (1.1.8 lab). A refuted (`unsupported`) or
+ * never concluded proof claims nothing.
+ */
+function claimsToolCalling(capability: ModelCapability): boolean {
+  return capability.toolCalling || capability.toolCallingVerification?.status === "verified";
+}
+
 export function codingWorkbenchModelEligibility(
   capability: ModelCapability,
   at?: { readonly nowMs: number },
 ): CodingWorkbenchModelEligibility {
-  const qualified = isCodingWorkbenchReadinessCandidate(capability) && capability.toolCalling;
+  const qualified =
+    isCodingWorkbenchReadinessCandidate(capability) && claimsToolCalling(capability);
   if (!qualified) return "ineligible";
-  return isToolCallingVerificationFresh(capability.toolCallingVerification, at)
+  return capability.toolCalling &&
+    isToolCallingVerificationFresh(capability.toolCallingVerification, at)
     ? "eligible"
     : "tool-calling-unverified";
 }

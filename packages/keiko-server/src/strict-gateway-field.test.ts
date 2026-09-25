@@ -1,10 +1,11 @@
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
+import type { ModelCapability } from "@oscharko-dev/keiko-model-gateway";
 import { buildUiHandlerDeps } from "./deps.js";
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext } from "./routes.js";
@@ -296,6 +297,19 @@ function fieldTmpDir(): string {
 
 function probesSince(log: FakeGatewayLog, mark: number, modelId: string): number {
   return log.chatModels.slice(mark).filter((entry) => entry === modelId).length;
+}
+
+// Moves every stored forced tool-call proof to `checkedAt`, as wall-clock time would on disk.
+function withToolCallingProofsAt(value: unknown, checkedAt: string): unknown {
+  if (Array.isArray(value)) return value.map((item) => withToolCallingProofsAt(item, checkedAt));
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) =>
+      key === "toolCallingVerification" && typeof item === "object" && item !== null
+        ? [key, { ...item, checkedAt }]
+        : [key, withToolCallingProofsAt(item, checkedAt)],
+    ),
+  );
 }
 
 describe("strict LiteLLM field twin", () => {
@@ -736,6 +750,79 @@ describe("strict LiteLLM field twin", () => {
       const profile = await handleCodingSidecarGatewayProfile(ctx("GET", {}), deps);
 
       expect(profile.body).toMatchObject({ status: "available", modelAlias: "qwen-chat" });
+    } finally {
+      await deps?.dispose?.();
+      await closeServer(gateway);
+    }
+  });
+
+  // 1.1.8 lab, a restart the day after setup: the loader stores an aged-out proof as
+  // `toolCalling: false`, and the renewal above keyed on that flag, so after every restart the
+  // Workbench read "no tool calling", probed nothing and stayed blocked until a manual check. Here
+  // the day passes on disk and the process restarts, so the production loader builds the config.
+  it("renews an expired tool-calling proof after a restart the day after setup", async () => {
+    resetCodingWorkbenchContextWindowProbesForTests();
+    const log: FakeGatewayLog = { embeddingBodies: [], chatModels: [] };
+    const gateway = startStrictLiteLlm(
+      log,
+      {},
+      { emptyChatModels: new Set(), answersToolCalls: true },
+    );
+    const port = await listen(gateway);
+    const tmp = fieldTmpDir();
+    const options = {
+      configPath: undefined,
+      evidenceDir: tmp,
+      uiDbPath: join(tmp, "keiko-ui.db"),
+      env: { ...VAULT_ENV, KEIKO_ALLOW_PRIVATE_EGRESS: "true" },
+    };
+
+    let deps: UiHandlerDeps | undefined;
+    try {
+      deps = buildUiHandlerDeps(options);
+      const setup = await handleGatewaySetup(
+        ctx("POST", { baseUrl: `http://127.0.0.1:${String(port)}/v1`, apiKey: "field-token" }),
+        deps,
+      );
+      expect(setup.status).toBe(200);
+      const storagePath = deps.gatewayConfig?.storagePath;
+      if (storagePath === undefined) throw new Error("expected a stored config");
+      const aged = new Date(Date.now() - 25 * 60 * 60 * 1_000).toISOString();
+      const stored: unknown = JSON.parse(readFileSync(storagePath, "utf8"));
+      writeFileSync(storagePath, JSON.stringify(withToolCallingProofsAt(stored, aged)), "utf8");
+      await deps.dispose?.();
+      deps = buildUiHandlerDeps(options);
+      const chatModel = (): ModelCapability | undefined =>
+        deps?.gatewayConfig
+          ?.current()
+          ?.capabilities?.find((capability) => capability.id === "qwen-chat");
+      // The loader still refuses tools on the aged proof; only a renewed proof may admit them.
+      expect(chatModel()?.toolCalling).toBe(false);
+      const mark = log.chatModels.length;
+      const events: ServerLogEvent[] = [];
+      const observed: UiHandlerDeps = {
+        ...deps,
+        activityLog: { write: (event): void => void events.push(event) },
+      };
+
+      const profile = await handleCodingSidecarGatewayProfile(ctx("GET", {}), observed);
+
+      expect(profile.body).toMatchObject({ status: "available", modelAlias: "qwen-chat" });
+      expect(probesSince(log, mark, "qwen-chat")).toBeGreaterThan(0);
+      expect(chatModel()).toMatchObject({
+        toolCalling: true,
+        toolCallingVerification: { status: "verified" },
+      });
+      // The renewal is reconstructable from the log: the automatic run and its verdict.
+      expect(events.map((event) => event.op)).toEqual(
+        expect.arrayContaining([
+          "gateway.readiness.automatic.started",
+          "gateway.readiness.automatic.completed",
+        ]),
+      );
+      expect(
+        events.find((event) => event.op === "gateway.readiness.automatic.completed")?.extra,
+      ).toMatchObject({ overallStatus: "ready" });
     } finally {
       await deps?.dispose?.();
       await closeServer(gateway);

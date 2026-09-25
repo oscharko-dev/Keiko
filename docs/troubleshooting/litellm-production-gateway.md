@@ -79,6 +79,43 @@ real `max_input_tokens` in the LiteLLM model configuration.
 
 ---
 
+## Coding Workbench finds no coding model after a restart the day after setup
+
+| Field             | Value                                                                  |
+| ----------------- | ---------------------------------------------------------------------- |
+| Severity          | High                                                                   |
+| Surface           | Coding Workbench                                                       |
+| Stable identifier | `coding-sidecar.gateway.readiness-insufficient` with `no-tool-calling` |
+
+**Symptom**
+
+Keiko was restarted more than a day after the gateway setup. The Coding Workbench then says the
+automatic tool-calling check did not confirm a compatible coding model, and Settings → Models shows
+the chat models as not verified, with tools "no". A check started from Settings makes the Workbench
+usable again.
+
+**Root Cause**
+
+Keiko's forced tool-call proof expires after 24 hours, and Keiko loads an expired proof as
+`toolCalling: false`. Before 1.1.9 the Workbench read that as a model without tool calling, so its
+profile read renewed nothing and the Workbench stayed blocked. Only a process that kept running
+past the 24 hours renewed the proof by itself.
+
+**Diagnostic Steps**
+
+In the activity log, the Workbench profile read logs `coding-sidecar.gateway.readiness-insufficient`
+with `reason: "no-tool-calling"` and `probeMode: "passive"`, and no
+`gateway.readiness.automatic.started` line precedes it. The model's last
+`gateway.tool-calling.verification` line reads `verified` and is more than 24 hours old.
+
+**Resolution**
+
+Update to 1.1.9 or later: opening the Workbench renews the expired proof itself, and
+`gateway.readiness.automatic.started` / `.completed` record the renewal. On an earlier version, run
+the model's check in Settings → Models once.
+
+---
+
 ## Authenticate x-litellm-key against a proxy that ignores it
 
 | Field             | Value                                                          |

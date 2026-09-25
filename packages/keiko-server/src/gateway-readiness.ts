@@ -1935,11 +1935,13 @@ function reconcileContextWindowReadiness(
 //     the Workbench needs 32,000: the long-context probe proves the window.
 //   - The forced tool-call proof expires after 24 h: the tool-calling probe renews it.
 // `runGatewayReadiness` persists both conclusions. This runs when the Workbench reads its profile,
-// for every chat model that claims tool calling. The model the Workbench would elect is awaited so
-// the profile it reads already reflects the result; the others finish in the background. It is
-// BOUNDED: one attempt per deployment identity within the six-hour cooldown, so a model
-// that really is short-context, or a gateway that is down, is not probed on every read — and a
-// model that never claimed tool calling is never probed from here at all.
+// for every chat model that claims tool calling — including one whose proof the config loader
+// demoted to `toolCalling: false` after it aged out, which is every such model after a restart the
+// day after setup (`codingWorkbenchModelEligibility`). The model the Workbench would elect is
+// awaited so the profile it reads already reflects the result; the others finish in the
+// background. It is BOUNDED: one attempt per deployment identity within the six-hour cooldown, so
+// a model that really is short-context, or a gateway that is down, is not probed on every read —
+// and a model whose probe refuted tool calling, or never concluded, is never probed from here.
 const WORKBENCH_REPROBE_COOLDOWN_MS = 6 * 60 * 60 * 1_000;
 // #3591 (1.1.7): a probe the gateway never answered is not a verdict. It used to hold the six-hour
 // cooldown, so one slow answer at peak load locked the Workbench out with no operator remedy but
