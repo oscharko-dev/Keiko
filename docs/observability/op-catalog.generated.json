@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "6fd0ec564caa823d05733eae6b792fba1fd641a59c8fb5758a2789e163ef680e",
+    "catalogDigest": "9a803375888db4dd27cbc59201e7aba768b5c8fbac6ef3e68e41cbca5112473a",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -7954,7 +7954,11 @@
               "body-too-large",
               "body-invalid",
               "busy",
-              "deadline"
+              "deadline",
+              "approval-denied",
+              "approval-expired",
+              "approval-cancelled",
+              "approval-unavailable"
             ]
           }
         },
@@ -7964,8 +7968,8 @@
         "failureClasses": ["coding-sidecar-tool-facade-rejection"],
         "proofIds": ["coding-sidecar.tool-facade.rejected.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-sidecar-tool-facade.ts:40",
-        "emitterSites": ["packages/keiko-server/src/coding-sidecar-tool-facade.ts:153"]
+        "registrationSite": "packages/keiko-server/src/coding-sidecar-tool-facade.ts:46",
+        "emitterSites": ["packages/keiko-server/src/coding-sidecar-tool-facade.ts:167"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -73679,7 +73683,7 @@
     {
       "op": "coding-runtime.handshake",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1117",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1131",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -73692,7 +73696,7 @@
     {
       "op": "coding-runtime.history",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:997",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1011",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -73730,21 +73734,21 @@
     {
       "op": "coding-runtime.opencode-composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:400",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:414",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.opencode-composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:668",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:682",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.opencode-composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeV2ApprovalRequests.ts:73",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeV2ApprovalRequests.ts:84",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -73983,14 +73987,14 @@
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1576",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1604",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1652",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1680",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -74091,7 +74095,7 @@
     {
       "op": "coding-sidecar.tool-facade.rejected",
       "category": "gateway",
-      "site": "packages/keiko-server/src/coding-sidecar-tool-facade.ts:43",
+      "site": "packages/keiko-server/src/coding-sidecar-tool-facade.ts:49",
       "package": "keiko-server"
     },
     {

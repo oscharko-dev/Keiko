@@ -55,7 +55,11 @@ import {
 } from "./opencodeV2HttpClient.js";
 import { createOpenCodeV2HistoryProjection, OpenCodeV2HistoryError } from "./opencodeV2History.js";
 import { recordContextPresentation } from "./codingRuntimeHistory.js";
-import { createOpenCodeV2ApprovalRequests } from "./opencodeV2ApprovalRequests.js";
+import {
+  createOpenCodeV2ApprovalRequests,
+  type OpenCodeV2ApprovalOutcome,
+  type ToolBridgeApprovalRejection,
+} from "./opencodeV2ApprovalRequests.js";
 import type { SidecarPermissionEvent } from "./codingSidecarEventParser.js";
 import { answerOpenCodeV2Form, projectOpenCodeV2Form, v2FormId } from "./opencodeV2Questions.js";
 import {
@@ -208,7 +212,17 @@ export interface OpenCodeToolBridge {
      * settle the SAME in-flight facade call through the one existing abort path.
      */
     readonly signal?: AbortSignal;
-  }): Promise<{ readonly status: number; readonly body: string }>;
+  }): Promise<OpenCodeToolBridgeResponse>;
+}
+
+/**
+ * `rejection` is set only on a refused governed ask (#3610): the outcome of the human decision,
+ * carried beside the status so the route never reads that 403 as an origin refusal.
+ */
+export interface OpenCodeToolBridgeResponse {
+  readonly status: number;
+  readonly body: string;
+  readonly rejection?: ToolBridgeApprovalRejection;
 }
 
 export interface OpenCodeRuntimeComposition {
@@ -1367,7 +1381,7 @@ function handleDirectToolRequest(
   input: Parameters<OpenCodeToolBridge["handle"]>[0],
   approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>,
   runs: ReadonlyMap<string, PreparedRun>,
-): Promise<{ readonly status: number; readonly body: string }> {
+): Promise<OpenCodeToolBridgeResponse> {
   const preflight = preflightToolRequest(active, deps.capability, input.headers, input.body);
   if (preflight.outcome === "rejected") {
     return Promise.resolve({ status: preflight.status, body: preflight.body });
@@ -1398,23 +1412,37 @@ async function handleV2PermissionRequest(
   signal: AbortSignal | undefined,
   approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>,
   runs: ReadonlyMap<string, PreparedRun>,
-): Promise<{ readonly status: number; readonly body: string }> {
+): Promise<OpenCodeToolBridgeResponse> {
   const run = typeof value.runId === "string" ? runs.get(value.runId) : undefined;
-  if (
-    run?.ready !== true ||
-    run.sessionId === undefined ||
-    run.onPermission === undefined ||
-    signal?.aborted === true
-  )
-    return { status: 403, body: "" };
-  const approved = await approvals.request({
+  if (signal?.aborted === true) return refusedApproval("cancelled");
+  if (run?.ready !== true || run.sessionId === undefined || run.onPermission === undefined)
+    return refusedApproval("unavailable");
+  const outcome = await approvals.request({
     value,
     runId: run.runId,
     sessionId: run.sessionId,
     onPermission: run.onPermission,
     signal: signal ?? new AbortController().signal,
   });
-  return approved ? { status: 200, body: '{"status":"approved"}' } : { status: 403, body: "" };
+  return outcome === "approved"
+    ? { status: 200, body: '{"status":"approved"}' }
+    : refusedApproval(outcome);
+}
+
+const APPROVAL_REJECTIONS: Readonly<
+  Record<Exclude<OpenCodeV2ApprovalOutcome, "approved">, ToolBridgeApprovalRejection>
+> = {
+  denied: "approval-denied",
+  expired: "approval-expired",
+  cancelled: "approval-cancelled",
+  unavailable: "approval-unavailable",
+};
+
+// The plugin only reads `response.ok`, so the status stays 403; the outcome rides beside it.
+function refusedApproval(
+  outcome: Exclude<OpenCodeV2ApprovalOutcome, "approved">,
+): OpenCodeToolBridgeResponse {
+  return { status: 403, body: "", rejection: APPROVAL_REJECTIONS[outcome] };
 }
 
 // The route's own disconnect signal (its client going away mid-execution) and the admission

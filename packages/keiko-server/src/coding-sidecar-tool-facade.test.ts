@@ -202,6 +202,34 @@ describe("coding-sidecar tool facade route", () => {
     ]);
   });
 
+  // #3610: a refused governed ask is a 403 like an origin refusal, but the bridge names the human
+  // decision's outcome. A denied or expired decision was logged as origin-not-allowed before.
+  it.each([
+    ["approval-denied", "authority-denied"],
+    ["approval-expired", "timeout"],
+    ["approval-cancelled", "cancelled"],
+    ["approval-unavailable", "unavailable"],
+  ] as const)(
+    "logs a refused governed ask as %s (%s), never as an origin violation",
+    async (rejection, errorKind) => {
+      const log = captureServerLog();
+      const handle = vi.fn(() => Promise.resolve({ status: 403, body: "", rejection }));
+      const result = await handleCodingSidecarToolFacade(
+        toolFacadeContext({}),
+        depsWith(bridge(handle)),
+      );
+      expect(result).toMatchObject({ status: 403, body: { error: { code: "FORBIDDEN" } } });
+      expect(log.events).toEqual([
+        expect.objectContaining({
+          op: "coding-sidecar.tool-facade.rejected",
+          status: 403,
+          errorKind,
+          extra: { reason: rejection, completeness: "complete", loss: "none" },
+        }),
+      ]);
+    },
+  );
+
   it("rejects an oversized body with 413 before ever calling the bridge, and logs body-too-large", async () => {
     const log = captureServerLog();
     const handle = vi.fn(() => Promise.resolve({ status: 200, body: "{}" }));

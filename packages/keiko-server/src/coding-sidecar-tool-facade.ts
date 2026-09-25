@@ -18,7 +18,10 @@ import {
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { correlationIdOrUnknown } from "./correlation.js";
-import { incomingHeaders } from "./coding-runtime/opencodeRuntimeComposition.js";
+import {
+  incomingHeaders,
+  type OpenCodeToolBridgeResponse,
+} from "./coding-runtime/opencodeRuntimeComposition.js";
 import { CODING_TOOL_MAX_BODY_BYTES } from "./coding-runtime/codingToolIpc.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { readJsonObject } from "./files.js";
@@ -28,14 +31,17 @@ import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 // Closed vocabulary (AGENTS.md §8): every rejection this route can hand back gets ONE body-free
 // warn line naming WHY, never a raw message. A status the bridge can return that is not in this
 // table (200 success, 502 a genuine facade-execution failure already diagnosed at its own source,
-// 503 no run is currently active) intentionally emits no "rejected" line here.
+// 503 no run is currently active) intentionally emits no "rejected" line here. A refused governed
+// ask is a 403 too, but names the human decision's outcome (#3610): denied, expired, cancelled, or
+// unavailable when it could not be put to the human.
 type CodingSidecarToolFacadeRejectionReason =
   | "origin-not-allowed"
   | "capability-invalid"
   | "body-too-large"
   | "body-invalid"
   | "busy"
-  | "deadline";
+  | "deadline"
+  | NonNullable<OpenCodeToolBridgeResponse["rejection"]>;
 
 const CODING_SIDECAR_TOOL_FACADE_REJECTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -56,6 +62,10 @@ const CODING_SIDECAR_TOOL_FACADE_REJECTED_OPERATION = defineActivityLogOperation
         "body-invalid",
         "busy",
         "deadline",
+        "approval-denied",
+        "approval-expired",
+        "approval-cancelled",
+        "approval-unavailable",
       ],
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
@@ -78,6 +88,10 @@ const TOOL_FACADE_REJECTION_ERROR_KIND: Readonly<
   "body-invalid": "invalid-request",
   busy: "unavailable",
   deadline: "timeout",
+  "approval-denied": "authority-denied",
+  "approval-expired": "timeout",
+  "approval-cancelled": "cancelled",
+  "approval-unavailable": "unavailable",
 };
 
 interface ToolFacadeStatusMapping {
@@ -268,15 +282,14 @@ function readToolFacadeBody(
   });
 }
 
-function toolFacadeRouteResult(
-  ctx: RouteContext,
-  result: { readonly status: number; readonly body: string },
-): RouteResult {
+function toolFacadeRouteResult(ctx: RouteContext, result: OpenCodeToolBridgeResponse): RouteResult {
   if (result.status === 200) {
     return { status: 200, body: JSON.parse(result.body) as unknown };
   }
   const mapping = TOOL_FACADE_STATUS_MAPPINGS.get(result.status) ?? TOOL_FACADE_DEFAULT_MAPPING;
-  if (mapping.reason !== undefined) logToolFacadeRejection(ctx, result.status, mapping.reason);
+  // Only a bare 403 is an origin refusal; a refused governed ask names its decision (#3610).
+  const reason = result.rejection ?? mapping.reason;
+  if (reason !== undefined) logToolFacadeRejection(ctx, result.status, reason);
   return {
     status: result.status,
     body: errorBody(mapping.code, mapping.message, ctx.correlationId),
