@@ -500,15 +500,17 @@ type CatalogDispatchOutcome = Awaited<
 // which opens a support incident (#3615).
 type HandlerRefusal = readonly [Exclude<ToolResultStatus, "completed">, ToolResultReason];
 // Every editor-agent conflict and failure code is classified here, so a code added to the contract
-// fails the build until it is (PR #3617 review). `undefined` keeps a code a handler fault.
+// fails the build until it is (PR #3617 review). `undefined` keeps a code a handler fault. An
+// editor that is not connected, or a language provider the workspace cannot serve, is a capability
+// that is unavailable right now, not a Keiko fault: none of them settles as `failed`.
 const EDITOR_REFUSALS: Readonly<
   Record<EditorAgentConflictCode | EditorAgentFailureCode, HandlerRefusal | undefined>
 > = {
   DIRTY: ["invalid", "workspace-stale"],
   VERSION_MISMATCH: ["invalid", "workspace-stale"],
   CONTENT_HASH_MISMATCH: ["invalid", "workspace-stale"],
-  NO_ACTIVE_SESSION: ["failed", "handler-unavailable"],
-  NO_ACTIVE_BRIDGE: ["failed", "handler-unavailable"],
+  NO_ACTIVE_SESSION: ["invalid", "unsupported-capability"],
+  NO_ACTIVE_BRIDGE: ["invalid", "unsupported-capability"],
   INVALID_EDITS: ["invalid", "invalid-arguments"],
   OUT_OF_SCOPE: ["denied", "workspace-denied"],
   DECOMPOSE_PER_ROOT: ["invalid", "invalid-arguments"],
@@ -518,7 +520,7 @@ const EDITOR_REFUSALS: Readonly<
   TIMED_OUT: ["timeout", "deadline-exceeded"],
   QUEUE_FULL: ["busy", "capacity-exhausted"],
   CANCELLED: ["cancelled", "explicit-cancellation"],
-  PROVIDER_UNAVAILABLE: ["failed", "handler-unavailable"],
+  PROVIDER_UNAVAILABLE: ["invalid", "unsupported-capability"],
   UNSUPPORTED_OPERATION: ["invalid", "unsupported-capability"],
   LIMIT_EXCEEDED: ["invalid", "invalid-arguments"],
   DUPLICATE_ACTION: ["invalid", "replay-conflict"],

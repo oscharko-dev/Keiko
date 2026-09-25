@@ -1381,7 +1381,7 @@ describe("private OpenCode run control", () => {
       // The check runs under the run's own tool capability, the one its tool calls carry.
       editBaseDigest: (capability, relativePath) => {
         checked.push(`${String(capability === TOOL_CAPABILITY)}:${relativePath}`);
-        return Promise.resolve("b".repeat(64));
+        return Promise.resolve({ kind: "digest", digest: "b".repeat(64) });
       },
     };
     const fixture = await startBridgeFixture(staleFacade, undefined, {

@@ -72,7 +72,11 @@ import {
 } from "./coding-runtime/opencodeToolSchemas.js";
 import type { OpenCodeOptionalToolName } from "./coding-runtime/opencodeLaunchProfile.js";
 import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "./correlation.js";
-import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import {
+  describeError,
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+} from "./diagnostics-log.js";
 import { readJsonObject } from "./files.js";
 import { safetyMarginTokensFor } from "@oscharko-dev/keiko-contracts/context-engineering";
 import {
@@ -475,6 +479,23 @@ const CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION = defineActivityLogOperation(
         "sequence-exhausted",
         "capacity-pressure",
       ],
+    },
+    // The Keiko-code frames and cause classes of the failure, when the turn failed on an error
+    // (PR #3617 review): a model-answer failure writes no error-level diagnostic, so this line is
+    // where its frames live.
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -1616,18 +1637,13 @@ function reportGatewayTurnFailure(
   deps: UiHandlerDeps,
   runId: string,
   failureCode: CodingWorkbenchTurnFailureCode,
+  error?: unknown,
 ): boolean {
   const snapshot = deps.codingRuntimeOrchestrator?.getSnapshot(runId);
   if (snapshot?.state !== "running" && snapshot?.state !== "paused") return false;
   const publicationReason = gatewayTurnFailurePublication(deps, runId, snapshot, failureCode);
-  logGatewayTurnFailure(
-    ctx,
-    runId,
-    snapshot.revision,
-    snapshot.state,
-    failureCode,
-    publicationReason,
-  );
+  const run = { revision: snapshot.revision, state: snapshot.state };
+  logGatewayTurnFailure(ctx, runId, run, failureCode, publicationReason, error);
   return true;
 }
 
@@ -1659,11 +1675,12 @@ function gatewayTurnFailurePublication(
 function logGatewayTurnFailure(
   ctx: RouteContext,
   runId: string,
-  revision: number,
-  state: "running" | "paused",
+  { revision, state }: { readonly revision: number; readonly state: "running" | "paused" },
   failureCode: CodingWorkbenchTurnFailureCode,
   publicationReason: GatewayFailurePublicationReason,
+  error: unknown,
 ): void {
+  const { frames, causeChain } = describeError(error);
   getServerLogger().warn(
     activityLogEvent(
       CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION,
@@ -1678,6 +1695,8 @@ function logGatewayTurnFailure(
         failureCode,
         published: publicationReason === "published",
         publicationReason,
+        ...(error === undefined || frames === undefined ? {} : { frames }),
+        ...(error === undefined || causeChain === undefined ? {} : { causeChain }),
         completeness: "complete",
         loss: "none",
       },
@@ -2434,6 +2453,7 @@ function settleFailedGatewayChat(
       deps,
       runId,
       spendReason === undefined ? gatewayTurnFailureCode(error) : "turn-rejected",
+      error,
     );
   emitGatewayFailureDiagnostic(ctx, deps, error, runId, turnFailureRecorded);
   settlePromptTokenReservation(deps, delivery.promptTokenReservation);
@@ -2528,6 +2548,7 @@ async function streamGatewayChat(
       deps,
       runId,
       gatewayTurnFailureCode(error),
+      error,
     );
     emitGatewayFailureDiagnostic(ctx, deps, error, runId, turnFailureRecorded);
     settlePromptTokenReservation(deps, promptTokenReservation);
@@ -2566,7 +2587,13 @@ async function pumpGatewayStreamWithCancellation(
   } catch (error) {
     const turnFailureRecorded =
       !cancellationSignal.aborted &&
-      reportGatewayTurnFailure(session.ctx, deps, session.runId, gatewayStreamFailureCode(error));
+      reportGatewayTurnFailure(
+        session.ctx,
+        deps,
+        session.runId,
+        gatewayStreamFailureCode(error),
+        error,
+      );
     emitGatewayStreamFailureDiagnostic(
       session.ctx,
       deps,

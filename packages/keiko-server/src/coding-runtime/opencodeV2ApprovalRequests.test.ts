@@ -14,6 +14,7 @@ import {
   formatActivityLogProofLine,
 } from "../../../../tests/support/activity-log-proof.js";
 import { capturedGeneratedV2Ask } from "./opencodeFunctionalHarness/_governedTools.js";
+import type { CodingToolEditBaseRead } from "./codingToolFacadePorts.js";
 import {
   createOpenCodeV2ApprovalRequests,
   type OpenCodeV2EditBaseDigest,
@@ -74,10 +75,17 @@ function requestIdOf(ask: Asked, index = 0): string {
   return requestId;
 }
 
+function digestOf(digest: string): Promise<CodingToolEditBaseRead> {
+  return Promise.resolve({ kind: "digest", digest });
+}
+
 function digestPort(
   digests: Readonly<Record<string, string | undefined>>,
 ): OpenCodeV2EditBaseDigest {
-  return (relativePath) => Promise.resolve(digests[relativePath]);
+  return (relativePath) => {
+    const digest = digests[relativePath];
+    return digest === undefined ? Promise.resolve({ kind: "unreadable" }) : digestOf(digest);
+  };
 }
 
 afterEach(() => {
@@ -374,7 +382,7 @@ describe("OpenCode V2 approval requests", () => {
         signal: new AbortController().signal,
         editBaseDigest: (relativePath) => {
           checked.push(relativePath);
-          return Promise.resolve(relativePath === "src/other.ts" ? "c".repeat(64) : BASE);
+          return digestOf(relativePath === "src/other.ts" ? "c".repeat(64) : BASE);
         },
       }),
     ).resolves.toEqual({
@@ -514,6 +522,60 @@ describe("OpenCode V2 approval requests", () => {
     );
   });
 
+  // PR #3617 review: a run whose live authority no longer admits the read puts no ask to the human
+  // unverified; a check that throws says how far it got; a check the registry's closing ended
+  // records the teardown, not a verdict.
+  it("refuses an ask the run's authority no longer admits, and logs how each check ended", async () => {
+    const log = createBufferedServerLogSink();
+    const approvals = createOpenCodeV2ApprovalRequests(undefined, log);
+    const ask = asked();
+    const request = async (
+      callId: string,
+      editBaseDigest: OpenCodeV2EditBaseDigest,
+    ): Promise<unknown> =>
+      approvals.request({
+        value: await editAsk(
+          callId,
+          editArgs([
+            { file: "src/example.ts", expectedContentHash: BASE },
+            { file: "src/other.ts", expectedContentHash: BASE },
+          ]),
+        ),
+        runId: RUN_ID,
+        sessionId: SESSION_ID,
+        onPermission: ask.onPermission,
+        signal: new AbortController().signal,
+        editBaseDigest,
+      });
+
+    await expect(
+      request("call_denied", (path) =>
+        path === "src/example.ts" ? digestOf(BASE) : Promise.resolve({ kind: "authority-denied" }),
+      ),
+    ).resolves.toEqual({ outcome: "unavailable", actionId: `${SESSION_ID}:call_denied` });
+    await request("call_throws", (path) =>
+      path === "src/example.ts" ? digestOf(BASE) : Promise.reject(new Error("secure read")),
+    );
+    await expect(
+      // The registry closes during the first read, whose digest is stale: the teardown wins.
+      request("call_closed", () => {
+        approvals.close();
+        return digestOf("c".repeat(64));
+      }),
+    ).resolves.toEqual({ outcome: "cancelled", actionId: `${SESSION_ID}:call_closed` });
+    expect(ask.events).toEqual([]);
+
+    const lines = log.events.filter((event) => event.op === "coding-runtime.approval.base-checked");
+    expect(
+      lines.map((line) => [line.errorKind, line.extra?.outcome, line.extra?.checkedFileCount]),
+    ).toEqual([
+      ["authority-denied", "denied", 1],
+      ["internal", "failed", 1],
+      [undefined, "cancelled", 1],
+    ]);
+    expect(lines[2]?.extra).not.toHaveProperty("staleFileSha256");
+  });
+
   // PR #3617 review: a registry closed while an edit's base is read, its run disposed, puts the ask
   // to no one, and a closed registry cancels any later ask at once.
   it("asks no one once the registry closed during or before the base check", async () => {
@@ -528,7 +590,7 @@ describe("OpenCode V2 approval requests", () => {
         signal: new AbortController().signal,
         editBaseDigest: () => {
           approvals.close();
-          return Promise.resolve(BASE);
+          return digestOf(BASE);
         },
       }),
     ).resolves.toEqual({ outcome: "cancelled", actionId: `${SESSION_ID}:call_closing` });
@@ -557,7 +619,7 @@ describe("OpenCode V2 approval requests", () => {
         signal: controller.signal,
         editBaseDigest: () => {
           controller.abort();
-          return Promise.resolve(BASE);
+          return digestOf(BASE);
         },
       }),
     ).resolves.toEqual({ outcome: "cancelled", actionId: `${SESSION_ID}:call_gone` });

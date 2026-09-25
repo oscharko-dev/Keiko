@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   CodingSafeActivityFeed,
   CodingSafeActivityMessageRole,
@@ -78,6 +79,21 @@ const CODING_RUNTIME_SAFE_ACTIVITY_OPERATION = defineActivityLogOperation({
       ],
     },
     occurrenceCount: { type: "integer", dataClass: "count", required: false },
+    // On a superseded update only: which call it restated, as a digest, and the call's settled state
+    // against the state the late update restated (PR #3617 review).
+    callIdSha256: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    settledState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["succeeded", "failed", "denied", "cancelled"],
+    },
+    restatedState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["pending", "running", "failed"],
+    },
     // #3610: why the projection refused a well-formed signal, on a projection-rejected drop only.
     rejection: {
       type: "string",
@@ -376,9 +392,8 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     const priorFeed = rollbackNeeded ? structuredClone(entry.feed) : undefined;
     const priorMessageTurns = rollbackNeeded ? new Map(entry.messageTurns) : undefined;
     const application = applySignal(entry, signal, this.limits);
-    const rejection = projectionRejection(application);
-    if (rejection !== undefined) return this.reject(runId, "projection-rejected", rejection);
-    this.noteSupersededRestatement(runId, application);
+    const ended = this.endedApplication(runId, entry, signal, application);
+    if (ended !== undefined) return ended;
     if (signal.signalId !== undefined) {
       rememberBoundedIdentity(entry.signalIds, signal.signalId, this.maxSignalIdentities);
     }
@@ -607,11 +622,29 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     if (this.subscribers.size === 0) this.subscriberRunId = undefined;
   }
 
-  // A late update that restates an earlier state of a call Keiko already settled is set aside; the
-  // line records that it arrived, so the log reconstructs every update (PR #3617 review).
-  private noteSupersededRestatement(runId: string, application: SignalApplication): void {
-    if (application !== "restatement-superseded") return;
+  // A refused signal is a drop and a superseded one is set aside; either ends the ingest here.
+  private endedApplication(
+    runId: string,
+    entry: ProjectionEntry,
+    signal: CodingSafeActivitySignal,
+    application: SignalApplication,
+  ): boolean | undefined {
+    const rejection = projectionRejection(application);
+    if (rejection !== undefined) return this.reject(runId, "projection-rejected", rejection);
+    return application === "restatement-superseded"
+      ? this.supersede(runId, entry, signal)
+      : undefined;
+  }
+
+  // A late update that restates an earlier state of a call Keiko already settled is set aside: it
+  // changes neither the feed nor its timestamp and notifies no one. Its line names the call, as a
+  // digest, and both states, so the log reconstructs every update (PR #3617 review).
+  private supersede(runId: string, entry: ProjectionEntry, signal: CodingSafeActivitySignal): true {
+    if (signal.signalId !== undefined) {
+      rememberBoundedIdentity(entry.signalIds, signal.signalId, this.maxSignalIdentities);
+    }
     this.supersededRestatementCount += 1;
+    const restatement = signal.kind === "tool" ? supersededRestatement(entry, signal) : {};
     this.activityLog?.write(
       activityLogEvent(
         CODING_RUNTIME_SAFE_ACTIVITY_OPERATION,
@@ -620,9 +653,11 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
           event: "superseded",
           reason: "late-restatement",
           occurrenceCount: this.supersededRestatementCount,
+          ...restatement,
         },
       ),
     );
+    return true;
   }
 
   private emitDropMilestones(
@@ -893,6 +928,39 @@ function shrinkPlan(plan: MutablePlan, maxBytes: number): void {
     plan.steps.pop();
     plan.truncated = true;
   }
+}
+
+const TOOL_SETTLED_STATES: ReadonlySet<string> = new Set([
+  "succeeded",
+  "failed",
+  "denied",
+  "cancelled",
+]);
+const TOOL_RESTATED_STATES: ReadonlySet<string> = new Set(["pending", "running", "failed"]);
+
+function supersededRestatement(
+  entry: ProjectionEntry,
+  signal: Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>,
+): {
+  readonly callIdSha256: string;
+  readonly settledState?: "succeeded" | "failed" | "denied" | "cancelled";
+  readonly restatedState?: "pending" | "running" | "failed";
+} {
+  const settled = locateToolTurn(entry, signal)?.turn.tools.find(
+    ({ callId }) => callId === signal.callId,
+  )?.state;
+  return {
+    callIdSha256: createHash("sha256")
+      .update("keiko.safe-activity.call.v1\0")
+      .update(signal.callId)
+      .digest("hex"),
+    ...(settled !== undefined && TOOL_SETTLED_STATES.has(settled)
+      ? { settledState: settled as "succeeded" | "failed" | "denied" | "cancelled" }
+      : {}),
+    ...(TOOL_RESTATED_STATES.has(signal.state)
+      ? { restatedState: signal.state as "pending" | "running" | "failed" }
+      : {}),
+  };
 }
 
 function locateToolTurn(

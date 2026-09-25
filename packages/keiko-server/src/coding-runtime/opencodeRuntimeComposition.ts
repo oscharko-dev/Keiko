@@ -46,7 +46,7 @@ import {
   parseCodingToolRequest,
   type CodingToolResult,
 } from "./codingToolIpc.js";
-import type { CodingToolFacade } from "./codingToolFacadePorts.js";
+import type { CodingToolEditBaseRead, CodingToolFacade } from "./codingToolFacadePorts.js";
 import { staleEditBaseToolResult } from "./codingToolFacade.js";
 import type { OpenCodeQuestionRequest } from "./opencodeHttpClient.js";
 import {
@@ -1440,8 +1440,10 @@ async function handleV2PermissionRequest(
     ...(editBaseDigest === undefined
       ? {}
       : {
-          editBaseDigest: (file: string, readSignal: AbortSignal): Promise<string | undefined> =>
-            editBaseDigest(deps.capability, file, readSignal),
+          editBaseDigest: (
+            file: string,
+            readSignal: AbortSignal,
+          ): Promise<CodingToolEditBaseRead> => editBaseDigest(deps.capability, file, readSignal),
         }),
   });
   settleDecidedTool(deps.settleTool, decision);

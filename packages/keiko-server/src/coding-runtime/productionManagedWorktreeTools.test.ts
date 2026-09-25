@@ -493,34 +493,39 @@ describe("production managed worktree tools", () => {
     const baseCheck = facade.editBaseDigest;
     if (baseCheck === undefined) throw new Error("the production facade has no base check");
     const signal = new AbortController().signal;
-    const editBaseDigest = (path: string): Promise<string | undefined> =>
+    const editBaseDigest = (path: string): Promise<unknown> =>
       baseCheck("opaque-capability", path, signal);
+    const unreadable = { kind: "unreadable" };
+    const denied = { kind: "authority-denied" };
 
-    await expect(editBaseDigest("src/example.ts")).resolves.toBe(read.read.digest);
+    await expect(editBaseDigest("src/example.ts")).resolves.toEqual({
+      kind: "digest",
+      digest: read.read.digest,
+    });
     // A file the read cannot return (a new file) leaves the check to the editor route.
-    await expect(editBaseDigest("src/missing.ts")).resolves.toBeUndefined();
+    await expect(editBaseDigest("src/missing.ts")).resolves.toEqual(unreadable);
     // A denied path is never read, so the check is no digest oracle for a file the model may not read.
     readText.mockClear();
-    await expect(editBaseDigest(".env")).resolves.toBeUndefined();
-    await expect(editBaseDigest("../outside.ts")).resolves.toBeUndefined();
+    await expect(editBaseDigest(".env")).resolves.toEqual(unreadable);
+    await expect(editBaseDigest("../outside.ts")).resolves.toEqual(unreadable);
     expect(readText).not.toHaveBeenCalled();
     // PR #3617 review: the run's live authority admits the read first, like keiko_workspace_read,
-    // so an expired or revoked run reads nothing, and a capability that is missing reads nothing.
-    await expect(baseCheck(undefined, "src/example.ts", signal)).resolves.toBeUndefined();
+    // so an expired or revoked run, or a missing capability, reads nothing and says it was denied.
+    await expect(baseCheck(undefined, "src/example.ts", signal)).resolves.toEqual(denied);
     authorityLive = false;
-    await expect(editBaseDigest("src/example.ts")).resolves.toBeUndefined();
+    await expect(editBaseDigest("src/example.ts")).resolves.toEqual(denied);
     expect(readText).not.toHaveBeenCalled();
-    // Authority that ends during the read answers nothing either.
+    // Authority that ends during the read is a denial too.
     authorityLive = true;
     revokeDuringRead = true;
-    await expect(editBaseDigest("src/example.ts")).resolves.toBeUndefined();
+    await expect(editBaseDigest("src/example.ts")).resolves.toEqual(denied);
     expect(readText).toHaveBeenCalledOnce();
     revokeDuringRead = false;
     authorityLive = true;
     readText.mockClear();
     // Only while this run's exact managed workspace is the active one.
     access = undefined;
-    await expect(editBaseDigest("src/example.ts")).resolves.toBeUndefined();
+    await expect(editBaseDigest("src/example.ts")).resolves.toEqual(unreadable);
     expect(readText).not.toHaveBeenCalled();
   });
 

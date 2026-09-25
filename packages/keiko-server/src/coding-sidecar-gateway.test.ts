@@ -4553,6 +4553,11 @@ describe("coding sidecar gateway turn failure projection", () => {
       "coding-sidecar.gateway.turn-failed.emitted-line",
       formatActivityLogProofLine(projected ?? {}),
     );
+    // PR #3617 review: the line carries the failure's Keiko-code frames, so a model-answer failure
+    // that writes no error-level diagnostic still has them.
+    expect(projected?.extra?.frames).toEqual(
+      expect.arrayContaining([expect.stringMatching(/^packages\/keiko-server\//u)]),
+    );
     // A turn the model ended without a usable answer is its answer, not a server fault: no
     // error-level diagnostic, so no support incident for it. Every other cause keeps the diagnostic.
     const modelAnswer =

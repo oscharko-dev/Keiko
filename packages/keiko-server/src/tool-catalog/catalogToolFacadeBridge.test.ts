@@ -374,7 +374,8 @@ describe("canonical catalog facade bridge", () => {
   );
 
   // PR #3617 review: every editor-agent conflict and failure code is classified at the bridge, so
-  // none becomes a bare handler fault. An editor that is not connected is an unavailable handler.
+  // none becomes a handler fault, none settles as failed, and none opens a support incident. An
+  // editor that is not connected is a capability that is unavailable right now.
   const UNAVAILABLE_EDITOR_CODES: ReadonlySet<string> = new Set([
     "NO_ACTIVE_SESSION",
     "NO_ACTIVE_BRIDGE",
@@ -394,7 +395,7 @@ describe("canonical catalog facade bridge", () => {
     return log.events.at(-1);
   }
 
-  it.each(EDITOR_CODES.filter((code) => !UNAVAILABLE_EDITOR_CODES.has(code)))(
+  it.each(EDITOR_CODES)(
     "settles the editor refusal %s as its own verdict below error level",
     async (code) => {
       const settled = await settledEditorRefusal(code);
@@ -405,10 +406,11 @@ describe("canonical catalog facade bridge", () => {
   );
 
   it.each([...UNAVAILABLE_EDITOR_CODES])(
-    "settles the editor code %s as an unavailable handler, not a handler fault",
+    "settles the editor code %s as an unavailable capability, not a handler fault",
     async (code) => {
       const settled = await settledEditorRefusal(code);
-      expect(settled?.extra).toMatchObject({ status: "failed", reason: "handler-unavailable" });
+      expect(settled?.extra).toMatchObject({ status: "invalid", reason: "unsupported-capability" });
+      expect(settled?.errorKind).toBe("unavailable");
     },
   );
 

@@ -1063,7 +1063,10 @@ the event carries no provider response body or customer content. Each gateway tu
 including another failed model request at the same task revision, writes
 `coding-sidecar.gateway.turn-failed` with the closed failure code, request correlation, run parent,
 revision, state, and a closed publication reason (published, unavailable hub, terminal run, invalid
-event, exhausted sequence, or capacity pressure). A revision is a task-state version, not a turn identifier, so
+event, exhausted sequence, or capacity pressure). When the turn failed on an error, the line also
+carries that error's Keiko-code `frames` and `causeChain`: a model-answer failure (`empty-answer`,
+`output-exhausted`, `invalid-tool-call`) writes no error-level diagnostic while the line is written,
+so this line is where its frames live. A revision is a task-state version, not a turn identifier, so
 it must not suppress later turn failures.
 A sidecar process that exits while its run is active publishes one `failure-redacted` event
 (`runtime-failed`) and writes the `coding-runtime.exit` diagnostic with the numeric exit code and

@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "6afd51ea07e4a0b1f532343971d1813d4f7a3e7c8ebdd15a33ee7a8b35c039de" as const;
+  "be18d821d9102273545c0b30d320e61d713a628c183538ca9e34dfa23e8a93de" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -3459,7 +3459,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["current", "stale", "failed", "cancelled"],
+        values: ["current", "stale", "denied", "failed", "cancelled"],
       },
       fileCount: {
         type: "integer",
@@ -6490,6 +6490,24 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      callIdSha256: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
+      },
+      settledState: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["succeeded", "failed", "denied", "cancelled"],
+      },
+      restatedState: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["pending", "running", "failed"],
+      },
       rejection: {
         type: "string",
         dataClass: "closed-enum",
@@ -7603,6 +7621,20 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "sequence-exhausted",
           "capacity-pressure",
         ],
+      },
+      frames: {
+        type: "string-array",
+        dataClass: "safe-platform-class",
+        required: false,
+        maxLength: 512,
+        maxItems: 8,
+      },
+      causeChain: {
+        type: "string-array",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 128,
+        maxItems: 5,
       },
     },
     causal: "correlation",
@@ -35520,6 +35552,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "callIdSha256",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
               name: "event",
               type: "string",
               dataClass: "closed-enum",
@@ -35549,8 +35587,20 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               dataClass: "closed-enum",
               required: false,
             },
+            {
+              name: "restatedState",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "settledState",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -36004,10 +36054,22 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "failure-cluster",
           safeContextFields: [
             {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
               name: "failureCode",
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "safe-platform-class",
+              required: false,
             },
             {
               name: "publicationReason",
@@ -36044,12 +36106,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "closed-enum",
             "completeness-state",
             "count",
+            "error-kind",
             "loss-state",
             "opaque-id",
+            "safe-platform-class",
           ],
           frameCauseEvidence: {
-            frames: false,
-            causeChain: false,
+            frames: true,
+            causeChain: true,
           },
           proofIds: ["coding-sidecar.gateway.turn-failed.emitted-line"],
           replayReferences: [],

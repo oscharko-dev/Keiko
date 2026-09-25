@@ -223,14 +223,15 @@ them fail-closed with exact keys, so an ask that names another call or session, 
 match the asked files, never reaches the human (#3612). Before an edit ask is put to the human, the
 server compares each base with the digest a governed read of the file reports now. The read goes
 only as far as `keiko_workspace_read` would: the run's live authority and producer binding must
-admit a read of the path before and after it, without reserving a delegation, so an expired or
-revoked run reads nothing. A stale base is refused without asking anyone, answered 409 with the
+admit a read of the path before and after it, without reserving a delegation. An expired or
+revoked run reads nothing, and its ask is refused as unavailable instead of reaching the human
+unverified. A stale base is refused without asking anyone, answered 409 with the
 edit's own `CONTENT_HASH_MISMATCH` refusal and re-read guidance for the model, and logged as
 `approval-stale` on the existing `coding-sidecar.tool-facade.rejected` line. Every check writes
 `coding-runtime.approval.base-checked` under the run's correlation: the ask's request id, the
-outcome (`current`, `stale`, `failed`, `cancelled`), the file counts, and a stale file only as a
-digest. An ask that arrives after, or whose check finishes after, the run's approval registry
-closed is cancelled and reaches no one. A denied ask settles its tool call as `denied`, an expired
+outcome (`current`, `stale`, `denied`, `failed`, `cancelled`), the file counts up to where the check
+ended, and a stale file only as a digest. An ask that arrives after, or whose check finishes after,
+the run's approval registry closed is cancelled, logged as `cancelled`, and reaches no one. A denied ask settles its tool call as `denied`, an expired
 or cancelled one as `cancelled`, so the timeline shows the human's verdict instead of the generic
 failure OpenCode reports for a refused call.
 

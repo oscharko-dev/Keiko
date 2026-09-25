@@ -288,14 +288,28 @@ describe("bounded coding safe-activity projection", () => {
           occurredAt: "2026-07-18T17:00:00.004Z",
         },
       ];
-      for (const signal of signals) expect(projection.ingest(RUN_ID, signal)).toBe(true);
+      const [created, settle, lateUpdate] = signals;
+      if (created === undefined || settle === undefined || lateUpdate === undefined)
+        throw new Error("expected three tool signals");
+      expect(projection.ingest(RUN_ID, created)).toBe(true);
+      expect(projection.ingest(RUN_ID, settle)).toBe(true);
+      const beforeLate = projection.currentContent();
+      const notified = vi.fn();
+      projection.subscribeContent(notified);
+      expect(projection.ingest(RUN_ID, lateUpdate)).toBe(true);
+      // PR #3617 review: the late update changes neither the feed nor its timestamp, and notifies
+      // no one.
+      expect(projection.currentContent()).toEqual(beforeLate);
+      expect(notified).not.toHaveBeenCalled();
       expect(projection.currentContent()).toMatchObject({
         feed: {
           droppedEventCount: 0,
+          updatedAt: "2026-07-18T17:00:00.003Z",
           turns: [{ tools: [{ callId: "call_fast", state: settled }] }],
         },
       });
-      // PR #3617 review: the late update is set aside, not silently discarded.
+      // PR #3617 review: the late update is set aside, not silently discarded, and its line names
+      // the call, as a digest, and both states.
       const superseded = activityLog.events.filter(
         (event) => event.op === "coding-runtime.safe-activity",
       );
@@ -306,6 +320,9 @@ describe("bounded coding safe-activity projection", () => {
             event: "superseded",
             reason: "late-restatement",
             occurrenceCount: 1,
+            callIdSha256: expect.stringMatching(/^[a-f0-9]{64}$/u) as unknown,
+            settledState: settled,
+            restatedState: late,
           }) as unknown,
         }),
       ]);

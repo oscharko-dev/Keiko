@@ -14,6 +14,7 @@ import {
 } from "../diagnostics-log.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 import type { SidecarPermissionEvent } from "./codingSidecarEventParser.js";
+import type { CodingToolEditBaseRead } from "./codingToolFacadePorts.js";
 import { projectOpenCodePermissionEvent } from "./opencodeProtocol.js";
 
 /**
@@ -40,11 +41,11 @@ export type OpenCodeV2ApprovalDecision =
       readonly actionId?: string | undefined;
     };
 
-/** The digest a governed read of the file reports now, or undefined when it cannot say. */
+/** What a governed read of the file answers now: its digest, that it cannot say, or a denial. */
 export type OpenCodeV2EditBaseDigest = (
   relativePath: string,
   signal: AbortSignal,
-) => Promise<string | undefined>;
+) => Promise<CodingToolEditBaseRead>;
 
 /** How a human decision ended; a stale base never reaches one. */
 type HumanDecisionOutcome = Exclude<OpenCodeV2ApprovalOutcome, "stale">;
@@ -95,7 +96,7 @@ const CODING_RUNTIME_APPROVAL_BASE_CHECKED_OPERATION = defineActivityLogOperatio
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["current", "stale", "failed", "cancelled"],
+      values: ["current", "stale", "denied", "failed", "cancelled"],
     },
     fileCount: { type: "integer", dataClass: "count", required: true },
     checkedFileCount: { type: "integer", dataClass: "count", required: true },
@@ -109,18 +110,21 @@ const CODING_RUNTIME_APPROVAL_BASE_CHECKED_OPERATION = defineActivityLogOperatio
   releaseImpact: "patch",
 });
 
-type BaseCheckOutcome = "current" | "stale" | "failed" | "cancelled";
+type BaseCheckOutcome = "current" | "stale" | "denied" | "failed" | "cancelled";
 
 interface BaseCheck {
   /** The asked files the governed read could answer for. */
   readonly checkedFileCount: number;
   readonly staleFile?: string | undefined;
+  /** The run's live authority no longer admits a read of an asked file. */
+  readonly authorityDenied?: boolean | undefined;
 }
 
 const BASE_CHECK_ENVELOPES = {
   current: {},
   cancelled: {},
   stale: { level: "warn", errorKind: "conflict" },
+  denied: { level: "warn", errorKind: "authority-denied" },
   failed: { level: "warn", errorKind: "internal" },
 } as const;
 
@@ -214,21 +218,47 @@ function parsedAsk(value: unknown, runId: string, sessionId: string): ParsedAsk 
   return event === undefined ? undefined : { event, actionId, bases };
 }
 
-// Stops at the first asked file whose governed read no longer reports the changeset's base digest.
-// A file the read cannot answer for (a new file, a denied path) is left to the editor route's check.
+// Stops at the first asked file whose governed read no longer reports the changeset's base digest,
+// or that the run's authority no longer admits. A file the read cannot answer for (a new file, a
+// denied path) is left to the editor route's check. `progress` counts the files checked so far, so
+// a check that throws still says how far it got (PR #3617 review).
 async function baseCheck(
   bases: readonly EditBase[],
   editBaseDigest: OpenCodeV2EditBaseDigest,
   signal: AbortSignal,
+  progress: { checkedFileCount: number },
 ): Promise<BaseCheck> {
-  let checkedFileCount = 0;
   for (const { file, expectedContentHash } of bases) {
     const current = await editBaseDigest(file, signal);
-    if (current === undefined) continue;
-    checkedFileCount += 1;
-    if (current !== expectedContentHash) return { checkedFileCount, staleFile: file };
+    if (current.kind === "authority-denied") {
+      return { checkedFileCount: progress.checkedFileCount, authorityDenied: true };
+    }
+    if (current.kind === "unreadable") continue;
+    progress.checkedFileCount += 1;
+    if (current.digest !== expectedContentHash) {
+      return { checkedFileCount: progress.checkedFileCount, staleFile: file };
+    }
   }
-  return { checkedFileCount };
+  return { checkedFileCount: progress.checkedFileCount };
+}
+
+// A check that ended with its caller or its registry records the teardown, never a verdict.
+function baseCheckOutcome(check: BaseCheck, ended: boolean): BaseCheckOutcome {
+  if (ended) return "cancelled";
+  if (check.authorityDenied === true) return "denied";
+  return check.staleFile === undefined ? "current" : "stale";
+}
+
+function baseCheckDecision(
+  outcome: BaseCheckOutcome,
+  ask: ParsedAsk,
+  check: BaseCheck,
+): OpenCodeV2ApprovalDecision | undefined {
+  if (outcome === "current") return undefined;
+  if (outcome === "stale" && check.staleFile !== undefined) {
+    return { outcome: "stale", actionId: ask.actionId, staleFile: check.staleFile };
+  }
+  return { outcome: outcome === "cancelled" ? "cancelled" : "unavailable", actionId: ask.actionId };
 }
 
 function staleFileDigest(file: string): string {
@@ -252,9 +282,9 @@ function recordBaseCheck(
         outcome,
         fileCount: ask.bases.length,
         checkedFileCount: check.checkedFileCount,
-        ...(check.staleFile === undefined
-          ? {}
-          : { staleFileSha256: staleFileDigest(check.staleFile) }),
+        ...(outcome === "stale" && check.staleFile !== undefined
+          ? { staleFileSha256: staleFileDigest(check.staleFile) }
+          : {}),
       },
     ),
   );
@@ -266,28 +296,24 @@ interface ApprovalSinks {
 }
 
 // A failed base check fails the ask closed: the human is not asked about a change whose base no
-// one could verify. A caller that went away meanwhile cancels the ask. Every outcome is logged.
+// one could verify, nor about one the run's authority no longer admits. A caller that went away, or
+// a registry that closed, meanwhile cancels the ask. Every outcome is logged.
 async function checkedBase(
   ask: ParsedAsk,
   runId: string,
   editBaseDigest: OpenCodeV2EditBaseDigest,
   signal: AbortSignal,
-  sinks: ApprovalSinks,
+  context: { readonly sinks: ApprovalSinks; readonly ended: () => boolean },
 ): Promise<OpenCodeV2ApprovalDecision | undefined> {
-  const { diagnostics, activityLog } = sinks;
+  const { diagnostics, activityLog } = context.sinks;
+  const progress = { checkedFileCount: 0 };
   try {
-    const check = await baseCheck(ask.bases, editBaseDigest, signal);
-    if (signal.aborted) {
-      recordBaseCheck(activityLog, runId, ask, "cancelled", check);
-      return { outcome: "cancelled", actionId: ask.actionId };
-    }
-    const { staleFile } = check;
-    recordBaseCheck(activityLog, runId, ask, staleFile === undefined ? "current" : "stale", check);
-    return staleFile === undefined
-      ? undefined
-      : { outcome: "stale", actionId: ask.actionId, staleFile };
+    const check = await baseCheck(ask.bases, editBaseDigest, signal, progress);
+    const outcome = baseCheckOutcome(check, context.ended());
+    recordBaseCheck(activityLog, runId, ask, outcome, check);
+    return baseCheckDecision(outcome, ask, check);
   } catch (error) {
-    recordBaseCheck(activityLog, runId, ask, "failed", { checkedFileCount: 0 });
+    recordBaseCheck(activityLog, runId, ask, "failed", progress);
     emitServerDiagnostic(diagnostics, {
       correlationId: runId,
       timestamp: new Date().toISOString(),
@@ -372,9 +398,9 @@ async function decideAsk(
   const { runId, onPermission, signal, editBaseDigest } = input;
   const { actionId, event } = ask;
   if (editBaseDigest !== undefined && ask.bases.length > 0) {
-    const refused = await checkedBase(ask, runId, editBaseDigest, signal, sinks);
+    const ended = (): boolean => signal.aborted || state.closed;
+    const refused = await checkedBase(ask, runId, editBaseDigest, signal, { sinks, ended });
     if (refused !== undefined) return refused;
-    if (state.closed) return { outcome: "cancelled", actionId };
   }
   if (state.pending.size >= MAX_PENDING_ASKS || state.pending.has(event.requestId)) {
     return { outcome: "unavailable", actionId };
