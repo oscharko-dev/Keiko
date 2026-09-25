@@ -2700,14 +2700,16 @@
       "releaseNoteCategory": "fixes",
       "releaseNotePriority": "high",
       "userVisibleChange": "behavioral",
-      "userVisibleSummary": "The Coding Workbench repairs what the 1.1.7 hands-on acceptance exposed: every question is stored once in Coding History, a commit or verification names the real reason it cannot proceed (an unstaged change or unsaved editor buffers) instead of sending the model round in a loop, the Workbench follows and names the repository it works in, an empty model answer is reported as such and no longer counts as a provider outage, a denied edit reads Denied, and a change built on a stale read is sent back to the model before any human is asked to approve it.",
+      "userVisibleSummary": "The Coding Workbench repairs what the 1.1.7 hands-on acceptance and the 1.1.8 lab run exposed: every question is stored once in Coding History, a commit or verification names the real reason it cannot proceed (an unstaged change or unsaved editor buffers) instead of sending the model round in a loop, the Workbench follows and names the repository it works in, a model whose context window cannot hold a coding run is refused at start with that reason, an empty answer or a malformed tool call is reported as such and no longer counts as a provider outage, a refusal of the model's own tool request no longer opens a support incident, a denied edit reads Denied, and a change built on a stale read is sent back to the model before any human is asked to approve it.",
       "affectedStateStores": [],
       "stateImpact": [],
       "releaseNoteBullets": [
         "Coding History: each question is stored once, and history written by 1.1.x shows each question once.",
         "Commits and verification: the refusal names candidate-not-staged or buffers-dirty with the matching next step, so the model no longer loops between verifying and proposing.",
         "Approvals: a denied, expired or cancelled decision is shown and logged as that decision, and a change whose base digest is already stale is refused before the approval card appears.",
-        "Gateway: an empty model answer is reported as empty-answer and does not open the circuit breaker.",
+        "Run start: a model whose context window cannot hold a coding run (at least 32,000 tokens) is refused at once with that reason, or while Keiko still verifies its window, instead of failing after two minutes without one.",
+        "Gateway: an empty model answer is reported as empty-answer and a malformed tool call as invalid-tool-call; neither opens the circuit breaker, and every failed turn is shown in the transcript and logged with its cause.",
+        "Tool calls: a refusal of the model's own request (a stale base, a denied or missing path, an unsaved buffer, a busy editor) settles as that verdict and no longer opens a local support incident.",
         "Workbench: it follows the header's repository, states the deployment ceiling when a mode does not apply, and shows the singular file count, scope and policy reason, and the activity after Stop correctly."
       ],
       "review": {
@@ -2716,7 +2718,7 @@
         "reviewedAt": "2026-09-25",
         "humanApproved": true,
         "approvalReference": "https://github.com/oscharko-dev/Keiko/issues/3610",
-        "rationale": "The release owner requested v1.1.8 on 2026-09-25 to ship the Coding Workbench repairs of the 1.1.7 hands-on acceptance: #3611 (issue #3610) merged to dev after all required checks and zero open review threads, and the governed-ask repairs of issue #3612 complete the acceptance findings.",
+        "rationale": "The release owner requested v1.1.8 on 2026-09-25 to ship the Coding Workbench repairs of the 1.1.7 hands-on acceptance: #3611 (issue #3610) merged to dev after all required checks and zero open review threads, and the governed-ask repairs of issue #3612 complete the acceptance findings. On 2026-09-25 the owner also asked for epic #3591 to be completed in this release: #3603, #3593 and #3615 ship here, with the dependency dispositions #3607 and #3609 (owner decision: allow the development-only LGPL-3.0-only lint dependency of eslint-plugin-sonarjs 4.2.1).",
         "traceability": null
       },
       "userActionRequired": true,
