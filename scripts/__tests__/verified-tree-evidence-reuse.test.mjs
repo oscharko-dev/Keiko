@@ -119,6 +119,13 @@ const COND = (extra) => "${{ always() && " + (extra ? extra + " && " : "") + GUA
 const EDITOR_CLAUSE =
   "(github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor')";
 const DOC_ONLY_CLAUSE = "needs.change-scope.outputs.documentation-only != 'true'";
+// The ONE sanctioned escape from the guard (ADR-0178 D1, amended 2026-09-25): the coverage chain
+// and the SonarCloud analysis run on every push to `dev` even for a proven tree, because SonarCloud
+// files an analysis under the branch or pull request the scanner names — the pull-request analysis
+// measures the same bytes but never advances `dev`'s branch history. Only a `push` to exactly
+// `refs/heads/dev` qualifies; a pull request, a merge group or another branch keeps the plain guard.
+const DEV_PUSH_CLAUSE = "(github.event_name == 'push' && github.ref == 'refs/heads/dev')";
+const COND_OR_DEV_PUSH = () => "${{ always() && (" + GUARD + " || " + DEV_PUSH_CLAUSE + ") }}";
 
 /**
  * The EXACT condition each gated job must carry. A substring check would also accept a
@@ -128,10 +135,10 @@ const DOC_ONLY_CLAUSE = "needs.change-scope.outputs.documentation-only != 'true'
 const EXPECTED_CONDITIONS = Object.freeze({
   "semantic-duplication": COND(),
   "core-quality": COND(),
-  "coverage-packages": COND(),
-  "coverage-ui": COND(),
-  "coverage-scripts": COND(),
-  "coverage-sonar": COND(),
+  "coverage-packages": COND_OR_DEV_PUSH(),
+  "coverage-ui": COND_OR_DEV_PUSH(),
+  "coverage-scripts": COND_OR_DEV_PUSH(),
+  "coverage-sonar": COND_OR_DEV_PUSH(),
   "build-scan-sbom-smoke": COND(EDITOR_CLAUSE),
   "cross-platform-smoke": COND(DOC_ONLY_CLAUSE),
   "node-26-compatibility": COND(DOC_ONLY_CLAUSE),
@@ -271,7 +278,15 @@ describe("the aggregator still fails closed", () => {
     expect(runAggregator(REUSING)).toBe(0);
   });
 
+  // A push to `dev` reuses the other gates but runs the coverage chain and the Sonar analysis
+  // (ADR-0178 D1, 2026-09-25): a passed analysis is an always-on gate that ran, a failed one is
+  // exactly the red `dev` verdict the branch analysis exists to produce.
+  it("accepts a reuse claim on which the dev Sonar analysis ran and passed", () => {
+    expect(runAggregator({ ...REUSING, COVERAGE_SONAR_RESULT: "success" })).toBe(0);
+  });
+
   it.each([
+    ["the dev Sonar analysis ran and failed", { ...REUSING, COVERAGE_SONAR_RESULT: "failure" }],
     ["the evidence run id is missing", { ...REUSING, TREE_EVIDENCE_RUN_ID: "" }],
     ["the evidence tree sha is missing", { ...REUSING, TREE_EVIDENCE_TREE_SHA: "" }],
     ["the evidence head sha is missing", { ...REUSING, TREE_EVIDENCE_HEAD_SHA: "" }],
