@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted (owner decision, 2026-09-20).
+Accepted (owner decision, 2026-09-20). Amended 2026-09-25 (owner decision): the coverage chain and
+the SonarCloud analysis run on every push to `dev` even for a proven tree — see D1 and Consequences.
 
 ## Amends
 
@@ -59,6 +60,19 @@ jobs whose verdict that evidence carries do not run: `semantic-duplication`, `co
 under two minutes in total and they judge the integration commit's own identity and history rather
 than its content.
 
+**Amendment (owner decision, 2026-09-25) — `dev` keeps its own SonarCloud analysis.** On a `push` to
+`refs/heads/dev`, `coverage-packages`, `coverage-ui`, `coverage-scripts` and `coverage-sonar` run even
+when the tree is proven. SonarCloud files an analysis under the branch or pull request the scanner
+names: the pull-request analysis measures the same bytes, but it is filed under the pull request and
+never advances `dev`'s branch history, new-code period or version events. After five days of reuse
+(eleven merges, 2026-09-20 to 2026-09-25) the `dev` overview on SonarCloud still showed the last
+full run, so the whole-project measures nobody's diff gate watches — overall coverage, duplication,
+debt trend — had gone unobserved. The coverage chain is that analysis's input, so it runs with it;
+the other six jobs remain reused, and a merge group or a push to another integration branch keeps
+the plain guard. Cost: about 25 minutes of wall time per `dev` merge for this chain. The `ci`
+aggregate needs no change: it already accepts `success` from a gated job that ran anyway and fails
+closed on any other state, so a red `dev` analysis turns the integration run red.
+
 ### D2 — Reuse requires a complete, unambiguous evidence chain
 
 `scripts/resolve-verified-tree-evidence.mjs` answers `true` only when every one of these holds:
@@ -93,13 +107,16 @@ the evidence it cites, and needs no expiry, allowlist, or manual invalidation.
 
 ## Consequences
 
-- An integration run of an already-proven tree completes in about two minutes instead of 48, and
-  cannot be turned red by infrastructure flake against code that is already proven.
+- An integration run of an already-proven tree completes in about two minutes for the reused gates
+  instead of 48; on `dev` the coverage chain and the SonarCloud analysis still run (about 25
+  minutes, amendment of 2026-09-25), and the reused gates cannot be turned red by infrastructure
+  flake against code that is already proven.
 - The pull-request run is unchanged and remains the complete arbiter. The quality bar is untouched:
   the same gates decide, once, on the bytes they actually judge.
-- SonarCloud's `dev` branch analysis and the packaging job's attestations are not re-emitted for an
-  identical tree. The pull-request run's analysis binds the same bytes, and both remain reachable on
-  demand via `workflow_dispatch`, which never reuses evidence. The `dev` Banking Grade verification
-  already ran only under `workflow_dispatch` before this decision.
+- The packaging job's attestations are not re-emitted for an identical tree; they remain reachable
+  on demand via `workflow_dispatch`, which never reuses evidence. SonarCloud's `dev` branch analysis
+  IS re-emitted on every push to `dev` (amendment of 2026-09-25), because an analysis filed under a
+  pull request does not advance the branch. The `dev` Banking Grade verification already ran only
+  under `workflow_dispatch` before this decision.
 - `scripts/__tests__/verified-tree-evidence-reuse.test.mjs` pins both halves: that every job in D1
   carries the guard and can resolve it, and that the aggregate's fail-closed verdicts in D4 hold.

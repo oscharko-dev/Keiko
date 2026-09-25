@@ -548,7 +548,10 @@ jobs:
   coverage-packages:
     name: Coverage shard (packages ${{ matrix.shard }}/3)
     needs: verified-tree
-    if: ${{ always() && needs.verified-tree.outputs.tree-verified != 'true' }}
+    # The coverage chain feeds the SonarCloud analysis, which files under the branch the scanner
+    # names: a proven tree's pull-request analysis never advances `dev`'s branch history. So this
+    # chain runs on every push to `dev` even when the tree is proven (ADR-0178 D1, 2026-09-25).
+    if: ${{ always() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -664,7 +667,8 @@ jobs:
   coverage-ui:
     name: Coverage suite (keiko-ui)
     needs: verified-tree
-    if: ${{ always() && needs.verified-tree.outputs.tree-verified != 'true' }}
+    # Runs on every push to `dev` even for a proven tree: see coverage-packages (ADR-0178 D1).
+    if: ${{ always() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -734,7 +738,8 @@ jobs:
   coverage-scripts:
     name: Coverage suite (scripts)
     needs: verified-tree
-    if: ${{ always() && needs.verified-tree.outputs.tree-verified != 'true' }}
+    # Runs on every push to `dev` even for a proven tree: see coverage-packages (ADR-0178 D1).
+    if: ${{ always() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -805,7 +810,12 @@ jobs:
     # The first step below turns every non-success shard result — failure, cancelled AND skipped —
     # into a red context. ADR-0135 D3 is unaffected: this job is not itself a required check; it is
     # the dependency the required `ci` aggregate already observes (Issue #2704).
-    if: ${{ always() && needs.verified-tree.outputs.tree-verified != 'true' }}
+    # On a push to `dev` this analysis runs even for a proven tree (ADR-0178 D1, 2026-09-25):
+    # SonarCloud files an analysis under the branch or pull request the scanner names, so five days
+    # of reused pull-request evidence had left `dev`'s overview, new-code period and version events
+    # at the last full run. The `ci` aggregate treats its `success` as an always-on gate that ran
+    # and fails closed on any other state, so a red `dev` analysis turns the run red.
+    if: ${{ always() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
     needs:
       - verified-tree
       - coverage-packages

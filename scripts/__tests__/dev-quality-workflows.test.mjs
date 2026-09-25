@@ -440,8 +440,11 @@ describe("dev quality workflows", () => {
     // ADR-0178: `always()` is unchanged and still load-bearing — a failed, cancelled or skipped
     // shard must turn this context red. The reuse guard is pinned alongside it, exactly, so that
     // neither the `always()` nor the guard can be altered without failing here.
+    // ADR-0178 D1 amendment (2026-09-25): on a push to `dev` the analysis runs even for a proven
+    // tree, so SonarCloud's branch history keeps moving. The clause is pinned exactly together with
+    // `always()` and the guard, so none of the three can be altered without failing here.
     expect(coverageJob).toContain(
-      "if: ${{ always() && needs.verified-tree.outputs.tree-verified != 'true' }}",
+      "if: ${{ always() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}",
     );
     expect(coverageJob).toContain('if [ "${entry#*:}" != "success" ]');
     expect(coverageJob).toContain("needs.coverage-packages.result");
