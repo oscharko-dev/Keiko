@@ -979,6 +979,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Das Modell oder eine Schutzprüfung der Workbench hat diesen Schritt abgelehnt. Prüfe die Gateway- und Berechtigungsdiagnose des Runs und passe Modell, Aufgabe oder Berechtigungen vor einem erneuten Versuch an.",
   "codingWorkbench.event.turnFailure.output-exhausted":
     "Das Modell hat sein gesamtes Ausgabebudget verbraucht, bevor eine Antwort entstand – meist durch Reasoning. Lass das Gateway ein größeres max_output_tokens für dieses Modell melden oder wähle ein Modell mit geringerem Reasoning-Anteil, und versuche es erneut.",
+  "codingWorkbench.event.turnFailure.empty-answer":
+    "Das Modell hat diesen Schritt ohne Text und ohne Werkzeugaufruf beendet. Der Anbieter hat geantwortet, es ist also kein Verbindungsproblem. Versuche den Schritt erneut; wiederholt es sich, formuliere die Aufgabe um oder wähle ein anderes Modell.",
   "codingWorkbench.event.detailOutcome": "Ergebnis: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Nicht vertrauenswürdiger Inhalt: Die abgerufene Seite wurde als Daten isoliert, nicht als Anweisungen.",

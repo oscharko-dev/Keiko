@@ -13,6 +13,7 @@ import {
   CircuitOpenError,
   ERROR_CODES,
   GatewayEgressError,
+  ProviderEmptyAnswerError,
   ProviderError,
   ProviderOutputExhaustedError,
   RateLimitError,
@@ -581,21 +582,29 @@ describe("Gateway.chatStream", () => {
   // #3591: an HTTP 200 answer that spent its whole output budget on reasoning (finish_reason
   // "length", no content) is a caller-fixable budget problem, not evidence the provider is
   // failing — it must not count toward opening the breaker either.
-  it("does not count a ProviderOutputExhaustedError as a breaker fault — consecutiveFailures stays 0 and state stays closed", async () => {
-    let calls = 0;
-    const gateway = new Gateway(config([provider({ maxRetries: 3 })]), {
-      adapter: fakeAdapter(() => {
-        calls += 1;
-        return Promise.reject(new ProviderOutputExhaustedError("example-chat-model"));
-      }),
-      clock: createScriptedGatewayClock(),
-    });
-    await expect(gateway.chat(REQUEST)).rejects.toBeInstanceOf(ProviderOutputExhaustedError);
-    // Not retryable, so exactly one adapter call regardless of the configured maxRetries.
-    expect(calls).toBe(1);
-    expect(gateway.circuitStatus("example-chat-model").consecutiveFailures).toBe(0);
-    expect(gateway.circuitStatus("example-chat-model").state).toBe("closed");
-  });
+  // #3610: an HTTP 200 answer with neither content nor a tool call is the same kind of fault — the
+  // provider answered — so it must not count toward opening the breaker either.
+  it.each([
+    ["ProviderOutputExhaustedError", ProviderOutputExhaustedError],
+    ["ProviderEmptyAnswerError", ProviderEmptyAnswerError],
+  ] as const)(
+    "does not count a %s as a breaker fault — consecutiveFailures stays 0 and state stays closed",
+    async (_label, faultClass) => {
+      let calls = 0;
+      const gateway = new Gateway(config([provider({ maxRetries: 3 })]), {
+        adapter: fakeAdapter(() => {
+          calls += 1;
+          return Promise.reject(new faultClass("example-chat-model"));
+        }),
+        clock: createScriptedGatewayClock(),
+      });
+      await expect(gateway.chat(REQUEST)).rejects.toBeInstanceOf(faultClass);
+      // Not retryable, so exactly one adapter call regardless of the configured maxRetries.
+      expect(calls).toBe(1);
+      expect(gateway.circuitStatus("example-chat-model").consecutiveFailures).toBe(0);
+      expect(gateway.circuitStatus("example-chat-model").state).toBe("closed");
+    },
+  );
 
   // RED reasoning (review finding on PR #3602): before the fix, a half-open probe that ended in a
   // non-provider fault hit neither CircuitBreaker.recordSuccess nor recordFailure, so the probe
@@ -608,6 +617,10 @@ describe("Gateway.chatStream", () => {
     [
       "ProviderOutputExhaustedError",
       (): ProviderOutputExhaustedError => new ProviderOutputExhaustedError("example-chat-model"),
+    ],
+    [
+      "ProviderEmptyAnswerError",
+      (): ProviderEmptyAnswerError => new ProviderEmptyAnswerError("example-chat-model"),
     ],
   ])(
     "keeps admitting calls after a half-open probe ends in a %s",

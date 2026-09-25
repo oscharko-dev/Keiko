@@ -888,6 +888,10 @@ describe("Coding Workbench runtime API failure branches", () => {
     expect(
       validateCodingWorkbenchRuntimeSseEvent({ ...event, failureCode: "output-exhausted" }).ok,
     ).toBe(true);
+    // #3610: an empty model answer is a per-turn gateway cause of its own, too.
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent({ ...event, failureCode: "empty-answer" }).ok,
+    ).toBe(true);
     expect(
       validateCodingWorkbenchRuntimeSseEvent({ ...event, eventKind: "task-submitted" }).ok,
     ).toBe(false);

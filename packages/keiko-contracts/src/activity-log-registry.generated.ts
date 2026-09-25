@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "4193f3d746cc138ca92ec933ad976dc4b33c1bcf5bb73f9e5455b03bc5d86404" as const;
+  "6fd0ec564caa823d05733eae6b792fba1fd641a59c8fb5758a2789e163ef680e" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -7433,7 +7433,13 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["provider-failed", "stream-incomplete", "turn-rejected", "output-exhausted"],
+        values: [
+          "provider-failed",
+          "stream-incomplete",
+          "turn-rejected",
+          "output-exhausted",
+          "empty-answer",
+        ],
       },
       published: {
         type: "boolean",

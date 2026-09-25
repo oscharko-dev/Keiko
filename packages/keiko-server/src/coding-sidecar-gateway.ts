@@ -4,6 +4,7 @@ import {
   CircuitOpenError,
   ContextOverflowError,
   ModelRefusalError,
+  ProviderEmptyAnswerError,
   ProviderError,
   ProviderOutputExhaustedError,
   RateLimitError,
@@ -449,7 +450,13 @@ const CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION = defineActivityLogOperation(
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["provider-failed", "stream-incomplete", "turn-rejected", "output-exhausted"],
+      values: [
+        "provider-failed",
+        "stream-incomplete",
+        "turn-rejected",
+        "output-exhausted",
+        "empty-answer",
+      ],
     },
     published: { type: "boolean", dataClass: "closed-enum", required: true },
     publicationReason: {
@@ -1634,6 +1641,7 @@ function gatewayTurnFailureCode(error: unknown): CodingWorkbenchTurnFailureCode 
   if (error instanceof ContextOverflowError || error instanceof ModelRefusalError)
     return "turn-rejected";
   if (error instanceof ProviderOutputExhaustedError) return "output-exhausted";
+  if (error instanceof ProviderEmptyAnswerError) return "empty-answer";
   if (
     error instanceof TimeoutError ||
     error instanceof TransportError ||
@@ -1648,6 +1656,7 @@ function gatewayStreamFailureCode(error: unknown): CodingWorkbenchTurnFailureCod
   if (error instanceof ContextOverflowError || error instanceof ModelRefusalError)
     return "turn-rejected";
   if (error instanceof ProviderOutputExhaustedError) return "output-exhausted";
+  if (error instanceof ProviderEmptyAnswerError) return "empty-answer";
   if (
     error instanceof AuthenticationError ||
     error instanceof RateLimitError ||

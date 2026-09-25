@@ -171,6 +171,20 @@ export class ProviderOutputExhaustedError extends ProviderError {
   }
 }
 
+// #3610: an HTTP 200 answer that completed without `finish_reason: "length"` and carries neither
+// content nor a tool call — gpt-oss behind LiteLLM ends a turn this way when it drops a tool call
+// and keeps only its reasoning. The provider answered, so this is neither a broken stream nor an
+// outage: it never counts toward the circuit breaker, and the coding runtime reports it as its own
+// turn-failure cause. It keeps the provider error code and message, so the chat surfaces and the
+// wire are unchanged, and it is not retried as is.
+export class ProviderEmptyAnswerError extends ProviderError {
+  readonly emptyAnswer = true;
+
+  constructor(modelId: string, secrets: readonly string[] = []) {
+    super(`provider returned an empty assistant response for '${modelId}'`, 200, secrets);
+  }
+}
+
 export class ConfigInvalidError extends GatewayError {
   readonly code = ERROR_CODES.CONFIG_INVALID;
   readonly retryable = false;

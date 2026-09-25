@@ -17,6 +17,7 @@ import {
   GatewayError,
   MalformedToolCallError,
   ModelRefusalError,
+  ProviderEmptyAnswerError,
   ProviderError,
   ProviderOutputExhaustedError,
   RateLimitError,
@@ -822,11 +823,8 @@ function assertUsableAssistantResponse(
   if (response.finishReason === "length") {
     throw new ProviderOutputExhaustedError(modelId, secrets);
   }
-  throw new ProviderError(
-    `provider returned an empty assistant response for '${modelId}'`,
-    PROVIDER_EMPTY_ASSISTANT_STATUS,
-    secrets,
-  );
+  // The answer completed with nothing usable in it: the model's result, not a broken stream (#3610).
+  throw new ProviderEmptyAnswerError(modelId, secrets);
 }
 
 function errorSignal(payload: unknown): string {
