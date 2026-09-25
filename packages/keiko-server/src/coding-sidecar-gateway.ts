@@ -2252,11 +2252,25 @@ async function dispatchGatewayChat(
     }
     if (parsed.stream) {
       bufferedStream = beginBufferedOpenAiStream(ctx, modelAlias, cancellation.transport);
+      if (bufferedStream === undefined) return settleUndeliverableBufferedStream(ctx, dispatch);
     }
     return await executeBufferedGatewayChat(ctx, dispatch, bufferedStream);
   } catch (error) {
     return settleFailedGatewayChat(ctx, deps, runId, cancellation, error, delivery, bufferedStream);
   }
+}
+
+// The opening frame never reached the client — the shared path killed the stream, or the response
+// was already gone — so no provider call is started for an answer nobody can receive, exactly as
+// `beginGatewayStream` ends the streamed path (#3602 review). The outcome names the abort source.
+function settleUndeliverableBufferedStream(
+  ctx: RouteContext,
+  dispatch: GatewayChatDispatchContext,
+): typeof STREAMING {
+  const { deps, runId, cancellation, promptTokenReservation } = dispatch;
+  recordGatewayOutcome(ctx, deps, runId, cancellation, "cancelled", 0, 0);
+  settlePromptTokenReservation(deps, promptTokenReservation);
+  return STREAMING;
 }
 
 // Extracted so `executeGatewayChat` stays under AGENTS.md §6's 50-line ceiling.
@@ -2703,11 +2717,12 @@ interface BufferedOpenAiStreamSession extends OpenAiSseStreamIdentity {
   readonly stopHeartbeat: () => void;
 }
 
+/** Returns undefined when the opening SSE frame could not be delivered; the response is destroyed. */
 function beginBufferedOpenAiStream(
   ctx: RouteContext,
   modelId: string,
   transport: SidecarSseTransport,
-): BufferedOpenAiStreamSession {
+): BufferedOpenAiStreamSession | undefined {
   const id = `chatcmpl-${randomUUID()}`;
   const created = Math.floor(Date.now() / 1000);
   ctx.res.writeHead(200, {
@@ -2720,7 +2735,10 @@ function beginBufferedOpenAiStream(
     openAiStreamChunk(id, created, modelId, { role: "assistant" }, null),
     transport,
   );
-  if (!opened) ctx.res.destroy();
+  if (!opened) {
+    ctx.res.destroy();
+    return undefined;
+  }
   return {
     ctx,
     id,
@@ -2787,10 +2805,8 @@ function bufferedOpenAiStream(
   modelId: string,
   response: NormalizedResponse,
 ): typeof STREAMING {
-  return completeBufferedOpenAiStream(
-    beginBufferedOpenAiStream(ctx, modelId, sidecarSseTransport(ctx, deps)),
-    response,
-  );
+  const session = beginBufferedOpenAiStream(ctx, modelId, sidecarSseTransport(ctx, deps));
+  return session === undefined ? STREAMING : completeBufferedOpenAiStream(session, response);
 }
 
 // False means the frame did not reach the client: either the response was already gone (the

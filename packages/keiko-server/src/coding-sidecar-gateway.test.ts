@@ -1863,6 +1863,47 @@ describe("coding-sidecar gateway", () => {
     ).toMatchObject({ source: "output-byte-estimate" });
   });
 
+  // #3602 review: a buffered stream whose opening frame the client will not take (the shared SSE
+  // path kills the stream) must not start a provider call for an answer nobody can receive — the
+  // same early exit `beginGatewayStream` gives the streamed path.
+  it("starts no provider call when the buffered stream's opening frame cannot be delivered", async () => {
+    const sink = captureServerLog("info");
+    const chat = vi.fn((): Promise<NormalizedResponse> =>
+      Promise.resolve(assistantResponse("azure-coding-model")),
+    );
+    const response = mockResponse({ captureBody: true });
+    response.res.write = vi.fn(() => false);
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "undeliverable" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      context,
+      runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-undeliverable" } }),
+        () => chat,
+      ),
+    );
+
+    expect(result).toBe(STREAMING);
+    expect(chat).not.toHaveBeenCalled();
+    expect(response.res.destroyed).toBe(true);
+    const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
+    expect(outcome?.extra).toMatchObject({
+      runId: "run-undeliverable",
+      outcome: "cancelled",
+      cancellationCause: "backpressure-killed",
+      completionTokens: 0,
+      outputBytes: 0,
+    });
+  });
+
   it("commits the buffered SSE handshake before waiting for the provider", async () => {
     vi.useFakeTimers();
     let resolveProvider: ((response: NormalizedResponse) => void) | undefined;
