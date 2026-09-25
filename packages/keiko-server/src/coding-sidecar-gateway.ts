@@ -1637,11 +1637,19 @@ function logGatewayTurnFailure(
   );
 }
 
-function gatewayTurnFailureCode(error: unknown): CodingWorkbenchTurnFailureCode {
+// The causes the buffered and the streamed path name the same way. Both output-budget exhaustion
+// and an empty answer are HTTP 200 provider errors, so they are resolved before any status check.
+function modelTurnFailureCode(error: unknown): CodingWorkbenchTurnFailureCode | undefined {
   if (error instanceof ContextOverflowError || error instanceof ModelRefusalError)
     return "turn-rejected";
   if (error instanceof ProviderOutputExhaustedError) return "output-exhausted";
   if (error instanceof ProviderEmptyAnswerError) return "empty-answer";
+  return undefined;
+}
+
+function gatewayTurnFailureCode(error: unknown): CodingWorkbenchTurnFailureCode {
+  const modelCause = modelTurnFailureCode(error);
+  if (modelCause !== undefined) return modelCause;
   if (
     error instanceof TimeoutError ||
     error instanceof TransportError ||
@@ -1653,10 +1661,8 @@ function gatewayTurnFailureCode(error: unknown): CodingWorkbenchTurnFailureCode 
 
 function gatewayStreamFailureCode(error: unknown): CodingWorkbenchTurnFailureCode {
   if (gatewaySpendRejectionReason(error) !== undefined) return "turn-rejected";
-  if (error instanceof ContextOverflowError || error instanceof ModelRefusalError)
-    return "turn-rejected";
-  if (error instanceof ProviderOutputExhaustedError) return "output-exhausted";
-  if (error instanceof ProviderEmptyAnswerError) return "empty-answer";
+  const modelCause = modelTurnFailureCode(error);
+  if (modelCause !== undefined) return modelCause;
   if (
     error instanceof AuthenticationError ||
     error instanceof RateLimitError ||
