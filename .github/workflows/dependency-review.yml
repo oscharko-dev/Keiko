@@ -61,7 +61,11 @@ jobs:
           # attaches to the library and to works that link it; a linter executed in CI and locally is
           # neither linked into Keiko nor distributed with it. Any other LGPL package still fails,
           # and this one would have to be re-decided if it ever became a runtime dependency.
-          allow-dependencies-licenses: pkg:npm/eslint-plugin-sonarjs
+          # `@sonarsource/analyzer-commons-configurations` is eslint-plugin-sonarjs 4.2.1's own new
+          # transitive dependency: same vendor, same LGPL-3.0-only license, same development-only
+          # lint tooling that is never linked into or shipped with Keiko. Owner decision 2026-09-25,
+          # #3609; recorded in docs/release/2296-dependency-security-closeout.md.
+          allow-dependencies-licenses: pkg:npm/eslint-plugin-sonarjs, pkg:npm/@sonarsource/analyzer-commons-configurations
           retry-on-snapshot-warnings: true
           retry-on-snapshot-warnings-timeout: 120
           show-openssf-scorecard: true

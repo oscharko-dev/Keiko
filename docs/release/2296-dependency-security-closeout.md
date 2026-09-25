@@ -291,6 +291,23 @@ runs a supported npm 11 version.
 
 This compatibility finding is repaired by the published Node.js 24/26 engine range and npm 11 consumer range. The exact `packageManager` pin remains the reproducible contributor, publication, portable, and measurement baseline; CI separately proves both approved Node/npm tuples.
 
+### License exception: `@sonarsource/analyzer-commons-configurations` is allowed (#3609)
+
+`eslint-plugin-sonarjs` 4.2.1 adds a new transitive dependency,
+`@sonarsource/analyzer-commons-configurations@2.31.0-5284`, licensed **LGPL-3.0-only**. Dependency
+Review's license allowlist covered the plugin itself (`pkg:npm/eslint-plugin-sonarjs`, the
+2026-07-25 amendment to ADR-0002 recorded above) but not this new sub-package, so the required
+`Review dependency diff (dev/main)` context failed on the version bump. #3608 kept
+`eslint-plugin-sonarjs` at 4.2.0 and `.github/dependabot.yml` ignored `>=4.2.1` until this was
+decided.
+
+**Allowed** (owner decision, 2026-09-25, #3609): `pkg:npm/@sonarsource/analyzer-commons-configurations`
+is added to `allow-dependencies-licenses` in `.github/workflows/dependency-review.yml`, next to
+`pkg:npm/eslint-plugin-sonarjs`. Same vendor and the same license as the already-allowed plugin, and
+the same reasoning applies: it is development-only lint tooling, executed in CI and on developer
+machines, never linked into Keiko or distributed in the published npm tarball. The Dependabot
+`ignore` entry is removed and `eslint-plugin-sonarjs` moves to 4.2.1.
+
 ## Follow-ups
 
 1. **Credential-shaped literals remain in pre-existing test fixtures.** A repository sweep found
