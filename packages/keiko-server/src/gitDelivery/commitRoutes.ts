@@ -719,7 +719,8 @@ function resolveCommitDraftModel(deps: UiHandlerDeps): ResolvedCommitDraftModel 
     modelId,
     useResponseFormat: structuredModelId !== undefined,
     maxOutputTokens: commitDraftOutputTokens(config.capabilities ?? [], modelId),
-    deadlineMs: gatewayRouteDeadlineMs(config, modelId),
+    // The draft only buffers, so its backstop follows the buffered budget alone (PR #3602 review).
+    deadlineMs: gatewayRouteDeadlineMs(config, modelId, ["buffered"]),
   };
 }
 
@@ -1093,6 +1094,9 @@ export const createHandleCommitDraft = (
         workspace.root,
         options.messagePolicy,
       );
+      if (cancellation.signal.aborted) {
+        return draftCancelledBeforeReads(activityLog, correlationId);
+      }
       return await draftWithModel(deps, workspace, req, policy, seams, now, {
         correlationId,
         signal: cancellation.signal,
@@ -1102,6 +1106,19 @@ export const createHandleCommitDraft = (
     }
   };
 };
+
+// A client that left during the policy lookup gets neither worktree read nor model call (PR #3602
+// review). The completion line still records the draft's end; nothing has been read yet, so the
+// staged counts it carries are the empty changeset's.
+function draftCancelledBeforeReads(log: ServerLogSink, correlationId: string): RouteResult {
+  return draftFailureResult(
+    log,
+    correlationId,
+    summarizeStagedChangeset([]),
+    503,
+    "GIT_DELIVERY_COMMIT_DRAFT_FAILED",
+  );
+}
 
 // The model call's own failure envelope: a worktree that cannot be read for the staged diff is a
 // 409, never a 500, and it is reported once with the request's correlation id.

@@ -2037,7 +2037,9 @@ export function codingSidecarGatewayRequestDeadlineMs(
   config: GatewayConfig,
   modelId: string,
 ): number {
-  return gatewayRouteDeadlineMs(config, modelId);
+  // The sidecar reaches the gateway both ways — a buffered `chat()` answer or a `chatStream()`
+  // read — so its backstop sits behind the longer of the two budgets.
+  return gatewayRouteDeadlineMs(config, modelId, ["buffered", "streamed"]);
 }
 
 function gatewayRequestCancellation(

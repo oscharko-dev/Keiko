@@ -18,27 +18,33 @@ export const GATEWAY_ROUTE_DEADLINE_GRACE_MS = 1_000;
 // An unconfigured model is refused before any provider call; this only bounds that refusal.
 export const UNCONFIGURED_MODEL_ROUTE_DEADLINE_MS = 30_000;
 
+// How a route reaches the gateway: a buffered `chat()` runs under the retry budget, a `chatStream()`
+// read under the single streamed read's budget. A route names every shape it can take, and the
+// backstop sits behind the longest of them — no further: a route that only buffers (the commit
+// draft) must not inherit the thirty-minute stream floor, or a stalled model port that only the
+// route's signal can stop would hang three times longer than its own budget (PR #3602 review).
+export type GatewayCallShape = "buffered" | "streamed";
+
 type RouteProviderBudgetPolicy = Parameters<typeof providerRequestBudgetMs>[0];
 
-// The routes behind this deadline reach the gateway both ways — the coding sidecar buffers a
-// `chat()` answer or reads a `chatStream()`, the commit draft buffers — so the backstop sits behind
-// the LONGER of the two budgets: the buffered retry budget and the single streamed read's budget.
-// With `maxRetries: 0` the buffered budget is the ten-minute floor while a streamed read is held to
-// the thirty-minute stream floor, and a deadline derived from the former cancelled a healthy stream
-// the gateway was still reading (PR #3602 review).
-function gatewayCallBudgetMs(provider: RouteProviderBudgetPolicy): number {
-  return Math.max(providerRequestBudgetMs(provider), streamRequestBudgetMs(provider));
+function gatewayCallBudgetMs(provider: RouteProviderBudgetPolicy, shape: GatewayCallShape): number {
+  return shape === "streamed" ? streamRequestBudgetMs(provider) : providerRequestBudgetMs(provider);
 }
 
-export function gatewayRouteDeadlineMs(config: GatewayConfig, modelId: string): number {
+export function gatewayRouteDeadlineMs(
+  config: GatewayConfig,
+  modelId: string,
+  shapes: readonly [GatewayCallShape, ...GatewayCallShape[]],
+): number {
   const provider = config.providers.find((candidate) => candidate.modelId === modelId);
-  const budget =
+  const raised =
     provider === undefined
+      ? undefined
+      : { ...provider, timeoutMs: codingWorkbenchProviderTimeoutMs(provider.timeoutMs) };
+  const budget =
+    raised === undefined
       ? UNCONFIGURED_MODEL_ROUTE_DEADLINE_MS
-      : gatewayCallBudgetMs({
-          ...provider,
-          timeoutMs: codingWorkbenchProviderTimeoutMs(provider.timeoutMs),
-        });
+      : Math.max(...shapes.map((shape) => gatewayCallBudgetMs(raised, shape)));
   // Armed with AbortSignal.timeout, which fires at once past 2^31 - 1 ms: an absurd budget must not
   // turn the backstop into an immediate abort.
   return Math.min(budget + GATEWAY_ROUTE_DEADLINE_GRACE_MS, MAX_TIMER_DELAY_MS);

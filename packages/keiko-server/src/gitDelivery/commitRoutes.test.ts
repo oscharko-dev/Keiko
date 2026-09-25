@@ -144,7 +144,9 @@ const DRAFT_GATEWAY_CONFIG: GatewayConfig = {
 };
 
 // The route deadline the draft arms for this fixture's model, taken from the production derivation.
-const DRAFT_ROUTE_DEADLINE_MS = gatewayRouteDeadlineMs(DRAFT_GATEWAY_CONFIG, "draft-model");
+const DRAFT_ROUTE_DEADLINE_MS = gatewayRouteDeadlineMs(DRAFT_GATEWAY_CONFIG, "draft-model", [
+  "buffered",
+]);
 
 function draftResponse(candidate: Readonly<Record<string, string>>): NormalizedResponse {
   return {
@@ -935,6 +937,17 @@ describe("commit draft — explicit model-backed generation", () => {
   // the spy would record 30_000 and never the route deadline derived from the gateway's own retry
   // budget for the resolved model (`gatewayRouteDeadlineMs`, PR #3602 review: a fixed 300 s
   // backstop sat under the 600 s buffered attempt the gateway now allows).
+  // The draft only buffers: its backstop is the buffered budget (600 s floor for this fixture's
+  // `maxRetries: 0`, plus the route's grace), never the streamed read's, which would let a stalled
+  // model port that only the route's signal can stop hang for the 30-minute stream floor
+  // (PR #3602 review).
+  it("derives the draft's route deadline from the buffered budget alone", () => {
+    expect(DRAFT_ROUTE_DEADLINE_MS).toBe(601_000);
+    expect(DRAFT_ROUTE_DEADLINE_MS).toBeLessThan(
+      gatewayRouteDeadlineMs(DRAFT_GATEWAY_CONFIG, "draft-model", ["buffered", "streamed"]),
+    );
+  });
+
   it("arms the route deadline behind the gateway's own retry budget for the resolved model", async () => {
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     try {
@@ -1216,10 +1229,11 @@ describe("commit draft — explicit model-backed generation", () => {
   });
 
   // PR #3602 review: the disconnect listeners used to be registered only after the commit policy
-  // had been resolved, so a client that left DURING that lookup was never recorded and the model
-  // call that followed ran for nobody. The cancellation is now armed before the lookup: the signal
-  // the model call receives is already aborted, and the port's own rejection settles the route.
-  it("records a client disconnect that happens while the commit policy is still being resolved", async () => {
+  // had been resolved, so a client that left DURING that lookup was never recorded, and the
+  // worktree reads and the model call that followed ran for nobody. The cancellation is now armed
+  // before the lookup and checked right after it: neither reader nor the model port is reached,
+  // and the completion line records the cancelled draft.
+  it("skips the worktree reads and the model call when the client left during the policy lookup", async () => {
     let policyLookupStarted = false;
     let releasePolicyLookup: (() => void) | undefined;
     const policyLookup = new Promise<undefined>((resolve) => {
@@ -1235,16 +1249,20 @@ describe("commit draft — explicit model-backed generation", () => {
         return policyLookup;
       },
     } as unknown as NonNullable<UiHandlerDeps["editorSettingsControl"]>;
-    let signalAbortedAtCall: boolean | undefined;
-    const port: ModelPort = {
-      call: (_request, signal): Promise<NormalizedResponse> => {
-        signalAbortedAtCall = signal.aborted;
-        return Promise.reject(new CancelledError("client cancelled"));
-      },
-    };
+    const stagedPathsReader = vi.fn(() => Promise.resolve(["packages/keiko-ui/a.ts"]));
+    const stagedDiffReader = vi.fn(() =>
+      Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+    );
+    const modelCall = vi.fn((): Promise<NormalizedResponse> =>
+      Promise.reject(new CancelledError("client cancelled")),
+    );
+    const port: ModelPort = { call: modelCall };
+    const events: ServerLogEvent[] = [];
     const handler = createHandleCommitDraft({
       execution: seams({
-        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+        stagedPathsReader,
+        stagedDiffReader,
+        activityLog: { write: (event): void => void events.push(event) },
       }),
     });
     const ctx = ctxFor(DRAFT, { schemaVersion: "1", projectId });
@@ -1260,9 +1278,15 @@ describe("commit draft — explicit model-backed generation", () => {
     releasePolicyLookup?.();
 
     const result = await pending;
-    expect(signalAbortedAtCall).toBe(true);
     expect(result.status).toBe(503);
     expect(result.body).toMatchObject({ error: { code: "GIT_DELIVERY_COMMIT_DRAFT_FAILED" } });
+    expect(stagedPathsReader).not.toHaveBeenCalled();
+    expect(stagedDiffReader).not.toHaveBeenCalled();
+    expect(modelCall).not.toHaveBeenCalled();
+    expect(events.find((event) => event.op === "git.commit.draft.completed")).toMatchObject({
+      status: 503,
+      extra: { outcome: "failed", failureCode: "GIT_DELIVERY_COMMIT_DRAFT_FAILED" },
+    });
   });
 });
 
