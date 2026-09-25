@@ -2644,6 +2644,7 @@ describe("coding-sidecar gateway", () => {
   });
 
   it("cancels the provider iterator when the streaming response applies backpressure", async () => {
+    const sink = captureServerLog("info");
     let pulls = 0;
     let returned = false;
     const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
@@ -2688,6 +2689,15 @@ describe("coding-sidecar gateway", () => {
     expect(returned).toBe(true);
     expect(pulls).toBe(1);
     expect(response.res.destroyed).toBe(true);
+    // #3602 review: the frames go through the shared protective SSE path, so a client that stops
+    // draining is killed the way every other SSE route kills it, and the outcome line names the
+    // kill rather than a disconnect the client never made.
+    const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
+    expect(outcome?.extra).toMatchObject({
+      runId: "run-backpressure",
+      outcome: "cancelled",
+      cancellationCause: "backpressure-killed",
+    });
   });
 
   it.each(["empty", "partial"] as const)(

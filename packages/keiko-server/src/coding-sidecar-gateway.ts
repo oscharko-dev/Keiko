@@ -78,6 +78,11 @@ import {
 } from "./gateway-readiness.js";
 import { getServerLogger } from "./observability/index.js";
 import { STREAMING, errorBody, type RouteContext, type RouteResult } from "./routes.js";
+import {
+  sseBackpressureReporter,
+  type SseBackpressureSignal,
+  writeOrDestroy,
+} from "./sse-write.js";
 import { startSseHeartbeat } from "./sse.js";
 import { createCanonicalOpenCodeHandlerCoverage } from "./tool-catalog/catalogToolFacadeBridge.js";
 
@@ -509,12 +514,12 @@ const CODING_SIDECAR_GATEWAY_OUTCOME_OPERATION = defineActivityLogOperation({
     // The route backstop armed for this turn (#3602 review); absent on lines written before 1.1.7.
     deadlineMs: { type: "integer", dataClass: "duration", required: false },
     // On a cancelled outcome only: which armed abort source ended the turn, so a stall that ran into
-    // the backstop never reads like a client that left.
+    // the backstop, or a slow client the shared SSE path killed, never reads like a client that left.
     cancellationCause: {
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["client-disconnect", "route-deadline", "run-stopped"],
+      values: ["client-disconnect", "route-deadline", "backpressure-killed", "run-stopped"],
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -2053,28 +2058,52 @@ function unavailableGatewayReason(
   return resolved.result.status === "unavailable" ? resolved.result.reason : "missing-provider";
 }
 
-/** Which of the three armed abort sources ended a cancelled turn; the outcome line's closed value. */
-type CodingSidecarGatewayCancellationCause = "client-disconnect" | "route-deadline" | "run-stopped";
+/** Which of the four armed abort sources ended a cancelled turn; the outcome line's closed value. */
+type CodingSidecarGatewayCancellationCause =
+  "client-disconnect" | "route-deadline" | "backpressure-killed" | "run-stopped";
+
+// The sidecar's SSE frames go through the server's shared protective write path (`writeOrDestroy`):
+// a frame the client is not draining aborts this controller, reports the body-free backpressure
+// diagnostic and destroys the socket, exactly as every other SSE route does. The controller is one
+// of the request's abort sources, so the outcome line can name the kill instead of guessing.
+interface SidecarSseTransport {
+  readonly backpressure: AbortController;
+  readonly onBackpressure: (signal: SseBackpressureSignal) => void;
+}
+
+function sidecarSseTransport(ctx: RouteContext, deps: UiHandlerDeps): SidecarSseTransport {
+  return {
+    backpressure: new AbortController(),
+    onBackpressure: sseBackpressureReporter(deps, "coding-sidecar-gateway", ctx.correlationId),
+  };
+}
 
 interface GatewayRequestCancellation {
   readonly signal: AbortSignal;
   /** The route backstop armed for this request, recorded on the outcome line. */
   readonly deadlineMs: number;
+  readonly transport: SidecarSseTransport;
   /** The source that aborted first, or undefined while nothing has aborted. */
   readonly cause: () => CodingSidecarGatewayCancellationCause | undefined;
   readonly dispose: () => void;
+}
+
+interface GatewayCancellationSources {
+  readonly client: AbortSignal;
+  readonly deadline: AbortSignal;
+  readonly backpressure: AbortSignal;
 }
 
 // `AbortSignal.any` carries the reason of the source that aborted first, so a client that leaves
 // after the deadline already fired still reads as the deadline, never the other way round.
 function gatewayCancellationCause(
   signal: AbortSignal,
-  clientSignal: AbortSignal,
-  deadline: AbortSignal,
+  sources: GatewayCancellationSources,
 ): CodingSidecarGatewayCancellationCause | undefined {
   if (!signal.aborted) return undefined;
-  if (signal.reason === clientSignal.reason) return "client-disconnect";
-  if (signal.reason === deadline.reason) return "route-deadline";
+  if (signal.reason === sources.client.reason) return "client-disconnect";
+  if (signal.reason === sources.deadline.reason) return "route-deadline";
+  if (signal.reason === sources.backpressure.reason) return "backpressure-killed";
   return "run-stopped";
 }
 
@@ -2108,16 +2137,19 @@ function gatewayRequestCancellation(
   ctx.res.once("close", abortClient);
   const deadlineMs = codingSidecarGatewayRequestDeadlineMs(config, modelId);
   const deadline = AbortSignal.timeout(deadlineMs);
+  const transport = sidecarSseTransport(ctx, deps);
   const runSignal = cancellationRegistry(deps)?.signalFor(runId);
-  const signals = [client.signal, deadline, runSignal].filter(
+  const signals = [client.signal, deadline, transport.backpressure.signal, runSignal].filter(
     (signal): signal is AbortSignal => signal !== undefined,
   );
   const signal = AbortSignal.any(signals);
+  const sources = { client: client.signal, deadline, backpressure: transport.backpressure.signal };
   return {
     signal,
     deadlineMs,
+    transport,
     cause: (): CodingSidecarGatewayCancellationCause | undefined =>
-      gatewayCancellationCause(signal, client.signal, deadline),
+      gatewayCancellationCause(signal, sources),
     dispose: (): void => {
       ctx.req.removeListener("aborted", abortClient);
       ctx.res.removeListener("close", abortClient);
@@ -2218,7 +2250,9 @@ async function dispatchGatewayChat(
     if (parsed.stream && upstreamStreamingSupported) {
       return await streamGatewayChat(ctx, dispatch);
     }
-    if (parsed.stream) bufferedStream = beginBufferedOpenAiStream(ctx, modelAlias);
+    if (parsed.stream) {
+      bufferedStream = beginBufferedOpenAiStream(ctx, modelAlias, cancellation.transport);
+    }
     return await executeBufferedGatewayChat(ctx, dispatch, bufferedStream);
   } catch (error) {
     return settleFailedGatewayChat(ctx, deps, runId, cancellation, error, delivery, bufferedStream);
@@ -2426,7 +2460,12 @@ function beginGatewayStream(session: GatewayStreamSession): boolean {
     "Cache-Control": "no-store",
     Connection: "keep-alive",
   });
-  if (!writeOpenAiSse(ctx, openAiStreamChunk(id, created, modelId, { role: "assistant" }, null))) {
+  const opened = writeOpenAiSse(
+    ctx,
+    openAiStreamChunk(id, created, modelId, { role: "assistant" }, null),
+    session.cancellation.transport,
+  );
+  if (!opened) {
     ctx.res.destroy();
     recordSessionOutcome(session, "cancelled");
     return false;
@@ -2454,12 +2493,9 @@ function writeSessionTerminal(
   session: GatewayStreamSession,
   finishReason: NormalizedResponse["finishReason"],
 ): void {
-  const { ctx, id, created, modelId, metrics } = session;
+  const { ctx, id, created, modelId, metrics, cancellation } = session;
   writeStreamTerminal(
-    ctx,
-    id,
-    created,
-    modelId,
+    { ctx, id, created, modelId, transport: cancellation.transport },
     finishReason,
     metrics.promptTokens,
     metrics.completionTokens,
@@ -2507,7 +2543,12 @@ async function streamGatewayDelta(session: GatewayStreamSession, token: string):
     writeSessionTerminal(session, "length");
     return false;
   }
-  if (!writeOpenAiSse(ctx, openAiStreamChunk(id, created, modelId, { content: token }, null))) {
+  const wrote = writeOpenAiSse(
+    ctx,
+    openAiStreamChunk(id, created, modelId, { content: token }, null),
+    session.cancellation.transport,
+  );
+  if (!wrote) {
     ctx.res.destroy();
     await iterator.return?.();
     recordSessionOutcome(session, "cancelled");
@@ -2546,6 +2587,7 @@ async function streamGatewayResponse(
         { tool_calls: openAiToolCalls(response.toolCalls) },
         null,
       ),
+      session.cancellation.transport,
     );
     if (!wrote) {
       ctx.res.destroy();
@@ -2648,17 +2690,23 @@ function isGatewayRequestCancelled(signal: AbortSignal): boolean {
   return signal.aborted;
 }
 
-interface BufferedOpenAiStreamSession {
+/** What a terminal chunk needs to know about its stream; both session shapes carry it. */
+interface OpenAiSseStreamIdentity {
   readonly ctx: RouteContext;
   readonly id: string;
   readonly created: number;
   readonly modelId: string;
+  readonly transport: SidecarSseTransport;
+}
+
+interface BufferedOpenAiStreamSession extends OpenAiSseStreamIdentity {
   readonly stopHeartbeat: () => void;
 }
 
 function beginBufferedOpenAiStream(
   ctx: RouteContext,
   modelId: string,
+  transport: SidecarSseTransport,
 ): BufferedOpenAiStreamSession {
   const id = `chatcmpl-${randomUUID()}`;
   const created = Math.floor(Date.now() / 1000);
@@ -2667,15 +2715,23 @@ function beginBufferedOpenAiStream(
     "Cache-Control": "no-store",
     Connection: "keep-alive",
   });
-  if (!writeOpenAiSse(ctx, openAiStreamChunk(id, created, modelId, { role: "assistant" }, null))) {
-    ctx.res.destroy();
-  }
+  const opened = writeOpenAiSse(
+    ctx,
+    openAiStreamChunk(id, created, modelId, { role: "assistant" }, null),
+    transport,
+  );
+  if (!opened) ctx.res.destroy();
   return {
     ctx,
     id,
     created,
     modelId,
-    stopHeartbeat: startSseHeartbeat(ctx.res, BUFFERED_STREAM_HEARTBEAT_MS),
+    transport,
+    stopHeartbeat: startSseHeartbeat(ctx.res, BUFFERED_STREAM_HEARTBEAT_MS, undefined, {
+      controller: transport.backpressure,
+      onBackpressure: transport.onBackpressure,
+      correlationId: ctx.correlationId,
+    }),
   };
 }
 
@@ -2683,7 +2739,7 @@ function completeBufferedOpenAiStream(
   session: BufferedOpenAiStreamSession,
   response: NormalizedResponse,
 ): typeof STREAMING {
-  const { ctx, id, created, modelId, stopHeartbeat } = session;
+  const { ctx, id, created, modelId, transport, stopHeartbeat } = session;
   stopHeartbeat();
   if (response.content.length > 0 || response.toolCalls.length > 0) {
     const wrote = writeOpenAiSse(
@@ -2700,6 +2756,7 @@ function completeBufferedOpenAiStream(
         },
         null,
       ),
+      transport,
     );
     if (!wrote) {
       ctx.res.destroy();
@@ -2707,10 +2764,7 @@ function completeBufferedOpenAiStream(
     }
   }
   writeStreamTerminal(
-    ctx,
-    id,
-    created,
-    modelId,
+    session,
     response.finishReason,
     response.usage.promptTokens,
     response.usage.completionTokens,
@@ -2722,49 +2776,65 @@ function settleBufferedOpenAiStreamError(
   session: BufferedOpenAiStreamSession,
   finishReason: "error" | "length",
 ): typeof STREAMING {
-  const { ctx, id, created, modelId, stopHeartbeat } = session;
-  stopHeartbeat();
-  writeStreamTerminal(ctx, id, created, modelId, finishReason, 0, 0);
+  session.stopHeartbeat();
+  writeStreamTerminal(session, finishReason, 0, 0);
   return STREAMING;
 }
 
 function bufferedOpenAiStream(
   ctx: RouteContext,
+  deps: UiHandlerDeps,
   modelId: string,
   response: NormalizedResponse,
 ): typeof STREAMING {
-  return completeBufferedOpenAiStream(beginBufferedOpenAiStream(ctx, modelId), response);
+  return completeBufferedOpenAiStream(
+    beginBufferedOpenAiStream(ctx, modelId, sidecarSseTransport(ctx, deps)),
+    response,
+  );
 }
 
-function writeOpenAiSse(ctx: RouteContext, payload: Readonly<Record<string, unknown>>): boolean {
-  if (!ctx.res.writableEnded && !ctx.res.destroyed) {
-    return ctx.res.write(`data: ${JSON.stringify(payload)}\n\n`);
-  }
-  return false;
+// False means the frame did not reach the client: either the response was already gone (the
+// client's own `close` is the abort source that names it) or the shared path killed the stream for
+// backpressure (its controller is). A caller that sees false stops producing; it never resumes.
+function writeOpenAiSse(
+  ctx: RouteContext,
+  payload: Readonly<Record<string, unknown>>,
+  transport: SidecarSseTransport,
+): boolean {
+  if (ctx.res.writableEnded || ctx.res.destroyed) return false;
+  return writeOrDestroy(
+    ctx.res,
+    `data: ${JSON.stringify(payload)}\n\n`,
+    transport.backpressure,
+    transport.onBackpressure,
+    ctx.correlationId,
+  );
 }
 
 function writeStreamTerminal(
-  ctx: RouteContext,
-  id: string,
-  created: number,
-  modelId: string,
+  stream: OpenAiSseStreamIdentity,
   finishReason: NormalizedResponse["finishReason"],
   promptTokens: number,
   completionTokens: number,
 ): void {
-  writeOpenAiSse(ctx, openAiStreamChunk(id, created, modelId, {}, finishReason));
-  writeOpenAiSse(ctx, {
-    id,
-    object: "chat.completion.chunk",
-    created,
-    model: modelId,
-    choices: [],
-    usage: {
-      prompt_tokens: promptTokens,
-      completion_tokens: completionTokens,
-      total_tokens: promptTokens + completionTokens,
+  const { ctx, id, created, modelId, transport } = stream;
+  writeOpenAiSse(ctx, openAiStreamChunk(id, created, modelId, {}, finishReason), transport);
+  writeOpenAiSse(
+    ctx,
+    {
+      id,
+      object: "chat.completion.chunk",
+      created,
+      model: modelId,
+      choices: [],
+      usage: {
+        prompt_tokens: promptTokens,
+        completion_tokens: completionTokens,
+        total_tokens: promptTokens + completionTokens,
+      },
     },
-  });
+    transport,
+  );
   if (!ctx.res.writableEnded && !ctx.res.destroyed) ctx.res.end("data: [DONE]\n\n");
 }
 
@@ -2973,7 +3043,7 @@ function authenticatedGatewayAdmission(
   ) {
     return {
       kind: "handled",
-      result: fixedReadinessResponse(ctx, modelAlias, parsed.stream === true),
+      result: fixedReadinessResponse(ctx, deps, modelAlias, parsed.stream === true),
     };
   }
   if (isExactManagedToolSet(parsed.tools)) registry?.verifyObserved(authentication.runId);
@@ -3228,6 +3298,7 @@ function executeBudgetedGatewayChat(
 
 function fixedReadinessResponse(
   ctx: RouteContext,
+  deps: UiHandlerDeps,
   modelId: string,
   stream: boolean,
 ): RouteResult | typeof STREAMING {
@@ -3245,5 +3316,7 @@ function fixedReadinessResponse(
       costClass: "low",
     },
   };
-  return stream ? bufferedOpenAiStream(ctx, modelId, response) : openAiResponse(modelId, response);
+  return stream
+    ? bufferedOpenAiStream(ctx, deps, modelId, response)
+    : openAiResponse(modelId, response);
 }
