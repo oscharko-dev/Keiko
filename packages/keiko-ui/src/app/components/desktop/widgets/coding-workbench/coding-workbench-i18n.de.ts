@@ -1025,9 +1025,9 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.alert.startRefusedModelUnavailable":
     "Das gewählte Modell ist für einen Coding-Lauf gerade nicht zugelassen ({code}). Führe unter Einstellungen → Modelle die Bereitschaftsprüfung dafür aus oder wähle ein Modell, das die Prüfung heute bestanden hat, und starte erneut.",
   "codingWorkbench.alert.startRefusedModelWindow":
-    "Das Kontextfenster des gewählten Modells ist für einen Coding-Lauf zu klein ({code}). Wähle ein Modell mit größerem Fenster oder lass die Bereitschaftsprüfung unter Einstellungen → Modelle das Fenster dieses Modells nachweisen und starte dann erneut.",
+    "Das Kontextfenster des gewählten Modells ist für einen Coding-Lauf zu klein (mindestens 32.000 Tokens; {code}). Keiko konnte 32.000 Tokens dafür nicht bestätigen. Wähle ein größeres Modell oder lass das Gateway max_input_tokens für dieses Modell angeben und starte dann erneut.",
   "codingWorkbench.alert.startRefusedModelVerificationPending":
-    "Das Kontextfenster des gewählten Modells wird noch geprüft ({code}). Warte, bis die Prüfung unter Einstellungen → Modelle abgeschlossen ist, und starte dann erneut.",
+    "Keiko prüft das Kontextfenster des gewählten Modells gerade beim Gateway ({code}). Bei einem ausgelasteten Gateway kann das einige Minuten dauern; starte erneut, sobald die Prüfung abgeschlossen ist.",
   "codingWorkbench.alert.startRefusedWorkspaceUnqualified":
     "Das gebundene Repository konnte für einen Coding-Lauf nicht qualifiziert werden ({code}). Wähle das Repository erneut über „Browse…“, damit sein echter Pfad gebunden wird, und starte erneut.",
   "codingWorkbench.alert.actionFailedSupportId": "Support-ID: {correlationId}.",

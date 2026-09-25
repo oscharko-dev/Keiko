@@ -1065,6 +1065,11 @@ including another failed model request at the same task revision, writes
 revision, state, and a closed publication reason (published, unavailable hub, terminal run, invalid
 event, exhausted sequence, or capacity pressure). A revision is a task-state version, not a turn identifier, so
 it must not suppress later turn failures.
+A sidecar process that exits while its run is active publishes one `failure-redacted` event
+(`runtime-failed`) and writes the `coding-runtime.exit` diagnostic with the numeric exit code and
+the Keiko-code frames of the site that observed the exit (#3593). An approval published while no
+Workbench window is subscribed stays retained in the run's event hub and reaches the next
+subscriber once.
 On completed buffered and streamed requests, `coding-sidecar.gateway.usage-settled` records the count and
 closed source (`provider-reported`, `streamed-byte-estimate`, or `output-byte-estimate`) beneath
 the request correlation and run parent. A positive provider count takes precedence over a byte

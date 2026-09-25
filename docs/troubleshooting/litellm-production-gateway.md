@@ -41,6 +41,44 @@ the failed read and run event; they contain counts and closed reasons, not model
 
 ---
 
+## Coding Workbench refuses to start a run with the selected model
+
+| Field             | Value                                                                       |
+| ----------------- | --------------------------------------------------------------------------- |
+| Severity          | Medium                                                                      |
+| Surface           | Coding Workbench                                                            |
+| Stable identifier | `CODING_RUNTIME_MODEL_UNAVAILABLE` with `model-context-window-insufficient` |
+
+**Symptom**
+
+A Workbench run with a model chosen in the model picker is refused at once. The Workbench says the
+selected model's context window is too small for a coding run, or that Keiko is still verifying it.
+
+**Root Cause**
+
+A coding run's prompt needs a window of at least 32,000 prompt tokens, the minimum the default
+model's readiness already requires. A LiteLLM route that declares no token limits leaves the
+4,096-token setup placeholder until Keiko's automatic long-context probe proves a larger window.
+Before 1.1.8 such a model was admitted; the gateway then refused the run's first request, and the
+run failed after the two-minute start timeout without a reason.
+
+**Diagnostic Steps**
+
+Export a bundle and analyze the run with
+`keiko support analyze keiko-bundle.jsonl --correlation-id <runId>`. The `coding-runtime.start`
+diagnostic reads
+`stage=start:reason=launch-resolution:model-unavailable:model-context-window-insufficient`, or
+`...:model-verification-pending` while the probe runs. `gateway.readiness.automatic.completed`
+shows whether the long-context probe ran and which window it verified.
+
+**Resolution**
+
+While the probe runs, wait and start again. If Keiko cannot confirm 32,000 tokens, the model is too
+small for coding runs as the gateway describes it: choose a larger model, or declare the model's
+real `max_input_tokens` in the LiteLLM model configuration.
+
+---
+
 ## Authenticate x-litellm-key against a proxy that ignores it
 
 | Field             | Value                                                          |

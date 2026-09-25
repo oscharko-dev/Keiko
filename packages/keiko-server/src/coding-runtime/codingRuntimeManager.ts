@@ -72,6 +72,7 @@ import {
 } from "./codingToolApprovalBridge.js";
 import {
   contentFreeErrorClass,
+  describeError,
   emitServerDiagnostic,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
@@ -1657,12 +1658,16 @@ function emitInvalidRuntimeEventDiagnostic(
   });
 }
 
+// A runtime exit is observed, not thrown. Its line still carries the Keiko-code frames of the site
+// that observed it (ADR-0173 D3), the frames every thrown failure line carries, so a customer's log
+// names the exit handler of the installed build (#3593).
 function emitRuntimeExitDiagnostic(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
   code: number | null,
   now: () => number,
 ): void {
+  const { frames } = describeError(new Error("runtime-exit-observed"));
   emitServerDiagnostic(diagnostics, {
     correlationId: runId,
     timestamp: new Date(now()).toISOString(),
@@ -1673,6 +1678,7 @@ function emitRuntimeExitDiagnostic(
     // label — moved to `code` (the field this data actually belongs on), `message` stays fixed.
     message: "runtime-exit-code",
     code: code === null ? "signal" : String(code),
+    frames,
   });
 }
 

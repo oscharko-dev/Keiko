@@ -31,6 +31,7 @@ import {
   RateLimitError,
   TimeoutError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
+import type { CodingWorkbenchTurnFailureCode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { TOOL_CALLING_VERIFICATION_MAX_AGE_MS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
@@ -4537,6 +4538,190 @@ describe("coding sidecar gateway turn failure projection", () => {
     };
     expect(await handleCodingSidecarGatewayChatCompletions(context, deps)).toBe(STREAMING);
     expect(diagnostics.record).toHaveBeenCalledTimes(count);
+  });
+});
+
+// #3593: no failure between the user's message and the reply may leave the transcript blank. Each
+// class the issue names publishes exactly one closed-code run event and writes exactly one
+// run-correlated turn-failed line without provider text, in every autonomy mode and on both
+// gateway classes the customer runs: an Azure OpenAI deployment and a LiteLLM OpenAI-compatible
+// route.
+describe("coding sidecar gateway no-silent-turn matrix (#3593)", () => {
+  afterEach(resetServerLogger);
+
+  const RUN_ID = "run-gateway-test";
+  type GatewayClass = (contextWindow?: number) => GatewayConfig;
+  interface TurnFault {
+    readonly deps: (gateway: GatewayClass) => UiHandlerDeps;
+    readonly context: () => RouteContext;
+  }
+
+  const GATEWAY_CLASSES: readonly (readonly [string, GatewayClass])[] = [
+    [
+      "an Azure OpenAI deployment",
+      (contextWindow = 128_000): GatewayConfig =>
+        configValue(
+          provider({ endpointStyle: "azure-openai-deployment", apiKeyHeaderName: "api-key" }),
+          capability({ contextWindow }),
+        ),
+    ],
+    [
+      "a LiteLLM OpenAI-compatible route",
+      (contextWindow = 128_000): GatewayConfig =>
+        configValue(
+          provider({
+            modelId: "litellm-coding-model",
+            baseUrl: "https://litellm.example/v1",
+            apiKey: "litellm-secret",
+            apiKeyHeaderName: "x-litellm-key",
+            endpointStyle: "openai-compatible",
+          }),
+          capability({ id: "litellm-coding-model", contextWindow }),
+        ),
+    ],
+  ];
+  const MODES = ["governed-assist", "supervised-coding", "autonomous-delivery"] as const;
+
+  function bufferedFault(error: Error): TurnFault {
+    return {
+      deps: (gateway) => depsValue(gateway(), () => () => Promise.reject(error)),
+      context: () => routeContext({ messages: [{ role: "user", content: "synthetic turn" }] }),
+    };
+  }
+
+  function streamedFault(stream: () => AsyncGenerator<GatewayStreamChunk>): TurnFault {
+    return {
+      deps: (gateway) => ({
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: RUN_ID } }),
+          undefined,
+          createOpenCodeGatewayReadinessRegistry(),
+          (): (() => AsyncIterable<GatewayStreamChunk>) => stream,
+        ),
+        config: gateway(),
+      }),
+      context: () =>
+        authenticatedContext({
+          model: "coding",
+          stream: true,
+          messages: [{ role: "user", content: "synthetic turn" }],
+          tools: modelVisibleTools(),
+        }),
+    };
+  }
+
+  function refusedRequest(content: string, contextWindow?: number): TurnFault {
+    return {
+      deps: (gateway) =>
+        depsValue(
+          gateway(contextWindow),
+          () => () => Promise.reject(new Error("synthetic dispatch after a refusal")),
+        ),
+      context: () => routeContext({ messages: [{ role: "user", content }] }),
+    };
+  }
+
+  async function* midStreamErrorFrame(): AsyncGenerator<GatewayStreamChunk> {
+    await Promise.resolve();
+    yield { type: "delta", token: "partial" };
+    throw Object.assign(new Error("synthetic upstream reset"), { code: "GATEWAY_TRANSPORT" });
+  }
+
+  async function* emptyStream(): AsyncGenerator<GatewayStreamChunk> {
+    await Promise.resolve();
+    yield* [];
+  }
+
+  async function* chunkTimeout(): AsyncGenerator<GatewayStreamChunk> {
+    await Promise.resolve();
+    yield { type: "delta", token: "partial" };
+    throw new TimeoutError("synthetic chunk timeout");
+  }
+
+  const FAILURE_CLASSES: readonly (readonly [
+    string,
+    CodingWorkbenchTurnFailureCode,
+    () => TurnFault,
+  ])[] = [
+    [
+      "a gateway 4xx",
+      "provider-failed",
+      (): TurnFault => bufferedFault(new ProviderError("synthetic bad request", 400)),
+    ],
+    [
+      "a gateway 5xx",
+      "provider-failed",
+      (): TurnFault => bufferedFault(new ProviderError("synthetic unavailable", 503)),
+    ],
+    [
+      "a mid-stream error frame",
+      "stream-incomplete",
+      (): TurnFault => streamedFault(midStreamErrorFrame),
+    ],
+    [
+      "an empty stream without a finish",
+      "stream-incomplete",
+      (): TurnFault => streamedFault(emptyStream),
+    ],
+    ["a chunk timeout", "stream-incomplete", (): TurnFault => streamedFault(chunkTimeout)],
+    [
+      "a request over the transport cap",
+      "turn-rejected",
+      (): TurnFault => refusedRequest("private-overflow".repeat(100_000)),
+    ],
+    [
+      "a prompt over the model's window",
+      "turn-rejected",
+      (): TurnFault => refusedRequest("private-window".repeat(40), 16),
+    ],
+  ];
+
+  describe.each(GATEWAY_CLASSES)("on %s", (_gatewayClass, gateway) => {
+    describe.each(MODES)("in %s", (mode) => {
+      it.each(FAILURE_CLASSES)(
+        "reports %s as one %s run event and one log line",
+        async (_label, code, fault) => {
+          const sink = captureServerLog("warn");
+          const eventHub = new CodingRuntimeEventHub();
+          const turn = fault();
+          const deps = {
+            ...turn.deps(gateway),
+            diagnostics: { record: vi.fn<(record: ServerDiagnosticRecord) => void>() },
+            codingRuntimeEventHub: eventHub,
+            codingRuntimeOrchestrator: {
+              getSnapshot: () => ({
+                state: "running",
+                revision: 5,
+                requestedMode: mode,
+                effectiveMode: mode,
+              }),
+            } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+          } as UiHandlerDeps;
+
+          await handleCodingSidecarGatewayChatCompletions(turn.context(), deps);
+
+          const replay = eventHub.replay(RUN_ID);
+          expect(replay.ok && replay.events).toEqual([
+            expect.objectContaining({
+              kind: "runtime-event",
+              eventKind: "failure-redacted",
+              failureCode: code,
+            }),
+          ]);
+          const failed = sink.events.filter(
+            (event) => event.op === "coding-sidecar.gateway.turn-failed",
+          );
+          expect(failed).toHaveLength(1);
+          expect(failed[0]).toMatchObject({
+            extra: { runId: RUN_ID, revision: 5, failureCode: code, published: true },
+          });
+          expect([failed[0]?.correlationId, failed[0]?.parentCorrelationId]).toContain(RUN_ID);
+          expect(JSON.stringify({ replay, events: sink.events })).not.toMatch(
+            /synthetic|private-overflow|private-window|litellm-secret|provider-secret/u,
+          );
+        },
+      );
+    });
   });
 });
 
