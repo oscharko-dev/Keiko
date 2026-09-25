@@ -304,6 +304,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.effort.xhigh": "Extra hoch",
   "codingWorkbench.composer.authority.label": "Rechte für diesen Lauf",
   "codingWorkbench.composer.authority.menu": "Rechte auswählen",
+  "codingWorkbench.composer.authority.ceiling":
+    "{requested} liegt über der Berechtigungsgrenze dieser Installation, daher starten Läufe mit {ceiling}.",
   "codingWorkbench.composer.authority.error.hydrate":
     "Die Rechte konnten nicht geladen werden. „Um Genehmigung bitten“ bleibt ausgewählt.",
   "codingWorkbench.composer.authority.error.persist":

@@ -933,6 +933,60 @@ describe("CodingWorkbenchWindow", () => {
     expect(document.querySelector('[data-mode="governed-assist"]')).toBeInTheDocument();
   });
 
+  // #3610: the composer kept the wider selection while the deployment ceiling capped the run; the
+  // cap showed only in the information panel, so a run started as Supervised silently ran in Ask
+  // mode. The composer states the cap next to the selection, which it still never reverts.
+  it("states in the composer when the deployment ceiling caps the selected authority", () => {
+    renderWorkbench(
+      liveState({
+        requestedMode: "supervised-coding",
+        runtime: {
+          status: "ready",
+          error: null,
+          value: {
+            schemaVersion: "1",
+            requestedMode: "supervised-coding",
+            deploymentCeiling: "governed-assist",
+            effectiveMode: "governed-assist",
+            runtimeAvailable: true,
+          },
+        },
+      }),
+    );
+
+    expect(
+      screen.getByText(
+        "Supervised workspace is above this installation's authority limit, so runs start with Ask for approval.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Run authority" })).toHaveTextContent(
+      "Supervised workspace",
+    );
+  });
+
+  it("states no cap while the selected authority is within the deployment ceiling", () => {
+    renderWorkbench(
+      liveState({
+        requestedMode: "governed-assist",
+        runtime: {
+          status: "ready",
+          error: null,
+          value: {
+            schemaVersion: "1",
+            requestedMode: "governed-assist",
+            deploymentCeiling: "supervised-coding",
+            effectiveMode: "governed-assist",
+            runtimeAvailable: true,
+          },
+        },
+      }),
+    );
+
+    expect(
+      screen.queryByText(/above this installation's authority limit/u),
+    ).not.toBeInTheDocument();
+  });
+
   it("locks the authority control without reverting the selection while persistence is pending", () => {
     autonomyHookMock.mockReturnValue({
       requestedMode: "governed-assist",

@@ -285,6 +285,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.effort.xhigh": "Extra high",
   "codingWorkbench.composer.authority.label": "Run authority",
   "codingWorkbench.composer.authority.menu": "Choose authority",
+  "codingWorkbench.composer.authority.ceiling":
+    "{requested} is above this installation's authority limit, so runs start with {ceiling}.",
   "codingWorkbench.composer.authority.error.hydrate":
     "Run authority could not be loaded. Ask for approval remains selected.",
   "codingWorkbench.composer.authority.error.persist":

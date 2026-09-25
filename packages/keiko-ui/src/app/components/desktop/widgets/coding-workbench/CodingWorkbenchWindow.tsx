@@ -881,6 +881,35 @@ function RunWorkspaceMismatchNotice({ visible }: { readonly visible: boolean }):
 }
 
 /**
+ * #3610: the deployment ceiling (Ask for approval unless the installation raises it) caps every run
+ * above it. The composer kept showing the wider selection and the cap appeared only in the
+ * information panel, so a run the operator started as Supervised silently ran in Ask mode. The
+ * selection itself is never reverted; this states the authority the next run will actually hold.
+ */
+function DeploymentCeilingNotice({
+  state,
+}: {
+  readonly state: CodingWorkbenchRuntimeState;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const ceiling = state.runtime.value?.deploymentCeiling;
+  if (ceiling === undefined || !isCodingWorkbenchModeWidening(ceiling, state.requestedMode)) {
+    return null;
+  }
+  return (
+    <output className={styles.alert}>
+      <span aria-hidden="true">!</span>{" "}
+      <span>
+        {t("codingWorkbench.composer.authority.ceiling", {
+          requested: modeLabel(state.requestedMode, t),
+          ceiling: modeLabel(ceiling, t),
+        })}
+      </span>
+    </output>
+  );
+}
+
+/**
  * Epic #3384 cascade: a refused edit used to leave the operator with nothing — the model just
  * asked "how would you like to proceed?" while every `keiko_changeset_edit` kept failing
  * NO_ACTIVE_SESSION. `useCodingWorkbenchEditorBridge` now retries the registration on its own
@@ -1266,6 +1295,7 @@ function WorkbenchColumns({
         />
         <CodexSubscriptionAuthCard state={state} actions={actions} />
         <RunWorkspaceMismatchNotice visible={runIsActive && runWorkspace.mismatched} />
+        <DeploymentCeilingNotice state={state} />
         <EditorBridgeUnavailableNotice visible={editorBridge.bridgeUnavailable} />
         <div className={styles.cmpRunActions}>
           <CodingWorkbenchProgress
