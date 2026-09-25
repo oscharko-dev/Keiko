@@ -232,14 +232,16 @@ function isReadinessHandshake(role: string, content: string): boolean {
  * The part of a run's conversation the operator wrote or was answered in: the handshake turn is
  * dropped, and so is the run's first operator message, because `begin` already stored it as the
  * run's intent. Later operator messages of the same run stay — they are follow-ups, not echoes.
+ * A source that no longer holds the task prompt (`intentEchoPresent` false) skips no message.
  */
 function operatorConversation<T extends { readonly role: string }>(
   messages: readonly T[],
   contentOf: (message: T) => string,
+  intentEchoPresent = true,
 ): readonly T[] {
   const conversation: T[] = [];
   let inHandshake = false;
-  let intentEchoed = false;
+  let intentEchoed = !intentEchoPresent;
   for (const message of messages) {
     if (isReadinessHandshake(message.role, contentOf(message))) {
       inHandshake = true;
@@ -474,7 +476,10 @@ export class CodingRuntimeHistory {
       return;
     }
     const messages = feed.turns.flatMap((turn) => turn.messages);
-    this.captureMessages(task.id, runId, messages);
+    // The display feed is armed only after the readiness handshake, so its first turn is the task
+    // prompt, and a truncated feed dropped its oldest turns first: it no longer holds the intent
+    // echo, and its first remaining operator message is a follow-up to keep (#3611 review).
+    this.captureMessages(task.id, runId, messages, !feed.truncated);
     recordHistory(this.log, "captured", {
       correlationId: runId,
       conversationId: task.id,
@@ -489,8 +494,9 @@ export class CodingRuntimeHistory {
     id: string,
     runId: string,
     messages: readonly CodingSafeActivityMessage[],
+    intentEchoPresent: boolean,
   ): void {
-    for (const message of operatorConversation(messages, displayText)) {
+    for (const message of operatorConversation(messages, displayText, intentEchoPresent)) {
       const text = displayText(message);
       if (text.length > 0)
         this.store.codingHistory?.append(id, runId, message.messageId, message.role, text);

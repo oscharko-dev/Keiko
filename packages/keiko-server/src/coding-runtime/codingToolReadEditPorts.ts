@@ -79,6 +79,7 @@ type EditOutcome =
 // before it ever reached the editor route, so nothing was attempted against the tree.
 export const NO_ACTIVE_SESSION_MESSAGE =
   "no Coding Workbench is connected for this workspace; keep the Workbench open and retry";
+const NO_ACTIVE_SESSION_DETAIL = { message: NO_ACTIVE_SESSION_MESSAGE } as const;
 
 type EditorAgentActionClient = Pick<EditorAgentHttpClient, "action"> &
   Partial<Pick<EditorAgentHttpClient, "listSessions">>;
@@ -461,6 +462,27 @@ const EDIT_REFUSAL_REASONS = [
 type EditRefusalReason = (typeof EDIT_REFUSAL_REASONS)[number];
 const EDIT_REFUSAL_REASON_SET: ReadonlySet<string> = new Set(EDIT_REFUSAL_REASONS);
 
+const EDIT_PREPARE_CAUSES = [
+  "workspace-access-lost",
+  "cancelled",
+  "guard-denied",
+  "changeset-invalid",
+  "binding-unavailable",
+  "editor-context-unavailable",
+  "lease-unavailable",
+] as const;
+type EditPrepareCause = (typeof EDIT_PREPARE_CAUSES)[number];
+
+const EDIT_PREPARE_ERROR_KINDS: Readonly<Record<EditPrepareCause, ActivityLogErrorKind>> = {
+  "workspace-access-lost": "authority-denied",
+  cancelled: "cancelled",
+  "guard-denied": "authority-denied",
+  "changeset-invalid": "validation-failed",
+  "binding-unavailable": "authority-denied",
+  "editor-context-unavailable": "unavailable",
+  "lease-unavailable": "conflict",
+};
+
 const CODING_RUNTIME_EDIT_REFUSED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -474,6 +496,14 @@ const CODING_RUNTIME_EDIT_REFUSED_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
       values: [...EDIT_REFUSAL_REASONS],
+    },
+    // #3611 review: EDIT_PREPARE_FAILED covers several causes; this names which one refused the
+    // edit before it reached the editor route. The model-facing reason code stays the same.
+    prepareCause: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [...EDIT_PREPARE_CAUSES],
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -754,8 +784,10 @@ async function executeEdit(
   mutationGuard: CodingToolMutationGuard,
 ): Promise<EditOutcome> {
   const prepared = prepareEdit(deps, request, signal, mutationGuard);
-  if (prepared === undefined) {
-    return editRefused(deps, editContextCorrelationId(deps), "EDIT_PREPARE_FAILED");
+  if ("refused" in prepared) {
+    return editRefused(deps, editContextCorrelationId(deps), "EDIT_PREPARE_FAILED", {
+      prepareCause: prepared.refused,
+    });
   }
   const correlationId = editCorrelationId(prepared.action);
   try {
@@ -767,7 +799,7 @@ async function executeEdit(
     );
     if (action === undefined) {
       discardMutationLease(deps, prepared.leaseRequest);
-      return editRefused(deps, correlationId, "NO_ACTIVE_SESSION", NO_ACTIVE_SESSION_MESSAGE);
+      return editRefused(deps, correlationId, "NO_ACTIVE_SESSION", NO_ACTIVE_SESSION_DETAIL);
     }
     if (!hasLiveWorkspaceAccess(deps)) {
       discardMutationLease(deps, prepared.leaseRequest);
@@ -787,7 +819,7 @@ async function executeEdit(
       deps,
       correlationId,
       editFailureReasonCode(result),
-      editFailureMessage(result),
+      editFailureDetail(result),
     );
   } catch (error) {
     discardMutationLease(deps, prepared.leaseRequest);
@@ -825,11 +857,12 @@ function editRefused(
   deps: CodingToolReadEditPortDeps,
   correlationId: string,
   reasonCode: string | undefined,
-  message?: string,
+  detail: { readonly message?: string; readonly prepareCause?: EditPrepareCause } = {},
 ): EditOutcome {
+  const { message, prepareCause } = detail;
   // The refusal line stays reason-code-only (body-free, AGENTS.md §8) — `message` never reaches
   // the activity log, only the outcome returned to the caller.
-  logEditRefused(deps, correlationId, reasonCode);
+  logEditRefused(deps, correlationId, reasonCode, prepareCause);
   return message === undefined
     ? { status: "failed", reasonCode }
     : { status: "failed", reasonCode, message };
@@ -853,12 +886,13 @@ function editFailureReasonCode(
 // model sees) and, like `message` above, never into the activity log. Without it the model saw the
 // bare code and retried the same patch blind: the probe rehearsal of 2026-09-08 sent six
 // INVALID_EDITS patches in a row and then gave up without delivering (#3390).
-function editFailureMessage(
-  result: Awaited<ReturnType<EditorAgentActionClient["action"]>>,
-): string | undefined {
-  if (!result.ok) return undefined;
+function editFailureDetail(result: Awaited<ReturnType<EditorAgentActionClient["action"]>>): {
+  readonly message?: string;
+} {
+  if (!result.ok) return {};
   const outcome = result.value.result;
-  return outcome.conflict?.message ?? outcome.failure?.message;
+  const message = outcome.conflict?.message ?? outcome.failure?.message;
+  return message === undefined ? {} : { message };
 }
 
 // The run id is the timeline an edit failure belongs to; the tool action id carries the sidecar's
@@ -900,13 +934,23 @@ function logEditRefused(
   deps: CodingToolReadEditPortDeps,
   correlationId: string,
   reasonCode: string | undefined,
+  prepareCause: EditPrepareCause | undefined,
 ): void {
   const reason = editRefusalReason(reasonCode);
+  const errorKind =
+    prepareCause === undefined
+      ? EDIT_REFUSAL_ERROR_KINDS[reason]
+      : EDIT_PREPARE_ERROR_KINDS[prepareCause];
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       CODING_RUNTIME_EDIT_REFUSED_OPERATION,
-      { level: "warn", correlationId, errorKind: EDIT_REFUSAL_ERROR_KINDS[reason] },
-      { reasonCode: reason, completeness: "complete", loss: "none" },
+      { level: "warn", correlationId, errorKind },
+      {
+        reasonCode: reason,
+        ...(prepareCause === undefined ? {} : { prepareCause }),
+        completeness: "complete",
+        loss: "none",
+      },
     ),
   );
 }
@@ -963,17 +1007,18 @@ function prepareEdit(
   request: EditorChangesetRequest,
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
-): PreparedEdit | undefined {
+): PreparedEdit | { readonly refused: EditPrepareCause } {
   const changeset = validatedChangeset(deps, request, signal, mutationGuard);
-  if (changeset === undefined) return undefined;
+  if (typeof changeset === "string") return { refused: changeset };
   const binding = mutationBinding(mutationGuard);
-  if (binding === null) return undefined;
-  if (binding === undefined && deps.enforceProducerBinding === true) return undefined;
+  if (binding === null || (binding === undefined && deps.enforceProducerBinding === true))
+    return { refused: "binding-unavailable" };
   const context = resolveEditorContext(deps);
-  if (context === undefined || !editorContextMatches(context, binding)) return undefined;
+  if (context === undefined || !editorContextMatches(context, binding))
+    return { refused: "editor-context-unavailable" };
   const action = changesetAction(request, changeset, context);
   const leaseRequest = registerMutationLease(deps, action, context, binding, mutationGuard);
-  if (binding !== undefined && leaseRequest === undefined) return undefined;
+  if (binding !== undefined && leaseRequest === undefined) return { refused: "lease-unavailable" };
   return {
     action,
     leaseRequest,
@@ -1001,17 +1046,13 @@ function validatedChangeset(
   request: EditorChangesetRequest,
   signal: AbortSignal | undefined,
   mutationGuard: CodingToolMutationGuard,
-): EditorAgentChangeset | undefined {
-  if (
-    !hasLiveWorkspaceAccess(deps) ||
-    isAborted(signal) ||
-    !checkGuard(mutationGuard) ||
-    !("changeset" in request)
-  ) {
-    return undefined;
-  }
-  if (!isExactEditorAgentChangeset(request.changeset)) return undefined;
-  return normalizeRawSingleFilePatch(request.changeset);
+): EditorAgentChangeset | EditPrepareCause {
+  if (!hasLiveWorkspaceAccess(deps)) return "workspace-access-lost";
+  if (isAborted(signal)) return "cancelled";
+  if (!checkGuard(mutationGuard)) return "guard-denied";
+  if (!("changeset" in request) || !isExactEditorAgentChangeset(request.changeset))
+    return "changeset-invalid";
+  return normalizeRawSingleFilePatch(request.changeset) ?? "changeset-invalid";
 }
 
 function normalizeRawSingleFilePatch(

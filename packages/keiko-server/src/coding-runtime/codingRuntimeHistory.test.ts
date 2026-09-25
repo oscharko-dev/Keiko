@@ -319,6 +319,56 @@ describe("paired coding conversation history", () => {
     ]);
   });
 
+  // #3611 review: the display feed drops its oldest turns when it outgrows its bounds. The task
+  // prompt's turn goes first, so a truncated feed no longer holds the intent echo, and its first
+  // remaining operator message is a follow-up that must be stored, not skipped as the echo.
+  it("keeps the first remaining follow-up of a truncated display feed", () => {
+    const { history, id } = fixture();
+    const runId = "b98ffdea-fc67-4e81-b1da-c5a987198123";
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      limits: { maxTurns: 2 },
+    });
+    projection.open({
+      runId,
+      workspaceId: "ws-1",
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    const occurredAt = "2026-07-18T17:00:00.000Z";
+    const say = (
+      messageId: string,
+      role: "user" | "assistant",
+      text: string,
+      parent?: string,
+    ): void => {
+      projection.ingest(runId, {
+        kind: "message",
+        messageId,
+        role,
+        occurredAt,
+        ...(parent === undefined ? {} : { parentMessageId: parent }),
+      });
+      projection.ingest(runId, { kind: "text", messageId, text, occurredAt });
+    };
+    say("task", "user", "Inspect a private source file");
+    say("answer", "assistant", "The file is fine.", "task");
+    say("follow-up", "user", "Now add a test");
+    say("follow-up-answer", "assistant", "Added.", "follow-up");
+    say("second", "user", "And document it");
+    say("second-answer", "assistant", "Documented.", "second");
+    const content = projection.currentContent();
+    const feed = content?.feed;
+    if (feed?.availability !== "available") throw new Error("expected an available feed");
+    expect(feed.truncated).toBe(true);
+
+    history.capture(runId, content);
+
+    expect(
+      history.detail(id, "read-display")?.messages.map(({ role, content: text }) => [role, text]),
+    ).toContainEqual(["user", "Now add a test"]);
+  });
+
   it("preserves astral text across chunk boundaries through SQLite and replay", () => {
     const { history, id } = fixture();
     const runId = "b98ffdea-fc67-4e81-b1da-c5a987198123";

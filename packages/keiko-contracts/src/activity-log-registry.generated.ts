@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "e19b632f3056f0a82fbaa3bb22408ea3543c842ef43305db01b637d323038b07" as const;
+  "b22efcb639973c2bdd7ec5f885666399fcf7c935ddfa7031a99f100b2d13424a" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -4259,6 +4259,20 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "EDIT_MUTATION_FAILED",
           "EDIT_CLIENT_ERROR",
           "UNCLASSIFIED",
+        ],
+      },
+      prepareCause: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "workspace-access-lost",
+          "cancelled",
+          "guard-denied",
+          "changeset-invalid",
+          "binding-unavailable",
+          "editor-context-unavailable",
+          "lease-unavailable",
         ],
       },
     },
@@ -31531,6 +31545,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           causal: "correlation",
           analyzerProjection: "failure-cluster",
           safeContextFields: [
+            {
+              name: "prepareCause",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
             {
               name: "reasonCode",
               type: "string",

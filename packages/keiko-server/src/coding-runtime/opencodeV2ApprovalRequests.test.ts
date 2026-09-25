@@ -166,6 +166,45 @@ describe("OpenCode V2 approval requests", () => {
     await expect(pending).resolves.toBe("cancelled");
   });
 
+  // #3611 review: at most 64 asks wait at once. The 65th is refused as unavailable, and settling one
+  // frees its slot again.
+  it("refuses an ask beyond the 64 pending ones and admits one again after a settlement", async () => {
+    const approvals = createOpenCodeV2ApprovalRequests();
+    const signal = new AbortController().signal;
+    const ask = asked();
+    const pending = Array.from({ length: 64 }, (_unused, index) =>
+      approvals.request({
+        value: permissionBody(`per_capacity_${String(index)}`),
+        runId: RUN_ID,
+        sessionId: SESSION_ID,
+        onPermission: ask.onPermission,
+        signal,
+      }),
+    );
+    await expect(
+      approvals.request({
+        value: permissionBody("per_capacity_overflow"),
+        runId: RUN_ID,
+        sessionId: SESSION_ID,
+        onPermission: ask.onPermission,
+        signal,
+      }),
+    ).resolves.toBe("unavailable");
+
+    expect(approvals.resolve(RUN_ID, requestIdOf(ask), false)).toBe(true);
+    await expect(pending[0]).resolves.toBe("denied");
+    const admitted = approvals.request({
+      value: permissionBody("per_capacity_after"),
+      runId: RUN_ID,
+      sessionId: SESSION_ID,
+      onPermission: ask.onPermission,
+      signal,
+    });
+    expect(ask.events).toHaveLength(65);
+    approvals.close();
+    await expect(admitted).resolves.toBe("cancelled");
+  });
+
   it("answers an ask whose delivery to the human failed as unavailable", async () => {
     const approvals = createOpenCodeV2ApprovalRequests();
     await expect(

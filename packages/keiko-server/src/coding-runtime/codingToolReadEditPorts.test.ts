@@ -297,11 +297,79 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
       expect.objectContaining({
         correlationId: "run-prepare-1",
         errorKind: "validation-failed",
-        extra: expect.objectContaining({ reasonCode: "EDIT_PREPARE_FAILED" }) as unknown,
+        extra: expect.objectContaining({
+          reasonCode: "EDIT_PREPARE_FAILED",
+          prepareCause: "changeset-invalid",
+        }) as unknown,
       }),
     ]);
     expect(records).toEqual([]);
   });
+
+  // #3611 review: EDIT_PREPARE_FAILED covers several causes, and not every one is a validation
+  // failure. The model still reads the one reason code; the refusal line names the cause and its
+  // error kind so the log tells a denied guard from a missing editor context.
+  it.each([
+    ["guard-denied", "authority-denied", { guardAllows: false }],
+    ["editor-context-unavailable", "unavailable", { contextResolves: false }],
+    ["workspace-access-lost", "authority-denied", { workspaceAccess: false }],
+    ["cancelled", "cancelled", { aborted: true }],
+    ["binding-unavailable", "authority-denied", { enforceBinding: true }],
+  ] as const)(
+    "names the prepare cause %s as %s on the refusal line",
+    async (prepareCause, errorKind, setup) => {
+      const scenario: {
+        readonly guardAllows?: boolean;
+        readonly contextResolves?: boolean;
+        readonly workspaceAccess?: boolean;
+        readonly aborted?: boolean;
+        readonly enforceBinding?: boolean;
+      } = setup;
+      const events: ServerLogEvent[] = [];
+      const action = vi.fn();
+      const ports = createCodingToolReadEditPorts({
+        secureWorkspaceTextRead: { readText: vi.fn() },
+        editorAgentClient: { action },
+        activityLog: { write: (event): void => void events.push(event) },
+        // An unavailable editor context surfaces as a throwing resolver.
+        resolveEditorActionContext: () => {
+          if (scenario.contextResolves === false) throw new Error("no editor context");
+          return {
+            sessionId: "session-cause",
+            authorityRef: { runId: "run-cause", envelopeDigest: DIGEST },
+            origin: "agent" as const,
+          };
+        },
+        ...(scenario.workspaceAccess === false
+          ? { resolveWorkspaceRootAccess: (): undefined => undefined }
+          : {}),
+        ...(scenario.enforceBinding === true ? { enforceProducerBinding: true } : {}),
+      });
+
+      await expect(
+        ports.editorChangeset.execute(
+          {
+            action: "edit",
+            actionId: "edit-cause",
+            idempotencyKey: "edit-cause-key",
+            changeset: changeset(),
+          },
+          scenario.aborted === true ? AbortSignal.abort() : undefined,
+          { check: (): boolean => scenario.guardAllows !== false },
+        ),
+      ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
+      expect(action).not.toHaveBeenCalled();
+      expect(editRefusedLines(events)).toEqual([
+        expect.objectContaining({
+          errorKind,
+          extra: expect.objectContaining({
+            reasonCode: "EDIT_PREPARE_FAILED",
+            prepareCause,
+          }) as unknown,
+        }),
+      ]);
+    },
+  );
 
   it("discovers exact governed file paths without exposing denied or unrelated entries", async (): Promise<void> => {
     const root = mkdtempSync(join(tmpdir(), "keiko-coding-discover-"));
