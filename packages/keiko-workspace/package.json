@@ -71,7 +71,7 @@
   "dependencies": {
     "@oscharko-dev/keiko-contracts": "1.1.7",
     "@oscharko-dev/keiko-security": "1.1.7",
-    "typescript": "~6.0.3"
+    "typescript": "~7.0.2"
   },
   "private": true
 }
