@@ -1301,7 +1301,8 @@ describe("private OpenCode run control", () => {
       await expect(
         fixture.runtime.runPort.replyPermission(FIXTURE_RUN_ID, requestId, "reject"),
       ).resolves.toBe(true);
-      await expect(decision).resolves.toMatchObject({ status: 403 });
+      // #3610: the refusal names the human decision, so the route never logs it as an origin refusal.
+      await expect(decision).resolves.toMatchObject({ status: 403, rejection: "approval-denied" });
       expect(permissionRequests).toEqual([]);
     } finally {
       await fixture.stop();

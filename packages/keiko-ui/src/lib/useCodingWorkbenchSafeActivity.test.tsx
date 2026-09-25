@@ -223,6 +223,40 @@ describe("useCodingWorkbenchSafeActivity", () => {
     expect(view.result.current.feed).toBeNull();
   });
 
+  // #3610 (W17): Stop purges the run's projection, and the Workbench then said "Activity not
+  // connected" with a Reconnect button that could never bring anything back. A finished run without
+  // a projection has ended; there is no held feed to caption as final.
+  it("reports a finished run without a projection as ended, not as a lost connection", async () => {
+    getSnapshotMock.mockResolvedValue({ schemaVersion: "1", content: null });
+    streamSnapshotsMock.mockResolvedValue(undefined);
+    const view = renderHook(() =>
+      useCodingWorkbenchSafeActivity({
+        runId: "run-1",
+        runState: "cancelled",
+        runtimeEventSignal: 0,
+      }),
+    );
+
+    await waitFor(() => expect(view.result.current.status).toBe("ended"));
+    expect(view.result.current.feed).toBeNull();
+  });
+
+  it("turns a purged projection into ended once the stopping run settles", async () => {
+    getSnapshotMock.mockResolvedValue({ schemaVersion: "1", content: null });
+    streamSnapshotsMock.mockResolvedValue(undefined);
+    const view = renderHook(
+      ({ runState }: { readonly runState: "stopping" | "cancelled" }) =>
+        useCodingWorkbenchSafeActivity({ runId: "run-1", runState, runtimeEventSignal: 0 }),
+      { initialProps: { runState: "stopping" as "stopping" | "cancelled" } },
+    );
+    await waitFor(() => expect(view.result.current.status).toBe("unavailable"));
+
+    view.rerender({ runState: "cancelled" });
+
+    expect(view.result.current.status).toBe("ended");
+    expect(view.result.current.feed).toBeNull();
+  });
+
   // Cross-run isolation: switching to a new runId must abandon the previous feed before it can
   // leak into the new run's view.
   it("drops the previous run's feed when runId changes", async () => {

@@ -25,6 +25,7 @@ import {
   CircuitOpenError,
   ConfigInvalidError,
   ContextOverflowError,
+  ProviderEmptyAnswerError,
   ProviderOutputExhaustedError,
   RateLimitError,
   TimeoutError,
@@ -2543,6 +2544,52 @@ describe("coding-sidecar gateway", () => {
     ]);
   });
 
+  // #3610: a streamed read that settles on an empty answer — the provider answered with neither
+  // content nor a tool call — is its own turn-failure cause on the stream path too, never a broken
+  // stream with a connectivity hint.
+  it("reports a streamed empty answer as empty-answer, not as an incomplete stream", async () => {
+    const sink = captureServerLog("warn");
+    const eventHub = new CodingRuntimeEventHub();
+    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      await Promise.resolve();
+      yield* [];
+      throw new ProviderEmptyAnswerError("coding");
+    };
+    const response = mockResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "empty answer" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+      correlationId: "sidecar-corr-0002",
+    };
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-stream-empty" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          stream(),
+      ),
+      codingRuntimeEventHub: eventHub,
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 3 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+    } as UiHandlerDeps;
+
+    expect(await handleCodingSidecarGatewayChatCompletions(context, deps)).toBe(STREAMING);
+    const replay = eventHub.replay("run-stream-empty");
+    expect(replay.ok && replay.events).toMatchObject([
+      { kind: "runtime-event", eventKind: "failure-redacted", failureCode: "empty-answer" },
+    ]);
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.turn-failed")?.extra,
+    ).toMatchObject({ runId: "run-stream-empty", failureCode: "empty-answer", published: true });
+  });
+
   // Regression: a mid-stream failure without a request correlation once produced bare "unknown",
   // which the diagnostic sanitizer rewrote to "invalid-correlation-id". The authenticated run id
   // is always available and now anchors the diagnostic directly in support analyze's run timeline.
@@ -4300,6 +4347,8 @@ describe("coding sidecar gateway turn failure projection", () => {
     [new ProviderError("empty assistant stream", 200), "stream-incomplete"],
     // #3591 (1.1.7): the budget ran out before any content — a budget to raise, not a broken stream.
     [new ProviderOutputExhaustedError("coding"), "output-exhausted"],
+    // #3610: the provider answered with neither content nor a tool call — not a broken stream.
+    [new ProviderEmptyAnswerError("coding"), "empty-answer"],
     [new TimeoutError("synthetic timeout"), "stream-incomplete"],
     [new ContextOverflowError("synthetic context limit"), "turn-rejected"],
   ] as const)("projects %s as %s without exposing provider text", async (error, code) => {

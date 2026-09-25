@@ -683,6 +683,87 @@ describe("bounded coding safe-activity projection", () => {
     expect(JSON.stringify(activityLog.events)).not.toMatch(/Old progress|Newest progress/u);
   });
 
+  // #3610 (W22): a projection-rejected drop named no cause, so the Workbench's "N update(s) omitted"
+  // could not be traced to the signal the projection refused. Every drop line carries its closed
+  // cause now; the signal's content never reaches the log.
+  it.each([
+    [
+      "parent-message-unknown",
+      (projection: ReturnType<typeof createCodingSafeActivityProjection>): boolean =>
+        projection.ingest(RUN_ID, message("msg_orphan", "assistant", "msg_missing")),
+    ],
+    [
+      "message-unknown",
+      (projection: ReturnType<typeof createCodingSafeActivityProjection>): boolean =>
+        projection.ingest(RUN_ID, text("msg_missing", "Private late text.")),
+    ],
+    [
+      "tool-transition-refused",
+      (projection: ReturnType<typeof createCodingSafeActivityProjection>): boolean =>
+        projection.ingest(RUN_ID, {
+          kind: "tool",
+          callId: "call_done",
+          state: "running",
+          occurredAt: "2026-07-18T17:00:00.004Z",
+        }),
+    ],
+    [
+      "tool-name-missing",
+      (projection: ReturnType<typeof createCodingSafeActivityProjection>): boolean =>
+        projection.ingest(RUN_ID, {
+          kind: "tool",
+          messageId: "msg_answer",
+          callId: "call_nameless",
+          state: "running",
+          occurredAt: "2026-07-18T17:00:00.004Z",
+        }),
+    ],
+  ] as const)("names the %s cause on a projection-rejected drop", (rejection, refuse) => {
+    const activityLog = createBufferedServerLogSink();
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      activityLog,
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    projection.ingest(RUN_ID, message("msg_answer", "assistant", "msg_user"));
+    projection.ingest(RUN_ID, {
+      kind: "tool",
+      messageId: "msg_answer",
+      callId: "call_done",
+      tool: "keiko_workspace_read",
+      state: "succeeded",
+      occurredAt: "2026-07-18T17:00:00.003Z",
+    });
+
+    expect(refuse(projection)).toBe(false);
+
+    const dropped = activityLog.events.filter(
+      (event) => event.op === "coding-runtime.safe-activity" && event.extra?.event === "dropped",
+    );
+    expect(dropped).toEqual([
+      expect.objectContaining({
+        correlationId: RUN_ID,
+        extra: expect.objectContaining({
+          reason: "projection-rejected",
+          rejection,
+          occurrenceCount: 1,
+        }) as unknown,
+      }),
+    ]);
+    const [droppedLine] = dropped;
+    if (droppedLine === undefined) throw new Error("expected one projection-rejected drop line");
+    expect(validateRegisteredActivityLogEvent(droppedLine)).toMatchObject({
+      op: "coding-runtime.safe-activity",
+    });
+    expect(JSON.stringify(activityLog.events)).not.toContain("Private late text");
+  });
+
   it("reports the first fault drop at once however many capacity drops preceded it", () => {
     const records: ServerDiagnosticRecord[] = [];
     const projection = createCodingSafeActivityProjection({

@@ -4,7 +4,11 @@ import type { DraftDeliveryService } from "../gitDelivery/draftDeliveryTypes.js"
 import type { ProductionManagedWorktreeToolInput } from "./productionManagedWorktreeTools.js";
 import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";
 import type { DraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
-import { runDraftDeliveryRequest } from "./productionDraftDeliveryRuntime.js";
+import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
+import {
+  requestDraftDeliveryApproval,
+  runDraftDeliveryRequest,
+} from "./productionDraftDeliveryRuntime.js";
 
 function unavailableService(result: CodingRuntimeDeliveryResult): DraftDeliveryService {
   return {
@@ -45,6 +49,33 @@ describe("production draft-delivery runtime", () => {
     ).resolves.toEqual({
       status: "failed",
       reasonCode: "proposal-unavailable",
+    });
+  });
+});
+
+// #3610 (W12): the push and pull-request approval cards read "Scope: Not specified" and "Policy
+// reason: Not specified"; the supervised policy's canonical builder states both for every action.
+describe("draft delivery approval request", () => {
+  it.each([
+    ["push-proposed", "push"],
+    ["pr-proposed", "pull-request"],
+  ] as const)("states the scope and policy reason for a %s draft", (phase, actionKind) => {
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const service = {
+      review: () => ({
+        record: {
+          phase,
+          binding: { runId: "run-delivery" },
+          recordedAt: "2026-09-25T11:00:00.000Z",
+        },
+        expiresAtMs: Date.parse("2026-09-25T12:00:00.000Z"),
+      }),
+    } as unknown as DraftDeliveryService;
+    requestDraftDeliveryApproval(service, "delivery-1", (event) => void events.push(event));
+    expect(events[0]?.permissionRequest).toMatchObject({
+      actionKind,
+      scopeLabel: "workspace-scope",
+      policyReason: "approval-required",
     });
   });
 });

@@ -43,6 +43,13 @@ export interface CodingWorkbenchChangesProps {
   readonly client?: CodingWorkbenchChangesClient | undefined;
 }
 
+// #3610 (W11): "1 changed file", never "1 changed files".
+function changedFilesText(count: number, t: CodingWorkbenchTranslate): string {
+  return count === 1
+    ? t("codingWorkbench.changes.changedFiles.one")
+    : t("codingWorkbench.changes.changedFiles", { count });
+}
+
 export function CodingWorkbenchChanges(props: CodingWorkbenchChangesProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const changes = useCodingWorkbenchChanges(props);
@@ -54,7 +61,7 @@ export function CodingWorkbenchChanges(props: CodingWorkbenchChangesProps): Reac
     >
       <summary className={styles.cmpActivitySummary}>
         {changes.status === "ready"
-          ? t("codingWorkbench.changes.changedFiles", { count: changes.files.length })
+          ? changedFilesText(changes.files.length, t)
           : t("codingWorkbench.changes.title")}
       </summary>
       <div className={styles.cmpChangesContent}>
@@ -211,7 +218,7 @@ function ChangedFileList({
   return (
     <div className={styles.changesFiles}>
       <p className={styles.changesPaneTitle} id="coding-workbench-changed-files-title">
-        {t("codingWorkbench.changes.changedFiles", { count: changes.files.length })}
+        {changedFilesText(changes.files.length, t)}
       </p>
       {window.virtual ? (
         <p className={styles.helpText} id="coding-workbench-changes-list-help">

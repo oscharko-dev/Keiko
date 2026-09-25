@@ -108,7 +108,10 @@ export type CodingWorkbenchTurnFailureCode =
   | "turn-rejected"
   // #3591 (1.1.7): the model spent its whole output budget (usually on reasoning) before any
   // content or tool call — a budget to raise, not a broken stream.
-  | "output-exhausted";
+  | "output-exhausted"
+  // #3610: the answer completed with neither content nor a tool call — the model's result, not a
+  // broken stream and not a connection problem.
+  | "empty-answer";
 
 export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRuntimeFailureCode[] =
   Object.freeze([

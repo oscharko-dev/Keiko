@@ -852,12 +852,19 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       start: [],
       state: [],
       end: ["coding-runtime.editor-mutation.settled"],
-      failure: [],
+      // #3610: a governed edit refusal is a warn-level decision line, never a server failure.
+      failure: ["coding-runtime.edit.refused"],
       loss: [],
     },
-    requiredCausalOperations: ["coding-runtime.editor-mutation.settled"],
+    requiredCausalOperations: [
+      "coding-runtime.edit.refused",
+      "coding-runtime.editor-mutation.settled",
+    ],
     requiredLossOperations: [],
-    requiredProofOperations: ["coding-runtime.editor-mutation.settled"],
+    requiredProofOperations: [
+      "coding-runtime.edit.refused",
+      "coding-runtime.editor-mutation.settled",
+    ],
     requiredReplayProofIds: [],
     requiredResourceOperations: ["coding-runtime.editor-mutation.settled"],
     requiredEvidenceClasses: ["closed-enum", "completeness-state", "loss-state"],

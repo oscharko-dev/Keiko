@@ -75,6 +75,19 @@ const CODING_RUNTIME_SAFE_ACTIVITY_OPERATION = defineActivityLogOperation({
       ],
     },
     occurrenceCount: { type: "integer", dataClass: "count", required: false },
+    // #3610: why the projection refused a well-formed signal, on a projection-rejected drop only.
+    rejection: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "parent-message-unknown",
+        "message-unknown",
+        "tool-transition-refused",
+        "tool-name-missing",
+        "feed-unavailable",
+      ],
+    },
     lossState: {
       type: "string",
       dataClass: "loss-state",
@@ -270,7 +283,22 @@ interface ResolvedLimits {
   readonly maxPlanBytes: number;
 }
 
-type SignalApplication = "accepted" | "capacity-dropped" | "rejected";
+/**
+ * #3610: why the projection refused a well-formed signal. The drop line carried only
+ * "projection-rejected", so an omitted update could not be traced to the signal that caused it.
+ */
+type ProjectionRejection =
+  | "parent-message-unknown"
+  | "message-unknown"
+  | "tool-transition-refused"
+  | "tool-name-missing"
+  | "feed-unavailable";
+
+type SignalApplication = "accepted" | "capacity-dropped" | ProjectionRejection;
+
+function projectionRejection(application: SignalApplication): ProjectionRejection | undefined {
+  return application === "accepted" || application === "capacity-dropped" ? undefined : application;
+}
 
 class SafeActivityProjection implements CodingSafeActivityProjection {
   private readonly now: () => number;
@@ -336,7 +364,8 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     const priorFeed = rollbackNeeded ? structuredClone(entry.feed) : undefined;
     const priorMessageTurns = rollbackNeeded ? new Map(entry.messageTurns) : undefined;
     const application = applySignal(entry, signal, this.limits);
-    if (application === "rejected") return this.reject(runId, "projection-rejected");
+    const rejection = projectionRejection(application);
+    if (rejection !== undefined) return this.reject(runId, "projection-rejected", rejection);
     if (signal.signalId !== undefined) {
       rememberBoundedIdentity(entry.signalIds, signal.signalId, this.maxSignalIdentities);
     }
@@ -397,11 +426,20 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     return false;
   }
 
-  public recordDrop(runId: string, reason: CodingSafeActivityDropReason): void {
-    this.recordDrops(runId, reason, 1);
+  public recordDrop(
+    runId: string,
+    reason: CodingSafeActivityDropReason,
+    rejection?: ProjectionRejection,
+  ): void {
+    this.recordDrops(runId, reason, 1, rejection);
   }
 
-  public recordDrops(runId: string, reason: CodingSafeActivityDropReason, count: number): void {
+  public recordDrops(
+    runId: string,
+    reason: CodingSafeActivityDropReason,
+    count: number,
+    rejection?: ProjectionRejection,
+  ): void {
     const entry = this.liveEntry(runId);
     if (entry?.feed.availability !== "available") return;
     const increment = boundedDropIncrement(count, this.maxDroppedEventCount);
@@ -410,7 +448,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     if (next === previous) return;
     entry.feed = withDroppedCount(entry.feed, next, instant(this.now()));
     this.notify();
-    this.emitDropMilestones(runId, reason, previous, next);
+    this.emitDropMilestones(runId, reason, previous, next, rejection);
   }
 
   public purge(runId: string, reason: CodingSafeActivityPurgeReason): void {
@@ -485,8 +523,12 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     return entry;
   }
 
-  private reject(runId: string, reason: CodingSafeActivityDropReason): false {
-    this.recordDrop(runId, reason);
+  private reject(
+    runId: string,
+    reason: CodingSafeActivityDropReason,
+    rejection?: ProjectionRejection,
+  ): false {
+    this.recordDrop(runId, reason, rejection);
     return false;
   }
 
@@ -557,6 +599,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     reason: CodingSafeActivityDropReason,
     previous: number,
     next: number,
+    rejection?: ProjectionRejection,
   ): void {
     this.activityLog?.write(
       activityLogEvent(
@@ -567,7 +610,13 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
             ? {}
             : { level: "warn", errorKind: "validation-failed" }),
         },
-        { event: "dropped", reason, occurrenceCount: next, lossState: "event-dropped" },
+        {
+          event: "dropped",
+          reason,
+          occurrenceCount: next,
+          lossState: "event-dropped",
+          ...(rejection === undefined ? {} : { rejection }),
+        },
       ),
     );
     // A capacity drop is the feed's DESIGNED truncation: a long agent turn keeps its newest
@@ -646,15 +695,11 @@ function applySignal(
   signal: CodingSafeActivitySignal,
   limits: ResolvedLimits,
 ): SignalApplication {
-  if (entry.feed.availability !== "available") return "rejected";
+  if (entry.feed.availability !== "available") return "feed-unavailable";
   if (signal.kind === "message") return applyMessage(entry, signal, limits);
-  if (signal.kind === "text") return applicationResult(applyText(entry, signal, limits));
-  if (signal.kind === "plan") return applicationResult(applyPlan(entry, signal, limits));
-  return applicationResult(applyTool(entry, signal, limits));
-}
-
-function applicationResult(accepted: boolean): SignalApplication {
-  return accepted ? "accepted" : "rejected";
+  if (signal.kind === "text") return applyText(entry, signal, limits);
+  if (signal.kind === "plan") return applyPlan(entry, signal, limits);
+  return applyTool(entry, signal, limits);
 }
 
 function applyMessage(
@@ -662,11 +707,11 @@ function applyMessage(
   signal: Extract<CodingSafeActivitySignal, { readonly kind: "message" }>,
   limits: ResolvedLimits,
 ): SignalApplication {
-  if (entry.feed.availability !== "available") return "rejected";
+  if (entry.feed.availability !== "available") return "feed-unavailable";
   const knownTurn = entry.messageTurns.get(signal.messageId);
   if (knownTurn !== undefined) return "accepted";
   const turn = turnForMessage(entry, signal);
-  if (turn === undefined) return "rejected";
+  if (turn === undefined) return "parent-message-unknown";
   let application: SignalApplication = "accepted";
   if (turn.messages.length >= limits.maxMessagesPerTurn) {
     turn.truncated = true;
@@ -727,14 +772,14 @@ function applyText(
   entry: ProjectionEntry,
   signal: Extract<CodingSafeActivitySignal, { readonly kind: "text" }>,
   limits: ResolvedLimits,
-): boolean {
+): SignalApplication {
   const located = locateMessage(entry, signal.messageId);
-  if (located === undefined) return false;
+  if (located === undefined) return "message-unknown";
   const { message, turn } = located;
-  if (message.truncated) return true;
+  if (message.truncated) return "accepted";
   if (message.segments.length >= limits.maxSegmentsPerMessage) {
     markMessageTruncated(message, turn);
-    return true;
+    return "accepted";
   }
   const cleaned = stripUnsafeFormatChars(signal.text);
   const clipped = clipTextForMessage(message, cleaned, limits.maxMessageBytes);
@@ -742,31 +787,31 @@ function applyText(
     message.segments.push({ kind: "text", text: clipped.text, truncated: clipped.truncated });
   }
   if (clipped.truncated) markMessageTruncated(message, turn);
-  return true;
+  return "accepted";
 }
 
 function applyTool(
   entry: ProjectionEntry,
   signal: Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>,
   limits: ResolvedLimits,
-): boolean {
+): SignalApplication {
   const located = locateToolTurn(entry, signal);
-  if (located === undefined) return false;
+  if (located === undefined) return "message-unknown";
   const existingIndex = located.turn.tools.findIndex(({ callId }) => callId === signal.callId);
   const existing = located.turn.tools[existingIndex];
   if (existing !== undefined) {
-    if (!allowedToolTransition(existing.state, signal.state)) return false;
+    if (!allowedToolTransition(existing.state, signal.state)) return "tool-transition-refused";
     located.turn.tools[existingIndex] = {
       ...existing,
       state: signal.state,
       occurredAt: signal.occurredAt,
     };
-    return true;
+    return "accepted";
   }
-  if (signal.tool === undefined) return false;
+  if (signal.tool === undefined) return "tool-name-missing";
   if (located.turn.tools.length >= limits.maxToolsPerTurn) {
     located.turn.truncated = true;
-    return true;
+    return "accepted";
   }
   located.turn.tools.push({
     callId: signal.callId,
@@ -774,7 +819,7 @@ function applyTool(
     state: signal.state,
     occurredAt: signal.occurredAt,
   });
-  return true;
+  return "accepted";
 }
 
 /** Replaces the whole snapshot; the upstream plan tool always writes the full step list. */
@@ -782,8 +827,8 @@ function applyPlan(
   entry: ProjectionEntry,
   signal: Extract<CodingSafeActivitySignal, { readonly kind: "plan" }>,
   limits: ResolvedLimits,
-): boolean {
-  if (entry.feed.availability !== "available") return false;
+): SignalApplication {
+  if (entry.feed.availability !== "available") return "feed-unavailable";
   const plan: MutablePlan = {
     revision: Math.min(Number.MAX_SAFE_INTEGER, (entry.feed.plan?.revision ?? 0) + 1),
     anchorMessageId: signal.anchorMessageId,
@@ -808,7 +853,7 @@ function applyPlan(
   }
   shrinkPlan(plan, limits.maxPlanBytes);
   entry.feed.plan = plan;
-  return true;
+  return "accepted";
 }
 
 function shrinkPlan(plan: MutablePlan, maxBytes: number): void {

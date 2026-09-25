@@ -3,7 +3,10 @@
 // left of the call's budget bounds the read, so a long live generation is not cut off at
 // `timeoutMs` and generated a second time.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { TimeoutError } from "@oscharko-dev/keiko-security/errors/gateway";
+import {
+  ProviderEmptyAnswerError,
+  TimeoutError,
+} from "@oscharko-dev/keiko-security/errors/gateway";
 import { MAX_TIMER_DELAY_MS } from "./config.js";
 import { Gateway } from "./gateway.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
@@ -238,6 +241,33 @@ describe("Gateway.chat reads over the provider's stream (provider stalls, coding
   });
 });
 
+// A real provider stream, written frame by frame: the SSE lines a provider sends and the one provider
+// every real-adapter test below reads from.
+const encoder = new TextEncoder();
+const sseLine = (payload: unknown): string => `data: ${JSON.stringify(payload)}\n\n`;
+const deltaLine = (content: string): string =>
+  sseLine({ choices: [{ index: 0, delta: { content } }] });
+const finishLine = (reason: string): string =>
+  sseLine({ choices: [{ index: 0, delta: {}, finish_reason: reason }] });
+const DONE_LINE = "data: [DONE]\n\n";
+
+const STREAM_PROVIDER: ModelProviderConfig = {
+  modelId: "example-chat-model",
+  baseUrl: "https://provider.example/v1",
+  apiKey: "fixture",
+  timeoutMs: 30_000, // far below the silence floor — proves the FLOORED bound is what applies
+  maxRetries: 0,
+  retryBaseDelayMs: 1,
+};
+
+function streamGatewayConfig(): GatewayConfig {
+  return {
+    capabilities: [capability(true)],
+    providers: [STREAM_PROVIDER],
+    circuitBreaker: { failureThreshold: 3, cooldownMs: 1000, halfOpenProbes: 1 },
+  };
+}
+
 // #3591: `Gateway.chatStream()` used to call `adapter.callStream(request, provider)` with NO
 // bounds at all, so a real `OpenAiAdapter` fell back to its own flat `STREAM_IDLE_TIMEOUT_MS`
 // (60s) for silence and the adapter-level `config.timeoutMs` for the whole read — never the
@@ -249,14 +279,6 @@ describe("Gateway.chatStream bounds a real provider stream by the floors (#3591)
   afterEach(() => {
     vi.useRealTimers();
   });
-
-  const encoder = new TextEncoder();
-  const sseLine = (payload: unknown): string => `data: ${JSON.stringify(payload)}\n\n`;
-  const deltaLine = (content: string): string =>
-    sseLine({ choices: [{ index: 0, delta: { content } }] });
-  const finishLine = (reason: string): string =>
-    sseLine({ choices: [{ index: 0, delta: {}, finish_reason: reason }] });
-  const DONE_LINE = "data: [DONE]\n\n";
 
   interface DrivenStream {
     readonly response: Response;
@@ -281,23 +303,6 @@ describe("Gateway.chatStream bounds a real provider stream by the floors (#3591)
       end: (): void => {
         controller?.close();
       },
-    };
-  }
-
-  const STREAM_PROVIDER: ModelProviderConfig = {
-    modelId: "example-chat-model",
-    baseUrl: "https://provider.example/v1",
-    apiKey: "fixture",
-    timeoutMs: 30_000, // far below the silence floor — proves the FLOORED bound is what applies
-    maxRetries: 0,
-    retryBaseDelayMs: 1,
-  };
-
-  function streamGatewayConfig(): GatewayConfig {
-    return {
-      capabilities: [capability(true)],
-      providers: [STREAM_PROVIDER],
-      circuitBreaker: { failureThreshold: 3, cooldownMs: 1000, halfOpenProbes: 1 },
     };
   }
 
@@ -363,5 +368,59 @@ describe("Gateway.chatStream bounds a real provider stream by the floors (#3591)
     });
     const failed = events.find((event) => event.op === "gateway.stream.failed");
     expect(failed?.errorKind).toBe("timeout");
+  });
+});
+
+// #3610: gpt-oss behind LiteLLM ended coding turns with reasoning only — a completed stream (a finish
+// reason and [DONE]) that carries neither content nor a tool call. Before this fix that answer was a
+// plain ProviderError(200): the Workbench showed it as a broken stream, and it counted toward the
+// breaker, so three such answers in a row locked every caller of the model out behind
+// CircuitOpenError although the provider had answered each time.
+describe("a completed but empty model answer (#3610)", () => {
+  function reasoningOnlyAnswer(): Response {
+    const frames = [
+      sseLine({ choices: [{ index: 0, delta: { content: "", reasoning: "thinking" } }] }),
+      finishLine("stop"),
+      DONE_LINE,
+    ].join("");
+    return new Response(encoder.encode(frames), {
+      headers: { "content-type": "text/event-stream" },
+    });
+  }
+
+  it("is reported as an empty answer and never opens the breaker", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const log: ModelGatewayLogSink = { write: (event): void => void events.push(event) };
+    let calls = 0;
+    const adapter = new OpenAiAdapter({
+      fetchImpl: (): Promise<Response> => {
+        calls += 1;
+        return Promise.resolve(reasoningOnlyAnswer());
+      },
+      requestId: "fixed-id",
+      costClass: "low",
+      log,
+    });
+    const gateway = new Gateway(streamGatewayConfig(), {
+      adapter,
+      clock: createScriptedGatewayClock(),
+      log,
+    });
+
+    // One more answer than the breaker's failureThreshold of 3: every call reaches the provider.
+    for (let attempt = 1; attempt <= 4; attempt += 1) {
+      const failure = await gateway.chat(REQUEST).catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(ProviderEmptyAnswerError);
+      expect(failure).toMatchObject({ code: "GATEWAY_PROVIDER_ERROR", httpStatus: 200 });
+    }
+    expect(calls).toBe(4);
+    expect(gateway.circuitStatus("example-chat-model")).toMatchObject({
+      state: "closed",
+      consecutiveFailures: 0,
+    });
+    // The read that settled on the empty answer is a failed read, body-free.
+    expect(events.find((event) => event.op === "chat.response.streamed")).toMatchObject({
+      extra: { outcome: "failed", outputExhausted: false },
+    });
   });
 });

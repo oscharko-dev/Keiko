@@ -33,6 +33,7 @@ import type { CodingRuntimeTaskDispatcher } from "./productionCodingRuntimeHost.
 import type { CodingRuntimePermissionPort } from "./codingRuntimePermissionPort.js";
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
 import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
+import type { ToolBridgeApprovalRejection } from "./opencodeV2ApprovalRequests.js";
 import type { CodingSafeActivityProjection } from "./codingSafeActivityProjection.js";
 import type { CodingRuntimeIssueIntake } from "./codingRuntimeIssueIntake.js";
 import type { SemanticSearchProvider } from "@oscharko-dev/keiko-workspace";
@@ -150,7 +151,11 @@ export interface CodingRuntimeToolFacadeBridge {
     readonly headers: Headers;
     readonly body: string;
     readonly signal?: AbortSignal;
-  }): Promise<{ readonly status: number; readonly body: string }>;
+  }): Promise<{
+    readonly status: number;
+    readonly body: string;
+    readonly rejection?: ToolBridgeApprovalRejection;
+  }>;
 }
 
 export interface CodingRuntimeControlPlaneInput {

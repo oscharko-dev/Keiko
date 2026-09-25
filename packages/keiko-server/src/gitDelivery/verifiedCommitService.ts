@@ -65,6 +65,8 @@ const VERIFIED_COMMIT_RESULT_REASONS = [
   "approval-invalid",
   "authority-denied",
   "verification-missing",
+  "candidate-not-staged",
+  "buffers-dirty",
   "verification-failed",
   "verification-stale",
   "candidate-drift",
@@ -138,7 +140,7 @@ const VERIFIED_COMMIT_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["candidate-not-staged", ...VERIFIED_COMMIT_RESULT_REASONS],
+      values: [...VERIFIED_COMMIT_RESULT_REASONS],
     },
     state: {
       type: "string",
@@ -224,7 +226,7 @@ type VerifiedCommitActivityPhase =
 interface VerifiedCommitActivityFields {
   readonly verificationGeneration?: number;
   readonly currentGeneration?: number;
-  readonly reason?: VerifiedCommitReason | "candidate-not-staged";
+  readonly reason?: VerifiedCommitReason;
   readonly state?: VerifiedCommitStatus | "issued" | "consumed" | "policy-authorized" | "failed";
   readonly unstagedCount?: number;
   readonly untrackedCount?: number;
@@ -589,8 +591,7 @@ class VerifiedCommitController implements VerifiedCommitService {
     // latest verification that did not pass (it failed, or executed nothing). Rehearsal run-16's
     // model read "verification-missing" after a verification it had just watched succeed and gave
     // the delivery up; the proof it lacked was a PASSING latest verification.
-    if (verification === undefined)
-      return this.record(context, binding, "verification-failed", "verification-missing");
+    if (verification === undefined) return this.recordMissingProof(context, binding, facts);
     if (!verification.passed)
       return this.record(context, binding, "verification-failed", "verification-failed");
     if (
@@ -939,6 +940,24 @@ class VerifiedCommitController implements VerifiedCommitService {
   private contextIsCurrent(context: VerifiedCommitRunContext): boolean {
     const current = this.context();
     return current !== undefined && contextMatches(current, context);
+  }
+
+  // No proof at all has three causes that need different next steps (#3610): an unstaged or
+  // untracked part of the change, which no verification can prove until it is staged; unsaved editor
+  // buffers, which staging cannot resolve (review on #3611); and a clean staged candidate nobody
+  // verified yet. Naming the first as "verification-missing" sent the model back to a verification
+  // that answered candidate-not-staged, round and round. The cause comes from the same read's
+  // blocking paths, never from the combined clean flag.
+  private recordMissingProof(
+    context: VerifiedCommitRunContext,
+    binding: VerifiedCommitBinding,
+    facts: VerifiedCommitFacts,
+  ): VerifiedCommitResult {
+    const blocking = facts.blocking;
+    if (blocking !== undefined && blocking.unstagedCount + blocking.untrackedCount > 0)
+      return this.record(context, binding, "verification-failed", "candidate-not-staged");
+    if (!context.buffersClean()) return this.record(context, binding, "blocked", "buffers-dirty");
+    return this.record(context, binding, "verification-failed", "verification-missing");
   }
 
   private record(

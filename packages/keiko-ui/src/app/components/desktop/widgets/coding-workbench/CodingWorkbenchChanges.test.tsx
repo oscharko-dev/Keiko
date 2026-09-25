@@ -123,7 +123,7 @@ function renderChanges(
 }
 
 async function expandChanges(): Promise<void> {
-  const summary = await screen.findByText(/^(?:\d+ changed files|Changes)$/u, {
+  const summary = await screen.findByText(/^(?:\d+ changed files?|Changes)$/u, {
     selector: "summary",
   });
   fireEvent.click(summary);
@@ -163,6 +163,8 @@ describe("CodingWorkbenchChanges", () => {
 
     await waitFor(() => expect(changesClient.getHistory).toHaveBeenCalledOnce());
     await expandChanges();
+    // #3611 review: the empty boundary keeps the plural form.
+    expect(screen.getByText("0 changed files", { selector: "summary" })).toBeVisible();
     expect(screen.getByText("This run has no workspace changes at this revision.")).toBeVisible();
     expect(screen.getByText("As of aaaaaaaa")).toBeVisible();
     expect(changesClient.getDiff).not.toHaveBeenCalled();
@@ -257,6 +259,16 @@ describe("CodingWorkbenchChanges", () => {
     );
     expect(view.container.querySelector(".rv-add .rv-src")).toBeNull();
     expect(changesClient.getStatus).toHaveBeenCalledTimes(1);
+  });
+
+  // #3610 (W11): a single changed file read "1 changed files" in the summary and the file pane.
+  it("names a single changed file in the singular", async (): Promise<void> => {
+    renderChanges(client());
+    await expandChanges();
+
+    expect(await screen.findByText("1 changed file", { selector: "summary" })).toBeVisible();
+    expect(screen.getByText("1 changed file", { selector: "p" })).toBeVisible();
+    expect(screen.queryByText(/1 changed files/u)).not.toBeInTheDocument();
   });
 
   it("virtualizes a 500-file change set to a bounded 24 rendered file buttons", async () => {

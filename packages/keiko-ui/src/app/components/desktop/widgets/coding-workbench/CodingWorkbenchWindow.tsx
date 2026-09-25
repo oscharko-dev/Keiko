@@ -102,7 +102,10 @@ import {
   useOptionalActiveWorkspace,
   type ActiveWorkspaceApi,
 } from "../../context/ActiveWorkspaceContext";
-import { useOptionalChatSessionCatalog } from "../../context/ChatSessionContext";
+import {
+  useOptionalChatSessionCatalog,
+  type ChatSessionCatalog,
+} from "../../context/ChatSessionContext";
 import {
   useRepositoryBranchState,
   type RepositoryBranchState,
@@ -878,6 +881,35 @@ function RunWorkspaceMismatchNotice({ visible }: { readonly visible: boolean }):
 }
 
 /**
+ * #3610: the deployment ceiling (Ask for approval unless the installation raises it) caps every run
+ * above it. The composer kept showing the wider selection and the cap appeared only in the
+ * information panel, so a run the operator started as Supervised silently ran in Ask mode. The
+ * selection itself is never reverted; this states the authority the next run will actually hold.
+ */
+function DeploymentCeilingNotice({
+  state,
+}: {
+  readonly state: CodingWorkbenchRuntimeState;
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  const ceiling = state.runtime.value?.deploymentCeiling;
+  if (ceiling === undefined || !isCodingWorkbenchModeWidening(ceiling, state.requestedMode)) {
+    return null;
+  }
+  return (
+    <output className={styles.alert}>
+      <span aria-hidden="true">!</span>{" "}
+      <span>
+        {t("codingWorkbench.composer.authority.ceiling", {
+          requested: modeLabel(state.requestedMode, t),
+          ceiling: modeLabel(ceiling, t),
+        })}
+      </span>
+    </output>
+  );
+}
+
+/**
  * Epic #3384 cascade: a refused edit used to leave the operator with nothing — the model just
  * asked "how would you like to proceed?" while every `keiko_changeset_edit` kept failing
  * NO_ACTIVE_SESSION. `useCodingWorkbenchEditorBridge` now retries the registration on its own
@@ -1263,6 +1295,7 @@ function WorkbenchColumns({
         />
         <CodexSubscriptionAuthCard state={state} actions={actions} />
         <RunWorkspaceMismatchNotice visible={runIsActive && runWorkspace.mismatched} />
+        <DeploymentCeilingNotice state={state} />
         <EditorBridgeUnavailableNotice visible={editorBridge.bridgeUnavailable} />
         <div className={styles.cmpRunActions}>
           <CodingWorkbenchProgress
@@ -1478,6 +1511,20 @@ function sessionRunFacts(
   return facts;
 }
 
+/** #3610: the repository the Workbench works in, as the catalog names it, else by its folder. Never
+ * the header's project: every other fact in the panel describes this repository, and naming the
+ * header's instead let an idle Workbench bound to one repository claim to be in another. */
+function workbenchRepositoryName(
+  catalog: ChatSessionCatalog | null,
+  repositoryRoot: string | null,
+): string | undefined {
+  if (repositoryRoot === null) return undefined;
+  const listed = catalog?.projects.find((project) => project.path === repositoryRoot)?.name;
+  return listed !== undefined && listed.length > 0
+    ? listed
+    : (repositoryLabel(repositoryRoot) ?? undefined);
+}
+
 function SessionContextBar({
   state,
   workspace,
@@ -1501,7 +1548,7 @@ function SessionContextBar({
   const facts = sessionInfoFacts({
     state,
     workspace,
-    projectName: catalog?.activeProject?.name,
+    projectName: workbenchRepositoryName(catalog, repositoryRoot),
     activeWorkspace,
     repository,
     mode,

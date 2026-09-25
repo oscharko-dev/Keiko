@@ -791,6 +791,57 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByRole("button", { name: "Start coding run" })).toBeInTheDocument();
   });
 
+  // #3610: the information panel named the header's project while every other fact in it (status,
+  // branch, target, task) described the bound repository, so an idle Workbench bound to one
+  // repository claimed to be in another. The Project fact names the repository it works in.
+  it("names the bound repository in the information panel while the header selects another", () => {
+    const elsewhere: ProjectWithAvailability = {
+      path: "/repos/selected-elsewhere",
+      name: "Selected elsewhere",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+      workspaceAvailable: false,
+    };
+    chatCatalogMock.activeProject = elsewhere;
+    chatCatalogMock.projects = [elsewhere, { ...elsewhere, path: "/repos/bound", name: "Bound" }];
+
+    renderWorkbench(
+      liveState(),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/bound", "/worktrees/prior-task"),
+    );
+
+    const dialog = openWorkbenchInformation();
+    expect(dialog).toHaveTextContent("ProjectBound");
+    expect(dialog).not.toHaveTextContent("Selected elsewhere");
+  });
+
+  it("names an unlisted bound repository by its folder instead of the header's project", () => {
+    chatCatalogMock.activeProject = {
+      path: "/repos/selected-elsewhere",
+      name: "Selected elsewhere",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+      workspaceAvailable: false,
+    };
+
+    renderWorkbench(
+      liveState(),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/inventory-service/", "/worktrees/prior-task"),
+    );
+
+    const dialog = openWorkbenchInformation();
+    expect(dialog).toHaveTextContent("Projectinventory-service");
+    expect(dialog).not.toHaveTextContent("Selected elsewhere");
+  });
+
   // Epic #3384 live-flow defect (#3401 "Review description"): after a settled run the Workbench
   // labels the REPOSITORY root, but the server retains the reviewable description proposal under
   // the run's task workspace root (`descriptionApplicationTarget`: `workspace.binding.activeRoot`).
@@ -880,6 +931,60 @@ describe("CodingWorkbenchWindow", () => {
     openWorkbenchInformation();
     expect(document.querySelectorAll("[data-mode]")).toHaveLength(1);
     expect(document.querySelector('[data-mode="governed-assist"]')).toBeInTheDocument();
+  });
+
+  // #3610: the composer kept the wider selection while the deployment ceiling capped the run; the
+  // cap showed only in the information panel, so a run started as Supervised silently ran in Ask
+  // mode. The composer states the cap next to the selection, which it still never reverts.
+  it("states in the composer when the deployment ceiling caps the selected authority", () => {
+    renderWorkbench(
+      liveState({
+        requestedMode: "supervised-coding",
+        runtime: {
+          status: "ready",
+          error: null,
+          value: {
+            schemaVersion: "1",
+            requestedMode: "supervised-coding",
+            deploymentCeiling: "governed-assist",
+            effectiveMode: "governed-assist",
+            runtimeAvailable: true,
+          },
+        },
+      }),
+    );
+
+    expect(
+      screen.getByText(
+        "Supervised workspace is above this installation's authority limit, so runs start with Ask for approval.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Run authority" })).toHaveTextContent(
+      "Supervised workspace",
+    );
+  });
+
+  it("states no cap while the selected authority is within the deployment ceiling", () => {
+    renderWorkbench(
+      liveState({
+        requestedMode: "governed-assist",
+        runtime: {
+          status: "ready",
+          error: null,
+          value: {
+            schemaVersion: "1",
+            requestedMode: "governed-assist",
+            deploymentCeiling: "supervised-coding",
+            effectiveMode: "governed-assist",
+            runtimeAvailable: true,
+          },
+        },
+      }),
+    );
+
+    expect(
+      screen.queryByText(/above this installation's authority limit/u),
+    ).not.toBeInTheDocument();
   });
 
   it("locks the authority control without reverting the selection while persistence is pending", () => {

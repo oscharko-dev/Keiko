@@ -46,6 +46,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.journey.proposeReadyPending":
     "The ready-for-review approval path is not available yet.",
   "codingWorkbench.journey.changedFiles": "{count} changed files",
+  "codingWorkbench.journey.changedFiles.one": "1 changed file",
   "codingWorkbench.journey.changedFilesTruncated": "(list truncated)",
   "codingWorkbench.journey.busy": "Updating handoff status…",
   "codingWorkbench.journey.actionError.refresh":
@@ -285,6 +286,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.effort.xhigh": "Extra high",
   "codingWorkbench.composer.authority.label": "Run authority",
   "codingWorkbench.composer.authority.menu": "Choose authority",
+  "codingWorkbench.composer.authority.ceiling":
+    "{requested} is above this installation's authority limit, so runs start with {ceiling}.",
   "codingWorkbench.composer.authority.error.hydrate":
     "Run authority could not be loaded. Ask for approval remains selected.",
   "codingWorkbench.composer.authority.error.persist":
@@ -442,6 +445,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.asOf": "As of {head}",
   "codingWorkbench.changes.empty": "This run has no workspace changes at this revision.",
   "codingWorkbench.changes.changedFiles": "{count} changed files",
+  "codingWorkbench.changes.changedFiles.one": "1 changed file",
   "codingWorkbench.changes.virtualInstructions":
     "Focus the changed-file list, then use Arrow or Page Up and Page Down keys to scroll.",
   "codingWorkbench.changes.filesTruncated":
@@ -748,6 +752,10 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Current authority does not permit this commit.",
   "codingWorkbench.commitResult.reason.verification-missing":
     "Run the required verification before proposing this commit.",
+  "codingWorkbench.commitResult.reason.buffers-dirty":
+    "Open files have unsaved editor changes, which staging cannot include. Save them, verify the staged change, then propose the commit again.",
+  "codingWorkbench.commitResult.reason.candidate-not-staged":
+    "Part of the change is not staged yet. Stage it, verify the staged change, then propose the commit again.",
   "codingWorkbench.commitResult.reason.verification-failed":
     "The required verification did not pass.",
   "codingWorkbench.commitResult.reason.verification-stale":
@@ -943,6 +951,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The model or a Workbench guard rejected this turn. Check the run's gateway and authority diagnostics for the cause, then adjust the model, task, or permissions before retrying.",
   "codingWorkbench.event.turnFailure.output-exhausted":
     "The model used its whole output budget before producing an answer, usually on reasoning. Have the gateway declare a larger max_output_tokens for this model, or choose a model with a smaller reasoning share, then retry.",
+  "codingWorkbench.event.turnFailure.empty-answer":
+    "The model finished this turn without any text or tool call. The provider answered, so this is not a connection problem. Retry the turn; if it repeats, rephrase the task or choose another model.",
   "codingWorkbench.event.detailOutcome": "Outcome: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Untrusted content: the fetched page was quarantined as data, not instructions.",

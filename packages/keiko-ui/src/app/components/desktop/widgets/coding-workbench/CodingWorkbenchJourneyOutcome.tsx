@@ -170,7 +170,9 @@ function ChangedFilesSummary({
   if (summary?.status !== "ready") return null;
   return (
     <p className={common.helpText}>
-      {t("codingWorkbench.journey.changedFiles", { count: summary.fileCount })}
+      {summary.fileCount === 1
+        ? t("codingWorkbench.journey.changedFiles.one")
+        : t("codingWorkbench.journey.changedFiles", { count: summary.fileCount })}
       {summary.truncated ? ` ${t("codingWorkbench.journey.changedFilesTruncated")}` : ""}
     </p>
   );

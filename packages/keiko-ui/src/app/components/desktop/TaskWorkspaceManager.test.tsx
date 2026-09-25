@@ -367,6 +367,26 @@ describe("TaskWorkspaceManager", () => {
     expect(trigger).toHaveFocus();
   });
 
+  // #3610 (W8): the manager lives inside the Coding Workbench information panel, a narrow scrolling
+  // container that clipped the floating panel on every side. Placed inline, the panel opens in the
+  // flow instead; the default placement stays a floating popover.
+  it("opens its panel in the flow when it is placed inline", () => {
+    const { container } = render(
+      <AnnouncerProvider>
+        <ActiveWorkspaceProvider value={api({ activeInstance: instance() })}>
+          <TaskWorkspaceManager placement="inline" />
+        </ActiveWorkspaceProvider>
+      </AnnouncerProvider>,
+    );
+    expect(container.querySelector('[data-placement="inline"]')).not.toBeNull();
+    expect(openManager()).toBeVisible();
+  });
+
+  it("keeps the floating popover placement by default", () => {
+    const container = renderManager(api({ activeInstance: instance() }));
+    expect(container.querySelector('[data-placement="popover"]')).not.toBeNull();
+  });
+
   it("has no accessibility violations in a dirty active, paused, and repairable inventory", async () => {
     const active = instance({ driftMarkers: ["uncommitted-changes"] });
     const paused = instance({

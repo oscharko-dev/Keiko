@@ -9,6 +9,7 @@ import {
   GatewayEgressError,
   ModelRefusalError,
   ProviderError,
+  ProviderEmptyAnswerError,
   ProviderOutputExhaustedError,
   RateLimitError,
   TimeoutError,
@@ -804,6 +805,8 @@ describe("OpenAiAdapter.call", () => {
     expect((failure as ProviderOutputExhaustedError).retryable).toBe(false);
   });
 
+  // #3610: the empty answer is its own class — not a broken stream, not an outage — and keeps the
+  // provider error code, status and message, so the chat surfaces and the wire are unchanged.
   it("rejects an empty assistant response instead of normalising it to success", async () => {
     const adapter = adapterWith(() =>
       Promise.resolve(
@@ -813,7 +816,15 @@ describe("OpenAiAdapter.call", () => {
       ),
     );
 
-    await expect(adapter.call(REQUEST, CONFIG)).rejects.toBeInstanceOf(ProviderError);
+    const failure = await adapter.call(REQUEST, CONFIG).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ProviderEmptyAnswerError);
+    expect(failure).toBeInstanceOf(ProviderError);
+    expect(failure).toMatchObject({
+      code: "GATEWAY_PROVIDER_ERROR",
+      httpStatus: 200,
+      retryable: false,
+      message: "provider returned an empty assistant response for 'example-chat-model'",
+    });
   });
 
   it("serialises assistant tool_calls and tool response tool_call_id on continuation turns", async () => {

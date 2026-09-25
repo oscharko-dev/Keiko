@@ -8,6 +8,7 @@ import {
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
   CODING_WORKBENCH_RUNTIME_FAILURE_CODES,
   CODING_WORKBENCH_RUNTIME_STATE_NAMES,
+  type CodingWorkbenchTurnFailureCode,
 } from "./coding-workbench-runtime-constants.js";
 import { stripUnsafeFormatChars } from "./text-safety.js";
 
@@ -120,6 +121,20 @@ export function validateSseEventFields(
   validateSseOptionalEnums(value, errors);
 }
 
+// The redacted per-turn gateway causes. A Record over the union, so a new cause that is not listed
+// here fails the build instead of every frame that carries it failing validation (#3610).
+const TURN_FAILURE_CODES: Readonly<Record<CodingWorkbenchTurnFailureCode, true>> = {
+  "provider-failed": true,
+  "stream-incomplete": true,
+  "turn-rejected": true,
+  "output-exhausted": true,
+  "empty-answer": true,
+};
+
+function isTurnFailureCode(value: unknown): boolean {
+  return typeof value === "string" && Object.hasOwn(TURN_FAILURE_CODES, value);
+}
+
 // The optional closed-vocabulary fields an SSE frame may carry. Split out of `validateSseEventFields`
 // so that function stays inside the repository complexity bound as the vocabulary grows.
 function validateSseOptionalEnums(value: Record<string, unknown>, errors: string[]): void {
@@ -134,13 +149,7 @@ function validateSseOptionalEnums(value: Record<string, unknown>, errors: string
     value.failureCode !== undefined &&
     !isOneOf(value.failureCode, CODING_WORKBENCH_RUNTIME_FAILURE_CODES) &&
     // Non-runtime frames cannot carry eventKind; exactKeys rejects them.
-    !(
-      value.eventKind === "failure-redacted" &&
-      (value.failureCode === "provider-failed" ||
-        value.failureCode === "stream-incomplete" ||
-        value.failureCode === "turn-rejected" ||
-        value.failureCode === "output-exhausted")
-    )
+    !(value.eventKind === "failure-redacted" && isTurnFailureCode(value.failureCode))
   ) {
     errors.push("failureCode is invalid");
   }

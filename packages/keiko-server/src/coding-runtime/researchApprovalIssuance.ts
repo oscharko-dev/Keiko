@@ -170,6 +170,8 @@ export function buildResearchPermissionEvent(input: {
       reasonCode: "research-approval-required",
       actionKind: "research",
       risk: "medium",
+      // #3610 (W12): the card names why it asks; the destination block states the scope.
+      policyReason: "approval-required",
       expiresAt: new Date(input.nowMs + RESEARCH_APPROVAL_TTL_MS).toISOString(),
     },
   };

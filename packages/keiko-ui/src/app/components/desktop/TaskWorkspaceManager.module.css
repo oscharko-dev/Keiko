@@ -70,6 +70,31 @@
   box-shadow: var(--popover-shadow);
 }
 
+/* #3610 (W8): placed inline, the panel opens in the flow below the trigger instead of floating over
+   a narrow scrolling container that clips it. This wins over the small-screen fixed placement too. */
+.cmp-r[data-placement="inline"] {
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.cmp-r[data-placement="inline"] > .cmp-p {
+  position: static;
+  flex: 1 0 100%;
+  width: auto;
+  max-height: none;
+  overflow: visible;
+  box-shadow: none;
+}
+
+/* The inline panel is as narrow as its container, so rows stack the way the small-screen layout does. */
+.cmp-r[data-placement="inline"] .cmp-i {
+  grid-template-columns: 1fr;
+}
+
+.cmp-r[data-placement="inline"] .cmp-as {
+  justify-content: flex-start;
+}
+
 .cmp-ph {
   display: flex;
   gap: var(--space-3);

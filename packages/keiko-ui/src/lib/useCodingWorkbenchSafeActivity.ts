@@ -200,13 +200,27 @@ function stateFromSnapshot(
   runState: CodingWorkbenchRuntimeStateName | undefined,
 ): CodingWorkbenchSafeActivityState {
   const content = snapshot.content;
-  if (!isSafeActivityContent(content) || content.feed.runId !== runId) {
-    return { status: "unavailable", feed: null, errorCode: null };
-  }
-  if (content.feed.availability === "unavailable") {
-    return { status: "unavailable", feed: null, errorCode: null };
+  if (
+    !isSafeActivityContent(content) ||
+    content.feed.runId !== runId ||
+    content.feed.availability === "unavailable"
+  ) {
+    return missingProjectionState(runState);
   }
   return { status: lifecycleStatus(runState), feed: content.feed, errorCode: null };
+}
+
+// #3610 (W17): no projection for this run. While the run lives that is a lost connection worth a
+// reconnect; once it has finished it has ended — Stop purges the projection at once, and a
+// Reconnect button could never bring anything back. No feed is held, so nothing stale is captioned.
+function missingProjectionState(
+  runState: CodingWorkbenchRuntimeStateName | undefined,
+): CodingWorkbenchSafeActivityState {
+  return {
+    status: terminalRunState(runState) ? "ended" : "unavailable",
+    feed: null,
+    errorCode: null,
+  };
 }
 
 function isSafeActivityContent(
@@ -224,7 +238,12 @@ function stateForLifecycle(
   // stale snapshot as the final confirmed transcript and remove the reconnect affordance — the
   // exact "stale content presented as live" the acceptance criterion forbids. Honest failure
   // first; the operator reconnects and only then sees a real terminal feed.
-  if (current.feed === null || failureStatus(current.status)) return current;
+  if (current.feed === null) {
+    return current.status === "unavailable" && terminalRunState(runState)
+      ? { ...current, status: "ended" }
+      : current;
+  }
+  if (failureStatus(current.status)) return current;
   return { ...current, status: lifecycleStatus(runState) };
 }
 
@@ -233,11 +252,11 @@ function lifecycleStatus(
 ): Extract<CodingWorkbenchSafeActivityStatus, "live" | "paused" | "recovery" | "ended"> {
   if (runState === "paused") return "paused";
   if (runState === "recovery-required") return "recovery";
-  if (terminalState(runState)) return "ended";
+  if (terminalRunState(runState)) return "ended";
   return "live";
 }
 
-function terminalState(runState: CodingWorkbenchRuntimeStateName | undefined): boolean {
+function terminalRunState(runState: CodingWorkbenchRuntimeStateName | undefined): boolean {
   return (
     runState === "succeeded" ||
     runState === "failed" ||

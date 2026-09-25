@@ -10,7 +10,12 @@ import type {
   EditorAgentChangeset,
   EditorAgentSessionSnapshot,
 } from "@oscharko-dev/keiko-contracts";
-import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import {
+  EDITOR_AGENT_CONFLICT_CODES,
+  EDITOR_AGENT_FAILURE_CODES,
+  EDITOR_AGENT_SCHEMA_VERSION,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { EditorAgentHttpClient } from "@oscharko-dev/keiko-tools";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
@@ -147,6 +152,10 @@ async function observedWorkspaceReadFailure(kind: WorkspaceReadFailureFixture): 
   return { diagnostics, events, result };
 }
 
+function editRefusedLines(events: readonly ServerLogEvent[]): readonly ServerLogEvent[] {
+  return events.filter((event) => event.op === "coding-runtime.edit.refused");
+}
+
 describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
   it("denies discovery when managed-root authority is revoked before postflight", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-coding-revoked-discover-"));
@@ -208,13 +217,15 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
   // activity log, so the model could not tell it from a retryable editor conflict and kept
   // re-issuing the edit while the workspace authority stayed gone (cursor review, PR #3381). The
   // closed reason code AND the `edit-refused` line under the run's own correlation are the pin.
-  it("denies an edit with a closed reason and a correlated diagnostic when managed-root authority is revoked before the effect", async () => {
+  it("denies an edit with a closed reason and a correlated refusal line when managed-root authority is revoked before the effect", async () => {
     const root = "/managed/workspace";
     const action = vi.fn();
     const records: ServerDiagnosticRecord[] = [];
+    const events: ServerLogEvent[] = [];
     const ports = createCodingToolReadEditPorts({
       secureWorkspaceTextRead: { readText: vi.fn() },
       editorAgentClient: { action },
+      activityLog: { write: (event): void => void events.push(event) },
       resolveEditorActionContext: () => ({
         sessionId: "session-revoked",
         authorityRef: { runId: "run-revoked", envelopeDigest: DIGEST },
@@ -239,25 +250,28 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
       ),
     ).resolves.toEqual({ status: "failed", reasonCode: "WORKSPACE_ACCESS_LOST" });
     expect(action).not.toHaveBeenCalled();
-    expect(records).toEqual([
+    // #3610: relocated from the failure diagnostic to the refusal line that now owns it — the same
+    // closed reason under the run's own correlation, and no server failure for a governed refusal.
+    expect(editRefusedLines(events)).toEqual([
       expect.objectContaining({
-        operation: "coding-runtime.editor-changeset",
-        source: "coding-tool-read-edit-ports.edit",
-        message: "edit-refused",
-        errorClass: "WORKSPACE_ACCESS_LOST",
         correlationId: "run-revoked",
+        errorKind: "authority-denied",
+        extra: expect.objectContaining({ reasonCode: "WORKSPACE_ACCESS_LOST" }) as unknown,
       }),
     ]);
+    expect(records).toEqual([]);
   });
 
   // The prepare stage refuses before any editor action exists, so its correlation has to come from
   // the run's own editor context; before this it left no line at all.
   it("emits a correlated prepare refusal when the changeset never reaches the editor route", async () => {
     const records: ServerDiagnosticRecord[] = [];
+    const events: ServerLogEvent[] = [];
     const action = vi.fn();
     const ports = createCodingToolReadEditPorts({
       secureWorkspaceTextRead: { readText: vi.fn() },
       editorAgentClient: { action },
+      activityLog: { write: (event): void => void events.push(event) },
       resolveEditorActionContext: () => ({
         sessionId: "session-prepare",
         authorityRef: { runId: "run-prepare-1", envelopeDigest: DIGEST },
@@ -279,15 +293,83 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
       ),
     ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
     expect(action).not.toHaveBeenCalled();
-    expect(records).toEqual([
+    expect(editRefusedLines(events)).toEqual([
       expect.objectContaining({
-        operation: "coding-runtime.editor-changeset",
-        message: "edit-refused",
-        errorClass: "EDIT_PREPARE_FAILED",
         correlationId: "run-prepare-1",
+        errorKind: "validation-failed",
+        extra: expect.objectContaining({
+          reasonCode: "EDIT_PREPARE_FAILED",
+          prepareCause: "changeset-invalid",
+        }) as unknown,
       }),
     ]);
+    expect(records).toEqual([]);
   });
+
+  // #3611 review: EDIT_PREPARE_FAILED covers several causes, and not every one is a validation
+  // failure. The model still reads the one reason code; the refusal line names the cause and its
+  // error kind so the log tells a denied guard from a missing editor context.
+  it.each([
+    ["guard-denied", "authority-denied", { guardAllows: false }],
+    ["editor-context-unavailable", "unavailable", { contextResolves: false }],
+    ["workspace-access-lost", "authority-denied", { workspaceAccess: false }],
+    ["cancelled", "cancelled", { aborted: true }],
+    ["binding-unavailable", "authority-denied", { enforceBinding: true }],
+  ] as const)(
+    "names the prepare cause %s as %s on the refusal line",
+    async (prepareCause, errorKind, setup) => {
+      const scenario: {
+        readonly guardAllows?: boolean;
+        readonly contextResolves?: boolean;
+        readonly workspaceAccess?: boolean;
+        readonly aborted?: boolean;
+        readonly enforceBinding?: boolean;
+      } = setup;
+      const events: ServerLogEvent[] = [];
+      const action = vi.fn();
+      const ports = createCodingToolReadEditPorts({
+        secureWorkspaceTextRead: { readText: vi.fn() },
+        editorAgentClient: { action },
+        activityLog: { write: (event): void => void events.push(event) },
+        // An unavailable editor context surfaces as a throwing resolver.
+        resolveEditorActionContext: () => {
+          if (scenario.contextResolves === false) throw new Error("no editor context");
+          return {
+            sessionId: "session-cause",
+            authorityRef: { runId: "run-cause", envelopeDigest: DIGEST },
+            origin: "agent" as const,
+          };
+        },
+        ...(scenario.workspaceAccess === false
+          ? { resolveWorkspaceRootAccess: (): undefined => undefined }
+          : {}),
+        ...(scenario.enforceBinding === true ? { enforceProducerBinding: true } : {}),
+      });
+
+      await expect(
+        ports.editorChangeset.execute(
+          {
+            action: "edit",
+            actionId: "edit-cause",
+            idempotencyKey: "edit-cause-key",
+            changeset: changeset(),
+          },
+          scenario.aborted === true ? AbortSignal.abort() : undefined,
+          { check: (): boolean => scenario.guardAllows !== false },
+        ),
+      ).resolves.toEqual({ status: "failed", reasonCode: "EDIT_PREPARE_FAILED" });
+      expect(action).not.toHaveBeenCalled();
+      expect(editRefusedLines(events)).toEqual([
+        expect.objectContaining({
+          errorKind,
+          extra: expect.objectContaining({
+            reasonCode: "EDIT_PREPARE_FAILED",
+            prepareCause,
+          }) as unknown,
+        }),
+      ]);
+    },
+  );
 
   it("discovers exact governed file paths without exposing denied or unrelated entries", async (): Promise<void> => {
     const root = mkdtempSync(join(tmpdir(), "keiko-coding-discover-"));
@@ -735,8 +817,9 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
 
   // A refused edit used to leave no trace outside the in-memory editor audit feed; the activity
   // log must carry the refusal with its closed-vocabulary reason (end-to-end run, 2026-09-03).
-  it("emits a body-free refusal diagnostic when the editor route rejects the changeset", async () => {
+  it("emits a body-free refusal line when the editor route rejects the changeset", async () => {
     const records: ServerDiagnosticRecord[] = [];
+    const events: ServerLogEvent[] = [];
     const editorAction = vi.fn((_action: EditorAgentAction, _signal: AbortSignal) =>
       Promise.resolve({
         ok: true as const,
@@ -755,6 +838,7 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
       secureWorkspaceTextRead: { readText: vi.fn() },
       editorAgentClient: { action: editorAction },
       diagnostics: { record: (record): void => void records.push(record) },
+      activityLog: { write: (event): void => void events.push(event) },
       resolveEditorActionContext: () => ({
         sessionId: "session-2332",
         authorityRef: { runId: "run-2332", envelopeDigest: DIGEST },
@@ -780,15 +864,112 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
       // still never reaches the activity log (asserted below).
       message: "The target escapes the root.",
     });
-    expect(records).toEqual([
+    const persisted = expectActivityLogProof(
+      "coding-runtime.edit.refused.emitted-line",
+      formatActivityLogProofLine(editRefusedLines(events)[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      level: "warn",
+      correlationId: "run-2332",
+      errorKind: "authority-denied",
+      reasonCode: "OUT_OF_SCOPE",
+    });
+    expect(records).toEqual([]);
+    expect(JSON.stringify(events)).not.toContain("escapes the root");
+  });
+
+  // #3610: the refusal vocabulary is written out as literals for the op catalog; a contract code
+  // missing from it would be recorded as EDIT_CLIENT_ERROR, so every one of them must be listed.
+  it("lists every editor-agent conflict and failure code as a refusal reason", async () => {
+    const events: ServerLogEvent[] = [];
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: vi.fn() },
+      editorAgentClient: { action: vi.fn() },
+      activityLog: { write: (event): void => void events.push(event) },
+      resolveEditorActionContext: () => ({
+        sessionId: "session-vocabulary",
+        authorityRef: { runId: "run-vocabulary", envelopeDigest: DIGEST },
+        origin: "agent",
+      }),
+    });
+    await ports.editorChangeset.execute(
+      {
+        action: "edit",
+        actionId: "edit-vocabulary",
+        idempotencyKey: "edit-vocabulary-key",
+        changeset: { patch: "x", files: [] },
+      },
+      undefined,
+      { check: (): true => true },
+    );
+    const refusal = editRefusedLines(events)[0];
+    const field =
+      refusal === undefined ? undefined : activityLogEventRegistration(refusal)?.fields.reasonCode;
+    const listed = field?.type === "string" ? (field.values ?? []) : [];
+    expect(listed.length).toBeGreaterThan(0);
+    for (const code of [...EDITOR_AGENT_CONFLICT_CODES, ...EDITOR_AGENT_FAILURE_CODES]) {
+      expect(listed).toContain(code);
+    }
+  });
+
+  // #3610 (W21): a changeset built on a stale read is refused with CONTENT_HASH_MISMATCH — an
+  // expected conflict the model repairs by re-reading. It was written as server.diagnostic.failure
+  // at level error with errorKind internal, which also opened a support incident for every such
+  // edit. It is a warn-level conflict now, and no failure diagnostic is written.
+  it("records a stale-base refusal as a conflict, never as a server failure", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const events: ServerLogEvent[] = [];
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: vi.fn() },
+      editorAgentClient: {
+        action: vi.fn(() =>
+          Promise.resolve({
+            ok: true as const,
+            value: {
+              result: {
+                schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+                actionId: "edit-stale-1",
+                sessionId: "session-stale",
+                status: "conflict" as const,
+                conflict: {
+                  code: "CONTENT_HASH_MISMATCH" as const,
+                  message: "The changeset file content hash no longer matches.",
+                },
+              },
+            },
+          }),
+        ),
+      },
+      diagnostics: { record: (record): void => void records.push(record) },
+      activityLog: { write: (event): void => void events.push(event) },
+      resolveEditorActionContext: () => ({
+        sessionId: "session-stale",
+        authorityRef: { runId: "run-stale", envelopeDigest: DIGEST },
+        origin: "agent",
+      }),
+    });
+
+    await expect(
+      ports.editorChangeset.execute(
+        {
+          action: "edit",
+          actionId: "edit-stale-1",
+          idempotencyKey: "edit-stale-key",
+          changeset: changeset(),
+        },
+        undefined,
+        { check: (): true => true },
+      ),
+    ).resolves.toMatchObject({ status: "failed", reasonCode: "CONTENT_HASH_MISMATCH" });
+    expect(editRefusedLines(events)).toEqual([
       expect.objectContaining({
-        operation: "coding-runtime.editor-changeset",
-        source: "coding-tool-read-edit-ports.edit",
-        message: "edit-refused",
-        errorClass: "OUT_OF_SCOPE",
+        level: "warn",
+        correlationId: "run-stale",
+        errorKind: "conflict",
+        extra: { reasonCode: "CONTENT_HASH_MISMATCH", completeness: "complete", loss: "none" },
       }),
     ]);
-    expect(JSON.stringify(records)).not.toContain("escapes the root");
+    expect(records).toEqual([]);
   });
 
   it("normalizes the real single-file raw-index model patch before editor validation", async () => {
@@ -1048,16 +1229,18 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
   // reconnect the Workbench. The outcome now carries one actionable sentence — while the
   // activity-log diagnostic (AGENTS.md §8: body-free evidence) stays reason-code-only and never
   // carries that sentence, so it cannot leak into a log a customer might attach unredacted.
-  it("names the actual condition in the refused edit's outcome while the diagnostic stays reason-code-only", async () => {
+  it("names the actual condition in the refused edit's outcome while the refusal line stays reason-code-only", async () => {
     vi.useFakeTimers();
     try {
       const records: ServerDiagnosticRecord[] = [];
+      const events: ServerLogEvent[] = [];
       const listSessions = vi.fn(() =>
         Promise.resolve({ ok: true as const, value: { sessions: [] } }),
       );
       const ports = createCodingToolReadEditPorts({
         secureWorkspaceTextRead: { readText: vi.fn() },
         editorAgentClient: { action: vi.fn(), listSessions },
+        activityLog: { write: (event): void => void events.push(event) },
         resolveEditorActionContext: () => ({
           sessionId: "runtime-run-msg",
           authorityRef: { runId: "run-message-1", envelopeDigest: DIGEST },
@@ -1080,17 +1263,15 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
         message:
           "no Coding Workbench is connected for this workspace; keep the Workbench open and retry",
       });
-      expect(records).toEqual([
+      expect(editRefusedLines(events)).toEqual([
         expect.objectContaining({
-          operation: "coding-runtime.editor-changeset",
-          source: "coding-tool-read-edit-ports.edit",
-          message: "edit-refused",
-          errorClass: "NO_ACTIVE_SESSION",
           correlationId: "run-message-1",
+          errorKind: "unavailable",
+          extra: { reasonCode: "NO_ACTIVE_SESSION", completeness: "complete", loss: "none" },
         }),
       ]);
-      expect(records[0]).not.toHaveProperty("extra.message");
-      expect(JSON.stringify(records)).not.toContain(NO_ACTIVE_SESSION_MESSAGE);
+      expect(records).toEqual([]);
+      expect(JSON.stringify(events)).not.toContain(NO_ACTIVE_SESSION_MESSAGE);
     } finally {
       vi.useRealTimers();
     }

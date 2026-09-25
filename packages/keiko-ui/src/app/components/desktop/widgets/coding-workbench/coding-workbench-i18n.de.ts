@@ -52,6 +52,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.journey.proposeReadyPending":
     "Der Freigabepfad für die Review-Bereitschaft ist noch nicht verfügbar.",
   "codingWorkbench.journey.changedFiles": "{count} geänderte Dateien",
+  "codingWorkbench.journey.changedFiles.one": "1 geänderte Datei",
   "codingWorkbench.journey.changedFilesTruncated": "(Liste gekürzt)",
   "codingWorkbench.journey.busy": "Übergabestatus wird aktualisiert…",
   "codingWorkbench.journey.actionError.refresh":
@@ -304,6 +305,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.effort.xhigh": "Extra hoch",
   "codingWorkbench.composer.authority.label": "Rechte für diesen Lauf",
   "codingWorkbench.composer.authority.menu": "Rechte auswählen",
+  "codingWorkbench.composer.authority.ceiling":
+    "{requested} liegt über der Berechtigungsgrenze dieser Installation, daher starten Läufe mit {ceiling}.",
   "codingWorkbench.composer.authority.error.hydrate":
     "Die Rechte konnten nicht geladen werden. „Um Genehmigung bitten“ bleibt ausgewählt.",
   "codingWorkbench.composer.authority.error.persist":
@@ -466,6 +469,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.empty":
     "Dieser Lauf enthält in dieser Revision keine Workspace-Änderungen.",
   "codingWorkbench.changes.changedFiles": "{count} geänderte Dateien",
+  "codingWorkbench.changes.changedFiles.one": "1 geänderte Datei",
   "codingWorkbench.changes.virtualInstructions":
     "Liste der geänderten Dateien fokussieren und dann mit Pfeil- oder Bild-auf- und Bild-ab-Tasten scrollen.",
   "codingWorkbench.changes.filesTruncated":
@@ -773,6 +777,10 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die aktuelle Berechtigung erlaubt diesen Commit nicht.",
   "codingWorkbench.commitResult.reason.verification-missing":
     "Führe die erforderliche Verifizierung aus, bevor du diesen Commit vorschlägst.",
+  "codingWorkbench.commitResult.reason.buffers-dirty":
+    "Geöffnete Dateien haben ungespeicherte Änderungen im Editor, die sich nicht vormerken lassen. Speichere sie, verifiziere die vorgemerkte Änderung und schlage den Commit dann erneut vor.",
+  "codingWorkbench.commitResult.reason.candidate-not-staged":
+    "Ein Teil der Änderung ist noch nicht vorgemerkt. Merke ihn vor, verifiziere die vorgemerkte Änderung und schlage den Commit dann erneut vor.",
   "codingWorkbench.commitResult.reason.verification-failed":
     "Die erforderliche Verifizierung war nicht erfolgreich.",
   "codingWorkbench.commitResult.reason.verification-stale":
@@ -977,6 +985,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Das Modell oder eine Schutzprüfung der Workbench hat diesen Schritt abgelehnt. Prüfe die Gateway- und Berechtigungsdiagnose des Runs und passe Modell, Aufgabe oder Berechtigungen vor einem erneuten Versuch an.",
   "codingWorkbench.event.turnFailure.output-exhausted":
     "Das Modell hat sein gesamtes Ausgabebudget verbraucht, bevor eine Antwort entstand – meist durch Reasoning. Lass das Gateway ein größeres max_output_tokens für dieses Modell melden oder wähle ein Modell mit geringerem Reasoning-Anteil, und versuche es erneut.",
+  "codingWorkbench.event.turnFailure.empty-answer":
+    "Das Modell hat diesen Schritt ohne Text und ohne Werkzeugaufruf beendet. Der Anbieter hat geantwortet, es ist also kein Verbindungsproblem. Versuche den Schritt erneut; wiederholt es sich, formuliere die Aufgabe um oder wähle ein anderes Modell.",
   "codingWorkbench.event.detailOutcome": "Ergebnis: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Nicht vertrauenswürdiger Inhalt: Die abgerufene Seite wurde als Daten isoliert, nicht als Anweisungen.",

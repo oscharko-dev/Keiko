@@ -15,6 +15,7 @@ import {
   ConfigInvalidError,
   ContextOverflowError,
   GatewayError,
+  ProviderEmptyAnswerError,
   ProviderOutputExhaustedError,
   TransportError,
   UnknownModelError,
@@ -547,8 +548,10 @@ function attachGatewayRequestId(error: unknown, requestId: string): void {
 // thrown instead, see openai-adapter.ts's redactUnknown), or a ProviderOutputExhaustedError (an
 // HTTP 200 with `finish_reason: "length"` and no content — the model answered, it just spent its
 // budget on reasoning; that is a caller-fixable budget problem, not evidence the provider is
-// failing). A named, extensible list rather than a growing chain of `&&` conditions, so the next
-// non-provider fault is one array entry away.
+// failing), or a ProviderEmptyAnswerError (#3610: an HTTP 200 answer that completed with neither
+// content nor a tool call — the provider answered, the model produced nothing usable; counting it
+// let three such answers lock every caller of a healthy model out). A named, extensible list rather
+// than a growing chain of `&&` conditions, so the next non-provider fault is one array entry away.
 //
 // TimeoutError is deliberately NOT here (review finding on PR #3602 — it was, briefly, during
 // #3591's development). Excluding every timeout disabled the breaker's own outage guard: an
@@ -563,6 +566,7 @@ const NON_PROVIDER_FAULTS = [
   ConfigInvalidError,
   ResponseRedactionError,
   ProviderOutputExhaustedError,
+  ProviderEmptyAnswerError,
 ] as const;
 
 function isNonProviderFault(error: unknown): boolean {

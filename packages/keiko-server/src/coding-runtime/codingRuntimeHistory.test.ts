@@ -12,6 +12,7 @@ import {
   type UiStore,
 } from "../store/index.js";
 import { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
+import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./opencodeLaunchProfile.js";
 import { createCodingSafeActivityProjection } from "./codingSafeActivityProjection.js";
 import { createBufferedServerLogSink } from "../observability/server-log.js";
 import {
@@ -247,6 +248,125 @@ describe("paired coding conversation history", () => {
       completeness: "partial",
       loss: "event-dropped",
     });
+  });
+
+  // #3610: every OpenCode session starts with the runtime readiness handshake — a user message with
+  // the fixed handshake prompt and an empty assistant answer — before the operator's task prompt.
+  // Skipping "the first user message" skipped the handshake and stored the task prompt a second
+  // time next to the run's intent, so the transcript showed every question twice.
+  it("never stores the readiness handshake and stores the task prompt only once, as the intent", () => {
+    const { history, id } = fixture();
+    const runId = "b98ffdea-fc67-4e81-b1da-c5a987198123";
+    const session = [
+      {
+        messageId: "msg_handshake",
+        role: "user" as const,
+        content: OPENCODE_RUNTIME_READINESS_PROMPT,
+      },
+      { messageId: "msg_handshake_answer", role: "assistant" as const, content: "" },
+      { messageId: "msg_task", role: "user" as const, content: "Inspect a private source file" },
+      { messageId: "msg_answer", role: "assistant" as const, content: "The file is fine." },
+      { messageId: "msg_follow_up", role: "user" as const, content: "And the tests?" },
+      { messageId: "msg_follow_up_answer", role: "assistant" as const, content: "They pass." },
+    ];
+    expect(history.captureNative(runId, session)).toBe(true);
+    expect(
+      history.detail(id, "read-handshake")?.messages.map(({ role, content }) => [role, content]),
+    ).toEqual([
+      ["user", "Inspect a private source file"],
+      ["assistant", "The file is fine."],
+      ["user", "And the tests?"],
+      ["assistant", "They pass."],
+    ]);
+  });
+
+  it("skips the handshake turn and the intent echo on the display projection as well", () => {
+    const { history, id } = fixture();
+    const runId = "b98ffdea-fc67-4e81-b1da-c5a987198123";
+    const projection = createCodingSafeActivityProjection({ now: () => 1_721_323_200_000 });
+    projection.open({
+      runId,
+      workspaceId: "ws-1",
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    const occurredAt = "2026-07-18T17:00:00.000Z";
+    const say = (
+      messageId: string,
+      role: "user" | "assistant",
+      text: string,
+      parent?: string,
+    ): void => {
+      projection.ingest(runId, {
+        kind: "message",
+        messageId,
+        role,
+        occurredAt,
+        ...(parent === undefined ? {} : { parentMessageId: parent }),
+      });
+      if (text.length > 0) projection.ingest(runId, { kind: "text", messageId, text, occurredAt });
+    };
+    say("handshake", "user", OPENCODE_RUNTIME_READINESS_PROMPT);
+    say("handshake-answer", "assistant", "", "handshake");
+    say("task", "user", "Inspect a private source file");
+    say("answer", "assistant", "The file is fine.", "task");
+    history.capture(runId, projection.currentContent());
+    expect(
+      history.detail(id, "read-display")?.messages.map(({ role, content }) => [role, content]),
+    ).toEqual([
+      ["user", "Inspect a private source file"],
+      ["assistant", "The file is fine."],
+    ]);
+  });
+
+  // #3611 review: the display feed drops its oldest turns when it outgrows its bounds. The task
+  // prompt's turn goes first, so a truncated feed no longer holds the intent echo, and its first
+  // remaining operator message is a follow-up that must be stored, not skipped as the echo.
+  it("keeps the first remaining follow-up of a truncated display feed", () => {
+    const { history, id } = fixture();
+    const runId = "b98ffdea-fc67-4e81-b1da-c5a987198123";
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      limits: { maxTurns: 2 },
+    });
+    projection.open({
+      runId,
+      workspaceId: "ws-1",
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    const occurredAt = "2026-07-18T17:00:00.000Z";
+    const say = (
+      messageId: string,
+      role: "user" | "assistant",
+      text: string,
+      parent?: string,
+    ): void => {
+      projection.ingest(runId, {
+        kind: "message",
+        messageId,
+        role,
+        occurredAt,
+        ...(parent === undefined ? {} : { parentMessageId: parent }),
+      });
+      projection.ingest(runId, { kind: "text", messageId, text, occurredAt });
+    };
+    say("task", "user", "Inspect a private source file");
+    say("answer", "assistant", "The file is fine.", "task");
+    say("follow-up", "user", "Now add a test");
+    say("follow-up-answer", "assistant", "Added.", "follow-up");
+    say("second", "user", "And document it");
+    say("second-answer", "assistant", "Documented.", "second");
+    const content = projection.currentContent();
+    const feed = content?.feed;
+    if (feed?.availability !== "available") throw new Error("expected an available feed");
+    expect(feed.truncated).toBe(true);
+
+    history.capture(runId, content);
+
+    expect(
+      history.detail(id, "read-display")?.messages.map(({ role, content: text }) => [role, text]),
+    ).toContainEqual(["user", "Now add a test"]);
   });
 
   it("preserves astral text across chunk boundaries through SQLite and replay", () => {
