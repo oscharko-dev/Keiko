@@ -752,6 +752,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Current authority does not permit this commit.",
   "codingWorkbench.commitResult.reason.verification-missing":
     "Run the required verification before proposing this commit.",
+  "codingWorkbench.commitResult.reason.buffers-dirty":
+    "Open files have unsaved editor changes, which staging cannot include. Save them, verify the staged change, then propose the commit again.",
   "codingWorkbench.commitResult.reason.candidate-not-staged":
     "Part of the change is not staged yet. Stage it, verify the staged change, then propose the commit again.",
   "codingWorkbench.commitResult.reason.verification-failed":

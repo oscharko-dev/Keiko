@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "31cde9f0fe8281178dd3c36aeacf76911d6806d461a1bcfa449afba265f35db6",
+    "catalogDigest": "e19b632f3056f0a82fbaa3bb22408ea3543c842ef43305db01b637d323038b07",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -17804,6 +17804,7 @@
               "authority-denied",
               "verification-missing",
               "candidate-not-staged",
+              "buffers-dirty",
               "verification-failed",
               "verification-stale",
               "candidate-drift",
@@ -17933,6 +17934,7 @@
               "authority-denied",
               "verification-missing",
               "candidate-not-staged",
+              "buffers-dirty",
               "verification-failed",
               "verification-stale",
               "candidate-drift",
@@ -17994,8 +17996,8 @@
         "failureClasses": ["git-verified-commit"],
         "proofIds": ["git.verified-commit.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:111",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:1046"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:112",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:1055"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -75043,7 +75045,7 @@
     {
       "op": "git.verified-commit",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:114",
+      "site": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:115",
       "package": "keiko-server"
     },
     {

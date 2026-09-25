@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "31cde9f0fe8281178dd3c36aeacf76911d6806d461a1bcfa449afba265f35db6" as const;
+  "e19b632f3056f0a82fbaa3bb22408ea3543c842ef43305db01b637d323038b07" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -16989,6 +16989,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "authority-denied",
           "verification-missing",
           "candidate-not-staged",
+          "buffers-dirty",
           "verification-failed",
           "verification-stale",
           "candidate-drift",
@@ -17118,6 +17119,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "authority-denied",
           "verification-missing",
           "candidate-not-staged",
+          "buffers-dirty",
           "verification-failed",
           "verification-stale",
           "candidate-drift",

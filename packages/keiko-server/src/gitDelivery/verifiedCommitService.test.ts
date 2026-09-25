@@ -602,6 +602,24 @@ describe("verified Code-task commit service", () => {
     });
   });
 
+  // #3611 review: the clean flag also covers unsaved editor buffers, which staging cannot resolve.
+  // With nothing unstaged, dirty buffers must never read as candidate-not-staged.
+  it("refuses unsaved editor buffers as buffers-dirty, not as an unstaged candidate", async () => {
+    service = createVerifiedCommitService({
+      ...options,
+      context: () => ({ ...context(), buffersClean: (): boolean => false }),
+    });
+    expect(await service.propose("feat: buffers are not saved")).toMatchObject({
+      status: "blocked",
+      reason: "buffers-dirty",
+    });
+    expect(
+      events.find(
+        (event) => event.extra?.phase === "result" && event.extra.reason === "buffers-dirty",
+      ),
+    ).toMatchObject({ extra: { state: "blocked", reason: "buffers-dirty" } });
+  });
+
   it("requires verification and refuses forged or cross-proposal approvals without a Git effect", async () => {
     const before = git(["rev-parse", "HEAD"]);
     expect(await service.propose("feat: no verification")).toMatchObject({

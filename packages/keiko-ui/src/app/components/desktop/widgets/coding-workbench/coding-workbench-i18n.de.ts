@@ -777,6 +777,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die aktuelle Berechtigung erlaubt diesen Commit nicht.",
   "codingWorkbench.commitResult.reason.verification-missing":
     "Führe die erforderliche Verifizierung aus, bevor du diesen Commit vorschlägst.",
+  "codingWorkbench.commitResult.reason.buffers-dirty":
+    "Geöffnete Dateien haben ungespeicherte Änderungen im Editor, die sich nicht vormerken lassen. Speichere sie, verifiziere die vorgemerkte Änderung und schlage den Commit dann erneut vor.",
   "codingWorkbench.commitResult.reason.candidate-not-staged":
     "Ein Teil der Änderung ist noch nicht vorgemerkt. Merke ihn vor, verifiziere die vorgemerkte Änderung und schlage den Commit dann erneut vor.",
   "codingWorkbench.commitResult.reason.verification-failed":

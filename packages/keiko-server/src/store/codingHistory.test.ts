@@ -198,6 +198,40 @@ describe("Coding History on the existing conversation store", () => {
     ).toEqual(expected);
   });
 
+  // #3611 review: only the newest 200 rows are listed. A run answered before that window must still
+  // count as answered, or a later verbatim resend in the window would be read as the legacy echo.
+  it("keeps a resend whose run was answered before the listed window", () => {
+    const history = codingHistory();
+    const task = history.create({
+      projectPath: root,
+      title: "Long task",
+      modelId: "coding",
+      workspaceId: "ws_long",
+      taskId: "task_long",
+      branch: "keiko/task/long",
+      operatorDigest: "a".repeat(64),
+    });
+    history.bindRun(task.id, "run-old");
+    history.append(task.id, "run-old", "intent", "user", "Fix the failing test");
+    history.append(task.id, "run-old", "msg_echo", "user", "Fix the failing test");
+    history.append(task.id, "run-old", "msg_answer", "assistant", "Done.");
+    history.bindRun(task.id, "run-busy");
+    for (let index = 0; index < 210; index += 1) {
+      history.append(
+        task.id,
+        "run-busy",
+        `msg_busy_${String(index)}`,
+        "user",
+        `note ${String(index)}`,
+      );
+    }
+    history.append(task.id, "run-old", "msg_resend", "user", "Fix the failing test");
+
+    const messages = history.detail(task.id, "a".repeat(64))?.messages ?? [];
+    expect(messages.map(({ content }) => content)).not.toContain("Done.");
+    expect(messages.at(-1)).toMatchObject({ role: "user", content: "Fix the failing test" });
+  });
+
   it("refuses a run binding to a second task and cascades when its chat is removed", () => {
     const history = codingHistory();
     const input = {

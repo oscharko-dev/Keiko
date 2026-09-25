@@ -163,6 +163,8 @@ describe("CodingWorkbenchChanges", () => {
 
     await waitFor(() => expect(changesClient.getHistory).toHaveBeenCalledOnce());
     await expandChanges();
+    // #3611 review: the empty boundary keeps the plural form.
+    expect(screen.getByText("0 changed files", { selector: "summary" })).toBeVisible();
     expect(screen.getByText("This run has no workspace changes at this revision.")).toBeVisible();
     expect(screen.getByText("As of aaaaaaaa")).toBeVisible();
     expect(changesClient.getDiff).not.toHaveBeenCalled();
@@ -260,7 +262,7 @@ describe("CodingWorkbenchChanges", () => {
   });
 
   // #3610 (W11): a single changed file read "1 changed files" in the summary and the file pane.
-  it("names a single changed file in the singular", async () => {
+  it("names a single changed file in the singular", async (): Promise<void> => {
     renderChanges(client());
     await expandChanges();
 

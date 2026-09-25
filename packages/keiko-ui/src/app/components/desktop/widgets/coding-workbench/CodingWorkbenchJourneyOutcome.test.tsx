@@ -372,9 +372,10 @@ describe("observed issue journey handoff", () => {
   });
   // #3610 (W11): the handoff summary read "1 changed files".
   it.each([
+    [0, "0 changed files"],
     [1, "1 changed file"],
     [3, "3 changed files"],
-  ] as const)("counts %s changed file(s) in the right number", (fileCount, sentence) => {
+  ] as const)("counts %s changed file(s) in the right number", (fileCount, sentence): void => {
     const fixture = journeyFixture();
     render(
       <CodingWorkbenchJourneyOutcome

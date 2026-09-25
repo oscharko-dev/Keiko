@@ -28,6 +28,9 @@ export const VERIFIED_COMMIT_REASONS = [
   // #3610: part of the change is still unstaged, so no verification can prove the commit yet; the
   // model must stage it and verify the staged change — never re-verify the unstaged working tree.
   "candidate-not-staged",
+  // #3610 review: open editor files hold unsaved changes. Staging cannot resolve that, so it is not
+  // candidate-not-staged: the files have to be saved before a verification can prove the commit.
+  "buffers-dirty",
   "verification-failed",
   "verification-stale",
   "candidate-drift",
@@ -114,6 +117,7 @@ const STATUS_REASONS: Readonly<Record<VerifiedCommitStatus, readonly VerifiedCom
     "conflict-markers",
     "policy-block",
     "preflight-block",
+    "buffers-dirty",
   ],
   failed: ["execution-failed"],
   "recovery-required": ["execution-uncertain", "restart-reconciliation"],

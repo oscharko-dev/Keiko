@@ -261,19 +261,10 @@ function upsertMessage(
  * repeats the intent word for word before the model answered in that run. Reading it out keeps
  * existing histories and continuation context correct without rewriting stored rows. The same
  * words sent again after an answer, or in another run, are the operator's own message and stay.
+ * Decided over every stored row of the chat, never only the newest listed window, so an answer
+ * older than that window still marks its run as answered (review on #3611).
  */
-function repeatedIntentMessageIds(
-  db: DatabaseSync,
-  id: string,
-  listed: readonly ChatMessage[],
-): ReadonlySet<string> {
-  const candidates = intentRepeatCandidates(db, id);
-  return candidates.size === 0
-    ? candidates
-    : firstEchoPerRun(listed, candidates, runsByMessage(db, id));
-}
-
-function intentRepeatCandidates(db: DatabaseSync, id: string): ReadonlySet<string> {
+function repeatedIntentMessageIds(db: DatabaseSync, id: string): ReadonlySet<string> {
   const rows = db
     .prepare(
       `SELECT echo.message_id AS message_id
@@ -287,38 +278,22 @@ function intentRepeatCandidates(db: DatabaseSync, id: string): ReadonlySet<strin
           AND echo.source_id <> 'intent'
           AND echoed.role = 'user'
           AND stored.role = 'user'
-          AND echoed.content = stored.content`,
+          AND echoed.content = stored.content
+          AND NOT EXISTS (
+            SELECT 1
+              FROM coding_history_message_bindings earlier
+              JOIN chat_messages prior ON prior.id = earlier.message_id
+             WHERE earlier.run_id = echo.run_id
+               AND earlier.source_id <> 'intent'
+               AND (prior.timestamp < echoed.timestamp
+                    OR (prior.timestamp = echoed.timestamp AND prior.rowid < echoed.rowid))
+               AND ((prior.role = 'user' AND prior.content = stored.content)
+                    OR (prior.role = 'assistant'
+                        AND length(trim(prior.content, ' ' || char(9) || char(10) || char(13))) > 0))
+          )`,
     )
     .all(id);
   return new Set(rows.map((row) => String(row.message_id)));
-}
-
-function runsByMessage(db: DatabaseSync, id: string): ReadonlyMap<string, string> {
-  const rows = db
-    .prepare(
-      `SELECT binding.message_id AS message_id, binding.run_id AS run_id
-         FROM coding_history_message_bindings binding
-         JOIN coding_history_runs run ON run.run_id = binding.run_id
-        WHERE run.chat_id = ?`,
-    )
-    .all(id);
-  return new Map(rows.map((row) => [String(row.message_id), String(row.run_id)] as const));
-}
-
-function firstEchoPerRun(
-  listed: readonly ChatMessage[],
-  candidates: ReadonlySet<string>,
-  runOf: ReadonlyMap<string, string>,
-): ReadonlySet<string> {
-  const answered = new Set<string>();
-  const echoes = new Map<string, string>();
-  for (const message of listed) {
-    const runId = runOf.get(message.id);
-    if (runId === undefined || echoes.has(runId) || answered.has(runId)) continue;
-    if (message.role === "assistant" && message.content.trim().length > 0) answered.add(runId);
-    else if (candidates.has(message.id)) echoes.set(runId, message.id);
-  }
-  return new Set(echoes.values());
 }
 
 function readDetail(
@@ -333,7 +308,7 @@ function readDetail(
     "SELECT run_id FROM coding_history_message_bindings WHERE message_id = ?",
   );
   const listed = store.listMessages(id, 200);
-  const repeated = repeatedIntentMessageIds(db, id, listed);
+  const repeated = repeatedIntentMessageIds(db, id);
   const messages = listed
     .filter((message) => !repeated.has(message.id))
     .map((message) => {
@@ -386,8 +361,8 @@ export function createCodingHistoryStore(
           .all(runId)
           .map((row) => row.message_id),
       );
+      const repeated = repeatedIntentMessageIds(db, id);
       const listed = store.listMessages(id, 200);
-      const repeated = repeatedIntentMessageIds(db, id, listed);
       return listed.filter((message) => !ids.has(message.id) && !repeated.has(message.id));
     },
     detail: (id, operator) => readDetail(db, store, id, operator),

@@ -756,11 +756,11 @@ describe("bounded coding safe-activity projection", () => {
         }) as unknown,
       }),
     ]);
-    expect(
-      validateRegisteredActivityLogEvent(
-        dropped[0] as unknown as Readonly<Record<PropertyKey, unknown>>,
-      ),
-    ).toMatchObject({ op: "coding-runtime.safe-activity" });
+    const [droppedLine] = dropped;
+    if (droppedLine === undefined) throw new Error("expected one projection-rejected drop line");
+    expect(validateRegisteredActivityLogEvent(droppedLine)).toMatchObject({
+      op: "coding-runtime.safe-activity",
+    });
     expect(JSON.stringify(activityLog.events)).not.toContain("Private late text");
   });
 
