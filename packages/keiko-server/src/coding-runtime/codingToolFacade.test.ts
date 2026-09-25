@@ -1217,6 +1217,28 @@ describe("CodingToolFacade", () => {
     expect(JSON.stringify(result)).not.toContain("PRIVATE_FAILURE_CANARY");
   });
 
+  // #3615: a read the secure read refused for the model's own request names its code to the model,
+  // and the catalog settles it as that refusal instead of a handler fault.
+  it.each([
+    "workspace-read-denied",
+    "workspace-read-not-found",
+    "workspace-read-not-text",
+    "workspace-read-too-large",
+  ])("names a read refused as %s to the model", async (reasonCode) => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() => Promise.resolve({ outcome: "failed", reasonCode }));
+    await expect(
+      createCodingToolFacade(ports).execute({
+        body: requestBody({ action: "read", relativePath: "src/example.ts" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      reasonCode,
+      evidence: [{ kind: "governed-delegate", code: reasonCode }],
+    });
+  });
+
   it.each([
     { commitProof: "recorded", unexpected: true },
     {

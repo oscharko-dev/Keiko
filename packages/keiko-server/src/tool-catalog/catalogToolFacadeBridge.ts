@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import type {
   CatalogJsonValue,
   ToolDescriptor,
+  ToolResultReason,
+  ToolResultStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import {
@@ -446,7 +448,7 @@ function bindingFor(
     ): Promise<CatalogHandlerResult> => {
       const result = await run(context.signal, context.mutationGuard);
       recordResult(result);
-      if (result.status === "failed") throw new CatalogDispatchFault("failed", "handler-failed");
+      if (result.status === "failed") throw handlerFault(result);
       return {
         data: captureCatalogJson(result),
         resultCount: 1,
@@ -472,7 +474,7 @@ function executionOverride(
     execute: async (_argumentsValue, context): Promise<CatalogHandlerResult> => {
       const result = await run(context.signal, context.mutationGuard);
       recordResult(result);
-      if (result.status === "failed") throw new CatalogDispatchFault("failed", "handler-failed");
+      if (result.status === "failed") throw handlerFault(result);
       return {
         data: captureCatalogJson(result),
         resultCount: 1,
@@ -486,20 +488,53 @@ type CatalogDispatchOutcome = Awaited<
   ReturnType<ReturnType<typeof createCatalogToolBinderFromPreparation>["dispatch"]>
 >;
 
+// A handler that ran and refused the request for the model's own input settles as that verdict: a
+// stale base, a patch or precondition the file does not meet, a path outside the workspace or denied
+// by policy, a read of a missing, non-text or oversized file. Only a bare failure -- no closed
+// reason, or one this table does not know -- is a handler fault, which the lifecycle logs at error
+// level and which opens a support incident (#3615).
+type HandlerRefusal = readonly [Exclude<ToolResultStatus, "completed">, ToolResultReason];
+const HANDLER_REFUSALS: ReadonlyMap<string, HandlerRefusal> = new Map<string, HandlerRefusal>([
+  ["CONTENT_HASH_MISMATCH", ["invalid", "workspace-stale"]],
+  ["VERSION_MISMATCH", ["invalid", "workspace-stale"]],
+  ["INVALID_EDITS", ["invalid", "invalid-arguments"]],
+  ["PRECONDITION_REQUIRED", ["invalid", "invalid-arguments"]],
+  ["OUT_OF_SCOPE", ["denied", "workspace-denied"]],
+  ["workspace-read-denied", ["denied", "workspace-denied"]],
+  ["workspace-read-not-found", ["invalid", "invalid-arguments"]],
+  ["workspace-read-not-text", ["invalid", "invalid-arguments"]],
+  ["workspace-read-too-large", ["invalid", "invalid-arguments"]],
+]);
+
+function handlerFault(
+  result: Extract<CodingToolResult, { readonly status: "failed" }>,
+): CatalogDispatchFault {
+  const code = result.evidence[0]?.code;
+  const refusal = code === undefined ? undefined : HANDLER_REFUSALS.get(code);
+  return refusal === undefined
+    ? new CatalogDispatchFault("failed", "handler-failed")
+    : new CatalogDispatchFault(refusal[0], refusal[1]);
+}
+
+function handlerVerdict(status: ToolResultStatus, reason: ToolResultReason): boolean {
+  if (status === "failed" && reason === "handler-failed") return true;
+  return [...HANDLER_REFUSALS.values()].some(
+    ([refusalStatus, refusalReason]) => refusalStatus === status && refusalReason === reason,
+  );
+}
+
+// The facade result of a handler that ran reaches the model unchanged, whether it completed, failed,
+// or refused the request; the catalog's own verdict only replaces a result no handler produced.
 function preservedExecutedResult(
   outcome: CatalogDispatchOutcome,
   executed: CodingToolResult | undefined,
 ): CodingToolResult | undefined {
   if (outcome.kind === "replayed") return undefined;
   if (outcome.result.status === "completed" && executed !== undefined) return executed;
-  if (
-    outcome.result.status === "failed" &&
-    outcome.result.reason === "handler-failed" &&
-    executed?.status === "failed"
-  ) {
-    return executed;
-  }
-  return undefined;
+  return executed?.status === "failed" &&
+    handlerVerdict(outcome.result.status, outcome.result.reason)
+    ? executed
+    : undefined;
 }
 
 function resultFor(

@@ -12,6 +12,7 @@ import {
 import { isVerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import { isVerificationKind } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
 import { isCodingRepositoryResult } from "./codingRepositorySearchHandler.js";
+import { WORKSPACE_READ_REFUSAL_CODES } from "./codingToolReadEditPorts.js";
 import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
 
@@ -143,6 +144,9 @@ const GOVERNED_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
   "delivery-authority-revoked",
   "connector-authority-revoked",
   "search-authority-revoked",
+  // A read the port refused for the model's own request (#3615): named, so the model can act on it
+  // and the catalog settles the call as a refusal instead of a handler fault.
+  ...Object.values(WORKSPACE_READ_REFUSAL_CODES),
   ...GOVERNED_VERIFICATION_REASON_CODES,
   // The verification runner's own closed codes (editor/verificationRunnerErrors.ts), sourced rather
   // than restated for the same reason the two contract enums above are. A verification the runner

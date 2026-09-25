@@ -300,7 +300,7 @@ async function executeRead(
   mutationGuard: CodingToolMutationGuard,
 ): Promise<
   | { readonly status: "completed"; readonly read: CodingToolReadResult }
-  | { readonly status: "failed" }
+  | { readonly status: "failed"; readonly reasonCode?: string }
 > {
   let binding = safeMutationBinding(mutationGuard);
   try {
@@ -639,13 +639,31 @@ function recordCompletedRead(
   );
 }
 
+// The refusals the secure read gives for the model's own request, by closed code: a path the policy
+// denies, a file that does not exist, is not text, or exceeds the helper's bound. They reach the
+// model and let the catalog settle the call as a refusal, not as a handler fault (#3615). A fault
+// stays bare -- including a port that returns more than the read bound, which is not the model's
+// request but a port this server must not trust.
+export const WORKSPACE_READ_REFUSAL_CODES = {
+  denied: "workspace-read-denied",
+  "not-found": "workspace-read-not-found",
+  "not-text": "workspace-read-not-text",
+  "too-large": "workspace-read-too-large",
+} as const satisfies Partial<Record<WorkspaceReadFailureReason, string>>;
+
+function readRefusalCode(reason: WorkspaceReadFailureReason): string | undefined {
+  return Object.hasOwn(WORKSPACE_READ_REFUSAL_CODES, reason)
+    ? WORKSPACE_READ_REFUSAL_CODES[reason as keyof typeof WORKSPACE_READ_REFUSAL_CODES]
+    : undefined;
+}
+
 function failedRead(
   deps: CodingToolReadEditPortDeps,
   binding: RuntimeProducerBinding | undefined,
   request: RepositoryReadRequest,
   reason: WorkspaceReadFailureReason,
   error?: unknown,
-): { readonly status: "failed" } {
+): { readonly status: "failed"; readonly reasonCode?: string } {
   const correlationId = correlationIdOrUnknown(binding?.runId);
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
@@ -662,7 +680,8 @@ function failedRead(
     ),
   );
   if (error !== undefined) emitReadFailureDiagnostic(deps.diagnostics, correlationId, error);
-  return { status: "failed" };
+  const reasonCode = readRefusalCode(reason);
+  return reasonCode === undefined ? { status: "failed" } : { status: "failed", reasonCode };
 }
 
 function emitReadFailureDiagnostic(

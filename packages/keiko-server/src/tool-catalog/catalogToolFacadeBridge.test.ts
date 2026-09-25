@@ -324,6 +324,40 @@ describe("canonical catalog facade bridge", () => {
     });
   });
 
+  // #3615: a refusal the handler gave for the model's own input -- a stale base, a patch that does
+  // not apply, a denied or missing path -- settles as that verdict below error level, so it opens no
+  // support incident, and the model still receives the handler's own result.
+  it.each([
+    ["CONTENT_HASH_MISMATCH", "invalid", "workspace-stale"],
+    ["INVALID_EDITS", "invalid", "invalid-arguments"],
+    ["OUT_OF_SCOPE", "denied", "workspace-denied"],
+    ["workspace-read-denied", "denied", "workspace-denied"],
+    ["workspace-read-not-found", "invalid", "invalid-arguments"],
+  ] as const)(
+    "settles a %s refusal as %s / %s below error level and keeps the handler result",
+    async (code, status, reason) => {
+      const { bridge, log } = createBridge();
+      const refusal = {
+        status: "failed" as const,
+        evidence: [{ kind: "governed-delegate", code }],
+        guidance: "Re-read the file and rebuild the patch.",
+      };
+
+      await expect(
+        bridge.execute(discoverRequest, facadeInput(), (_signal, mutationGuard) => {
+          expect(mutationGuard.check()).toBe(true);
+          return Promise.resolve(refusal);
+        }),
+      ).resolves.toEqual(refusal);
+      const settled = log.events.at(-1);
+      expect(settled).toMatchObject({
+        op: "tool-catalog.invocation-settled",
+        extra: { status, reason, effectStarted: true, budgetDisposition: "committed" },
+      });
+      expect(settled?.level).not.toBe("error");
+    },
+  );
+
   it("settles a governed failure without re-entering a revoked live context for its clock", async () => {
     const started = deferred<undefined>();
     const finish = deferred<undefined>();

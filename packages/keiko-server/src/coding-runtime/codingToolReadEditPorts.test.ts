@@ -194,6 +194,51 @@ describe("governed workspace file digest", () => {
   });
 });
 
+// #3615: a read the secure read refuses for the model's own request names its closed code, so the
+// model can act on it and the catalog settles the call as a refusal; a fault stays a bare failure.
+describe("workspace read refusal codes", () => {
+  const readWith = async (result: SecureWorkspaceTextReadResult): Promise<unknown> => {
+    const binding = { ...liveDiscoveryBinding(), runId: "run-read-refusal" };
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: () => Promise.resolve(result) },
+      editorAgentClient: { action: vi.fn() },
+      resolveEditorActionContext: vi.fn(),
+      resolveRepositoryReadContext: () => binding,
+      activityLog: { write: (): void => undefined },
+      enforceProducerBinding: true,
+    });
+    return ports.repositoryRead.execute(
+      {
+        action: "read",
+        actionId: "read-refusal",
+        idempotencyKey: "read-refusal-key",
+        relativePath: "src/example.ts",
+      },
+      undefined,
+      { check: (): true => true, binding },
+    );
+  };
+
+  it.each([
+    ["denied", "workspace-read-denied"],
+    ["not-found", "workspace-read-not-found"],
+    ["not-text", "workspace-read-not-text"],
+    ["too-large", "workspace-read-too-large"],
+  ] as const)("names a %s refusal as %s", async (reason, reasonCode) => {
+    await expect(readWith({ ok: false, reason })).resolves.toEqual({
+      status: "failed",
+      reasonCode,
+    });
+  });
+
+  it.each(["process-failed", "timeout", "artifact-unverified"] as const)(
+    "keeps a %s fault a bare failure",
+    async (reason) => {
+      await expect(readWith({ ok: false, reason })).resolves.toEqual({ status: "failed" });
+    },
+  );
+});
+
 describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
   it("denies discovery when managed-root authority is revoked before postflight", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-coding-revoked-discover-"));
