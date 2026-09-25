@@ -51,11 +51,13 @@ const CODING_RUNTIME_SAFE_ACTIVITY_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "coding-runtime.codingSafeActivityProjection.lifecycle",
   fields: {
+    // `superseded`: a late runtime update for a call Keiko already settled was set aside, not lost
+    // (PR #3617 review), so a reader can reconstruct that the update arrived.
     event: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["purged", "dropped"],
+      values: ["purged", "dropped", "superseded"],
     },
     reason: {
       type: "string",
@@ -72,6 +74,7 @@ const CODING_RUNTIME_SAFE_ACTIVITY_OPERATION = defineActivityLogOperation({
         "projection-rejected",
         "capacity-rejected",
         "subscriber-rejected",
+        "late-restatement",
       ],
     },
     occurrenceCount: { type: "integer", dataClass: "count", required: false },
@@ -294,10 +297,17 @@ type ProjectionRejection =
   | "tool-name-missing"
   | "feed-unavailable";
 
-type SignalApplication = "accepted" | "capacity-dropped" | ProjectionRejection;
+type SignalApplication =
+  "accepted" | "capacity-dropped" | "restatement-superseded" | ProjectionRejection;
+
+const APPLIED: ReadonlySet<SignalApplication> = new Set<SignalApplication>([
+  "accepted",
+  "capacity-dropped",
+  "restatement-superseded",
+]);
 
 function projectionRejection(application: SignalApplication): ProjectionRejection | undefined {
-  return application === "accepted" || application === "capacity-dropped" ? undefined : application;
+  return APPLIED.has(application) ? undefined : (application as ProjectionRejection);
 }
 
 class SafeActivityProjection implements CodingSafeActivityProjection {
@@ -314,6 +324,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
   private subscriberRunId: string | undefined;
   private expiryTimer: ReturnType<typeof setTimeout> | undefined;
   private faultDropCount = 0;
+  private supersededRestatementCount = 0;
 
   public constructor(options: CodingSafeActivityProjectionOptions) {
     this.now = options.now ?? Date.now;
@@ -343,6 +354,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     if (!validOpenInput(input, expiresAtMs, now)) this.expireCurrent();
     else {
       this.faultDropCount = 0;
+      this.supersededRestatementCount = 0;
       this.scheduleExpiry(this.entry);
       this.notify();
     }
@@ -366,6 +378,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     const application = applySignal(entry, signal, this.limits);
     const rejection = projectionRejection(application);
     if (rejection !== undefined) return this.reject(runId, "projection-rejected", rejection);
+    this.noteSupersededRestatement(runId, application);
     if (signal.signalId !== undefined) {
       rememberBoundedIdentity(entry.signalIds, signal.signalId, this.maxSignalIdentities);
     }
@@ -594,6 +607,24 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     if (this.subscribers.size === 0) this.subscriberRunId = undefined;
   }
 
+  // A late update that restates an earlier state of a call Keiko already settled is set aside; the
+  // line records that it arrived, so the log reconstructs every update (PR #3617 review).
+  private noteSupersededRestatement(runId: string, application: SignalApplication): void {
+    if (application !== "restatement-superseded") return;
+    this.supersededRestatementCount += 1;
+    this.activityLog?.write(
+      activityLogEvent(
+        CODING_RUNTIME_SAFE_ACTIVITY_OPERATION,
+        { correlationId: correlationIdOrUnknown(runId) },
+        {
+          event: "superseded",
+          reason: "late-restatement",
+          occurrenceCount: this.supersededRestatementCount,
+        },
+      ),
+    );
+  }
+
   private emitDropMilestones(
     runId: string,
     reason: CodingSafeActivityDropReason,
@@ -800,7 +831,7 @@ function applyTool(
   const existingIndex = located.turn.tools.findIndex(({ callId }) => callId === signal.callId);
   const existing = located.turn.tools[existingIndex];
   if (existing !== undefined) {
-    if (staleOpenCodeRestatement(existing.state, signal)) return "accepted";
+    if (staleOpenCodeRestatement(existing.state, signal)) return "restatement-superseded";
     if (!allowedToolTransition(existing.state, signal.state)) return "tool-transition-refused";
     located.turn.tools[existingIndex] = {
       ...existing,

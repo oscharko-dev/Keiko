@@ -62,7 +62,9 @@ import {
 import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   codingToolFullAccessDeliveryAllowed,
+  createCodingToolAuthorityPreview,
   createRuntimeCodingToolFacade,
+  type CodingToolAuthorityContextProvider,
   type CommitExecutionApproval,
 } from "./codingToolAuthorityPort.js";
 import type { GovernedVerificationReasonCode } from "./codingToolFacade.js";
@@ -706,23 +708,10 @@ export function createProductionManagedWorktreeToolFacade(
   input: ProductionManagedWorktreeToolInput,
 ): CodingToolFacade {
   const readEdit = createReadEditPorts(input);
+  const authorityContext = managedWorktreeAuthorityContext(input);
   const facade = createRuntimeCodingToolFacade(
     input.authority,
-    () => ({
-      adapterKind: input.adapterKind ?? "model-gateway-sidecar",
-      liveFacts: input.liveFacts(),
-      workspaceRoot: input.workspaceRoot,
-      deploymentCeiling: input.deploymentCeiling,
-      nowIso: new Date().toISOString(),
-      runId: input.authorityRef.runId,
-      envelopeDigest: input.authorityRef.envelopeDigest,
-      authorityExpiresAt: input.authorityExpiresAt,
-      // F8 (#3413): the run's own correlation id (the same value `buildRepositorySearchPort`
-      // already threads into its H1 search-handler invocation below), so the catalog facade
-      // bridge's tool-catalog.* lifecycle lines join the rest of this run's activity log instead
-      // of falling back to UNKNOWN_CORRELATION_ID.
-      correlationId: input.authorityRef.runId,
-    }),
+    authorityContext,
     governedPorts(input, readEdit),
     {
       invocationRegistry: input.invocationRegistry,
@@ -740,17 +729,55 @@ export function createProductionManagedWorktreeToolFacade(
       unavailableOptionalTools: () => deriveOptionalToolAvailability(input),
     },
   );
-  return { ...facade, editBaseDigest: editBaseDigestPort(input) };
+  return { ...facade, editBaseDigest: editBaseDigestPort(input, authorityContext) };
 }
 
-// The governed ask's base check (#3612) reads through the same secure read as keiko_workspace_read,
-// answered only while this run's exact managed workspace is the active one.
+function managedWorktreeAuthorityContext(
+  input: ProductionManagedWorktreeToolInput,
+): CodingToolAuthorityContextProvider {
+  return () => ({
+    adapterKind: input.adapterKind ?? "model-gateway-sidecar",
+    liveFacts: input.liveFacts(),
+    workspaceRoot: input.workspaceRoot,
+    deploymentCeiling: input.deploymentCeiling,
+    nowIso: new Date().toISOString(),
+    runId: input.authorityRef.runId,
+    envelopeDigest: input.authorityRef.envelopeDigest,
+    authorityExpiresAt: input.authorityExpiresAt,
+    // F8 (#3413): the run's own correlation id (the same value `buildRepositorySearchPort`
+    // already threads into its H1 search-handler invocation below), so the catalog facade
+    // bridge's tool-catalog.* lifecycle lines join the rest of this run's activity log instead
+    // of falling back to UNKNOWN_CORRELATION_ID.
+    correlationId: input.authorityRef.runId,
+  });
+}
+
+// The governed ask's base check (#3612) reads a file only as far as keiko_workspace_read would: the
+// run's live authority and producer binding must admit a read of that path before the same secure
+// read, and still admit it after, so an expired or revoked run reads nothing (PR #3617 review). The
+// check reserves no delegation; it is no tool call.
 function editBaseDigestPort(
   input: ProductionManagedWorktreeToolInput,
+  authorityContext: CodingToolAuthorityContextProvider,
 ): NonNullable<CodingToolFacade["editBaseDigest"]> {
   const read = workspaceAuthorityCheckedRead(input);
-  return (relativePath, signal) => governedWorkspaceFileDigest(read, relativePath, signal);
+  const admitsRead = createCodingToolAuthorityPreview(input.authority, authorityContext, {
+    requireProducerBinding: true,
+  });
+  return async (capability, relativePath, signal) => {
+    const request = {
+      action: "read",
+      relativePath,
+      actionId: EDIT_BASE_CHECK_ID,
+      idempotencyKey: EDIT_BASE_CHECK_ID,
+    } as const;
+    if (!admitsRead(capability, request).ok) return undefined;
+    const digest = await governedWorkspaceFileDigest(read, relativePath, signal);
+    return admitsRead(capability, request).ok ? digest : undefined;
+  };
 }
+
+const EDIT_BASE_CHECK_ID = "edit-base-check";
 
 function createReadEditPorts(input: ProductionManagedWorktreeToolInput): CodingToolReadEditPorts {
   return createCodingToolReadEditPorts({

@@ -17,6 +17,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   findConfiguredCapability,
   resolveCodingSafeSidecarGatewayProfile,
+  ResponseRedactionError,
   type Gateway,
   type GatewayCallRequest,
   type GatewayConfig,
@@ -1586,13 +1587,17 @@ function isModelAnswerFailure(error: unknown): boolean {
   return cause !== undefined && MODEL_ANSWER_FAILURES.has(cause);
 }
 
+// A model-answer failure writes no error-level diagnostic only when its warn-level turn-failed line
+// was written. A run no longer running or paused gets no such line, so the diagnostic keeps the
+// failure's class and frames (PR #3617 review).
 function emitGatewayFailureDiagnostic(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   error: unknown,
   runId: string,
+  turnFailureRecorded: boolean,
 ): void {
-  if (isModelAnswerFailure(error)) return;
+  if (turnFailureRecorded && isModelAnswerFailure(error)) return;
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
@@ -1605,14 +1610,15 @@ function emitGatewayFailureDiagnostic(
   );
 }
 
+/** Writes the run's turn-failed line; false for a run that is no longer running or paused. */
 function reportGatewayTurnFailure(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   runId: string,
   failureCode: CodingWorkbenchTurnFailureCode,
-): void {
+): boolean {
   const snapshot = deps.codingRuntimeOrchestrator?.getSnapshot(runId);
-  if (snapshot?.state !== "running" && snapshot?.state !== "paused") return;
+  if (snapshot?.state !== "running" && snapshot?.state !== "paused") return false;
   const publicationReason = gatewayTurnFailurePublication(deps, runId, snapshot, failureCode);
   logGatewayTurnFailure(
     ctx,
@@ -1622,6 +1628,7 @@ function reportGatewayTurnFailure(
     failureCode,
     publicationReason,
   );
+  return true;
 }
 
 type GatewayFailurePublicationReason =
@@ -1681,7 +1688,15 @@ function logGatewayTurnFailure(
 // The causes the buffered and the streamed path name the same way. Both output-budget exhaustion
 // and an empty answer are HTTP 200 provider errors, so they are resolved before any status check.
 function modelTurnFailureCode(error: unknown): CodingWorkbenchTurnFailureCode | undefined {
-  if (error instanceof ContextOverflowError || error instanceof ModelRefusalError)
+  // The gateway's own redaction refused an answer nested too deep to walk: a Workbench guard
+  // rejected the turn, whether or not a tool was called, so it is no invalid tool call and keeps
+  // its error-level diagnostic (PR #3617 review). It extends MalformedToolCallError, so it is named
+  // before that check.
+  if (
+    error instanceof ContextOverflowError ||
+    error instanceof ModelRefusalError ||
+    error instanceof ResponseRedactionError
+  )
     return "turn-rejected";
   if (error instanceof ProviderOutputExhaustedError) return "output-exhausted";
   if (error instanceof ProviderEmptyAnswerError) return "empty-answer";
@@ -1729,8 +1744,9 @@ function emitGatewayStreamFailureDiagnostic(
   deps: UiHandlerDeps,
   error: unknown,
   runId: string,
+  turnFailureRecorded: boolean,
 ): void {
-  if (isModelAnswerFailure(error)) return;
+  if (turnFailureRecorded && isModelAnswerFailure(error)) return;
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
@@ -1899,8 +1915,9 @@ function emitGatewayToolContractDiagnostic(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   runId: string,
-  tools: readonly ToolDefinition[] | undefined,
+  parsed: CodingSidecarGatewayChatCompletionRequest,
 ): void {
+  const { tools } = parsed;
   const { code, reason } = toolContractRejectionReason(tools);
   emitServerDiagnostic(deps.diagnostics, {
     correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
@@ -1913,7 +1930,22 @@ function emitGatewayToolContractDiagnostic(
     code,
   });
   logGatewayRejection(ctx, runId, 403, reason, toolContractMismatch(tools));
+  refuseReadinessChallenge(deps, runId, parsed);
   reportGatewayTurnFailure(ctx, deps, runId, "turn-rejected");
+}
+
+// Ends a pending readiness challenge at once when the route refused the challenge's own request: a
+// deterministic refusal of the readiness prompt cannot turn into an observed request later (#3603).
+// A refused side request, a title or compaction call the runtime sends meanwhile, leaves the
+// challenge waiting for the readiness prompt (PR #3617 review).
+function refuseReadinessChallenge(
+  deps: UiHandlerDeps,
+  runId: string,
+  parsed: CodingSidecarGatewayChatCompletionRequest | undefined,
+): void {
+  if (parsed !== undefined && isRuntimeReadinessProbe(parsed)) {
+    gatewayReadinessRegistry(deps)?.refuseChallenge(runId);
+  }
 }
 
 /**
@@ -2394,15 +2426,16 @@ function settleFailedGatewayChat(
 ): RouteResult | typeof STREAMING {
   const cancelled = cancellation.signal.aborted;
   recordGatewayOutcome(ctx, deps, runId, cancellation, cancelled ? "cancelled" : "failed", 0, 0);
-  emitGatewayFailureDiagnostic(ctx, deps, error, runId);
   const spendReason = gatewaySpendRejectionReason(error);
-  if (!cancelled)
+  const turnFailureRecorded =
+    !cancelled &&
     reportGatewayTurnFailure(
       ctx,
       deps,
       runId,
       spendReason === undefined ? gatewayTurnFailureCode(error) : "turn-rejected",
     );
+  emitGatewayFailureDiagnostic(ctx, deps, error, runId, turnFailureRecorded);
   settlePromptTokenReservation(deps, delivery.promptTokenReservation);
   if (spendReason !== undefined && bufferedStream === undefined) {
     logGatewayRejection(ctx, runId, 403, spendReason);
@@ -2490,8 +2523,13 @@ async function streamGatewayChat(
     )(request)[Symbol.asyncIterator]();
   } catch (error) {
     recordGatewayOutcome(ctx, deps, runId, dispatch.cancellation, "failed", 0, 0);
-    emitGatewayFailureDiagnostic(ctx, deps, error, runId);
-    reportGatewayTurnFailure(ctx, deps, runId, gatewayTurnFailureCode(error));
+    const turnFailureRecorded = reportGatewayTurnFailure(
+      ctx,
+      deps,
+      runId,
+      gatewayTurnFailureCode(error),
+    );
+    emitGatewayFailureDiagnostic(ctx, deps, error, runId, turnFailureRecorded);
     settlePromptTokenReservation(deps, promptTokenReservation);
     return unavailableError();
   }
@@ -2526,10 +2564,16 @@ async function pumpGatewayStreamWithCancellation(
   try {
     await pumpGatewayStream(session);
   } catch (error) {
-    emitGatewayStreamFailureDiagnostic(session.ctx, deps, error, session.runId);
-    if (!cancellationSignal.aborted) {
+    const turnFailureRecorded =
+      !cancellationSignal.aborted &&
       reportGatewayTurnFailure(session.ctx, deps, session.runId, gatewayStreamFailureCode(error));
-    }
+    emitGatewayStreamFailureDiagnostic(
+      session.ctx,
+      deps,
+      error,
+      session.runId,
+      turnFailureRecorded,
+    );
     settleGatewayStreamError(session);
   } finally {
     cancellationSignal.removeEventListener("abort", cancelIterator);
@@ -3206,7 +3250,7 @@ function rejectUnmanagedGatewayToolContract(
 ): RouteResult | undefined {
   const declaresTools = parsed.tools !== undefined && parsed.tools.length > 0;
   if (!declaresTools || isExactManagedToolSet(parsed.tools)) return undefined;
-  emitGatewayToolContractDiagnostic(ctx, deps, authentication.runId, parsed.tools);
+  emitGatewayToolContractDiagnostic(ctx, deps, authentication.runId, parsed);
   return forbiddenGatewayRequest();
 }
 
@@ -3232,7 +3276,7 @@ function authenticatedGatewayAdmission(
 ): RuntimeGatewayAdmission {
   const registry = gatewayReadinessRegistry(deps);
   if (!isAdmittedManagedToolSet(parsed.tools, registry, authentication.runId)) {
-    emitGatewayToolContractDiagnostic(ctx, deps, authentication.runId, parsed.tools);
+    emitGatewayToolContractDiagnostic(ctx, deps, authentication.runId, parsed);
     return { kind: "handled", result: forbiddenGatewayRequest() };
   }
   if (
@@ -3300,7 +3344,7 @@ function logChatRequestRejection(
         }
       : undefined;
   logGatewayRejection(ctx, runId, validationError.status, reason, boundedEvidence);
-  gatewayReadinessRegistry(deps)?.refuseChallenge(runId);
+  refuseReadinessChallenge(deps, runId, observed?.parsed);
   reportGatewayTurnFailure(ctx, deps, runId, "turn-rejected");
 }
 

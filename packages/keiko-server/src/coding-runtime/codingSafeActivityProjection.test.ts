@@ -251,9 +251,11 @@ describe("bounded coding safe-activity projection", () => {
   ] as const)(
     "keeps a settled %s call when OpenCode's earlier %s update arrives late",
     (settled, late) => {
+      const activityLog = createBufferedServerLogSink();
       const projection = createCodingSafeActivityProjection({
         now: () => 1_721_323_200_000,
         diagnostics: { record: (): void => undefined },
+        activityLog,
       });
       projection.open({
         runId: RUN_ID,
@@ -292,6 +294,26 @@ describe("bounded coding safe-activity projection", () => {
           droppedEventCount: 0,
           turns: [{ tools: [{ callId: "call_fast", state: settled }] }],
         },
+      });
+      // PR #3617 review: the late update is set aside, not silently discarded.
+      const superseded = activityLog.events.filter(
+        (event) => event.op === "coding-runtime.safe-activity",
+      );
+      expect(superseded).toEqual([
+        expect.objectContaining({
+          correlationId: RUN_ID,
+          extra: expect.objectContaining({
+            event: "superseded",
+            reason: "late-restatement",
+            occurrenceCount: 1,
+          }) as unknown,
+        }),
+      ]);
+      const [supersededLine] = superseded;
+      if (supersededLine === undefined) throw new Error("expected one superseded line");
+      expect(supersededLine.level).toBeUndefined();
+      expect(validateRegisteredActivityLogEvent(supersededLine)).toMatchObject({
+        op: "coding-runtime.safe-activity",
       });
     },
   );

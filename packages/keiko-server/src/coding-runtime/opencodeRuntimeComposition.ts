@@ -286,7 +286,7 @@ export function createOpenCodeRuntimeComposition(
   input: OpenCodeRuntimeCompositionInput,
 ): OpenCodeRuntimeComposition {
   const runs = new Map<string, PreparedRun>();
-  const approvals = createOpenCodeV2ApprovalRequests(input.diagnostics);
+  const approvals = createOpenCodeV2ApprovalRequests(input.diagnostics, input.activityLog);
   const bridge = createToolBridge(
     input.capabilities.toolFacadeCapability,
     input.toolFacade,
@@ -1430,13 +1430,19 @@ async function handleV2PermissionRequest(
   if (signal?.aborted === true) return refusedApproval("cancelled");
   if (run?.ready !== true || run.sessionId === undefined || run.onPermission === undefined)
     return refusedApproval("unavailable");
+  const { editBaseDigest } = deps.facade;
   const decision = await approvals.request({
     value,
     runId: run.runId,
     sessionId: run.sessionId,
     onPermission: run.onPermission,
     signal: signal ?? new AbortController().signal,
-    editBaseDigest: deps.facade.editBaseDigest,
+    ...(editBaseDigest === undefined
+      ? {}
+      : {
+          editBaseDigest: (file: string, readSignal: AbortSignal): Promise<string | undefined> =>
+            editBaseDigest(deps.capability, file, readSignal),
+        }),
   });
   settleDecidedTool(deps.settleTool, decision);
   return approvalResponse(decision);

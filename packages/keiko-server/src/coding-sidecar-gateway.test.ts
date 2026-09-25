@@ -6,6 +6,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ProviderError,
+  ResponseRedactionError,
   resolveCodingSafeSidecarGatewayProfile,
   type GatewayCallRequest,
   type GatewayConfig,
@@ -1138,10 +1139,13 @@ describe("coding-sidecar gateway", () => {
       ),
     );
     expect(drifted).toMatchObject({ status: 403 });
-    await Promise.resolve();
-    expect(driftSettled).toBe(false);
-    driftAbort.abort();
+    // A drifted contract never observes readiness. Since #3603 (PR #3617 review) the refused
+    // readiness prompt also ends the challenge at once, unobserved, instead of leaving it to wait out
+    // the start timeout: a deterministic refusal cannot turn into an observed request later.
     await expect(driftPending).resolves.toBe(false);
+    expect(driftSettled).toBe(true);
+    expect(readiness.isVerified("run-2")).toBe(false);
+    driftAbort.abort();
     const afterAbortedReadiness = await handleCodingSidecarGatewayChatCompletions(
       authenticatedContext({
         model: "coding",
@@ -1378,6 +1382,58 @@ describe("coding-sidecar gateway", () => {
     expect(refused).toMatchObject({ status: 400 });
     await expect(observed).resolves.toBe(false);
     expect(readiness.isVerified("run-1")).toBe(false);
+  });
+
+  // PR #3617 review: the readiness prompt refused for its tool set ends the challenge at once too.
+  it("ends a pending gateway challenge at once when the readiness prompt's tool set is refused", async () => {
+    const readiness = createOpenCodeGatewayReadinessRegistry();
+    const observed = readiness.waitForObservedRequest("run-1", new AbortController().signal);
+    const deps = runtimeGatewayDeps(
+      () => ({ ok: true, binding: { runId: "run-1" } }),
+      undefined,
+      readiness,
+    );
+    const refused = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: OPENCODE_RUNTIME_READINESS_PROMPT }],
+        tools: modelVisibleTools().slice(0, 2),
+      }),
+      deps,
+    );
+    expect(refused).toMatchObject({ status: 403 });
+    await expect(observed).resolves.toBe(false);
+  });
+
+  // A side request the runtime sends meanwhile, a title or compaction call, is not the challenge:
+  // its refusal leaves the challenge waiting for the readiness prompt.
+  it("leaves a pending gateway challenge waiting when the route refuses a side request", async () => {
+    const readiness = createOpenCodeGatewayReadinessRegistry();
+    const observed = readiness.waitForObservedRequest("run-1", new AbortController().signal);
+    let settled = false;
+    void observed.then(() => {
+      settled = true;
+    });
+    const deps = runtimeGatewayDeps(
+      () => ({ ok: true, binding: { runId: "run-1" } }),
+      undefined,
+      readiness,
+    );
+    for (const tools of [modelVisibleTools(), modelVisibleTools().slice(0, 2)]) {
+      const refused = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: tools.length === 2 ? "coding" : "not-the-run-model",
+          messages: [{ role: "user", content: "generate a title for this session" }],
+          tools,
+        }),
+        deps,
+      );
+      expect(refused).toMatchObject({ status: tools.length === 2 ? 403 : 400 });
+    }
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(readiness.claim("run-1")).toBe(true);
+    await expect(observed).resolves.toBe(true);
   });
 
   it("leaves a run without a pending challenge untouched when a later request is refused", async () => {
@@ -4461,6 +4517,9 @@ describe("coding sidecar gateway turn failure projection", () => {
     [new ProviderEmptyAnswerError("coding"), "empty-answer"],
     // 1.1.8 lab run: the model's tool call never matched its schema — not a provider rejection.
     [new MalformedToolCallError("tool call has non-JSON arguments"), "invalid-tool-call"],
+    // PR #3617 review: the gateway's own redaction refused an answer nested too deep, tool call or
+    // not. A Workbench guard rejected the turn; it keeps its diagnostic.
+    [new ResponseRedactionError("synthetic redaction depth"), "turn-rejected"],
     [new TimeoutError("synthetic timeout"), "stream-incomplete"],
     [new ContextOverflowError("synthetic context limit"), "turn-rejected"],
   ] as const)("projects %s as %s without exposing provider text", async (error, code) => {
@@ -4501,6 +4560,62 @@ describe("coding sidecar gateway turn failure projection", () => {
     expect(diagnostics.record).toHaveBeenCalledTimes(modelAnswer ? 0 : 1);
   });
 
+  // PR #3617 review: a model-answer failure skips its error-level diagnostic only because the warn
+  // line names it. A run that is no longer running or paused gets no such line, so the diagnostic
+  // keeps the failure's class and frames, on the buffered and on the streamed path.
+  it.each(["buffered", "streamed"] as const)(
+    "keeps the diagnostic of a %s empty answer when the run records no turn failure",
+    async (path) => {
+      const sink = captureServerLog("warn");
+      const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+      const error = new ProviderEmptyAnswerError("coding");
+      const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        yield* [];
+        throw error;
+      };
+      const base =
+        path === "buffered"
+          ? depsValue(
+              configValue(provider(), capability()),
+              () => (): Promise<NormalizedResponse> => Promise.reject(error),
+            )
+          : runtimeGatewayDeps(
+              () => ({ ok: true, binding: { runId: "run-gateway-test" } }),
+              undefined,
+              createOpenCodeGatewayReadinessRegistry(),
+              (): (() => AsyncIterable<GatewayStreamChunk>) =>
+                (): AsyncIterable<GatewayStreamChunk> =>
+                  stream(),
+            );
+      const deps = {
+        ...base,
+        diagnostics,
+        codingRuntimeOrchestrator: {
+          getSnapshot: () => ({ state: "failed", revision: 4 }),
+        } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
+      } as UiHandlerDeps;
+      await handleCodingSidecarGatewayChatCompletions(
+        path === "buffered"
+          ? routeContext({ messages: [{ role: "user", content: "synthetic" }] })
+          : authenticatedContext({
+              model: "coding",
+              stream: true,
+              messages: [{ role: "user", content: "synthetic" }],
+              tools: modelVisibleTools(),
+            }),
+        deps,
+      );
+      expect(
+        sink.events.filter((event) => event.op === "coding-sidecar.gateway.turn-failed"),
+      ).toEqual([]);
+      expect(diagnostics.record).toHaveBeenCalledOnce();
+      expect(diagnostics.record.mock.calls[0]?.[0]).toMatchObject({
+        errorClass: "ProviderEmptyAnswerError",
+      });
+    },
+  );
+
   // The lab run behind a LiteLLM hosted_vllm route opened a support incident on the first streamed
   // empty answer: the stream path wrote the same error-level diagnostic.
   it.each([
@@ -4524,6 +4639,10 @@ describe("coding sidecar gateway turn failure projection", () => {
           stream(),
       ),
       diagnostics,
+      // The lab run's turn: the run is running, so the warn-level turn-failed line names the cause.
+      codingRuntimeOrchestrator: {
+        getSnapshot: () => ({ state: "running", revision: 3 }),
+      } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"],
     } as UiHandlerDeps;
     const response = mockResponse({ captureBody: true });
     const context: RouteContext = {

@@ -8,6 +8,11 @@ import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contra
 
 import type { SidecarPermissionEvent } from "./codingSidecarEventParser.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import { createBufferedServerLogSink, type ServerLogEvent } from "../observability/server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import { capturedGeneratedV2Ask } from "./opencodeFunctionalHarness/_governedTools.js";
 import {
   createOpenCodeV2ApprovalRequests,
@@ -432,6 +437,111 @@ describe("OpenCode V2 approval requests", () => {
         code: "stage=permission-base-check",
       }),
     ]);
+  });
+
+  // PR #3617 review: every base check leaves one run-correlated line, so each stale edit, and each
+  // check that let an ask through, is attributable from the log alone: the ask's request id, how
+  // many asked files the read could answer for, and the stale file only as a digest.
+  it("logs each base check outcome under the run's correlation", async () => {
+    const log = createBufferedServerLogSink();
+    const approvals = createOpenCodeV2ApprovalRequests(undefined, log);
+    const ask = asked();
+    const request = async (
+      callId: string,
+      files: readonly Record<string, unknown>[],
+      editBaseDigest: OpenCodeV2EditBaseDigest,
+    ): Promise<unknown> =>
+      approvals.request({
+        value: await editAsk(callId, editArgs(files)),
+        runId: RUN_ID,
+        sessionId: SESSION_ID,
+        onPermission: ask.onPermission,
+        signal: new AbortController().signal,
+        editBaseDigest,
+      });
+    const twoFiles = (second: string): readonly Record<string, unknown>[] => [
+      { file: "src/example.ts", expectedContentHash: BASE },
+      { file: second, expectedContentHash: BASE },
+    ];
+    const newer = digestPort({ "src/example.ts": BASE, "src/a.ts": "c".repeat(64) });
+    const newerB = digestPort({ "src/example.ts": BASE, "src/b.ts": "c".repeat(64) });
+
+    await request("call_stale_a", twoFiles("src/a.ts"), newer);
+    await request("call_stale_b", twoFiles("src/b.ts"), newerB);
+    await request("call_failed", twoFiles("src/a.ts"), () => Promise.reject(new Error("read")));
+    const current = request(
+      "call_current",
+      twoFiles("src/new.ts"),
+      digestPort({ "src/example.ts": BASE }),
+    );
+    await vi.waitFor(() => {
+      expect(ask.events).toHaveLength(1);
+    });
+    approvals.resolve(RUN_ID, requestIdOf(ask), true);
+    await current;
+
+    const lines = log.events.filter(
+      (event): event is ServerLogEvent => event.op === "coding-runtime.approval.base-checked",
+    );
+    expect(lines.map((line) => [line.level, line.errorKind, line.extra?.outcome])).toEqual([
+      ["warn", "conflict", "stale"],
+      ["warn", "conflict", "stale"],
+      ["warn", "internal", "failed"],
+      // No level: the sink writes it at its default, info.
+      [undefined, undefined, "current"],
+    ]);
+    for (const line of lines) {
+      expect(line.correlationId).toBe(RUN_ID);
+      expect(line.extra).toMatchObject({
+        runId: RUN_ID,
+        requestId: expect.any(String) as unknown,
+        fileCount: 2,
+      });
+    }
+    expect(lines.map((line) => line.extra?.checkedFileCount)).toEqual([2, 2, 0, 1]);
+    // The line joins the approval the human saw, and each ask has its own.
+    expect(lines[3]?.extra?.requestId).toBe(requestIdOf(ask));
+    expect(new Set(lines.map((line) => line.extra?.requestId)).size).toBe(4);
+    const [staleA, staleB] = lines.map((line) => line.extra?.staleFileSha256);
+    expect(staleA).toMatch(/^[a-f0-9]{64}$/u);
+    expect(staleB).toMatch(/^[a-f0-9]{64}$/u);
+    expect(staleA).not.toBe(staleB);
+    expect(lines[2]?.extra).not.toHaveProperty("staleFileSha256");
+    expect(JSON.stringify(lines)).not.toContain("src/a.ts");
+    expectActivityLogProof(
+      "coding-runtime.approval.base-checked.emitted-line",
+      formatActivityLogProofLine(lines[0] ?? {}),
+    );
+  });
+
+  // PR #3617 review: a registry closed while an edit's base is read, its run disposed, puts the ask
+  // to no one, and a closed registry cancels any later ask at once.
+  it("asks no one once the registry closed during or before the base check", async () => {
+    const approvals = createOpenCodeV2ApprovalRequests();
+    const ask = asked();
+    await expect(
+      approvals.request({
+        value: await editAsk("call_closing"),
+        runId: RUN_ID,
+        sessionId: SESSION_ID,
+        onPermission: ask.onPermission,
+        signal: new AbortController().signal,
+        editBaseDigest: () => {
+          approvals.close();
+          return Promise.resolve(BASE);
+        },
+      }),
+    ).resolves.toEqual({ outcome: "cancelled", actionId: `${SESSION_ID}:call_closing` });
+    await expect(
+      approvals.request({
+        value: await verificationAsk("call_after_close"),
+        runId: RUN_ID,
+        sessionId: SESSION_ID,
+        onPermission: ask.onPermission,
+        signal: new AbortController().signal,
+      }),
+    ).resolves.toEqual({ outcome: "cancelled", actionId: `${SESSION_ID}:call_after_close` });
+    expect(ask.events).toEqual([]);
   });
 
   it("cancels an ask whose caller goes away during the base check", async () => {

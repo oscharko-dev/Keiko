@@ -338,4 +338,5 @@ export * as PromptEnhancer from "./promptEnhancer/index.js";
 export * as PrDescription from "./prDescription/index.js";
 
 export { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
+export { ResponseRedactionError } from "./openai-adapter.js";
 export type { GatewayToolCatalogBridge } from "./toolCatalogBridge.js";

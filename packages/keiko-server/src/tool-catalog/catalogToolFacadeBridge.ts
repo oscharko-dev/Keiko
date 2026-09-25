@@ -5,6 +5,10 @@ import type {
   ToolResultReason,
   ToolResultStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type {
+  EditorAgentConflictCode,
+  EditorAgentFailureCode,
+} from "@oscharko-dev/keiko-contracts";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import {
   activityLogEvent,
@@ -488,18 +492,44 @@ type CatalogDispatchOutcome = Awaited<
   ReturnType<ReturnType<typeof createCatalogToolBinderFromPreparation>["dispatch"]>
 >;
 
-// A handler that ran and refused the request for the model's own input settles as that verdict: a
-// stale base, a patch or precondition the file does not meet, a path outside the workspace or denied
-// by policy, a read of a missing, non-text or oversized file. Only a bare failure -- no closed
-// reason, or one this table does not know -- is a handler fault, which the lifecycle logs at error
-// level and which opens a support incident (#3615).
+// A handler that ran and refused the request settles as that verdict: a stale base or unsaved
+// buffer, a patch or precondition the file does not meet, a path outside the workspace or denied by
+// policy, an approval still owed, an editor that is busy, timed out, cancelled or not connected, a
+// read of a missing, non-text or oversized file. Only a bare failure -- no closed reason, or one
+// this table does not know -- is a handler fault, which the lifecycle logs at error level and
+// which opens a support incident (#3615).
 type HandlerRefusal = readonly [Exclude<ToolResultStatus, "completed">, ToolResultReason];
+// Every editor-agent conflict and failure code is classified here, so a code added to the contract
+// fails the build until it is (PR #3617 review). `undefined` keeps a code a handler fault.
+const EDITOR_REFUSALS: Readonly<
+  Record<EditorAgentConflictCode | EditorAgentFailureCode, HandlerRefusal | undefined>
+> = {
+  DIRTY: ["invalid", "workspace-stale"],
+  VERSION_MISMATCH: ["invalid", "workspace-stale"],
+  CONTENT_HASH_MISMATCH: ["invalid", "workspace-stale"],
+  NO_ACTIVE_SESSION: ["failed", "handler-unavailable"],
+  NO_ACTIVE_BRIDGE: ["failed", "handler-unavailable"],
+  INVALID_EDITS: ["invalid", "invalid-arguments"],
+  OUT_OF_SCOPE: ["denied", "workspace-denied"],
+  DECOMPOSE_PER_ROOT: ["invalid", "invalid-arguments"],
+  PRECONDITION_REQUIRED: ["invalid", "invalid-arguments"],
+  POLICY_DENIED: ["denied", "workspace-denied"],
+  APPROVAL_REQUIRED: ["denied", "approval-required"],
+  TIMED_OUT: ["timeout", "deadline-exceeded"],
+  QUEUE_FULL: ["busy", "capacity-exhausted"],
+  CANCELLED: ["cancelled", "explicit-cancellation"],
+  PROVIDER_UNAVAILABLE: ["failed", "handler-unavailable"],
+  UNSUPPORTED_OPERATION: ["invalid", "unsupported-capability"],
+  LIMIT_EXCEEDED: ["invalid", "invalid-arguments"],
+  DUPLICATE_ACTION: ["invalid", "replay-conflict"],
+  MUTATION_IN_FLIGHT: ["busy", "invocation-in-flight"],
+};
 const HANDLER_REFUSALS: ReadonlyMap<string, HandlerRefusal> = new Map<string, HandlerRefusal>([
-  ["CONTENT_HASH_MISMATCH", ["invalid", "workspace-stale"]],
-  ["VERSION_MISMATCH", ["invalid", "workspace-stale"]],
-  ["INVALID_EDITS", ["invalid", "invalid-arguments"]],
-  ["PRECONDITION_REQUIRED", ["invalid", "invalid-arguments"]],
-  ["OUT_OF_SCOPE", ["denied", "workspace-denied"]],
+  ...Object.entries(EDITOR_REFUSALS).flatMap(([code, refusal]): [string, HandlerRefusal][] =>
+    refusal === undefined ? [] : [[code, refusal]],
+  ),
+  // The workspace the run is bound to stopped resolving: the run lost its authority to edit.
+  ["WORKSPACE_ACCESS_LOST", ["denied", "workspace-denied"]],
   ["workspace-read-denied", ["denied", "workspace-denied"]],
   ["workspace-read-not-found", ["invalid", "invalid-arguments"]],
   ["workspace-read-not-text", ["invalid", "invalid-arguments"]],

@@ -440,19 +440,22 @@ describe("production managed worktree tools", () => {
   // read reports, never a second formula.
   it("answers a changeset base check with the governed read's own digest", async () => {
     let access: WorkspaceRootAccess | undefined = resolveWorkspaceRootAccess();
-    const readText = vi.fn((request: { readonly relativePath: string }) =>
-      Promise.resolve(
+    let authorityLive = true;
+    let revokeDuringRead = false;
+    const readText = vi.fn((request: { readonly relativePath: string }) => {
+      if (revokeDuringRead) authorityLive = false;
+      return Promise.resolve(
         request.relativePath === "src/missing.ts"
           ? { ok: false as const, reason: "not-found" as const }
           : { ok: true as const, text: "export const value = 1;\n" },
-      ),
-    );
+      );
+    });
     const facade = createProductionManagedWorktreeToolFacade({
       authority: {
-        revalidateCapabilityForMutation: () => ({
-          ok: true as const,
-          envelope: authorizedEnvelope(),
-        }),
+        revalidateCapabilityForMutation: () =>
+          authorityLive
+            ? { ok: true as const, envelope: authorizedEnvelope() }
+            : { ok: false as const, reason: "authority-expired" },
         resolveCapabilityForDelegation: () => ({
           ok: true as const,
           envelope: authorizedEnvelope(),
@@ -487,21 +490,37 @@ describe("production managed worktree tools", () => {
       capability: "opaque-capability",
     });
     if (read.status !== "completed" || !("read" in read)) throw new Error("governed read failed");
-    const editBaseDigest = facade.editBaseDigest;
-    if (editBaseDigest === undefined) throw new Error("the production facade has no base check");
+    const baseCheck = facade.editBaseDigest;
+    if (baseCheck === undefined) throw new Error("the production facade has no base check");
     const signal = new AbortController().signal;
+    const editBaseDigest = (path: string): Promise<string | undefined> =>
+      baseCheck("opaque-capability", path, signal);
 
-    await expect(editBaseDigest("src/example.ts", signal)).resolves.toBe(read.read.digest);
+    await expect(editBaseDigest("src/example.ts")).resolves.toBe(read.read.digest);
     // A file the read cannot return (a new file) leaves the check to the editor route.
-    await expect(editBaseDigest("src/missing.ts", signal)).resolves.toBeUndefined();
+    await expect(editBaseDigest("src/missing.ts")).resolves.toBeUndefined();
     // A denied path is never read, so the check is no digest oracle for a file the model may not read.
     readText.mockClear();
-    await expect(editBaseDigest(".env", signal)).resolves.toBeUndefined();
-    await expect(editBaseDigest("../outside.ts", signal)).resolves.toBeUndefined();
+    await expect(editBaseDigest(".env")).resolves.toBeUndefined();
+    await expect(editBaseDigest("../outside.ts")).resolves.toBeUndefined();
     expect(readText).not.toHaveBeenCalled();
+    // PR #3617 review: the run's live authority admits the read first, like keiko_workspace_read,
+    // so an expired or revoked run reads nothing, and a capability that is missing reads nothing.
+    await expect(baseCheck(undefined, "src/example.ts", signal)).resolves.toBeUndefined();
+    authorityLive = false;
+    await expect(editBaseDigest("src/example.ts")).resolves.toBeUndefined();
+    expect(readText).not.toHaveBeenCalled();
+    // Authority that ends during the read answers nothing either.
+    authorityLive = true;
+    revokeDuringRead = true;
+    await expect(editBaseDigest("src/example.ts")).resolves.toBeUndefined();
+    expect(readText).toHaveBeenCalledOnce();
+    revokeDuringRead = false;
+    authorityLive = true;
+    readText.mockClear();
     // Only while this run's exact managed workspace is the active one.
     access = undefined;
-    await expect(editBaseDigest("src/example.ts", signal)).resolves.toBeUndefined();
+    await expect(editBaseDigest("src/example.ts")).resolves.toBeUndefined();
     expect(readText).not.toHaveBeenCalled();
   });
 

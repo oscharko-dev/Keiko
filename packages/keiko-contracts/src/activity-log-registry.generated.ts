@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "d6e824a5a21bb6b858b47f772e01cb24af6d2cc68b4759b3b9e3c20fdeccf468" as const;
+  "6afd51ea07e4a0b1f532343971d1813d4f7a3e7c8ebdd15a33ee7a8b35c039de" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -3428,6 +3428,66 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "coding-runtime.approval.base-checked",
+    category: "process",
+    owner: "keiko-server",
+    emitter: "coding-runtime.opencodeV2ApprovalRequests.recordBaseCheck",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      runId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: true,
+        maxLength: 128,
+      },
+      requestId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: true,
+        maxLength: 128,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["current", "stale", "failed", "cancelled"],
+      },
+      fileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      checkedFileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      staleFileSha256: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["coding-runtime-approval-wait"],
+    proofIds: ["coding-runtime.approval.base-checked.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "coding-runtime.approval.waiting",
     category: "process",
     owner: "keiko-server",
@@ -6405,7 +6465,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["purged", "dropped"],
+        values: ["purged", "dropped", "superseded"],
       },
       reason: {
         type: "string",
@@ -6422,6 +6482,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "projection-rejected",
           "capacity-rejected",
           "subscriber-rejected",
+          "late-restatement",
         ],
       },
       occurrenceCount: {
@@ -31911,21 +31972,86 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["state"],
       lifecycleOperations: {
         start: [],
-        state: ["coding-runtime.approval.waiting"],
+        state: ["coding-runtime.approval.base-checked", "coding-runtime.approval.waiting"],
         end: [],
         failure: [],
         loss: [],
       },
       causalEdges: [
         {
+          op: "coding-runtime.approval.base-checked",
+          mode: "correlation",
+        },
+        {
           op: "coding-runtime.approval.waiting",
           mode: "correlation",
         },
       ],
       lossSignals: [],
-      resourceSignals: ["coding-runtime.approval.waiting"],
+      resourceSignals: ["coding-runtime.approval.base-checked", "coding-runtime.approval.waiting"],
       replayReferences: [],
       operations: [
+        {
+          op: "coding-runtime.approval.base-checked",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "checkedFileCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "fileCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "requestId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "runId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "staleFileSha256",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-runtime.approval.base-checked.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "coding-runtime.approval.waiting",
           owner: "keiko-server",
@@ -61332,6 +61458,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-context.pack": "tools-workflows",
     "coding-repository-handler.settled": "tools-workflows",
     "coding-repository-handler.started": "tools-workflows",
+    "coding-runtime.approval.base-checked": "tools-workflows",
     "coding-runtime.approval.waiting": "tools-workflows",
     "coding-runtime.authority.mint-failed": "tools-workflows",
     "coding-runtime.authority.minted": "tools-workflows",

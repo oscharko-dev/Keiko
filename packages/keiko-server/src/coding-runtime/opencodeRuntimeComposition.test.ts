@@ -1378,8 +1378,9 @@ describe("private OpenCode run control", () => {
     const checked: string[] = [];
     const staleFacade: CodingToolFacade = {
       execute: facade.execute,
-      editBaseDigest: (relativePath) => {
-        checked.push(relativePath);
+      // The check runs under the run's own tool capability, the one its tool calls carry.
+      editBaseDigest: (capability, relativePath) => {
+        checked.push(`${String(capability === TOOL_CAPABILITY)}:${relativePath}`);
         return Promise.resolve("b".repeat(64));
       },
     };
@@ -1403,7 +1404,7 @@ describe("private OpenCode run control", () => {
         detail: "The file changed after its read: src/example.ts",
         guidance: expect.stringContaining("Re-read the file with keiko_workspace_read") as string,
       });
-      expect(checked).toEqual(["src/example.ts"]);
+      expect(checked).toEqual(["true:src/example.ts"]);
       expect(runtimeEvents.some((event) => event.kind === "permission-requested")).toBe(false);
       expect(recorder.settlements).toEqual([
         {

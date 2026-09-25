@@ -637,7 +637,8 @@ States:
   rejection so the model can regenerate the call, but the provider answered every time: a lab run of
   1.1.8 behind a LiteLLM `hosted_vllm` route opened the breaker after five such calls and failed the
   run on `CircuitOpenError`. The coding runtime reports it as its own `invalid-tool-call`
-  turn-failure cause. A `TimeoutError` DOES count: with the silence and budget floors of #3591 a
+  turn-failure cause, except the redaction-depth refusal: no tool call need be involved, so the
+  coding runtime reports that one as `turn-rejected` and keeps its error-level diagnostic. A `TimeoutError` DOES count: with the silence and budget floors of #3591 a
   timeout is a multi-minute silence, which is the outage signal the breaker exists for. When counter
   reaches `failureThreshold`, transition to **Open** and record `openedAt = clock.now()`.
 - **Open**: any call immediately throws `CircuitOpenError` without contacting the provider.

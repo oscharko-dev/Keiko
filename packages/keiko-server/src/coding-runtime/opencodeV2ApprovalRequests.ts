@@ -1,12 +1,18 @@
 import { createHash } from "node:crypto";
 
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 
+import { correlationIdOrUnknown } from "../correlation.js";
 import {
   contentFreeErrorClass,
   emitServerDiagnostic,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import type { SidecarPermissionEvent } from "./codingSidecarEventParser.js";
 import { projectOpenCodePermissionEvent } from "./opencodeProtocol.js";
 
@@ -71,6 +77,52 @@ interface ParsedAsk {
   readonly actionId: string;
   readonly bases: readonly EditBase[];
 }
+
+// How a governed edit ask's base check ended (#3612), under the run's own correlation, so each stale
+// edit and each check that let an ask reach the human is attributable from the log alone (PR #3617
+// review). Body-free: the ask's request id, counts, and the stale file only as a digest.
+const CODING_RUNTIME_APPROVAL_BASE_CHECKED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.approval.base-checked",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.opencodeV2ApprovalRequests.recordBaseCheck",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    requestId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["current", "stale", "failed", "cancelled"],
+    },
+    fileCount: { type: "integer", dataClass: "count", required: true },
+    checkedFileCount: { type: "integer", dataClass: "count", required: true },
+    staleFileSha256: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-approval-wait"],
+  proofIds: ["coding-runtime.approval.base-checked.emitted-line"],
+  releaseImpact: "patch",
+});
+
+type BaseCheckOutcome = "current" | "stale" | "failed" | "cancelled";
+
+interface BaseCheck {
+  /** The asked files the governed read could answer for. */
+  readonly checkedFileCount: number;
+  readonly staleFile?: string | undefined;
+}
+
+const BASE_CHECK_ENVELOPES = {
+  current: {},
+  cancelled: {},
+  stale: { level: "warn", errorKind: "conflict" },
+  failed: { level: "warn", errorKind: "internal" },
+} as const;
 
 const MAX_PENDING_ASKS = 64;
 const ASK_KEYS: readonly string[] = ["action", "runId", "actionId", "properties"];
@@ -162,36 +214,80 @@ function parsedAsk(value: unknown, runId: string, sessionId: string): ParsedAsk 
   return event === undefined ? undefined : { event, actionId, bases };
 }
 
-// The first asked file whose governed read no longer reports the changeset's base digest. A file
-// the read cannot answer for (a new file, a denied path) is left to the editor route's check.
-async function staleBaseFile(
+// Stops at the first asked file whose governed read no longer reports the changeset's base digest.
+// A file the read cannot answer for (a new file, a denied path) is left to the editor route's check.
+async function baseCheck(
   bases: readonly EditBase[],
   editBaseDigest: OpenCodeV2EditBaseDigest,
   signal: AbortSignal,
-): Promise<string | undefined> {
+): Promise<BaseCheck> {
+  let checkedFileCount = 0;
   for (const { file, expectedContentHash } of bases) {
     const current = await editBaseDigest(file, signal);
-    if (current !== undefined && current !== expectedContentHash) return file;
+    if (current === undefined) continue;
+    checkedFileCount += 1;
+    if (current !== expectedContentHash) return { checkedFileCount, staleFile: file };
   }
-  return undefined;
+  return { checkedFileCount };
+}
+
+function staleFileDigest(file: string): string {
+  return createHash("sha256").update("keiko.approval.base-file.v1\0").update(file).digest("hex");
+}
+
+function recordBaseCheck(
+  activityLog: ServerLogSink | undefined,
+  runId: string,
+  ask: ParsedAsk,
+  outcome: BaseCheckOutcome,
+  check: BaseCheck,
+): void {
+  activityLog?.write(
+    activityLogEvent(
+      CODING_RUNTIME_APPROVAL_BASE_CHECKED_OPERATION,
+      { correlationId: correlationIdOrUnknown(runId), ...BASE_CHECK_ENVELOPES[outcome] },
+      {
+        runId,
+        requestId: ask.event.requestId,
+        outcome,
+        fileCount: ask.bases.length,
+        checkedFileCount: check.checkedFileCount,
+        ...(check.staleFile === undefined
+          ? {}
+          : { staleFileSha256: staleFileDigest(check.staleFile) }),
+      },
+    ),
+  );
+}
+
+interface ApprovalSinks {
+  readonly diagnostics: ServerDiagnosticSink | undefined;
+  readonly activityLog: ServerLogSink | undefined;
 }
 
 // A failed base check fails the ask closed: the human is not asked about a change whose base no
-// one could verify. A caller that went away meanwhile cancels the ask.
+// one could verify. A caller that went away meanwhile cancels the ask. Every outcome is logged.
 async function checkedBase(
   ask: ParsedAsk,
   runId: string,
   editBaseDigest: OpenCodeV2EditBaseDigest,
   signal: AbortSignal,
-  diagnostics: ServerDiagnosticSink | undefined,
+  sinks: ApprovalSinks,
 ): Promise<OpenCodeV2ApprovalDecision | undefined> {
+  const { diagnostics, activityLog } = sinks;
   try {
-    const staleFile = await staleBaseFile(ask.bases, editBaseDigest, signal);
-    if (signal.aborted) return { outcome: "cancelled", actionId: ask.actionId };
+    const check = await baseCheck(ask.bases, editBaseDigest, signal);
+    if (signal.aborted) {
+      recordBaseCheck(activityLog, runId, ask, "cancelled", check);
+      return { outcome: "cancelled", actionId: ask.actionId };
+    }
+    const { staleFile } = check;
+    recordBaseCheck(activityLog, runId, ask, staleFile === undefined ? "current" : "stale", check);
     return staleFile === undefined
       ? undefined
       : { outcome: "stale", actionId: ask.actionId, staleFile };
   } catch (error) {
+    recordBaseCheck(activityLog, runId, ask, "failed", { checkedFileCount: 0 });
     emitServerDiagnostic(diagnostics, {
       correlationId: runId,
       timestamp: new Date().toISOString(),
@@ -258,39 +354,68 @@ function humanDecision(
   });
 }
 
+interface RegistryState {
+  readonly pending: Map<string, Pending>;
+  closed: boolean;
+}
+
+type ApprovalRequestInput = Parameters<OpenCodeV2ApprovalRequests["request"]>[0];
+
+// Only an edit's bases are checked; every other ask reaches the human without a wait. A registry
+// closed meanwhile, its run disposed, asks no one: nothing would answer (PR #3617 review).
+async function decideAsk(
+  state: RegistryState,
+  input: ApprovalRequestInput,
+  ask: ParsedAsk,
+  sinks: ApprovalSinks,
+): Promise<OpenCodeV2ApprovalDecision> {
+  const { runId, onPermission, signal, editBaseDigest } = input;
+  const { actionId, event } = ask;
+  if (editBaseDigest !== undefined && ask.bases.length > 0) {
+    const refused = await checkedBase(ask, runId, editBaseDigest, signal, sinks);
+    if (refused !== undefined) return refused;
+    if (state.closed) return { outcome: "cancelled", actionId };
+  }
+  if (state.pending.size >= MAX_PENDING_ASKS || state.pending.has(event.requestId)) {
+    return { outcome: "unavailable", actionId };
+  }
+  const outcome = await humanDecision(
+    state.pending,
+    runId,
+    event,
+    onPermission,
+    signal,
+    sinks.diagnostics,
+  );
+  return { outcome, actionId };
+}
+
 /** The existing Keiko approval lane owns the decision; V2 plugin tools have no native ask API. */
 export function createOpenCodeV2ApprovalRequests(
   diagnostics?: ServerDiagnosticSink,
+  activityLog?: ServerLogSink,
 ): OpenCodeV2ApprovalRequests {
-  const pending = new Map<string, Pending>();
+  const state: RegistryState = { pending: new Map<string, Pending>(), closed: false };
+  const sinks: ApprovalSinks = { diagnostics, activityLog };
   return {
     request: async (input): Promise<OpenCodeV2ApprovalDecision> => {
-      const { runId, onPermission, signal } = input;
-      const ask = parsedAsk(input.value, runId, input.sessionId);
+      const ask = parsedAsk(input.value, input.runId, input.sessionId);
       if (ask === undefined) return UNAVAILABLE;
-      const { actionId, event } = ask;
-      if (signal.aborted) return { outcome: "cancelled", actionId };
-      // Only an edit's bases are checked; every other ask reaches the human without a wait.
-      const { editBaseDigest } = input;
-      if (editBaseDigest !== undefined && ask.bases.length > 0) {
-        const refused = await checkedBase(ask, runId, editBaseDigest, signal, diagnostics);
-        if (refused !== undefined) return refused;
+      if (input.signal.aborted || state.closed) {
+        return { outcome: "cancelled", actionId: ask.actionId };
       }
-      if (pending.size >= MAX_PENDING_ASKS || pending.has(event.requestId)) {
-        return { outcome: "unavailable", actionId };
-      }
-      const outcome = await humanDecision(pending, runId, event, onPermission, signal, diagnostics);
-      return { outcome, actionId };
+      return decideAsk(state, input, ask, sinks);
     },
     resolve: (runId, requestId, approved): boolean => {
-      const item = pending.get(requestId);
+      const item = state.pending.get(requestId);
       if (item?.runId !== runId) return false;
       item.resolve(approved ? "approved" : "denied");
       return true;
     },
     close: (): void => {
-      for (const item of pending.values()) item.resolve("cancelled");
-      pending.clear();
+      state.closed = true;
+      for (const item of state.pending.values()) item.resolve("cancelled");
+      state.pending.clear();
     },
   };
 }
