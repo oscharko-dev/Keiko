@@ -80,7 +80,7 @@ function InformationFacts({
 }
 
 function OptionalTaskWorkspaceManager(): ReactNode {
-  return useOptionalActiveWorkspace() === null ? null : <TaskWorkspaceManager />;
+  return useOptionalActiveWorkspace() === null ? null : <TaskWorkspaceManager placement="inline" />;
 }
 
 function TaskWorkspaceLocation(): ReactNode {

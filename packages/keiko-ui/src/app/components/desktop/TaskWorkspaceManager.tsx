@@ -428,14 +428,24 @@ function statusText(api: ActiveWorkspaceApi, t: I18nTranslate): string {
   });
 }
 
-function TaskWorkspaceManagerImpl(): ReactNode {
+/**
+ * `popover` floats the panel below the trigger. `inline` opens it in the flow: the Coding Workbench
+ * information panel is a narrow, scrolling container that clipped the floating panel (#3610, W8).
+ */
+export type TaskWorkspaceManagerPlacement = "popover" | "inline";
+
+function TaskWorkspaceManagerImpl({
+  placement = "popover",
+}: {
+  readonly placement?: TaskWorkspaceManagerPlacement;
+}): ReactNode {
   const api = useActiveWorkspace();
   const t = useTranslate();
   const panel = useWorkspacePanelState();
   const active = api.activeInstance;
   const label = active === null ? t("taskWorkspace.title") : active.taskId;
   return (
-    <div ref={panel.rootRef} className={styles["cmp-r"]}>
+    <div ref={panel.rootRef} className={styles["cmp-r"]} data-placement={placement}>
       <button
         ref={panel.triggerRef}
         type="button"
