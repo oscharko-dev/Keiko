@@ -94,7 +94,11 @@ export function requestVerifiedCommitApproval(
       actionClass: "delivery-substrate",
       reasonCode: "commit-approval-required",
       actionKind: "commit",
+      // #3610 (W12): the same scope and policy facts the supervised policy's canonical builder
+      // states, so the approval card never reads "Not specified" for a governed delivery step.
+      scopeLabel: "workspace-scope",
       risk: "high",
+      policyReason: "approval-required",
       expiresAt: new Date(proposal.expiresAtMs).toISOString(),
     },
   };
@@ -137,7 +141,9 @@ export function requestRuntimeStageApproval(
       actionClass: "workspace-write",
       reasonCode: "stage-approval-required",
       actionKind: "git-stage",
+      scopeLabel: "workspace-scope",
       risk: "medium",
+      policyReason: "approval-required",
       expiresAt: new Date(proposal.expiresAtMs).toISOString(),
     },
   };

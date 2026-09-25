@@ -125,7 +125,10 @@ export function requestDraftDeliveryApproval(
         actionClass: "delivery-substrate",
         actionKind,
         reasonCode: `${actionKind}-approval-required`,
+        // #3610 (W12): the canonical scope and policy facts, never "Not specified" on the card.
+        scopeLabel: "workspace-scope",
         risk: "high",
+        policyReason: "approval-required",
         expiresAt: new Date(proposal.expiresAtMs).toISOString(),
       },
     },

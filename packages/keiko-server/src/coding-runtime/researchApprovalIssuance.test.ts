@@ -183,7 +183,9 @@ describe("buildResearchPermissionEvent", () => {
     expect(event).toBeDefined();
     expect(validateCodingWorkbenchRuntimeEvent(event).ok).toBe(true);
     expect(event?.kind).toBe("permission-requested");
+    // #3610 (W12): the research card named no policy reason; its scope is the destination block.
     expect(event?.permissionRequest).toMatchObject({
+      policyReason: "approval-required",
       requestId: "research-approval-1",
       kind: "network-egress",
       actionClass: "network-egress",

@@ -4,11 +4,16 @@ import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { runMigrations } from "../store/schema.js";
 import { createCodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
+import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
 import {
+  requestRuntimeStageApproval,
+  requestVerifiedCommitApproval,
   resolveVerifiedCommitContext,
   type VerifiedCommitRuntimeBinding,
   type VerifiedCommitRuntimeDependencies,
 } from "./productionVerifiedCommitRuntime.js";
+import type { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
+import type { VerifiedCommitService } from "../gitDelivery/verifiedCommitTypes.js";
 import type { CodingRuntimeTrustedContext } from "./runtimeAuthorityService.js";
 import type { GitDeliveryMutationDeps } from "../gitDelivery/execution.js";
 
@@ -112,6 +117,39 @@ function binding(runId: string): VerifiedCommitRuntimeBinding {
 // server-log.ts's applyEnvelopeFields never shape-validates the primary `correlationId` field
 // (only `parentCorrelationId` is gated by isValidCorrelationId), so a malformed runId reaching this
 // call site previously landed in the log verbatim.
+// #3610 (W12): the stage and commit approval cards read "Scope: Not specified" and "Policy reason:
+// Not specified" because these server-built requests carried neither fact; the supervised policy's
+// canonical builder states both for every action.
+describe("server-built delivery approval requests", () => {
+  const EXPIRES_AT_MS = Date.parse("2026-09-25T12:00:00.000Z");
+
+  it("states the scope and policy reason on the stage approval", () => {
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const service = {
+      review: () => ({ runId: "run-stage", expiresAtMs: EXPIRES_AT_MS }),
+    } as unknown as RuntimeGitService;
+    requestRuntimeStageApproval(service, "stage-1", (event) => void events.push(event));
+    expect(events[0]?.permissionRequest).toMatchObject({
+      actionKind: "git-stage",
+      scopeLabel: "workspace-scope",
+      policyReason: "approval-required",
+    });
+  });
+
+  it("states the scope and policy reason on the commit approval", () => {
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const service = {
+      review: () => ({ binding: { runId: "run-commit" }, expiresAtMs: EXPIRES_AT_MS, review: {} }),
+    } as unknown as VerifiedCommitService;
+    requestVerifiedCommitApproval(service, "commit-1", (event) => void events.push(event));
+    expect(events[0]?.permissionRequest).toMatchObject({
+      actionKind: "commit",
+      scopeLabel: "workspace-scope",
+      policyReason: "approval-required",
+    });
+  });
+});
+
 describe("resolveVerifiedCommitContext correlation id (#3384 B3-16)", () => {
   it("passes through a well-formed runId as the correlation id", () => {
     // >=8 chars, matching correlation.ts's SAFE_CORRELATION_ID floor.
