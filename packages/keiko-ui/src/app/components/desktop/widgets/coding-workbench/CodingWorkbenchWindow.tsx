@@ -102,7 +102,10 @@ import {
   useOptionalActiveWorkspace,
   type ActiveWorkspaceApi,
 } from "../../context/ActiveWorkspaceContext";
-import { useOptionalChatSessionCatalog } from "../../context/ChatSessionContext";
+import {
+  useOptionalChatSessionCatalog,
+  type ChatSessionCatalog,
+} from "../../context/ChatSessionContext";
 import {
   useRepositoryBranchState,
   type RepositoryBranchState,
@@ -1478,6 +1481,20 @@ function sessionRunFacts(
   return facts;
 }
 
+/** #3610: the repository the Workbench works in, as the catalog names it, else by its folder. Never
+ * the header's project: every other fact in the panel describes this repository, and naming the
+ * header's instead let an idle Workbench bound to one repository claim to be in another. */
+function workbenchRepositoryName(
+  catalog: ChatSessionCatalog | null,
+  repositoryRoot: string | null,
+): string | undefined {
+  if (repositoryRoot === null) return undefined;
+  const listed = catalog?.projects.find((project) => project.path === repositoryRoot)?.name;
+  return listed !== undefined && listed.length > 0
+    ? listed
+    : (repositoryLabel(repositoryRoot) ?? undefined);
+}
+
 function SessionContextBar({
   state,
   workspace,
@@ -1501,7 +1518,7 @@ function SessionContextBar({
   const facts = sessionInfoFacts({
     state,
     workspace,
-    projectName: catalog?.activeProject?.name,
+    projectName: workbenchRepositoryName(catalog, repositoryRoot),
     activeWorkspace,
     repository,
     mode,

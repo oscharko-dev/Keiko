@@ -1203,6 +1203,7 @@ describe("code-owned client diagnostic notes (F29)", () => {
     "[keiko] coding workbench bind sequence rejected: ApiError",
     "[keiko] coding workbench base branch lookup failed: ApiError",
     "[keiko] coding workbench repository trust bound",
+    "[keiko] coding workbench repository selection released",
     "[keiko] coding workbench worktree script trust catalog read failed",
     "[keiko] coding workbench worktree trust grant refused",
     "[keiko] journey initial refresh failed",

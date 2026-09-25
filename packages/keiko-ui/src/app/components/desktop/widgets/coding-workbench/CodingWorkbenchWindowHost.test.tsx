@@ -73,6 +73,45 @@ describe("CodingWorkbenchWindowHost", () => {
     expect(props?.selectedRoot).toBe("/repos/cfg");
   });
 
+  // #3610: the per-window path is a one-shot choice (first bind, Git clone/open return, history).
+  // Once the header selects another repository, the header is the one source again (#3563) — a
+  // stale path kept the Workbench in the repository the operator had just left.
+  it("releases a stale per-window repository once the header selects another one", () => {
+    windowRendered.mockClear();
+    diagnostics.writes = [];
+    const context = contextFixture({ selectedRoot: "/repos/shared" });
+    const view = render(
+      <CodingWorkbenchWindowHost cfg={{ repositoryPath: "/repos/cfg" }} context={context} />,
+    );
+    expect(context.updateCfg).not.toHaveBeenCalled();
+
+    view.rerender(
+      <CodingWorkbenchWindowHost
+        cfg={{ repositoryPath: "/repos/cfg" }}
+        context={{ ...context, selectedRoot: "/repos/other" }}
+      />,
+    );
+
+    expect(context.updateCfg).toHaveBeenCalledExactlyOnceWith({ repositoryPath: undefined });
+    expect(diagnostics.writes).toEqual(["[keiko] coding workbench repository selection released"]);
+  });
+
+  it("keeps the per-window repository when the header moves onto that same repository", () => {
+    const context = contextFixture({ selectedRoot: "/repos/shared" });
+    const view = render(
+      <CodingWorkbenchWindowHost cfg={{ repositoryPath: "/repos/cfg" }} context={context} />,
+    );
+
+    view.rerender(
+      <CodingWorkbenchWindowHost
+        cfg={{ repositoryPath: "/repos/cfg" }}
+        context={{ ...context, selectedRoot: "/repos/cfg" }}
+      />,
+    );
+
+    expect(context.updateCfg).not.toHaveBeenCalled();
+  });
+
   it("falls back to the shared selection when the cfg carries no repositoryPath", () => {
     windowRendered.mockClear();
     renderHost({}, { selectedRoot: "/repos/shared" });

@@ -791,6 +791,57 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByRole("button", { name: "Start coding run" })).toBeInTheDocument();
   });
 
+  // #3610: the information panel named the header's project while every other fact in it (status,
+  // branch, target, task) described the bound repository, so an idle Workbench bound to one
+  // repository claimed to be in another. The Project fact names the repository it works in.
+  it("names the bound repository in the information panel while the header selects another", () => {
+    const elsewhere: ProjectWithAvailability = {
+      path: "/repos/selected-elsewhere",
+      name: "Selected elsewhere",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+      workspaceAvailable: false,
+    };
+    chatCatalogMock.activeProject = elsewhere;
+    chatCatalogMock.projects = [elsewhere, { ...elsewhere, path: "/repos/bound", name: "Bound" }];
+
+    renderWorkbench(
+      liveState(),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/bound", "/worktrees/prior-task"),
+    );
+
+    const dialog = openWorkbenchInformation();
+    expect(dialog).toHaveTextContent("ProjectBound");
+    expect(dialog).not.toHaveTextContent("Selected elsewhere");
+  });
+
+  it("names an unlisted bound repository by its folder instead of the header's project", () => {
+    chatCatalogMock.activeProject = {
+      path: "/repos/selected-elsewhere",
+      name: "Selected elsewhere",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+      workspaceAvailable: false,
+    };
+
+    renderWorkbench(
+      liveState(),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/inventory-service/", "/worktrees/prior-task"),
+    );
+
+    const dialog = openWorkbenchInformation();
+    expect(dialog).toHaveTextContent("Projectinventory-service");
+    expect(dialog).not.toHaveTextContent("Selected elsewhere");
+  });
+
   // Epic #3384 live-flow defect (#3401 "Review description"): after a settled run the Workbench
   // labels the REPOSITORY root, but the server retains the reviewable description proposal under
   // the run's task workspace root (`descriptionApplicationTarget`: `workspace.binding.activeRoot`).
