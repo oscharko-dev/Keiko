@@ -15,6 +15,7 @@ import {
   ConfigInvalidError,
   ContextOverflowError,
   GatewayError,
+  MalformedToolCallError,
   ProviderEmptyAnswerError,
   ProviderOutputExhaustedError,
   TransportError,
@@ -32,7 +33,7 @@ import {
   type ModelGatewayLogContext,
   type ModelGatewayLogSink,
 } from "./observability.js";
-import { OpenAiAdapter, ResponseRedactionError } from "./openai-adapter.js";
+import { OpenAiAdapter } from "./openai-adapter.js";
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
 import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
 import {
@@ -550,8 +551,13 @@ function attachGatewayRequestId(error: unknown, requestId: string): void {
 // budget on reasoning; that is a caller-fixable budget problem, not evidence the provider is
 // failing), or a ProviderEmptyAnswerError (#3610: an HTTP 200 answer that completed with neither
 // content nor a tool call — the provider answered, the model produced nothing usable; counting it
-// let three such answers lock every caller of a healthy model out). A named, extensible list rather
-// than a growing chain of `&&` conditions, so the next non-provider fault is one array entry away.
+// let three such answers lock every caller of a healthy model out), or a MalformedToolCallError
+// (the model's own tool call did not parse or did not match the tool's schema: the gateway retries
+// it, and the provider answered every time; a lab run of 1.1.8 behind a LiteLLM hosted_vllm route
+// opened the breaker after five such calls and failed the run on CircuitOpenError). It covers the
+// redaction-depth refusal (ResponseRedactionError) and the catalog's schema rejection
+// (GatewayToolCatalogError), both of which extend it. A named, extensible list rather than a
+// growing chain of `&&` conditions, so the next non-provider fault is one array entry away.
 //
 // TimeoutError is deliberately NOT here (review finding on PR #3602 — it was, briefly, during
 // #3591's development). Excluding every timeout disabled the breaker's own outage guard: an
@@ -564,7 +570,7 @@ function attachGatewayRequestId(error: unknown, requestId: string): void {
 const NON_PROVIDER_FAULTS = [
   CancelledError,
   ConfigInvalidError,
-  ResponseRedactionError,
+  MalformedToolCallError,
   ProviderOutputExhaustedError,
   ProviderEmptyAnswerError,
 ] as const;

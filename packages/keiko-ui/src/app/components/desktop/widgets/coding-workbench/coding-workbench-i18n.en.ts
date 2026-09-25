@@ -953,6 +953,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The model used its whole output budget before producing an answer, usually on reasoning. Have the gateway declare a larger max_output_tokens for this model, or choose a model with a smaller reasoning share, then retry.",
   "codingWorkbench.event.turnFailure.empty-answer":
     "The model finished this turn without any text or tool call. The provider answered, so this is not a connection problem. Retry the turn; if it repeats, rephrase the task or choose another model.",
+  "codingWorkbench.event.turnFailure.invalid-tool-call":
+    "The model called a tool with arguments that do not match the tool, on every attempt. The provider answered, so this is not a connection problem. Retry the turn; if it repeats, rephrase the task or choose another model.",
   "codingWorkbench.event.detailOutcome": "Outcome: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Untrusted content: the fetched page was quarantined as data, not instructions.",

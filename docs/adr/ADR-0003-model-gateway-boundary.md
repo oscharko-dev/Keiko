@@ -623,14 +623,21 @@ States:
 
 - **Closed**: requests pass through. Consecutive failure counter increments on each `GatewayError`
   except the ones in `gateway.ts`'s `NON_PROVIDER_FAULTS` list — `CancelledError`,
-  `ConfigInvalidError`, `ResponseRedactionError`, since #3591 `ProviderOutputExhaustedError`, and,
+  `ConfigInvalidError`, `MalformedToolCallError`, since #3591 `ProviderOutputExhaustedError`, and,
   since #3610, `ProviderEmptyAnswerError`: a reasoning model that spends its whole output budget on
   an HTTP 200 answer is a caller-fixable budget problem, not a provider failure, and must not open
   the breaker and lock out every other caller of that model. The same holds for an HTTP 200 answer
   that completed with neither content nor a tool call: the provider answered, the model produced
   nothing usable. It keeps the provider error code, so the chat surfaces are unchanged, and the
   coding runtime reports it as its own `empty-answer` turn-failure cause instead of a broken
-  stream. A stream that ends without any terminal frame is still a provider failure. A `TimeoutError` DOES count: with the silence and budget floors of #3591 a
+  stream. A stream that ends without any terminal frame is still a provider failure.
+  `MalformedToolCallError` covers the model's own tool call that did not parse or did not match the
+  tool's schema, including the catalog rejection `GatewayToolCatalogError` and the redaction-depth
+  refusal `ResponseRedactionError`, which both extend it. The gateway still retries a schema
+  rejection so the model can regenerate the call, but the provider answered every time: a lab run of
+  1.1.8 behind a LiteLLM `hosted_vllm` route opened the breaker after five such calls and failed the
+  run on `CircuitOpenError`. The coding runtime reports it as its own `invalid-tool-call`
+  turn-failure cause. A `TimeoutError` DOES count: with the silence and budget floors of #3591 a
   timeout is a multi-minute silence, which is the outage signal the breaker exists for. When counter
   reaches `failureThreshold`, transition to **Open** and record `openedAt = clock.now()`.
 - **Open**: any call immediately throws `CircuitOpenError` without contacting the provider.

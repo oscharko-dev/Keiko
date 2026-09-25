@@ -111,7 +111,10 @@ export type CodingWorkbenchTurnFailureCode =
   | "output-exhausted"
   // #3610: the answer completed with neither content nor a tool call — the model's result, not a
   // broken stream and not a connection problem.
-  | "empty-answer";
+  | "empty-answer"
+  // The model's tool call did not parse or did not match the tool's schema, on every attempt the
+  // gateway made — the model's result, not a provider rejection (1.1.8 lab run).
+  | "invalid-tool-call";
 
 export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRuntimeFailureCode[] =
   Object.freeze([

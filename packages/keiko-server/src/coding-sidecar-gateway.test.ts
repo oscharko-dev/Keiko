@@ -25,6 +25,7 @@ import {
   CircuitOpenError,
   ConfigInvalidError,
   ContextOverflowError,
+  MalformedToolCallError,
   ProviderEmptyAnswerError,
   ProviderOutputExhaustedError,
   RateLimitError,
@@ -4349,13 +4350,17 @@ describe("coding sidecar gateway turn failure projection", () => {
     [new ProviderOutputExhaustedError("coding"), "output-exhausted"],
     // #3610: the provider answered with neither content nor a tool call — not a broken stream.
     [new ProviderEmptyAnswerError("coding"), "empty-answer"],
+    // 1.1.8 lab run: the model's tool call never matched its schema — not a provider rejection.
+    [new MalformedToolCallError("tool call has non-JSON arguments"), "invalid-tool-call"],
     [new TimeoutError("synthetic timeout"), "stream-incomplete"],
     [new ContextOverflowError("synthetic context limit"), "turn-rejected"],
   ] as const)("projects %s as %s without exposing provider text", async (error, code) => {
     const sink = captureServerLog("warn");
     const eventHub = new CodingRuntimeEventHub();
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
     const deps: UiHandlerDeps = {
       ...depsValue(configValue(provider(), capability()), () => () => Promise.reject(error)),
+      diagnostics,
       codingRuntimeEventHub: eventHub,
       codingRuntimeOrchestrator: {
         getSnapshot: () => ({ state: "running", revision: 2 }),
@@ -4380,6 +4385,50 @@ describe("coding sidecar gateway turn failure projection", () => {
       "coding-sidecar.gateway.turn-failed.emitted-line",
       formatActivityLogProofLine(projected ?? {}),
     );
+    // A turn the model ended without a usable answer is its answer, not a server fault: no
+    // error-level diagnostic, so no support incident for it. Every other cause keeps the diagnostic.
+    const modelAnswer =
+      code === "empty-answer" || code === "output-exhausted" || code === "invalid-tool-call";
+    expect(diagnostics.record).toHaveBeenCalledTimes(modelAnswer ? 0 : 1);
+  });
+
+  // The lab run behind a LiteLLM hosted_vllm route opened a support incident on the first streamed
+  // empty answer: the stream path wrote the same error-level diagnostic.
+  it.each([
+    [new ProviderEmptyAnswerError("coding"), 0],
+    [new ProviderOutputExhaustedError("coding"), 0],
+    [new MalformedToolCallError("tool call has non-JSON arguments"), 0],
+    [new ProviderError("synthetic unavailable", 503), 1],
+  ] as const)("records a streamed %s with %i error-level diagnostics", async (error, count) => {
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      await Promise.resolve();
+      yield* [];
+      throw error;
+    };
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-stream-model-answer" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          stream(),
+      ),
+      diagnostics,
+    } as UiHandlerDeps;
+    const response = mockResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "model answer" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+      correlationId: "sidecar-corr-model-answer",
+    };
+    expect(await handleCodingSidecarGatewayChatCompletions(context, deps)).toBe(STREAMING);
+    expect(diagnostics.record).toHaveBeenCalledTimes(count);
   });
 });
 

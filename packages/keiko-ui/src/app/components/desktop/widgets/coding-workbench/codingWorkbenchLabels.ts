@@ -293,6 +293,8 @@ function turnFailureDetail(
     return t("codingWorkbench.event.turnFailure.output-exhausted");
   if (event.failureCode === "empty-answer")
     return t("codingWorkbench.event.turnFailure.empty-answer");
+  if (event.failureCode === "invalid-tool-call")
+    return t("codingWorkbench.event.turnFailure.invalid-tool-call");
   return "";
 }
 

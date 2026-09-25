@@ -3,6 +3,7 @@ import {
   AuthenticationError,
   CircuitOpenError,
   ContextOverflowError,
+  MalformedToolCallError,
   ModelRefusalError,
   ProviderEmptyAnswerError,
   ProviderError,
@@ -456,6 +457,7 @@ const CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION = defineActivityLogOperation(
         "turn-rejected",
         "output-exhausted",
         "empty-answer",
+        "invalid-tool-call",
       ],
     },
     published: { type: "boolean", dataClass: "closed-enum", required: true },
@@ -1546,12 +1548,29 @@ function gatewayDiagnosticCorrelation(
     : { correlationId, parentCorrelationId: runId };
 }
 
+// A turn the model ended without a usable answer -- nothing at all, reasoning until its output budget
+// ran out, or a tool call that never parsed or matched its schema -- is the model's answer, not a
+// server fault: the warn-level turn-failed line names it. An error-level diagnostic opened a support
+// incident for every such turn; a lab run of the 1.1.8 candidate behind a LiteLLM hosted_vllm route
+// opened one on its first empty answer.
+const MODEL_ANSWER_FAILURES: ReadonlySet<CodingWorkbenchTurnFailureCode> = new Set([
+  "output-exhausted",
+  "empty-answer",
+  "invalid-tool-call",
+]);
+
+function isModelAnswerFailure(error: unknown): boolean {
+  const cause = modelTurnFailureCode(error);
+  return cause !== undefined && MODEL_ANSWER_FAILURES.has(cause);
+}
+
 function emitGatewayFailureDiagnostic(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   error: unknown,
   runId: string,
 ): void {
+  if (isModelAnswerFailure(error)) return;
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
@@ -1644,6 +1663,7 @@ function modelTurnFailureCode(error: unknown): CodingWorkbenchTurnFailureCode | 
     return "turn-rejected";
   if (error instanceof ProviderOutputExhaustedError) return "output-exhausted";
   if (error instanceof ProviderEmptyAnswerError) return "empty-answer";
+  if (error instanceof MalformedToolCallError) return "invalid-tool-call";
   return undefined;
 }
 
@@ -1688,6 +1708,7 @@ function emitGatewayStreamFailureDiagnostic(
   error: unknown,
   runId: string,
 ): void {
+  if (isModelAnswerFailure(error)) return;
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({

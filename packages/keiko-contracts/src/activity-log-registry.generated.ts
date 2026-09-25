@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "e6ff4f9103465a86c5c98ff099bbef6ee47d9c4304c8cedbc33cc3f69bba0754" as const;
+  "16070ad188776aa5773717294d01538c9f9497bf8a6dc774d2bc29cf1ce22919" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -7522,6 +7522,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "turn-rejected",
           "output-exhausted",
           "empty-answer",
+          "invalid-tool-call",
         ],
       },
       published: {

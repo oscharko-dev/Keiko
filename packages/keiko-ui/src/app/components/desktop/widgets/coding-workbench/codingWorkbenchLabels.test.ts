@@ -243,6 +243,7 @@ describe("eventDetail auxiliary outcome", () => {
     "turn-rejected",
     "output-exhausted",
     "empty-answer",
+    "invalid-tool-call",
   ] as const)("shows the actionable %s cause for a redacted gateway failure", (failureCode) => {
     expect(eventDetail(runtimeEvent({ eventKind: "failure-redacted", failureCode }), t)).toBe(
       `codingWorkbench.event.detailFailure codingWorkbench.event.turnFailure.${failureCode}`,
