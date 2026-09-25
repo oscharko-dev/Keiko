@@ -1885,12 +1885,20 @@ describe("coding-sidecar gateway", () => {
       res: response.res,
     };
 
+    const settlePromptTokens = vi.fn(
+      (_capability: string, _reserved: number, _actual: number): unknown => ({ ok: true }),
+    );
     const result = await handleCodingSidecarGatewayChatCompletions(context, {
       ...runtimeGatewayDeps(
         () => ({ ok: true, binding: { runId: "run-undeliverable" } }),
         () => chat,
       ),
       diagnostics,
+      runtimeCapabilityAuthenticator: {
+        authenticate: () => ({ ok: true, binding: { runId: "run-undeliverable" } }),
+        reservePromptTokens: () => ({ ok: true, runId: "run-undeliverable" }),
+        settlePromptTokens,
+      },
     });
 
     expect(result).toBe(STREAMING);
@@ -1901,6 +1909,23 @@ describe("coding-sidecar gateway", () => {
       runId: "run-undeliverable",
       outcome: "cancelled",
       cancellationCause: "backpressure-killed",
+      completionTokens: 0,
+      outputBytes: 0,
+    });
+    // No provider call ran, so the reservation goes back to the run's budget in full (actual usage
+    // 0, never the conservative estimate a dispatched-but-unobserved call keeps), and the usage
+    // line records the release.
+    expect(settlePromptTokens).toHaveBeenCalledOnce();
+    const [, reserved, actual] = settlePromptTokens.mock.calls[0] ?? [];
+    expect(reserved).toBeGreaterThan(0);
+    expect(actual).toBe(0);
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.usage-settled")?.extra,
+    ).toMatchObject({
+      runId: "run-undeliverable",
+      promptTokens: 0,
+      promptSource: "released-unspent",
+      promptSettlementStatus: "settled",
       completionTokens: 0,
       outputBytes: 0,
     });
@@ -1927,6 +1952,71 @@ describe("coding-sidecar gateway", () => {
           reason: "backpressure-killed",
         }),
       );
+    });
+  });
+
+  // The streamed counterpart: the gateway's stream is an async generator that dispatches on its
+  // first pull, and a failed handshake comes before that pull, so the reservation is released too.
+  it("releases the prompt reservation when the streamed handshake cannot be delivered", async () => {
+    const sink = captureServerLog("info");
+    let pulls = 0;
+    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      await Promise.resolve();
+      pulls += 1;
+      yield { type: "delta", token: "never" };
+    };
+    const response = mockResponse({ captureBody: true });
+    response.res.write = vi.fn(() => false);
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "undeliverable stream" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+    const settlePromptTokens = vi.fn(
+      (_capability: string, _reserved: number, _actual: number): unknown => ({ ok: true }),
+    );
+    const deps: UiHandlerDeps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-stream-undeliverable" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          stream(),
+      ),
+      runtimeCapabilityAuthenticator: {
+        authenticate: () => ({ ok: true, binding: { runId: "run-stream-undeliverable" } }),
+        reservePromptTokens: () => ({ ok: true, runId: "run-stream-undeliverable" }),
+        settlePromptTokens,
+      },
+    };
+
+    const result = await handleCodingSidecarGatewayChatCompletions(context, deps);
+
+    expect(result).toBe(STREAMING);
+    expect(pulls).toBe(0);
+    expect(response.res.destroyed).toBe(true);
+    expect(settlePromptTokens).toHaveBeenCalledOnce();
+    const [, reserved, actual] = settlePromptTokens.mock.calls[0] ?? [];
+    expect(reserved).toBeGreaterThan(0);
+    expect(actual).toBe(0);
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome")?.extra,
+    ).toMatchObject({
+      runId: "run-stream-undeliverable",
+      outcome: "cancelled",
+      cancellationCause: "backpressure-killed",
+    });
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.usage-settled")?.extra,
+    ).toMatchObject({
+      runId: "run-stream-undeliverable",
+      promptTokens: 0,
+      promptSource: "released-unspent",
+      promptSettlementStatus: "settled",
     });
   });
 

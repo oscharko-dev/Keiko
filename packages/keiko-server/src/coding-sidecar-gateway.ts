@@ -129,7 +129,7 @@ interface PromptTokenReservation {
 
 interface PromptTokenSettlement {
   readonly promptTokens: number;
-  readonly source: "provider-reported" | "reserved-estimate";
+  readonly source: "provider-reported" | "reserved-estimate" | "released-unspent";
   readonly status: "settled" | "retained-after-refusal" | "unverified" | "not-wired";
 }
 
@@ -157,23 +157,46 @@ function settlePromptTokenReservation(
   reservation: PromptTokenReservation,
   actualPromptTokens?: number,
 ): PromptTokenSettlement {
+  const providerReported = actualPromptTokens !== undefined && actualPromptTokens > 0;
+  return applyPromptTokenSettlement(deps, reservation, {
+    promptTokens: providerReported ? actualPromptTokens : reservation.reservedPromptTokens,
+    source: providerReported ? "provider-reported" : "reserved-estimate",
+  });
+}
+
+/**
+ * Releases a reservation whose provider call never ran — the client would not take the opening
+ * SSE frame, so the buffered path never called the chat factory and the streamed path never pulled
+ * the gateway's generator. The conservative rule above keeps the estimate only for a call that WAS
+ * dispatched; here nothing was spent, so the whole reservation goes back to the run's budget
+ * (#3602 review). Same idempotence and same not-wired fallback as a settlement.
+ */
+function releasePromptTokenReservation(
+  deps: UiHandlerDeps,
+  reservation: PromptTokenReservation,
+): PromptTokenSettlement {
+  return applyPromptTokenSettlement(deps, reservation, {
+    promptTokens: 0,
+    source: "released-unspent",
+  });
+}
+
+function applyPromptTokenSettlement(
+  deps: UiHandlerDeps,
+  reservation: PromptTokenReservation,
+  usage: Pick<PromptTokenSettlement, "promptTokens" | "source">,
+): PromptTokenSettlement {
   if (reservation.settled) {
     if (reservation.settlement === undefined) throw new TypeError("missing prompt settlement");
     return reservation.settlement;
   }
   reservation.settled = true;
-  const providerReported = actualPromptTokens !== undefined && actualPromptTokens > 0;
-  const promptTokens = providerReported ? actualPromptTokens : reservation.reservedPromptTokens;
   const unverified: PromptTokenSettlement = {
     promptTokens: reservation.reservedPromptTokens,
     source: "reserved-estimate",
     status: "unverified",
   };
-  const selected: PromptTokenSettlement = {
-    promptTokens,
-    source: providerReported ? "provider-reported" : "reserved-estimate",
-    status: "settled",
-  };
+  const selected: PromptTokenSettlement = { ...usage, status: "settled" };
   reservation.settlement = unverified;
   const authenticator = runtimeCapabilityAuthenticator(deps);
   if (authenticator?.settlePromptTokens === undefined) {
@@ -183,7 +206,7 @@ function settlePromptTokenReservation(
   const outcome = authenticator.settlePromptTokens(
     reservation.capability,
     reservation.reservedPromptTokens,
-    promptTokens,
+    usage.promptTokens,
   );
   reservation.settlement = observedPromptSettlement(outcome, selected, unverified);
   return reservation.settlement;
@@ -464,11 +487,12 @@ const CODING_SIDECAR_GATEWAY_USAGE_SETTLED_OPERATION = defineActivityLogOperatio
     runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
     completionTokens: { type: "integer", dataClass: "count", required: true },
     promptTokens: { type: "integer", dataClass: "count", required: true },
+    // `released-unspent`: the provider call never ran, the whole reservation went back (#3602).
     promptSource: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["provider-reported", "reserved-estimate"],
+      values: ["provider-reported", "reserved-estimate", "released-unspent"],
     },
     promptSettlementStatus: {
       type: "string",
@@ -2277,8 +2301,27 @@ function settleUndeliverableBufferedStream(
 ): typeof STREAMING {
   const { deps, runId, cancellation, promptTokenReservation } = dispatch;
   recordGatewayOutcome(ctx, deps, runId, cancellation, "cancelled", 0, 0);
-  settlePromptTokenReservation(deps, promptTokenReservation);
+  releaseUndispatchedPromptBudget(ctx, deps, runId, promptTokenReservation);
   return STREAMING;
+}
+
+// A handshake the client would not take leaves no provider call behind, so the reservation is
+// released rather than kept as spent, and the usage line records the release (zero prompt tokens,
+// `released-unspent`) so the ledger movement is reconstructible from the log.
+function releaseUndispatchedPromptBudget(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  runId: string,
+  reservation: PromptTokenReservation,
+): void {
+  const settlement = releasePromptTokenReservation(deps, reservation);
+  logGatewayCompletionUsage(
+    ctx,
+    runId,
+    { completionTokens: 0, outputBytes: 0 },
+    "output-byte-estimate",
+    settlement,
+  );
 }
 
 // Extracted so `executeGatewayChat` stays under AGENTS.md §6's 50-line ceiling.
@@ -2396,7 +2439,13 @@ async function streamGatewayChat(
   }
   const session = createGatewayStreamSession(ctx, dispatch, iterator);
   try {
-    if (beginGatewayStream(session)) await pumpGatewayStreamWithCancellation(deps, session);
+    if (beginGatewayStream(session)) {
+      await pumpGatewayStreamWithCancellation(deps, session);
+    } else {
+      // The gateway's stream is an async generator: nothing was sent before the first pull, and
+      // the handshake failed before it, so the reservation is released, not kept as spent.
+      releaseUndispatchedPromptBudget(ctx, deps, runId, promptTokenReservation);
+    }
     return STREAMING;
   } finally {
     // Every exit path above returns/throws without necessarily having observed real usage
