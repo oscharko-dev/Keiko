@@ -2675,6 +2675,61 @@
         "signingScope": "evaluation",
         "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.1.8",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.1.8",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-25-keiko-1.1.8-coding-workbench-acceptance-repairs",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "The Coding Workbench repairs what the 1.1.7 hands-on acceptance exposed: every question is stored once in Coding History, a commit or verification names the real reason it cannot proceed (an unstaged change or unsaved editor buffers) instead of sending the model round in a loop, the Workbench follows and names the repository it works in, an empty model answer is reported as such and no longer counts as a provider outage, a denied edit reads Denied, and a change built on a stale read is sent back to the model before any human is asked to approve it.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Coding History: each question is stored once, and history written by 1.1.x shows each question once.",
+        "Commits and verification: the refusal names candidate-not-staged or buffers-dirty with the matching next step, so the model no longer loops between verifying and proposing.",
+        "Approvals: a denied, expired or cancelled decision is shown and logged as that decision, and a change whose base digest is already stale is refused before the approval card appears.",
+        "Gateway: an empty model answer is reported as empty-answer and does not open the circuit breaker.",
+        "Workbench: it follows the header's repository, states the deployment ceiling when a mode does not apply, and shows the singular file count, scope and policy reason, and the activity after Stop correctly."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-25",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/issues/3610",
+        "rationale": "The release owner requested v1.1.8 on 2026-09-25 to ship the Coding Workbench repairs of the 1.1.7 hands-on acceptance: #3611 (issue #3610) merged to dev after all required checks and zero open review threads, and the governed-ask repairs of issue #3612 complete the acceptance findings.",
+        "traceability": null
+      },
+      "userActionRequired": true,
+      "remediation": "restart-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
     }
   ]
 }
