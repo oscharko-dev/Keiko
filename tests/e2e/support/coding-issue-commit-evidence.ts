@@ -216,7 +216,8 @@ async function proveDiffKeyboardScroll(page: Page, surface: string): Promise<voi
     .locator(surface)
     .locator("summary")
     .filter({
-      hasText: /^\d+ changed files$/u,
+      // #3610: a single changed file reads "1 changed file".
+      hasText: /^\d+ changed files?$/u,
     });
   await summary.click();
   const viewport = page.locator(surface).locator(".rv-code").first();
