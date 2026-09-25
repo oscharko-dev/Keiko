@@ -2069,12 +2069,20 @@ type CodingSidecarGatewayCancellationCause =
 interface SidecarSseTransport {
   readonly backpressure: AbortController;
   readonly onBackpressure: (signal: SseBackpressureSignal) => void;
+  /**
+   * The one id the outcome line, the backpressure diagnostic and the `sse.stream.closed` line
+   * share, so a termination can be joined across its evidence: the request's own correlation id,
+   * or the sanctioned `UNKNOWN_CORRELATION_ID` fallback — never a fresh mint on one line only.
+   */
+  readonly correlationId: string;
 }
 
 function sidecarSseTransport(ctx: RouteContext, deps: UiHandlerDeps): SidecarSseTransport {
+  const correlationId = correlationIdOrUnknown(ctx.correlationId);
   return {
     backpressure: new AbortController(),
-    onBackpressure: sseBackpressureReporter(deps, "coding-sidecar-gateway", ctx.correlationId),
+    onBackpressure: sseBackpressureReporter(deps, "coding-sidecar-gateway", correlationId),
+    correlationId,
   };
 }
 
@@ -2748,7 +2756,7 @@ function beginBufferedOpenAiStream(
     stopHeartbeat: startSseHeartbeat(ctx.res, BUFFERED_STREAM_HEARTBEAT_MS, undefined, {
       controller: transport.backpressure,
       onBackpressure: transport.onBackpressure,
-      correlationId: ctx.correlationId,
+      correlationId: transport.correlationId,
     }),
   };
 }
@@ -2823,7 +2831,7 @@ function writeOpenAiSse(
     `data: ${JSON.stringify(payload)}\n\n`,
     transport.backpressure,
     transport.onBackpressure,
-    ctx.correlationId,
+    transport.correlationId,
   );
 }
 

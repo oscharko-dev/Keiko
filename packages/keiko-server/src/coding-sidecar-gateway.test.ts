@@ -32,6 +32,7 @@ import {
 import { TOOL_CALLING_VERIFICATION_MAX_AGE_MS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
   _classifyBadRequestReasonForTests,
@@ -1868,6 +1869,7 @@ describe("coding-sidecar gateway", () => {
   // same early exit `beginGatewayStream` gives the streamed path.
   it("starts no provider call when the buffered stream's opening frame cannot be delivered", async () => {
     const sink = captureServerLog("info");
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
     const chat = vi.fn((): Promise<NormalizedResponse> =>
       Promise.resolve(assistantResponse("azure-coding-model")),
     );
@@ -1883,13 +1885,13 @@ describe("coding-sidecar gateway", () => {
       res: response.res,
     };
 
-    const result = await handleCodingSidecarGatewayChatCompletions(
-      context,
-      runtimeGatewayDeps(
+    const result = await handleCodingSidecarGatewayChatCompletions(context, {
+      ...runtimeGatewayDeps(
         () => ({ ok: true, binding: { runId: "run-undeliverable" } }),
         () => chat,
       ),
-    );
+      diagnostics,
+    });
 
     expect(result).toBe(STREAMING);
     expect(chat).not.toHaveBeenCalled();
@@ -1901,6 +1903,30 @@ describe("coding-sidecar gateway", () => {
       cancellationCause: "backpressure-killed",
       completionTokens: 0,
       outputBytes: 0,
+    });
+    // One id joins the outcome line, the backpressure diagnostic and the stream's terminal line —
+    // for a context without a correlation id the sanctioned fallback on all three, never a fresh
+    // mint on one of them.
+    expect(outcome?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    expect(diagnostics.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        errorClass: "SseBackpressureKill",
+        correlationId: UNKNOWN_CORRELATION_ID,
+      }),
+    );
+    // The terminal line arrives on the response's `close`, a tick after destroy; the sink may also
+    // hold a late close from an earlier test's response, so the join is asserted on this stream's
+    // own reason and id rather than on whichever terminal line comes first.
+    await vi.waitFor(() => {
+      const closed = sink.events
+        .filter((event) => event.op === "sse.stream.closed")
+        .map((event) => ({ correlationId: event.correlationId, ...event.extra }));
+      expect(closed).toContainEqual(
+        expect.objectContaining({
+          correlationId: UNKNOWN_CORRELATION_ID,
+          reason: "backpressure-killed",
+        }),
+      );
     });
   });
 
