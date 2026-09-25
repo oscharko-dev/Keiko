@@ -209,6 +209,7 @@ describe("coding-sidecar tool facade route", () => {
     ["approval-expired", "timeout"],
     ["approval-cancelled", "cancelled"],
     ["approval-unavailable", "unavailable"],
+    ["approval-authority-denied", "authority-denied"],
   ] as const)(
     "logs a refused governed ask as %s (%s), never as an origin violation",
     async (rejection, errorKind) => {
@@ -229,6 +230,35 @@ describe("coding-sidecar tool facade route", () => {
       ]);
     },
   );
+
+  // PR #3617 review: a refused ask's line names its run as parent, and the run and permission
+  // request, so it joins the run's approval.base-checked line that says why.
+  it("links a refused governed ask's line to its run and permission request", async () => {
+    const log = captureServerLog();
+    const handle = vi.fn(() =>
+      Promise.resolve({
+        status: 403,
+        body: "",
+        rejection: "approval-authority-denied" as const,
+        approval: { runId: "run-tool-facade", requestId: "permission-1" },
+      }),
+    );
+    await handleCodingSidecarToolFacade(toolFacadeContext({}), depsWith(bridge(handle)));
+    expect(log.events).toEqual([
+      expect.objectContaining({
+        op: "coding-sidecar.tool-facade.rejected",
+        parentCorrelationId: "run-tool-facade",
+        errorKind: "authority-denied",
+        extra: {
+          reason: "approval-authority-denied",
+          runId: "run-tool-facade",
+          requestId: "permission-1",
+          completeness: "complete",
+          loss: "none",
+        },
+      }),
+    ]);
+  });
 
   // #3612: a changeset whose base is already stale never reaches the human. The route logs the
   // refusal as a conflict and hands the edit's own refusal result to the plugin, which returns it to

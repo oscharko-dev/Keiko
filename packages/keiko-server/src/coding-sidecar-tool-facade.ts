@@ -72,6 +72,10 @@ const CODING_SIDECAR_TOOL_FACADE_REJECTED_OPERATION = defineActivityLogOperation
         "approval-authority-denied",
       ],
     },
+    // A refused governed ask names its run and its permission request, so the line joins the run's
+    // approval.base-checked and approval.waiting lines (PR #3617 review).
+    runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    requestId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -168,16 +172,23 @@ function logToolFacadeRejection(
   ctx: RouteContext,
   status: number,
   reason: CodingSidecarToolFacadeRejectionReason,
+  approval?: OpenCodeToolBridgeResponse["approval"],
 ): void {
   getServerLogger().warn(
     activityLogEvent(
       CODING_SIDECAR_TOOL_FACADE_REJECTED_OPERATION,
       {
         correlationId: correlationIdOrUnknown(ctx.correlationId),
+        ...(approval === undefined ? {} : { parentCorrelationId: approval.runId }),
         status,
         errorKind: TOOL_FACADE_REJECTION_ERROR_KIND[reason],
       },
-      { reason, completeness: "complete", loss: "none" },
+      {
+        reason,
+        ...(approval === undefined ? {} : { runId: approval.runId, requestId: approval.requestId }),
+        completeness: "complete",
+        loss: "none",
+      },
     ),
   );
 }
@@ -295,7 +306,7 @@ function toolFacadeRouteResult(ctx: RouteContext, result: OpenCodeToolBridgeResp
   const mapping = TOOL_FACADE_STATUS_MAPPINGS.get(result.status) ?? TOOL_FACADE_DEFAULT_MAPPING;
   // Only a bare 403 is an origin refusal; a refused governed ask names its decision (#3610).
   const reason = result.rejection ?? mapping.reason;
-  if (reason !== undefined) logToolFacadeRejection(ctx, result.status, reason);
+  if (reason !== undefined) logToolFacadeRejection(ctx, result.status, reason, result.approval);
   // The model reads a stale base's refusal result as the edit's own answer (#3612).
   if (reason === "approval-stale") return { status: 409, body: JSON.parse(result.body) as unknown };
   return {

@@ -2028,7 +2028,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProofOperations: ["coding-sidecar.tool-facade.rejected"],
     requiredReplayProofIds: [],
     requiredResourceOperations: [],
-    requiredEvidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
     requiredFrameOperations: [],
     requiredCauseOperations: [],
   },

@@ -1439,7 +1439,12 @@ describe("private OpenCode run control", () => {
         headers: new Headers({ authorization: `Bearer ${TOOL_CAPABILITY}` }),
         body: JSON.stringify(await editAsk("call_revoked")),
       });
-      expect(response).toMatchObject({ status: 403, rejection: "approval-authority-denied" });
+      expect(response).toMatchObject({
+        status: 403,
+        rejection: "approval-authority-denied",
+        // PR #3617 review: the route's line joins the run's own approval lines through these.
+        approval: { runId: FIXTURE_RUN_ID, requestId: expect.any(String) as unknown },
+      });
       expect(runtimeEvents.some((event) => event.kind === "permission-requested")).toBe(false);
       expect(recorder.settlements).toEqual([
         {

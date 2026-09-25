@@ -225,6 +225,8 @@ export interface OpenCodeToolBridgeResponse {
   readonly status: number;
   readonly body: string;
   readonly rejection?: ToolBridgeApprovalRejection;
+  /** The run and permission request a refused governed ask belongs to (PR #3617 review). */
+  readonly approval?: { readonly runId: string; readonly requestId: string } | undefined;
 }
 
 export interface OpenCodeRuntimeComposition {
@@ -1447,7 +1449,19 @@ async function handleV2PermissionRequest(
         }),
   });
   settleDecidedTool(deps.settleTool, decision);
-  return approvalResponse(decision);
+  return withApprovalIds(approvalResponse(decision), run.runId, decision);
+}
+
+// A refused ask names its run and permission request, so the route's line joins the run's own
+// approval lines (PR #3617 review).
+function withApprovalIds(
+  response: OpenCodeToolBridgeResponse,
+  runId: string,
+  decision: OpenCodeV2ApprovalDecision,
+): OpenCodeToolBridgeResponse {
+  return decision.requestId === undefined || response.rejection === undefined
+    ? response
+    : { ...response, approval: { runId, requestId: decision.requestId } };
 }
 
 // The tool call a refused ask ends is settled with Keiko's own verdict (#3612): OpenCode reports

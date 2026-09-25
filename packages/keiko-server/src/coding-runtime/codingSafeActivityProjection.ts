@@ -930,21 +930,24 @@ function shrinkPlan(plan: MutablePlan, maxBytes: number): void {
   }
 }
 
-const TOOL_SETTLED_STATES: ReadonlySet<string> = new Set([
-  "succeeded",
-  "failed",
-  "denied",
-  "cancelled",
-]);
-const TOOL_RESTATED_STATES: ReadonlySet<string> = new Set(["pending", "running", "failed"]);
+type SettledToolState = "succeeded" | "failed" | "denied" | "cancelled";
+type RestatedToolState = "pending" | "running" | "failed";
+
+function isSettledToolState(state: CodingSafeActivityToolState): state is SettledToolState {
+  return TERMINAL_TOOL_STATES.has(state);
+}
+
+function isRestatedToolState(state: CodingSafeActivityToolState): state is RestatedToolState {
+  return state === "pending" || state === "running" || state === "failed";
+}
 
 function supersededRestatement(
   entry: ProjectionEntry,
   signal: Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>,
 ): {
   readonly callIdSha256: string;
-  readonly settledState?: "succeeded" | "failed" | "denied" | "cancelled";
-  readonly restatedState?: "pending" | "running" | "failed";
+  readonly settledState?: SettledToolState;
+  readonly restatedState?: RestatedToolState;
 } {
   const settled = locateToolTurn(entry, signal)?.turn.tools.find(
     ({ callId }) => callId === signal.callId,
@@ -954,12 +957,8 @@ function supersededRestatement(
       .update("keiko.safe-activity.call.v1\0")
       .update(signal.callId)
       .digest("hex"),
-    ...(settled !== undefined && TOOL_SETTLED_STATES.has(settled)
-      ? { settledState: settled as "succeeded" | "failed" | "denied" | "cancelled" }
-      : {}),
-    ...(TOOL_RESTATED_STATES.has(signal.state)
-      ? { restatedState: signal.state as "pending" | "running" | "failed" }
-      : {}),
+    ...(settled !== undefined && isSettledToolState(settled) ? { settledState: settled } : {}),
+    ...(isRestatedToolState(signal.state) ? { restatedState: signal.state } : {}),
   };
 }
 

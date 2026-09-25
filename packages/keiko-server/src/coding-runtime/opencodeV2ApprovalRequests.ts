@@ -37,10 +37,17 @@ export type ToolBridgeApprovalRejection =
  * only for an ask that did not parse. `staleFile` names the changeset file whose base was stale.
  */
 export type OpenCodeV2ApprovalDecision =
-  | { readonly outcome: "stale"; readonly actionId: string; readonly staleFile: string }
+  | {
+      readonly outcome: "stale";
+      readonly actionId: string;
+      readonly requestId: string;
+      readonly staleFile: string;
+    }
   | {
       readonly outcome: Exclude<OpenCodeV2ApprovalOutcome, "stale">;
       readonly actionId?: string | undefined;
+      /** The ask's own permission request id, which its log lines carry; absent when unparsed. */
+      readonly requestId?: string | undefined;
     };
 
 /** What a governed read of the file answers now: its digest, that it cannot say, or a denial. */
@@ -244,6 +251,56 @@ async function baseCheck(
   return { checkedFileCount: progress.checkedFileCount };
 }
 
+// The decision about one parsed ask, naming its call and its permission request.
+function decided(
+  ask: ParsedAsk,
+  outcome: Exclude<OpenCodeV2ApprovalOutcome, "stale">,
+): OpenCodeV2ApprovalDecision {
+  return { outcome, actionId: ask.actionId, requestId: ask.event.requestId };
+}
+
+type BaseRead =
+  | { readonly kind: "checked"; readonly check: BaseCheck }
+  | { readonly kind: "refused"; readonly decision: OpenCodeV2ApprovalDecision };
+
+interface BaseCheckContext {
+  readonly sinks: ApprovalSinks;
+  /** True once the caller went away or the registry closed. */
+  readonly ended: () => boolean;
+}
+
+// A read that fails refuses the ask on the spot, so its failure is recorded where it is caught. A
+// read that rejects because its run is being torn down is the teardown, not a failure.
+async function readBases(
+  ask: ParsedAsk,
+  runId: string,
+  editBaseDigest: OpenCodeV2EditBaseDigest,
+  signal: AbortSignal,
+  context: BaseCheckContext,
+): Promise<BaseRead> {
+  const { diagnostics, activityLog } = context.sinks;
+  const progress = { checkedFileCount: 0 };
+  try {
+    return { kind: "checked", check: await baseCheck(ask.bases, editBaseDigest, signal, progress) };
+  } catch (error) {
+    if (context.ended()) {
+      recordBaseCheck(activityLog, runId, ask, "cancelled", progress);
+      return { kind: "refused", decision: decided(ask, "cancelled") };
+    }
+    recordBaseCheck(activityLog, runId, ask, "failed", progress);
+    emitServerDiagnostic(diagnostics, {
+      correlationId: runId,
+      timestamp: new Date().toISOString(),
+      operation: "coding-runtime.opencode-composition",
+      source: "opencode.permission",
+      errorClass: contentFreeErrorClass(error),
+      message: "runtime-turn-failed",
+      code: "stage=permission-base-check",
+    });
+    return { kind: "refused", decision: decided(ask, "unavailable") };
+  }
+}
+
 // A check that ended with its caller or its registry records the teardown, never a verdict.
 function baseCheckOutcome(check: BaseCheck, ended: boolean): BaseCheckOutcome {
   if (ended) return "cancelled";
@@ -251,25 +308,29 @@ function baseCheckOutcome(check: BaseCheck, ended: boolean): BaseCheckOutcome {
   return check.staleFile === undefined ? "current" : "stale";
 }
 
+const BASE_CHECK_DECISIONS = {
+  denied: "authority-denied",
+  failed: "unavailable",
+  cancelled: "cancelled",
+} as const;
+
 function baseCheckDecision(
   outcome: BaseCheckOutcome,
   ask: ParsedAsk,
   check: BaseCheck,
 ): OpenCodeV2ApprovalDecision | undefined {
   if (outcome === "current") return undefined;
-  if (outcome === "stale" && check.staleFile !== undefined) {
-    return { outcome: "stale", actionId: ask.actionId, staleFile: check.staleFile };
+  if (outcome === "stale") {
+    if (check.staleFile === undefined) return decided(ask, "unavailable");
+    return {
+      outcome: "stale",
+      actionId: ask.actionId,
+      requestId: ask.event.requestId,
+      staleFile: check.staleFile,
+    };
   }
-  return { outcome: BASE_CHECK_DECISIONS[outcome], actionId: ask.actionId };
+  return decided(ask, BASE_CHECK_DECISIONS[outcome]);
 }
-
-const BASE_CHECK_DECISIONS = {
-  current: "unavailable",
-  stale: "unavailable",
-  denied: "authority-denied",
-  failed: "unavailable",
-  cancelled: "cancelled",
-} as const satisfies Readonly<Record<BaseCheckOutcome, OpenCodeV2ApprovalOutcome>>;
 
 function staleFileDigest(file: string): string {
   return createHash("sha256").update("keiko.approval.base-file.v1\0").update(file).digest("hex");
@@ -305,41 +366,25 @@ interface ApprovalSinks {
   readonly activityLog: ServerLogSink | undefined;
 }
 
-// A failed base check fails the ask closed: the human is not asked about a change whose base no
-// one could verify, nor about one the run's authority no longer admits. A caller that went away, or
-// a registry that closed, meanwhile cancels the ask. Every outcome is logged.
-async function checkedBase(
+// Settles a completed base check in one synchronous step, so no teardown can slip in between its
+// verdict and the ask it lets through (PR #3617 review). The human is not asked about a change
+// whose base is stale, nor about one the run's authority no longer admits. A caller that went away,
+// or a registry that closed, cancels the ask. Every outcome is logged, and so is a teardown the log
+// write itself caused.
+function settleBaseCheck(
   ask: ParsedAsk,
   runId: string,
-  editBaseDigest: OpenCodeV2EditBaseDigest,
-  signal: AbortSignal,
-  context: { readonly sinks: ApprovalSinks; readonly ended: () => boolean },
-): Promise<OpenCodeV2ApprovalDecision | undefined> {
-  const { diagnostics, activityLog } = context.sinks;
-  const progress = { checkedFileCount: 0 };
-  try {
-    const check = await baseCheck(ask.bases, editBaseDigest, signal, progress);
-    const outcome = baseCheckOutcome(check, context.ended());
-    recordBaseCheck(activityLog, runId, ask, outcome, check);
-    return baseCheckDecision(outcome, ask, check);
-  } catch (error) {
-    // A read that rejects because its run is being torn down is the teardown, not a failure.
-    if (context.ended()) {
-      recordBaseCheck(activityLog, runId, ask, "cancelled", progress);
-      return { outcome: "cancelled", actionId: ask.actionId };
-    }
-    recordBaseCheck(activityLog, runId, ask, "failed", progress);
-    emitServerDiagnostic(diagnostics, {
-      correlationId: runId,
-      timestamp: new Date().toISOString(),
-      operation: "coding-runtime.opencode-composition",
-      source: "opencode.permission",
-      errorClass: contentFreeErrorClass(error),
-      message: "runtime-turn-failed",
-      code: "stage=permission-base-check",
-    });
-    return { outcome: "unavailable", actionId: ask.actionId };
+  check: BaseCheck,
+  context: BaseCheckContext,
+): OpenCodeV2ApprovalDecision | undefined {
+  const { activityLog } = context.sinks;
+  const outcome = baseCheckOutcome(check, context.ended());
+  recordBaseCheck(activityLog, runId, ask, outcome, check);
+  if (outcome === "current" && context.ended()) {
+    recordBaseCheck(activityLog, runId, ask, "cancelled", check);
+    return decided(ask, "cancelled");
   }
+  return baseCheckDecision(outcome, ask, check);
 }
 
 function dispatchPermission(
@@ -403,7 +448,8 @@ interface RegistryState {
 type ApprovalRequestInput = Parameters<OpenCodeV2ApprovalRequests["request"]>[0];
 
 // Only an edit's bases are checked; every other ask reaches the human without a wait. A registry
-// closed meanwhile, its run disposed, asks no one: nothing would answer (PR #3617 review).
+// closed meanwhile, its run disposed, asks no one: nothing would answer (PR #3617 review). After
+// the awaited read, every step to the pending registration is synchronous.
 async function decideAsk(
   state: RegistryState,
   input: ApprovalRequestInput,
@@ -411,16 +457,16 @@ async function decideAsk(
   sinks: ApprovalSinks,
 ): Promise<OpenCodeV2ApprovalDecision> {
   const { runId, onPermission, signal, editBaseDigest } = input;
-  const { actionId, event } = ask;
+  const { event } = ask;
   if (editBaseDigest !== undefined && ask.bases.length > 0) {
-    const ended = (): boolean => signal.aborted || state.closed;
-    const refused = await checkedBase(ask, runId, editBaseDigest, signal, { sinks, ended });
+    const context = { sinks, ended: (): boolean => signal.aborted || state.closed };
+    const read = await readBases(ask, runId, editBaseDigest, signal, context);
+    if (read.kind === "refused") return read.decision;
+    const refused = settleBaseCheck(ask, runId, read.check, context);
     if (refused !== undefined) return refused;
-    // Teardown may close the registry after the check returned and before this resumes.
-    if (ended()) return { outcome: "cancelled", actionId };
   }
   if (state.pending.size >= MAX_PENDING_ASKS || state.pending.has(event.requestId)) {
-    return { outcome: "unavailable", actionId };
+    return decided(ask, "unavailable");
   }
   const outcome = await humanDecision(
     state.pending,
@@ -430,7 +476,7 @@ async function decideAsk(
     signal,
     sinks.diagnostics,
   );
-  return { outcome, actionId };
+  return decided(ask, outcome);
 }
 
 /** The existing Keiko approval lane owns the decision; V2 plugin tools have no native ask API. */
@@ -444,9 +490,7 @@ export function createOpenCodeV2ApprovalRequests(
     request: async (input): Promise<OpenCodeV2ApprovalDecision> => {
       const ask = parsedAsk(input.value, input.runId, input.sessionId);
       if (ask === undefined) return UNAVAILABLE;
-      if (input.signal.aborted || state.closed) {
-        return { outcome: "cancelled", actionId: ask.actionId };
-      }
+      if (input.signal.aborted || state.closed) return decided(ask, "cancelled");
       return decideAsk(state, input, ask, sinks);
     },
     resolve: (runId, requestId, approved): boolean => {

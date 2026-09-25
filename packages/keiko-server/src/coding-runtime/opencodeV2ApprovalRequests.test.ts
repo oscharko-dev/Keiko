@@ -23,6 +23,8 @@ import {
 const RUN_ID = "run-approval";
 const SESSION_ID = "ses_approval";
 const BASE = "a".repeat(64);
+// A parsed ask's decision names its permission request; its shape is the projection's own.
+const ANY_REQUEST_ID = expect.any(String) as unknown as string;
 const PATCH = "--- a/src/example.ts\n+++ b/src/example.ts\n@@ -1 +1 @@\n-old\n+new\n";
 
 function editArgs(
@@ -109,7 +111,11 @@ describe("OpenCode V2 approval requests", () => {
         signal: new AbortController().signal,
       });
       expect(approvals.resolve(RUN_ID, requestIdOf(ask), approved)).toBe(true);
-      await expect(decision).resolves.toEqual({ outcome, actionId: `${SESSION_ID}:call_1` });
+      await expect(decision).resolves.toEqual({
+        outcome,
+        actionId: `${SESSION_ID}:call_1`,
+        requestId: requestIdOf(ask),
+      });
       // Settled once: a second reply for the same ask finds nothing pending.
       expect(approvals.resolve(RUN_ID, requestIdOf(ask), approved)).toBe(false);
     },
@@ -154,6 +160,7 @@ describe("OpenCode V2 approval requests", () => {
     await expect(aborted).resolves.toEqual({
       outcome: "cancelled",
       actionId: `${SESSION_ID}:call_abort`,
+      requestId: ANY_REQUEST_ID,
     });
     await expect(closed).resolves.toMatchObject({ outcome: "cancelled" });
   });
@@ -292,6 +299,7 @@ describe("OpenCode V2 approval requests", () => {
     await expect(decision).resolves.toEqual({
       outcome: "approved",
       actionId: `${SESSION_ID}:call_verify`,
+      requestId: requestIdOf(ask),
     });
   });
 
@@ -388,6 +396,7 @@ describe("OpenCode V2 approval requests", () => {
     ).resolves.toEqual({
       outcome: "stale",
       actionId: `${SESSION_ID}:call_stale`,
+      requestId: ANY_REQUEST_ID,
       staleFile: "src/other.ts",
     });
     expect(checked).toEqual(["src/example.ts", "src/other.ts"]);
@@ -435,7 +444,11 @@ describe("OpenCode V2 approval requests", () => {
         signal: new AbortController().signal,
         editBaseDigest: () => Promise.reject(new Error("secure read unavailable")),
       }),
-    ).resolves.toEqual({ outcome: "unavailable", actionId: `${SESSION_ID}:call_check_failed` });
+    ).resolves.toEqual({
+      outcome: "unavailable",
+      actionId: `${SESSION_ID}:call_check_failed`,
+      requestId: ANY_REQUEST_ID,
+    });
     expect(ask.events).toEqual([]);
     expect(diagnostics).toEqual([
       expect.objectContaining({
@@ -552,7 +565,11 @@ describe("OpenCode V2 approval requests", () => {
       request("call_denied", (path) =>
         path === "src/example.ts" ? digestOf(BASE) : Promise.resolve({ kind: "authority-denied" }),
       ),
-    ).resolves.toEqual({ outcome: "authority-denied", actionId: `${SESSION_ID}:call_denied` });
+    ).resolves.toEqual({
+      outcome: "authority-denied",
+      actionId: `${SESSION_ID}:call_denied`,
+      requestId: ANY_REQUEST_ID,
+    });
     await request("call_throws", (path) =>
       path === "src/example.ts" ? digestOf(BASE) : Promise.reject(new Error("secure read")),
     );
@@ -562,7 +579,11 @@ describe("OpenCode V2 approval requests", () => {
         approvals.close();
         return digestOf("c".repeat(64));
       }),
-    ).resolves.toEqual({ outcome: "cancelled", actionId: `${SESSION_ID}:call_closed` });
+    ).resolves.toEqual({
+      outcome: "cancelled",
+      actionId: `${SESSION_ID}:call_closed`,
+      requestId: ANY_REQUEST_ID,
+    });
     expect(ask.events).toEqual([]);
 
     const lines = log.events.filter((event) => event.op === "coding-runtime.approval.base-checked");
@@ -579,9 +600,12 @@ describe("OpenCode V2 approval requests", () => {
   // PR #3617 review: teardown that closes the registry after the check returned, but before the ask
   // resumes, still puts it to no one; a read that rejects because of the teardown is cancelled.
   it("cancels an ask that teardown ended after its check or through a rejected read", async () => {
+    const outcomes: unknown[] = [];
     const approvals = createOpenCodeV2ApprovalRequests(undefined, {
       write: (event): void => {
-        if (event.op === "coding-runtime.approval.base-checked") approvals.close();
+        if (event.op !== "coding-runtime.approval.base-checked") return;
+        outcomes.push(event.extra?.outcome);
+        approvals.close();
       },
     });
     const ask = asked();
@@ -594,8 +618,14 @@ describe("OpenCode V2 approval requests", () => {
         signal: new AbortController().signal,
         editBaseDigest: digestPort({ "src/example.ts": BASE }),
       }),
-    ).resolves.toEqual({ outcome: "cancelled", actionId: `${SESSION_ID}:call_after_check` });
+    ).resolves.toEqual({
+      outcome: "cancelled",
+      actionId: `${SESSION_ID}:call_after_check`,
+      requestId: ANY_REQUEST_ID,
+    });
     expect(ask.events).toEqual([]);
+    // The check's verdict and the teardown that overtook it are both on the run's log.
+    expect(outcomes).toEqual(["current", "cancelled"]);
 
     const log = createBufferedServerLogSink();
     const teardown = createOpenCodeV2ApprovalRequests(undefined, log);
@@ -611,7 +641,11 @@ describe("OpenCode V2 approval requests", () => {
           return Promise.reject(new Error("read aborted by teardown"));
         },
       }),
-    ).resolves.toEqual({ outcome: "cancelled", actionId: `${SESSION_ID}:call_rejected_read` });
+    ).resolves.toEqual({
+      outcome: "cancelled",
+      actionId: `${SESSION_ID}:call_rejected_read`,
+      requestId: ANY_REQUEST_ID,
+    });
     expect(
       log.events
         .filter((event) => event.op === "coding-runtime.approval.base-checked")
@@ -637,7 +671,11 @@ describe("OpenCode V2 approval requests", () => {
           return digestOf(BASE);
         },
       }),
-    ).resolves.toEqual({ outcome: "cancelled", actionId: `${SESSION_ID}:call_closing` });
+    ).resolves.toEqual({
+      outcome: "cancelled",
+      actionId: `${SESSION_ID}:call_closing`,
+      requestId: ANY_REQUEST_ID,
+    });
     await expect(
       approvals.request({
         value: await verificationAsk("call_after_close"),
@@ -646,7 +684,11 @@ describe("OpenCode V2 approval requests", () => {
         onPermission: ask.onPermission,
         signal: new AbortController().signal,
       }),
-    ).resolves.toEqual({ outcome: "cancelled", actionId: `${SESSION_ID}:call_after_close` });
+    ).resolves.toEqual({
+      outcome: "cancelled",
+      actionId: `${SESSION_ID}:call_after_close`,
+      requestId: ANY_REQUEST_ID,
+    });
     expect(ask.events).toEqual([]);
   });
 
@@ -666,7 +708,11 @@ describe("OpenCode V2 approval requests", () => {
           return digestOf(BASE);
         },
       }),
-    ).resolves.toEqual({ outcome: "cancelled", actionId: `${SESSION_ID}:call_gone` });
+    ).resolves.toEqual({
+      outcome: "cancelled",
+      actionId: `${SESSION_ID}:call_gone`,
+      requestId: ANY_REQUEST_ID,
+    });
     expect(ask.events).toEqual([]);
   });
 });
