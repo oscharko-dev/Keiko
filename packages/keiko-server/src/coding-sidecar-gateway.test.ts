@@ -1909,6 +1909,7 @@ describe("coding-sidecar gateway", () => {
   });
 
   it("aborts a buffered provider call on response close and run stop", async () => {
+    const sink = captureServerLog("info");
     for (const cancellation of ["response-close", "run-stop"] as const) {
       const run = new AbortController();
       let seenSignal: AbortSignal | undefined;
@@ -1952,6 +1953,16 @@ describe("coding-sidecar gateway", () => {
       await expect(providerAborted).resolves.toBeUndefined();
       await expect(pending).resolves.toMatchObject({ status: 503 });
       expect(seenSignal?.aborted).toBe(true);
+      // #3602 review: the outcome line names which abort source ended the turn.
+      const outcome = sink.events
+        .filter((event) => event.op === "coding-sidecar.gateway.outcome")
+        .at(-1);
+      expect(outcome?.extra).toMatchObject({
+        runId: "run-cancel",
+        outcome: "cancelled",
+        cancellationCause: cancellation === "response-close" ? "client-disconnect" : "run-stopped",
+        deadlineMs: expect.any(Number) as number,
+      });
     }
   });
 
@@ -2160,6 +2171,7 @@ describe("coding-sidecar gateway", () => {
   it("passes the sidecar deadline through to an in-flight provider call", async () => {
     // No retries: the route deadline is the floored single attempt plus the route's grace. The
     // value is taken from the route's own derivation so the mock follows the floors, not a literal.
+    const sink = captureServerLog("info");
     const deadlineProvider = provider({ timeoutMs: 10, maxRetries: 0 });
     const deadlineConfig = configValue(deadlineProvider, capability());
     const routeDeadlineMs = codingSidecarGatewayRequestDeadlineMs(
@@ -2209,6 +2221,15 @@ describe("coding-sidecar gateway", () => {
       await expect(providerAborted).resolves.toBeUndefined();
       expect(result).toMatchObject({ status: 503 });
       expect(seenSignal?.aborted).toBe(true);
+      // #3602 review: a backstop expiry is logged as the deadline, with the deadline that was
+      // applied, never as an anonymous cancellation a client disconnect would also produce.
+      const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
+      expect(outcome?.extra).toMatchObject({
+        runId: "run-deadline",
+        outcome: "cancelled",
+        cancellationCause: "route-deadline",
+        deadlineMs: routeDeadlineMs,
+      });
     } finally {
       timeoutSpy.mockRestore();
     }
@@ -2492,6 +2513,7 @@ describe("coding-sidecar gateway", () => {
   });
 
   it("returns the injected stream and aborts its provider signal when the client disconnects", async () => {
+    const sink = captureServerLog("info");
     let returned = false;
     let seenSignal: AbortSignal | undefined;
     let started: (() => void) | undefined;
@@ -2541,6 +2563,84 @@ describe("coding-sidecar gateway", () => {
     await expect(pending).resolves.toBe(STREAMING);
     expect(seenSignal?.aborted).toBe(true);
     expect(returned).toBe(true);
+    const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
+    expect(outcome?.extra).toMatchObject({
+      runId: "run-stream-cancel",
+      outcome: "cancelled",
+      cancellationCause: "client-disconnect",
+      deadlineMs: expect.any(Number) as number,
+    });
+  });
+
+  // #3602 review: a stream that stalls until the route backstop fires used to leave the same
+  // `cancelled` line as a client that left. The outcome line now names the deadline as the cause
+  // and records the deadline that was applied, so the log alone says why the turn stopped.
+  it("names the route deadline on the outcome line when a stalled stream hits the backstop", async () => {
+    const sink = captureServerLog("info");
+    const deadlineProvider = provider({ timeoutMs: 10, maxRetries: 0 });
+    const deadlineConfig = configValue(deadlineProvider, capability());
+    const routeDeadlineMs = codingSidecarGatewayRequestDeadlineMs(
+      deadlineConfig,
+      deadlineProvider.modelId,
+    );
+    const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockImplementation((ms) => nativeTimeout(ms === routeDeadlineMs ? 10 : ms));
+    let returned = false;
+    const stalled = async function* (request: GatewayRequest): AsyncGenerator<GatewayStreamChunk> {
+      try {
+        await new Promise<void>((resolve) => {
+          request.cancellationSignal?.addEventListener(
+            "abort",
+            () => {
+              resolve();
+            },
+            { once: true },
+          );
+        });
+        yield* [] as GatewayStreamChunk[];
+      } finally {
+        returned = true;
+      }
+    };
+    const response = mockResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "stall" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-stream-deadline" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): ((request: GatewayRequest) => AsyncIterable<GatewayStreamChunk>) =>
+          (request: GatewayRequest): AsyncIterable<GatewayStreamChunk> =>
+            stalled(request),
+      ),
+      config: deadlineConfig,
+    } as UiHandlerDeps;
+
+    try {
+      await expect(handleCodingSidecarGatewayChatCompletions(context, deps)).resolves.toBe(
+        STREAMING,
+      );
+      expect(returned).toBe(true);
+      const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
+      expect(outcome?.extra).toMatchObject({
+        runId: "run-stream-deadline",
+        outcome: "cancelled",
+        cancellationCause: "route-deadline",
+        deadlineMs: routeDeadlineMs,
+      });
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 
   it("cancels the provider iterator when the streaming response applies backpressure", async () => {

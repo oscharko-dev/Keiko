@@ -1952,10 +1952,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "coding-sidecar.gateway.request-validated",
       "coding-sidecar.gateway.usage-settled",
     ],
+    // `duration`: the route backstop the outcome line records (`deadlineMs`, #3602 review).
     requiredEvidenceClasses: [
       "closed-enum",
       "completeness-state",
       "count",
+      "duration",
       "loss-state",
       "opaque-id",
     ],

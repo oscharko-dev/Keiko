@@ -506,6 +506,16 @@ const CODING_SIDECAR_GATEWAY_OUTCOME_OPERATION = defineActivityLogOperation({
     },
     completionTokens: { type: "integer", dataClass: "count", required: true },
     outputBytes: { type: "integer", dataClass: "count", required: true },
+    // The route backstop armed for this turn (#3602 review); absent on lines written before 1.1.7.
+    deadlineMs: { type: "integer", dataClass: "duration", required: false },
+    // On a cancelled outcome only: which armed abort source ended the turn, so a stall that ran into
+    // the backstop never reads like a client that left.
+    cancellationCause: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["client-disconnect", "route-deadline", "run-stopped"],
+    },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
@@ -1289,10 +1299,22 @@ function emitGatewayEvidenceAggregationDiagnostic(deps: UiHandlerDeps, runId: st
   });
 }
 
+// A cancelled outcome names the abort source that ended the turn. Without an aborted source it is
+// the transport path — an SSE or terminal write found the response gone before its `close`
+// listener ran — which is the client leaving, never the deadline.
+function gatewayOutcomeCancellationCause(
+  cancellation: GatewayRequestCancellation,
+  outcome: CodingSidecarGatewayRunOutcome,
+): { readonly cancellationCause: CodingSidecarGatewayCancellationCause } | undefined {
+  if (outcome !== "cancelled") return undefined;
+  return { cancellationCause: cancellation.cause() ?? "client-disconnect" };
+}
+
 function recordGatewayOutcome(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   runId: string,
+  cancellation: GatewayRequestCancellation,
   outcome: CodingSidecarGatewayRunOutcome,
   completionTokens: number,
   outputBytes: number,
@@ -1301,7 +1323,16 @@ function recordGatewayOutcome(
     activityLogEvent(
       CODING_SIDECAR_GATEWAY_OUTCOME_OPERATION,
       { correlationId: correlationIdOrUnknown(ctx.correlationId), parentCorrelationId: runId },
-      { runId, outcome, completionTokens, outputBytes, completeness: "complete", loss: "none" },
+      {
+        runId,
+        outcome,
+        completionTokens,
+        outputBytes,
+        deadlineMs: cancellation.deadlineMs,
+        ...gatewayOutcomeCancellationCause(cancellation, outcome),
+        completeness: "complete",
+        loss: "none",
+      },
     ),
   );
   try {
@@ -2022,9 +2053,29 @@ function unavailableGatewayReason(
   return resolved.result.status === "unavailable" ? resolved.result.reason : "missing-provider";
 }
 
+/** Which of the three armed abort sources ended a cancelled turn; the outcome line's closed value. */
+type CodingSidecarGatewayCancellationCause = "client-disconnect" | "route-deadline" | "run-stopped";
+
 interface GatewayRequestCancellation {
   readonly signal: AbortSignal;
+  /** The route backstop armed for this request, recorded on the outcome line. */
+  readonly deadlineMs: number;
+  /** The source that aborted first, or undefined while nothing has aborted. */
+  readonly cause: () => CodingSidecarGatewayCancellationCause | undefined;
   readonly dispose: () => void;
+}
+
+// `AbortSignal.any` carries the reason of the source that aborted first, so a client that leaves
+// after the deadline already fired still reads as the deadline, never the other way round.
+function gatewayCancellationCause(
+  signal: AbortSignal,
+  clientSignal: AbortSignal,
+  deadline: AbortSignal,
+): CodingSidecarGatewayCancellationCause | undefined {
+  if (!signal.aborted) return undefined;
+  if (signal.reason === clientSignal.reason) return "client-disconnect";
+  if (signal.reason === deadline.reason) return "route-deadline";
+  return "run-stopped";
 }
 
 // The route's deadline is a backstop BEHIND the gateway's own end-to-end budget, never the budget
@@ -2055,13 +2106,18 @@ function gatewayRequestCancellation(
   };
   ctx.req.once("aborted", abortClient);
   ctx.res.once("close", abortClient);
-  const deadline = AbortSignal.timeout(codingSidecarGatewayRequestDeadlineMs(config, modelId));
+  const deadlineMs = codingSidecarGatewayRequestDeadlineMs(config, modelId);
+  const deadline = AbortSignal.timeout(deadlineMs);
   const runSignal = cancellationRegistry(deps)?.signalFor(runId);
   const signals = [client.signal, deadline, runSignal].filter(
     (signal): signal is AbortSignal => signal !== undefined,
   );
+  const signal = AbortSignal.any(signals);
   return {
-    signal: AbortSignal.any(signals),
+    signal,
+    deadlineMs,
+    cause: (): CodingSidecarGatewayCancellationCause | undefined =>
+      gatewayCancellationCause(signal, client.signal, deadline),
     dispose: (): void => {
       ctx.req.removeListener("aborted", abortClient);
       ctx.res.removeListener("close", abortClient);
@@ -2093,7 +2149,7 @@ interface GatewayChatDispatchContext {
   readonly modelAlias: string;
   readonly request: GatewayRequest;
   readonly runId: string;
-  readonly cancellationSignal: AbortSignal;
+  readonly cancellation: GatewayRequestCancellation;
   readonly promptTokenReservation: PromptTokenReservation;
 }
 
@@ -2130,15 +2186,7 @@ async function executeGatewayChat(
     runId,
   );
   try {
-    return await dispatchGatewayChat(
-      ctx,
-      deps,
-      binding,
-      parsed,
-      runId,
-      delivery,
-      cancellation.signal,
-    );
+    return await dispatchGatewayChat(ctx, deps, binding, parsed, runId, delivery, cancellation);
   } finally {
     cancellation.dispose();
   }
@@ -2152,17 +2200,17 @@ async function dispatchGatewayChat(
   parsed: CodingSidecarGatewayChatCompletionRequest,
   runId: string,
   delivery: GatewayChatDelivery,
-  cancellationSignal: AbortSignal,
+  cancellation: GatewayRequestCancellation,
 ): Promise<RouteResult | typeof STREAMING> {
   const { modelAlias, upstreamStreamingSupported } = delivery;
-  const request = requestForGatewayDelivery(ctx, parsed, delivery, cancellationSignal);
+  const request = requestForGatewayDelivery(ctx, parsed, delivery, cancellation.signal);
   const dispatch = {
     deps,
     binding,
     modelAlias,
     request,
     runId,
-    cancellationSignal,
+    cancellation,
     promptTokenReservation: delivery.promptTokenReservation,
   } satisfies GatewayChatDispatchContext;
   let bufferedStream: BufferedOpenAiStreamSession | undefined;
@@ -2173,15 +2221,7 @@ async function dispatchGatewayChat(
     if (parsed.stream) bufferedStream = beginBufferedOpenAiStream(ctx, modelAlias);
     return await executeBufferedGatewayChat(ctx, dispatch, bufferedStream);
   } catch (error) {
-    return settleFailedGatewayChat(
-      ctx,
-      deps,
-      runId,
-      cancellationSignal,
-      error,
-      delivery,
-      bufferedStream,
-    );
+    return settleFailedGatewayChat(ctx, deps, runId, cancellation, error, delivery, bufferedStream);
   }
 }
 
@@ -2190,15 +2230,16 @@ function settleFailedGatewayChat(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   runId: string,
-  cancellationSignal: AbortSignal,
+  cancellation: GatewayRequestCancellation,
   error: unknown,
   delivery: Pick<GatewayChatDelivery, "promptTokenReservation">,
   bufferedStream: BufferedOpenAiStreamSession | undefined,
 ): RouteResult | typeof STREAMING {
-  recordGatewayOutcome(ctx, deps, runId, cancellationSignal.aborted ? "cancelled" : "failed", 0, 0);
+  const cancelled = cancellation.signal.aborted;
+  recordGatewayOutcome(ctx, deps, runId, cancellation, cancelled ? "cancelled" : "failed", 0, 0);
   emitGatewayFailureDiagnostic(ctx, deps, error, runId);
   const spendReason = gatewaySpendRejectionReason(error);
-  if (!cancellationSignal.aborted)
+  if (!cancelled)
     reportGatewayTurnFailure(
       ctx,
       deps,
@@ -2220,7 +2261,7 @@ async function executeBufferedGatewayChat(
   dispatch: GatewayChatDispatchContext,
   stream: BufferedOpenAiStreamSession | undefined,
 ): Promise<RouteResult | typeof STREAMING> {
-  const { deps, binding, modelAlias, request, runId, cancellationSignal, promptTokenReservation } =
+  const { deps, binding, modelAlias, request, runId, cancellation, promptTokenReservation } =
     dispatch;
   const response = await chatFactoryFor(deps, binding.gateway)(binding.config, modelAlias)(request);
   const promptSettlement = settlePromptTokenReservation(
@@ -2237,9 +2278,17 @@ async function executeBufferedGatewayChat(
   };
   logGatewayCompletionUsage(ctx, runId, metrics, usage.source, promptSettlement);
   const record = (outcome: CodingSidecarGatewayRunOutcome): void => {
-    recordGatewayOutcome(ctx, deps, runId, outcome, metrics.completionTokens, metrics.outputBytes);
+    recordGatewayOutcome(
+      ctx,
+      deps,
+      runId,
+      cancellation,
+      outcome,
+      metrics.completionTokens,
+      metrics.outputBytes,
+    );
   };
-  if (cancellationSignal.aborted) {
+  if (cancellation.signal.aborted) {
     record("cancelled");
     return stream === undefined
       ? unavailableError()
@@ -2251,46 +2300,22 @@ async function executeBufferedGatewayChat(
       ? unavailableError()
       : settleBufferedOpenAiStreamError(stream, "length");
   }
-  return deliverBufferedGatewayAnswer(
-    ctx,
-    deps,
-    runId,
-    stream,
-    modelAlias,
-    settledResponse,
-    metrics,
-  );
+  return deliverBufferedGatewayAnswer(ctx, modelAlias, stream, settledResponse, record);
 }
 
 function deliverBufferedGatewayAnswer(
   ctx: RouteContext,
-  deps: UiHandlerDeps,
-  runId: string,
-  stream: BufferedOpenAiStreamSession | undefined,
   modelAlias: string,
+  stream: BufferedOpenAiStreamSession | undefined,
   response: NormalizedResponse,
-  metrics: { readonly completionTokens: number; readonly outputBytes: number },
+  record: (outcome: CodingSidecarGatewayRunOutcome) => void,
 ): RouteResult | typeof STREAMING {
   if (stream === undefined) {
-    recordGatewayOutcome(
-      ctx,
-      deps,
-      runId,
-      "accepted",
-      metrics.completionTokens,
-      metrics.outputBytes,
-    );
+    record("accepted");
     return openAiResponse(modelAlias, response);
   }
   completeBufferedOpenAiStream(stream, response);
-  recordGatewayOutcome(
-    ctx,
-    deps,
-    runId,
-    ctx.res.writableEnded && !ctx.res.destroyed ? "accepted" : "cancelled",
-    metrics.completionTokens,
-    metrics.outputBytes,
-  );
+  record(ctx.res.writableEnded && !ctx.res.destroyed ? "accepted" : "cancelled");
   return STREAMING;
 }
 
@@ -2307,7 +2332,7 @@ async function streamGatewayChat(
       modelAlias,
     )(request)[Symbol.asyncIterator]();
   } catch (error) {
-    recordGatewayOutcome(ctx, deps, runId, "failed", 0, 0);
+    recordGatewayOutcome(ctx, deps, runId, dispatch.cancellation, "failed", 0, 0);
     emitGatewayFailureDiagnostic(ctx, deps, error, runId);
     reportGatewayTurnFailure(ctx, deps, runId, gatewayTurnFailureCode(error));
     settlePromptTokenReservation(deps, promptTokenReservation);
@@ -2329,7 +2354,8 @@ async function pumpGatewayStreamWithCancellation(
   deps: UiHandlerDeps,
   session: GatewayStreamSession,
 ): Promise<void> {
-  const { cancellationSignal, iterator } = session;
+  const { cancellation, iterator } = session;
+  const cancellationSignal = cancellation.signal;
   const cancelIterator = (): void => {
     void iterator.return?.();
   };
@@ -2338,7 +2364,7 @@ async function pumpGatewayStreamWithCancellation(
     await pumpGatewayStream(session);
   } catch (error) {
     emitGatewayStreamFailureDiagnostic(session.ctx, deps, error, session.runId);
-    if (!session.cancellationSignal.aborted) {
+    if (!cancellationSignal.aborted) {
       reportGatewayTurnFailure(session.ctx, deps, session.runId, gatewayStreamFailureCode(error));
     }
     settleGatewayStreamError(session);
@@ -2355,7 +2381,7 @@ interface GatewayStreamSession {
   readonly modelId: string;
   readonly request: GatewayRequest;
   readonly runId: string;
-  readonly cancellationSignal: AbortSignal;
+  readonly cancellation: GatewayRequestCancellation;
   readonly iterator: AsyncIterator<GatewayStreamChunk>;
   readonly promptTokenReservation: PromptTokenReservation;
   readonly metrics: {
@@ -2371,7 +2397,7 @@ function createGatewayStreamSession(
   dispatch: GatewayChatDispatchContext,
   iterator: AsyncIterator<GatewayStreamChunk>,
 ): GatewayStreamSession {
-  const { deps, modelAlias, request, runId, cancellationSignal, promptTokenReservation } = dispatch;
+  const { deps, modelAlias, request, runId, cancellation, promptTokenReservation } = dispatch;
   return {
     ctx,
     deps,
@@ -2380,7 +2406,7 @@ function createGatewayStreamSession(
     modelId: modelAlias,
     request,
     runId,
-    cancellationSignal,
+    cancellation,
     iterator,
     promptTokenReservation,
     metrics: {
@@ -2412,8 +2438,16 @@ function recordSessionOutcome(
   session: GatewayStreamSession,
   outcome: CodingSidecarGatewayRunOutcome,
 ): void {
-  const { ctx, deps, runId, metrics } = session;
-  recordGatewayOutcome(ctx, deps, runId, outcome, metrics.completionTokens, metrics.outputBytes);
+  const { ctx, deps, runId, cancellation, metrics } = session;
+  recordGatewayOutcome(
+    ctx,
+    deps,
+    runId,
+    cancellation,
+    outcome,
+    metrics.completionTokens,
+    metrics.outputBytes,
+  );
 }
 
 function writeSessionTerminal(
@@ -2433,7 +2467,8 @@ function writeSessionTerminal(
 }
 
 async function pumpGatewayStream(session: GatewayStreamSession): Promise<void> {
-  const { cancellationSignal, iterator } = session;
+  const { cancellation, iterator } = session;
+  const cancellationSignal = cancellation.signal;
   for (;;) {
     if (isGatewayRequestCancelled(cancellationSignal)) {
       await iterator.return?.();
@@ -2601,7 +2636,7 @@ function logGatewayCompletionUsage(
 }
 
 function settleGatewayStreamError(session: GatewayStreamSession): void {
-  if (!session.cancellationSignal.aborted) {
+  if (!session.cancellation.signal.aborted) {
     recordSessionOutcome(session, "failed");
     writeSessionTerminal(session, "error");
   } else {

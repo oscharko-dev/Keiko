@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "b0f7caf5c0a08f6a93c76e869bc59672606133cd15193a0c5580076925eb22d9" as const;
+  "ee15fe687a3f2a930ec723a7edc370dc9c37af3b0e1d354f77f9d63b70d9f8b1" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -7078,6 +7078,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      deadlineMs: {
+        type: "integer",
+        dataClass: "duration",
+        required: false,
+      },
+      cancellationCause: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["client-disconnect", "route-deadline", "run-stopped"],
       },
     },
     causal: "correlation",
@@ -35522,10 +35533,22 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "cancellationCause",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
               name: "completionTokens",
               type: "integer",
               dataClass: "count",
               required: true,
+            },
+            {
+              name: "deadlineMs",
+              type: "integer",
+              dataClass: "duration",
+              required: false,
             },
             {
               name: "outcome",
@@ -35550,6 +35573,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "closed-enum",
             "completeness-state",
             "count",
+            "duration",
             "loss-state",
             "opaque-id",
           ],
