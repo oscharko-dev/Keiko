@@ -62,7 +62,7 @@
     "@oscharko-dev/keiko-editor": "1.1.7",
     "diff": "9.0.0",
     "monaco-editor": "0.56.0",
-    "next": "16.3.4",
+    "next": "16.3.5",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },
