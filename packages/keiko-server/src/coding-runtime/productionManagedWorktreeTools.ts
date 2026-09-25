@@ -112,6 +112,7 @@ import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import type { CodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import {
   createProductionAuxiliaryPorts,
+  hasExactWorkspaceAccess,
   PRODUCTION_SKILL_STATIC_FACTS,
   workspaceAuthorityCheckedRead,
 } from "./productionAuxiliaryPorts.js";
@@ -757,8 +758,9 @@ function managedWorktreeAuthorityContext(
 }
 
 // The governed ask's base check (#3612) reads a file only as far as keiko_workspace_read would: the
-// run's live authority and producer binding must admit a read of that path before the same secure
-// read, and still admit it after. An expired or revoked run reads nothing, and says so, so its ask
+// run's live authority and producer binding must admit a read of that path, and the run's exact
+// managed workspace must still be the active one, before the same secure read and again after it.
+// An expired or revoked run, or one that lost its workspace, reads nothing and says so, so its ask
 // never reaches the human unverified (PR #3617 review). The check reserves no delegation; it is no
 // tool call.
 function editBaseDigestPort(
@@ -776,9 +778,11 @@ function editBaseDigestPort(
       actionId: EDIT_BASE_CHECK_ID,
       idempotencyKey: EDIT_BASE_CHECK_ID,
     } as const;
-    if (!admitsRead(capability, request).ok) return EDIT_BASE_AUTHORITY_DENIED;
+    const admitted = (): boolean =>
+      hasExactWorkspaceAccess(input) && admitsRead(capability, request).ok;
+    if (!admitted()) return EDIT_BASE_AUTHORITY_DENIED;
     const digest = await governedWorkspaceFileDigest(read, relativePath, signal);
-    if (!admitsRead(capability, request).ok) return EDIT_BASE_AUTHORITY_DENIED;
+    if (!admitted()) return EDIT_BASE_AUTHORITY_DENIED;
     return digest === undefined ? EDIT_BASE_UNREADABLE : { kind: "digest", digest };
   };
 }

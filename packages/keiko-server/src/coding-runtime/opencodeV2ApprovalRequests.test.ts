@@ -552,7 +552,7 @@ describe("OpenCode V2 approval requests", () => {
       request("call_denied", (path) =>
         path === "src/example.ts" ? digestOf(BASE) : Promise.resolve({ kind: "authority-denied" }),
       ),
-    ).resolves.toEqual({ outcome: "unavailable", actionId: `${SESSION_ID}:call_denied` });
+    ).resolves.toEqual({ outcome: "authority-denied", actionId: `${SESSION_ID}:call_denied` });
     await request("call_throws", (path) =>
       path === "src/example.ts" ? digestOf(BASE) : Promise.reject(new Error("secure read")),
     );
@@ -574,6 +574,50 @@ describe("OpenCode V2 approval requests", () => {
       [undefined, "cancelled", 1],
     ]);
     expect(lines[2]?.extra).not.toHaveProperty("staleFileSha256");
+  });
+
+  // PR #3617 review: teardown that closes the registry after the check returned, but before the ask
+  // resumes, still puts it to no one; a read that rejects because of the teardown is cancelled.
+  it("cancels an ask that teardown ended after its check or through a rejected read", async () => {
+    const approvals = createOpenCodeV2ApprovalRequests(undefined, {
+      write: (event): void => {
+        if (event.op === "coding-runtime.approval.base-checked") approvals.close();
+      },
+    });
+    const ask = asked();
+    await expect(
+      approvals.request({
+        value: await editAsk("call_after_check"),
+        runId: RUN_ID,
+        sessionId: SESSION_ID,
+        onPermission: ask.onPermission,
+        signal: new AbortController().signal,
+        editBaseDigest: digestPort({ "src/example.ts": BASE }),
+      }),
+    ).resolves.toEqual({ outcome: "cancelled", actionId: `${SESSION_ID}:call_after_check` });
+    expect(ask.events).toEqual([]);
+
+    const log = createBufferedServerLogSink();
+    const teardown = createOpenCodeV2ApprovalRequests(undefined, log);
+    await expect(
+      teardown.request({
+        value: await editAsk("call_rejected_read"),
+        runId: RUN_ID,
+        sessionId: SESSION_ID,
+        onPermission: ask.onPermission,
+        signal: new AbortController().signal,
+        editBaseDigest: () => {
+          teardown.close();
+          return Promise.reject(new Error("read aborted by teardown"));
+        },
+      }),
+    ).resolves.toEqual({ outcome: "cancelled", actionId: `${SESSION_ID}:call_rejected_read` });
+    expect(
+      log.events
+        .filter((event) => event.op === "coding-runtime.approval.base-checked")
+        .map((event) => event.extra?.outcome),
+    ).toEqual(["cancelled"]);
+    expect(ask.events).toEqual([]);
   });
 
   // PR #3617 review: a registry closed while an edit's base is read, its run disposed, puts the ask

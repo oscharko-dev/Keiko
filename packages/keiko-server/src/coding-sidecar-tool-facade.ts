@@ -69,6 +69,7 @@ const CODING_SIDECAR_TOOL_FACADE_REJECTED_OPERATION = defineActivityLogOperation
         "approval-cancelled",
         "approval-unavailable",
         "approval-stale",
+        "approval-authority-denied",
       ],
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
@@ -96,6 +97,7 @@ const TOOL_FACADE_REJECTION_ERROR_KIND: Readonly<
   "approval-cancelled": "cancelled",
   "approval-unavailable": "unavailable",
   "approval-stale": "conflict",
+  "approval-authority-denied": "authority-denied",
 };
 
 interface ToolFacadeStatusMapping {

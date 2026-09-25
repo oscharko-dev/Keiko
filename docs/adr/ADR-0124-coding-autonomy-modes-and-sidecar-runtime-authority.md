@@ -223,9 +223,11 @@ them fail-closed with exact keys, so an ask that names another call or session, 
 match the asked files, never reaches the human (#3612). Before an edit ask is put to the human, the
 server compares each base with the digest a governed read of the file reports now. The read goes
 only as far as `keiko_workspace_read` would: the run's live authority and producer binding must
-admit a read of the path before and after it, without reserving a delegation. An expired or
-revoked run reads nothing, and its ask is refused as unavailable instead of reaching the human
-unverified. A stale base is refused without asking anyone, answered 409 with the
+admit a read of the path, and the run's exact managed workspace must still be the active one,
+before and after it, without reserving a delegation. An expired or revoked run, or one that lost
+its workspace, reads nothing: its ask is refused as `authority-denied` (route reason
+`approval-authority-denied`) instead of reaching the human unverified, and its tool call reads
+Denied. A stale base is refused without asking anyone, answered 409 with the
 edit's own `CONTENT_HASH_MISMATCH` refusal and re-read guidance for the model, and logged as
 `approval-stale` on the existing `coding-sidecar.tool-facade.rejected` line. Every check writes
 `coding-runtime.approval.base-checked` under the run's correlation: the ask's request id, the

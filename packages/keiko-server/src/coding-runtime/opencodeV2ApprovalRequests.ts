@@ -21,9 +21,11 @@ import { projectOpenCodePermissionEvent } from "./opencodeProtocol.js";
  * How one governed ask ended (#3610). Closed and body-free: the tool facade route logs a refusal
  * by it, so a denied or expired human decision is never recorded as an origin violation again.
  * `stale`: a changeset's base digest no longer matched its file, so no human was asked (#3612).
+ * `authority-denied`: the run's live authority, or its workspace, no longer admits the edit's
+ * reads, so no human was asked either (PR #3617 review).
  */
 export type OpenCodeV2ApprovalOutcome =
-  "approved" | "denied" | "expired" | "cancelled" | "unavailable" | "stale";
+  "approved" | "denied" | "expired" | "cancelled" | "unavailable" | "stale" | "authority-denied";
 
 /** A refused governed ask as the bridge reports it to the tool facade route. */
 export type ToolBridgeApprovalRejection =
@@ -47,8 +49,8 @@ export type OpenCodeV2EditBaseDigest = (
   signal: AbortSignal,
 ) => Promise<CodingToolEditBaseRead>;
 
-/** How a human decision ended; a stale base never reaches one. */
-type HumanDecisionOutcome = Exclude<OpenCodeV2ApprovalOutcome, "stale">;
+/** How a human decision ended; a stale base or a denied authority never reaches one. */
+type HumanDecisionOutcome = Exclude<OpenCodeV2ApprovalOutcome, "stale" | "authority-denied">;
 
 interface Pending {
   readonly runId: string;
@@ -258,8 +260,16 @@ function baseCheckDecision(
   if (outcome === "stale" && check.staleFile !== undefined) {
     return { outcome: "stale", actionId: ask.actionId, staleFile: check.staleFile };
   }
-  return { outcome: outcome === "cancelled" ? "cancelled" : "unavailable", actionId: ask.actionId };
+  return { outcome: BASE_CHECK_DECISIONS[outcome], actionId: ask.actionId };
 }
+
+const BASE_CHECK_DECISIONS = {
+  current: "unavailable",
+  stale: "unavailable",
+  denied: "authority-denied",
+  failed: "unavailable",
+  cancelled: "cancelled",
+} as const satisfies Readonly<Record<BaseCheckOutcome, OpenCodeV2ApprovalOutcome>>;
 
 function staleFileDigest(file: string): string {
   return createHash("sha256").update("keiko.approval.base-file.v1\0").update(file).digest("hex");
@@ -313,6 +323,11 @@ async function checkedBase(
     recordBaseCheck(activityLog, runId, ask, outcome, check);
     return baseCheckDecision(outcome, ask, check);
   } catch (error) {
+    // A read that rejects because its run is being torn down is the teardown, not a failure.
+    if (context.ended()) {
+      recordBaseCheck(activityLog, runId, ask, "cancelled", progress);
+      return { outcome: "cancelled", actionId: ask.actionId };
+    }
     recordBaseCheck(activityLog, runId, ask, "failed", progress);
     emitServerDiagnostic(diagnostics, {
       correlationId: runId,
@@ -401,6 +416,8 @@ async function decideAsk(
     const ended = (): boolean => signal.aborted || state.closed;
     const refused = await checkedBase(ask, runId, editBaseDigest, signal, { sinks, ended });
     if (refused !== undefined) return refused;
+    // Teardown may close the registry after the check returned and before this resumes.
+    if (ended()) return { outcome: "cancelled", actionId };
   }
   if (state.pending.size >= MAX_PENDING_ASKS || state.pending.has(event.requestId)) {
     return { outcome: "unavailable", actionId };

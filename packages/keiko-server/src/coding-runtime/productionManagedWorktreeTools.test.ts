@@ -523,9 +523,10 @@ describe("production managed worktree tools", () => {
     revokeDuringRead = false;
     authorityLive = true;
     readText.mockClear();
-    // Only while this run's exact managed workspace is the active one.
+    // Only while this run's exact managed workspace is the active one: a run that lost it reads
+    // nothing and says it was denied, so its ask never reaches the human (PR #3617 review).
     access = undefined;
-    await expect(editBaseDigest("src/example.ts")).resolves.toEqual(unreadable);
+    await expect(editBaseDigest("src/example.ts")).resolves.toEqual(denied);
     expect(readText).not.toHaveBeenCalled();
   });
 

@@ -1418,6 +1418,41 @@ describe("private OpenCode run control", () => {
     }
   });
 
+  // PR #3617 review: an edit the run's authority no longer admits is refused before any human is
+  // asked, and its tool call reads Denied instead of OpenCode's generic failure.
+  it("settles an edit the run's authority no longer admits as denied, asking no one", async () => {
+    const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
+    const recorder = settlementRecorder();
+    const deniedFacade: CodingToolFacade = {
+      execute: facade.execute,
+      editBaseDigest: () => Promise.resolve({ kind: "authority-denied" }),
+    };
+    const fixture = await startBridgeFixture(deniedFacade, undefined, {
+      mode: "governed-assist",
+      runtimeEvents,
+      safeActivity: recorder.safeActivity,
+      runControl: { promptBodies: [], abortSessions: [], statusResponses: [] },
+    });
+    try {
+      const response = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers({ authorization: `Bearer ${TOOL_CAPABILITY}` }),
+        body: JSON.stringify(await editAsk("call_revoked")),
+      });
+      expect(response).toMatchObject({ status: 403, rejection: "approval-authority-denied" });
+      expect(runtimeEvents.some((event) => event.kind === "permission-requested")).toBe(false);
+      expect(recorder.settlements).toEqual([
+        {
+          actionId: "ses_tool:call_revoked",
+          state: "denied",
+          occurredAt: expect.any(String) as string,
+        },
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
   it("accepts status omission only when causal terminal history exists", async () => {
     const prompt = "SENTINEL_PRIVATE_RUN_PROMPT";
     const initialContext = "SENTINEL_UNTRUSTED_ISSUE_CONTEXT";

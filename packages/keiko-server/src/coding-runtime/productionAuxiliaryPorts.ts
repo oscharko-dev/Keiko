@@ -163,7 +163,8 @@ export function workspaceAuthorityCheckedRead(
   };
 }
 
-function hasExactWorkspaceAccess(input: WorkspaceBoundReadInput): boolean {
+/** Whether the run's exact managed workspace is still the one its root access resolves to. */
+export function hasExactWorkspaceAccess(input: WorkspaceBoundReadInput): boolean {
   try {
     const access = input.resolveWorkspaceRootAccess();
     return access?.kind === "managed-task" && access.canonicalRoot === input.workspaceRoot;

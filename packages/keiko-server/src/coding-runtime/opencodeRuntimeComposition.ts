@@ -1460,6 +1460,8 @@ const DECIDED_TOOL_STATES: Readonly<
   expired: "cancelled",
   cancelled: "cancelled",
   stale: "failed",
+  // PR #3617 review: an edit the run's authority no longer admits is denied, not a generic failure.
+  "authority-denied": "denied",
 };
 
 function settleDecidedTool(
@@ -1492,6 +1494,7 @@ const APPROVAL_REJECTIONS: Readonly<
   cancelled: "approval-cancelled",
   unavailable: "approval-unavailable",
   stale: "approval-stale",
+  "authority-denied": "approval-authority-denied",
 };
 
 // The plugin only reads `response.ok`, so the status stays 403; the outcome rides beside it.
