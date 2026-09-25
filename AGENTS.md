@@ -621,10 +621,13 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   signed squash merges of up-to-date heads, so the commit that lands carries the identical tree sha
   as the head the required matrix already proved. The `dev` run resolves that first and skips the
   gates that evidence already carries, completing in about two minutes instead of ~48
-  ([ADR-0178](docs/adr/ADR-0178-reuse-proven-tree-evidence-on-integration-runs.md)). It fails closed
-  on every uncertainty, so one differing byte — including an edit to CI itself — runs the full
-  matrix. The pull-request run is unchanged and remains the complete arbiter: never treat a fast
-  `dev` run as permission to let a pull request go unmeasured.
+  ([ADR-0178](docs/adr/ADR-0178-reuse-proven-tree-evidence-on-integration-runs.md)). One chain is
+  never reused on `dev`: the coverage suites and the SonarCloud analysis run on every push to `dev`,
+  because SonarCloud files an analysis under the branch the scanner names and a pull-request analysis
+  never advances `dev`'s own history (ADR-0178 D1, amended 2026-09-25). It fails closed on every
+  uncertainty, so one differing byte — including an edit to CI itself — runs the full matrix. The
+  pull-request run is unchanged and remains the complete arbiter: never treat a fast `dev` run as
+  permission to let a pull request go unmeasured.
 - **Agent reaction SLO.** When a review finding is published on the current head, the delivering
   agent pushes one repair within 10 minutes of its appearance. In that window, harvest every
   already-published finding from every producer into one head. Do not wait for CI to turn green or
