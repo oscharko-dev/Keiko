@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "d6fe3752cd34365dfe31448d720123fec2667e901dc0783ebdf419c147b23b01" as const;
+  "31cde9f0fe8281178dd3c36aeacf76911d6806d461a1bcfa449afba265f35db6" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -6414,6 +6414,18 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: false,
+      },
+      rejection: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: [
+          "parent-message-unknown",
+          "message-unknown",
+          "tool-transition-refused",
+          "tool-name-missing",
+          "feed-unavailable",
+        ],
       },
       lossState: {
         type: "string",
@@ -35380,6 +35392,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "rejection",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
             },
           ],
           evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],

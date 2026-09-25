@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "d6fe3752cd34365dfe31448d720123fec2667e901dc0783ebdf419c147b23b01",
+    "catalogDigest": "31cde9f0fe8281178dd3c36aeacf76911d6806d461a1bcfa449afba265f35db6",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -6752,6 +6752,18 @@
             "dataClass": "count",
             "required": false
           },
+          "rejection": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "parent-message-unknown",
+              "message-unknown",
+              "tool-transition-refused",
+              "tool-name-missing",
+              "feed-unavailable"
+            ]
+          },
           "lossState": {
             "type": "string",
             "dataClass": "loss-state",
@@ -6767,8 +6779,8 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:46",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:518",
-          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:562"
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:560",
+          "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:605"
         ]
       },
       {
@@ -45439,6 +45451,12 @@
                   "type": "string",
                   "dataClass": "closed-enum",
                   "required": true
+                },
+                {
+                  "name": "rejection",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": false
                 }
               ],
               "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
@@ -74000,14 +74018,14 @@
     {
       "op": "coding-runtime.safe-activity",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1169",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1214",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.safe-activity",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1187",
+      "site": "packages/keiko-server/src/coding-runtime/codingSafeActivityProjection.ts:1232",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
