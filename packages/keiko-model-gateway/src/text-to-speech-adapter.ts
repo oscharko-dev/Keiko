@@ -238,10 +238,14 @@ const SPEECH_TTS_FAILURE_ERROR_KIND: Readonly<Record<TextToSpeechErrorKind, Acti
     "empty-audio": "validation-failed",
   };
 
+// THE COMPLETION LINE pairs with every dispatch line, whichever delivery shape the call took: the
+// buffered clip and the opened stream both report the same outcome vocabulary (PR #3602 review — the
+// streamed path once wrote a dispatch line and then nothing, so a timed-out or rate-limited stream
+// read like a call still in flight).
 function logCompleted(
   request: TextToSpeechRequest,
   timeoutMs: number,
-  outcome: TextToSpeechOutcome,
+  outcome: TextToSpeechOutcome | TextToSpeechStreamOutcome,
 ): void {
   const log = withCorrelationId(resolveLogSink(request.log), request.correlationId);
   const correlationId = logCorrelationId(log);
@@ -802,6 +806,20 @@ export async function requestTextToSpeechStream(
     return { ok: false, kind: "unsupported-model" };
   }
   const built = buildRequest(request);
+  const outcome = await dispatchAndOpenStream(built, request);
+  logCompleted(request, built.timeoutMs, outcome);
+  return outcome;
+}
+
+// Dispatches the built request and opens the bounded audio stream, without touching the activity
+// log — mirrors `dispatchAndDecode` for the buffered clip: the single caller above pairs this result
+// with THE COMPLETION LINE, so no exit can be added here without also being logged. "succeeded"
+// means the provider answered and the stream opened with audio in it; what happens to the bytes
+// after that is the consumer's own evidence.
+async function dispatchAndOpenStream(
+  built: BuiltRequest,
+  request: TextToSpeechRequestWithVoice,
+): Promise<TextToSpeechStreamOutcome> {
   const dispatched = await dispatch(built, request.fetchImpl, request.egress);
   if (typeof dispatched === "string") {
     return { ok: false, kind: dispatched };

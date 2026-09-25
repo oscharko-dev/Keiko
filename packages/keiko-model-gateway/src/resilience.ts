@@ -79,6 +79,17 @@ export function codingWorkbenchProviderTimeoutMs(timeoutMs: number): number {
   return Math.max(timeoutMs, GATEWAY_SILENCE_FLOOR_MS);
 }
 
+// The end-to-end budget of the ONE, unretried read `Gateway.chatStream()` performs: the provider's
+// `timeoutMs` (a coding-workbench-profiled caller raises it through `codingWorkbenchProviderTimeoutMs`
+// first), never below the silence floor its first byte is held to, and never below the
+// streamed-answer floor. `gateway.ts`'s `chatStreamBounds` takes its budget from here, and so does
+// the route deadline armed behind a streamed call (`gateway-route-deadline.ts` in keiko-server): a
+// route that backed a streamed call with the BUFFERED budget cut a healthy stream at ten minutes
+// while the gateway itself was still reading it (PR #3602 review).
+export function streamRequestBudgetMs(provider: { readonly timeoutMs: number }): number {
+  return Math.max(provider.timeoutMs, GATEWAY_SILENCE_FLOOR_MS, GATEWAY_STREAM_BUDGET_FLOOR_MS);
+}
+
 const GATEWAY_RETRY_BUDGET_EXHAUSTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,

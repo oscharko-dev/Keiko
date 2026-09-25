@@ -1083,25 +1083,44 @@ export const createHandleCommitDraft = (
     if (req === undefined) return errResult(400, "GIT_DELIVERY_COMMIT_BAD_REQUEST");
     const workspace = resolveProjectWorkspace(deps, req.projectId);
     if (workspace === undefined) return errResult(404, "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT");
-    const policy = await resolveGovernedCommitMessagePolicy(
-      deps,
-      workspace.root,
-      options.messagePolicy,
-    );
+    // Armed BEFORE the policy lookup: a client that leaves while the policy is still being resolved
+    // is already recorded on the signal the model call arms, so that call is never made for nobody
+    // (PR #3602 review). Disposed once both the lookup and the call have settled, however they end.
     const cancellation = commitDraftCancellation(ctx);
     try {
-      return await computeModelCommitDraft(deps, workspace, req, policy, seams, now, {
+      const policy = await resolveGovernedCommitMessagePolicy(
+        deps,
+        workspace.root,
+        options.messagePolicy,
+      );
+      return await draftWithModel(deps, workspace, req, policy, seams, now, {
         correlationId,
         signal: cancellation.signal,
       });
-    } catch (error) {
-      reportDraftWorktreeFailure(deps, correlationId, error);
-      return errResult(409, "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE");
     } finally {
       cancellation.dispose();
     }
   };
 };
+
+// The model call's own failure envelope: a worktree that cannot be read for the staged diff is a
+// 409, never a 500, and it is reported once with the request's correlation id.
+async function draftWithModel(
+  deps: UiHandlerDeps,
+  workspace: WorkspaceInfo,
+  req: CommitDraftRequest,
+  policy: GitCommitMessagePolicy,
+  seams: GitDeliveryExecutionSeams,
+  now: () => number,
+  run: CommitDraftRun,
+): Promise<RouteResult> {
+  try {
+    return await computeModelCommitDraft(deps, workspace, req, policy, seams, now, run);
+  } catch (error) {
+    reportDraftWorktreeFailure(deps, run.correlationId, error);
+    return errResult(409, "GIT_DELIVERY_COMMIT_WORKTREE_UNAVAILABLE");
+  }
+}
 
 // ─── Execute (governed, with message-policy gate) ───────────────────────────────────────────────
 

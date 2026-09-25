@@ -6,7 +6,6 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ProviderError,
-  ProviderOutputExhaustedError,
   resolveCodingSafeSidecarGatewayProfile,
   type GatewayCallRequest,
   type GatewayConfig,
@@ -19,12 +18,14 @@ import {
 import {
   codingWorkbenchProviderTimeoutMs,
   providerRequestBudgetMs,
+  streamRequestBudgetMs,
 } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import {
   AuthenticationError,
   CircuitOpenError,
   ConfigInvalidError,
   ContextOverflowError,
+  ProviderOutputExhaustedError,
   RateLimitError,
   TimeoutError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
@@ -1969,13 +1970,40 @@ describe("coding-sidecar gateway", () => {
   });
 
   // #3591: a 30 s configured timeout no longer bounds a Workbench turn. The one attempt is held to
-  // the 300 s silence floor, the buffered call to the 600 s budget floor, and the route adds its
-  // one-second grace behind that budget.
+  // the 300 s silence floor, the buffered call to the 600 s budget floor, a streamed read to the
+  // 1,800 s stream floor, and the route adds its one-second grace behind the LONGER of the two
+  // budgets — with no retries the buffered budget is the shorter one, and a deadline derived from
+  // it alone cancelled a healthy stream the gateway was still reading (PR #3602 review).
   it("keeps a slow Coding Workbench turn alive past a 30-second provider spike", () => {
     const slow = provider({ timeoutMs: 30_000, maxRetries: 0 });
     expect(
       codingSidecarGatewayRequestDeadlineMs(configValue(slow, capability()), slow.modelId),
-    ).toBe(601_000);
+    ).toBe(1_801_000);
+  });
+
+  // The sidecar reaches the gateway both ways (`chat()` buffered, `chatStream()` streamed), so the
+  // backstop must sit behind whichever budget is longer: the streamed read's when retries are few,
+  // the buffered retry budget when they are many.
+  it("sets the route deadline behind the streamed read's budget as well as the buffered one", () => {
+    for (const value of [
+      provider({ maxRetries: 0 }),
+      provider({ timeoutMs: 120_000, maxRetries: 1 }),
+      provider({ timeoutMs: 30_000, maxRetries: 3 }),
+      provider({ timeoutMs: 2_400_000, maxRetries: 0 }),
+    ]) {
+      const raised = { ...value, timeoutMs: codingWorkbenchProviderTimeoutMs(value.timeoutMs) };
+      const deadline = codingSidecarGatewayRequestDeadlineMs(
+        configValue(value, capability()),
+        value.modelId,
+      );
+      expect(deadline).toBeGreaterThan(streamRequestBudgetMs(raised));
+      expect(deadline).toBeGreaterThan(providerRequestBudgetMs(raised));
+    }
+    // The fixture that makes the buffered budget the longer one, so the assertion above is not
+    // satisfied by the stream floor alone.
+    const retried = provider({ timeoutMs: 30_000, maxRetries: 3 });
+    const raised = { ...retried, timeoutMs: codingWorkbenchProviderTimeoutMs(retried.timeoutMs) };
+    expect(providerRequestBudgetMs(raised)).toBeGreaterThan(streamRequestBudgetMs(raised));
   });
 
   // A timer armed with more than 2^31 - 1 ms fires at once: a budget that large must not turn the

@@ -1214,6 +1214,56 @@ describe("commit draft — explicit model-backed generation", () => {
     expect(result.status).toBe(503);
     expect(result.body).toMatchObject({ error: { code: "GIT_DELIVERY_COMMIT_DRAFT_FAILED" } });
   });
+
+  // PR #3602 review: the disconnect listeners used to be registered only after the commit policy
+  // had been resolved, so a client that left DURING that lookup was never recorded and the model
+  // call that followed ran for nobody. The cancellation is now armed before the lookup: the signal
+  // the model call receives is already aborted, and the port's own rejection settles the route.
+  it("records a client disconnect that happens while the commit policy is still being resolved", async () => {
+    let policyLookupStarted = false;
+    let releasePolicyLookup: (() => void) | undefined;
+    const policyLookup = new Promise<undefined>((resolve) => {
+      releasePolicyLookup = (): void => {
+        resolve(undefined);
+      };
+    });
+    // Only `read` is reached: the route resolves the policy through the settings control and
+    // nothing else on it, so the seam stands in for exactly that one call.
+    const editorSettingsControl = {
+      read: (): Promise<undefined> => {
+        policyLookupStarted = true;
+        return policyLookup;
+      },
+    } as unknown as NonNullable<UiHandlerDeps["editorSettingsControl"]>;
+    let signalAbortedAtCall: boolean | undefined;
+    const port: ModelPort = {
+      call: (_request, signal): Promise<NormalizedResponse> => {
+        signalAbortedAtCall = signal.aborted;
+        return Promise.reject(new CancelledError("client cancelled"));
+      },
+    };
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+    });
+    const ctx = ctxFor(DRAFT, { schemaVersion: "1", projectId });
+
+    const pending = handler(
+      ctx,
+      deps({ config: DRAFT_GATEWAY_CONFIG, modelPortFactory: () => port, editorSettingsControl }),
+    );
+    await vi.waitFor(() => {
+      expect(policyLookupStarted).toBe(true);
+    });
+    ctx.req.emit("aborted");
+    releasePolicyLookup?.();
+
+    const result = await pending;
+    expect(signalAbortedAtCall).toBe(true);
+    expect(result.status).toBe(503);
+    expect(result.body).toMatchObject({ error: { code: "GIT_DELIVERY_COMMIT_DRAFT_FAILED" } });
+  });
 });
 
 describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () => {

@@ -40,9 +40,9 @@ import {
   executeWithRetry,
   GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
   GATEWAY_SILENCE_FLOOR_MS,
-  GATEWAY_STREAM_BUDGET_FLOOR_MS,
   providerRequestBudgetMs,
   providerRetryConfig,
+  streamRequestBudgetMs,
   systemClock,
 } from "./resilience.js";
 import { assertValidGatewaySamplingParameters } from "./types.js";
@@ -654,10 +654,11 @@ function effectiveBufferedAttemptMs(provider: ModelProviderConfig): number {
 // every interactive gateway surface is (#3591) — a slow gateway is not a broken gateway. Unlike
 // `streamedReadBounds` (the buffered `chat()` path's per-attempt bound), there is no retry budget
 // to derive a total from, so both bounds come straight from the provider's own (possibly
-// Coding-Workbench-raised) `timeoutMs`, floored to the streamed-answer floor.
+// Coding-Workbench-raised) `timeoutMs`: the silence bound floored to the silence floor, the budget
+// through `streamRequestBudgetMs` — the one derivation the route deadline behind a streamed call
+// shares (PR #3602 review).
 function chatStreamBounds(provider: ModelProviderConfig): StreamReadBounds {
-  const silenceMs = effectiveSilenceMs(provider);
-  return { silenceMs, budgetMs: Math.max(silenceMs, GATEWAY_STREAM_BUDGET_FLOOR_MS) };
+  return { silenceMs: effectiveSilenceMs(provider), budgetMs: streamRequestBudgetMs(provider) };
 }
 
 // One attempt's answer: over the provider's stream when the attempt has read bounds, whole

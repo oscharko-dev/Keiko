@@ -688,6 +688,95 @@ describe("requestTextToSpeech", () => {
     });
   });
 
+  // The streamed delivery shape writes the same completion line as the buffered clip (review finding
+  // on PR #3602: `requestTextToSpeechStream` wrote a dispatch line and then nothing, so a timed-out
+  // stream was indistinguishable from a call still in flight). One case per exit class of the
+  // dispatch: the timeout, a provider rejection, and an opened stream.
+  it("logs the streamed call's completed line with a timeout failureKind on a timeout outcome", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const outcome = await requestTextToSpeechStream({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-tts",
+      input: ANSWER,
+      voice: "configured-voice",
+      correlationId: "corr-tts-stream-timeout",
+      log: { write: (event): void => void events.push(event) },
+      fetchImpl: mockFetch(() => {
+        throw new DOMException("timed out", "TimeoutError");
+      }),
+    });
+    expect(outcome).toEqual({ ok: false, kind: "timeout" });
+    const completed = events.find((event) => event.op === "speech.tts.request.completed");
+    expect(completed).toMatchObject({
+      level: "warn",
+      category: "gateway",
+      op: "speech.tts.request.completed",
+      correlationId: "corr-tts-stream-timeout",
+      errorKind: "timeout",
+      extra: {
+        outcome: "failed",
+        failureKind: "timeout",
+        timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS,
+      },
+    });
+    expect(events.map((event) => event.op)).toEqual([
+      "speech.tts.request.dispatch",
+      "speech.tts.request.completed",
+    ]);
+  });
+
+  it("logs the streamed call's completed line with a rate-limited failureKind on a 429 outcome", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const outcome = await requestTextToSpeechStream({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-tts",
+      input: ANSWER,
+      voice: "configured-voice",
+      correlationId: "corr-tts-stream-rate-limit",
+      log: { write: (event): void => void events.push(event) },
+      fetchImpl: mockFetch(() => new Response("", { status: 429 })),
+    });
+    expect(outcome).toEqual({ ok: false, kind: "rate-limited" });
+    const completed = events.find((event) => event.op === "speech.tts.request.completed");
+    expect(completed).toMatchObject({
+      level: "warn",
+      op: "speech.tts.request.completed",
+      correlationId: "corr-tts-stream-rate-limit",
+      errorKind: "rate-limited",
+      extra: { outcome: "failed", failureKind: "rate-limited" },
+    });
+  });
+
+  it("logs the streamed call's completed line as succeeded once the audio stream has opened", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const outcome = await requestTextToSpeechStream({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-tts",
+      input: ANSWER,
+      voice: "configured-voice",
+      correlationId: "corr-tts-stream-ok",
+      log: { write: (event): void => void events.push(event) },
+      fetchImpl: mockFetch(() => audioResponse(AUDIO_BYTES)),
+    });
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.value.mimeType).toBe("audio/mpeg");
+      await outcome.value.body.cancel();
+    }
+    const completed = events.find((event) => event.op === "speech.tts.request.completed");
+    expect(completed).toMatchObject({
+      level: "info",
+      op: "speech.tts.request.completed",
+      correlationId: "corr-tts-stream-ok",
+      extra: { outcome: "succeeded", timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS },
+    });
+    expect(completed).not.toHaveProperty("errorKind");
+    expect(completed?.extra).not.toHaveProperty("failureKind");
+  });
+
   it("never leaks the api key into the URL or request body", async () => {
     let seenUrl = "";
     let seenBody = "";
