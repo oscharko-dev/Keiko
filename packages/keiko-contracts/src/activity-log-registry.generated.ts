@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "b22efcb639973c2bdd7ec5f885666399fcf7c935ddfa7031a99f100b2d13424a" as const;
+  "e6ff4f9103465a86c5c98ff099bbef6ee47d9c4304c8cedbc33cc3f69bba0754" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -6925,7 +6925,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["candidate-not-staged", "candidate-drift", "proof-unavailable"],
+        values: ["candidate-not-staged", "buffers-dirty", "candidate-drift", "proof-unavailable"],
       },
       proofStage: {
         type: "string",
@@ -7648,6 +7648,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "approval-expired",
           "approval-cancelled",
           "approval-unavailable",
+          "approval-stale",
         ],
       },
     },

@@ -800,6 +800,7 @@ function applyTool(
   const existingIndex = located.turn.tools.findIndex(({ callId }) => callId === signal.callId);
   const existing = located.turn.tools[existingIndex];
   if (existing !== undefined) {
+    if (closedVerdictKept(existing.state, signal.state)) return "accepted";
     if (!allowedToolTransition(existing.state, signal.state)) return "tool-transition-refused";
     located.turn.tools[existingIndex] = {
       ...existing,
@@ -989,6 +990,16 @@ function boundedCharacters(value: string, maxChars: number): readonly string[] {
 function candidateMessageBytes(message: MutableMessage, text: string, truncated: boolean): number {
   const segment: CodingSafeActivityTextSegment = { kind: "text", text, truncated };
   return bytes({ ...message, segments: [...message.segments, segment], truncated });
+}
+
+// Only Keiko settles a tool call as denied or cancelled (a human's verdict, a stopped call). OpenCode
+// then reports the refused call as a generic failure; that report restates the closed verdict and is
+// kept as a no-op instead of an omitted update (#3612).
+function closedVerdictKept(
+  from: CodingSafeActivityToolState,
+  to: CodingSafeActivityToolState,
+): boolean {
+  return (from === "denied" || from === "cancelled") && to === "failed";
 }
 
 function allowedToolTransition(

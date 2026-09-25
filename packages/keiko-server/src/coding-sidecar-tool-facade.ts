@@ -33,7 +33,9 @@ import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 // table (200 success, 502 a genuine facade-execution failure already diagnosed at its own source,
 // 503 no run is currently active) intentionally emits no "rejected" line here. A refused governed
 // ask is a 403 too, but names the human decision's outcome (#3610): denied, expired, cancelled, or
-// unavailable when it could not be put to the human.
+// unavailable when it could not be put to the human. A changeset whose base digest is already stale
+// is never put to the human: a 409 names it `approval-stale` and carries the edit's refusal result
+// for the model (#3612).
 type CodingSidecarToolFacadeRejectionReason =
   | "origin-not-allowed"
   | "capability-invalid"
@@ -66,6 +68,7 @@ const CODING_SIDECAR_TOOL_FACADE_REJECTED_OPERATION = defineActivityLogOperation
         "approval-expired",
         "approval-cancelled",
         "approval-unavailable",
+        "approval-stale",
       ],
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
@@ -92,6 +95,7 @@ const TOOL_FACADE_REJECTION_ERROR_KIND: Readonly<
   "approval-expired": "timeout",
   "approval-cancelled": "cancelled",
   "approval-unavailable": "unavailable",
+  "approval-stale": "conflict",
 };
 
 interface ToolFacadeStatusMapping {
@@ -290,6 +294,8 @@ function toolFacadeRouteResult(ctx: RouteContext, result: OpenCodeToolBridgeResp
   // Only a bare 403 is an origin refusal; a refused governed ask names its decision (#3610).
   const reason = result.rejection ?? mapping.reason;
   if (reason !== undefined) logToolFacadeRejection(ctx, result.status, reason);
+  // The model reads a stale base's refusal result as the edit's own answer (#3612).
+  if (reason === "approval-stale") return { status: 409, body: JSON.parse(result.body) as unknown };
   return {
     status: result.status,
     body: errorBody(mapping.code, mapping.message, ctx.correlationId),

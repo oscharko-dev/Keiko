@@ -12,7 +12,7 @@ import {
   createCanonicalCatalogFacadeBridge,
   type CanonicalCatalogContext,
 } from "../tool-catalog/catalogToolFacadeBridge.js";
-import { createCodingToolFacade } from "./codingToolFacade.js";
+import { createCodingToolFacade, staleEditBaseToolResult } from "./codingToolFacade.js";
 import type {
   CodingToolAuthorityPort,
   CodingToolDelegatePort,
@@ -1231,6 +1231,16 @@ describe("CodingToolFacade", () => {
       extra: true,
     },
     { commitProof: "unavailable", reasonCode: "candidate-not-staged", nextAction: "verify-again" },
+    // #3612: unsaved buffers are saved, never staged, and name no paths.
+    { commitProof: "unavailable", reasonCode: "buffers-dirty", nextAction: "stage-then-verify" },
+    {
+      commitProof: "unavailable",
+      reasonCode: "buffers-dirty",
+      nextAction: "save-then-verify",
+      blocking: { unstagedCount: 0, untrackedCount: 0, unstaged: [], untracked: [] },
+    },
+    { commitProof: "unavailable", reasonCode: "candidate-drift", nextAction: "save-then-verify" },
+    { commitProof: "unavailable", reasonCode: "unknown-reason", nextAction: "verify-again" },
   ])("strips a malformed verification proof payload", async (commit) => {
     const verification = { status: "passed", completed: ["test"], commit };
     const ports = facade();
@@ -1285,6 +1295,15 @@ describe("CodingToolFacade", () => {
       },
     },
     { status: "passed", completed: ["test"], commit: { commitProof: "recorded" } },
+    {
+      status: "passed",
+      completed: ["test"],
+      commit: {
+        commitProof: "unavailable",
+        reasonCode: "buffers-dirty",
+        nextAction: "save-then-verify",
+      },
+    },
   ])("preserves executed checks independently of commit proof", async (verification) => {
     const ports = facade();
     ports.delegate.execute = vi.fn(() => Promise.resolve({ outcome: "completed", verification }));
@@ -1294,6 +1313,41 @@ describe("CodingToolFacade", () => {
         capability,
       }),
     ).resolves.toMatchObject({ status: "completed", verification });
+  });
+
+  // #3612: a stale base refused at the governed ask reads to the model like the editor route's own
+  // CONTENT_HASH_MISMATCH refusal after an approval: the same evidence code and re-read guidance.
+  it("answers a stale changeset base with the edit refusal's evidence and guidance", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "failed",
+        reasonCode: "CONTENT_HASH_MISMATCH",
+        message: "The changeset file content hash no longer matches.",
+      }),
+    );
+    const afterApproval = await createCodingToolFacade(ports).execute({
+      body: requestBody({
+        action: "edit",
+        changeset: {
+          patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-a\n+b\n",
+          files: [{ file: "src/a.ts", expectedContentHash: "a".repeat(64) }],
+        },
+      }),
+      capability,
+    });
+    const beforeAsking = staleEditBaseToolResult("src/a.ts");
+    expect(beforeAsking).toEqual({
+      ...afterApproval,
+      detail: "The file changed after its read: src/a.ts",
+    });
+    expect(afterApproval).toMatchObject({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "CONTENT_HASH_MISMATCH" }],
+    });
+    // A path outside the printable detail bound is left out, never echoed.
+    expect(staleEditBaseToolResult("src/\u00e4.ts")).not.toHaveProperty("detail");
+    expect(staleEditBaseToolResult("src/\u00e4.ts")).toHaveProperty("guidance");
   });
 
   // isVerifiedCommitBlockingPaths/isBlockingPathList: bounded, workspace-relative, exact-keyed.

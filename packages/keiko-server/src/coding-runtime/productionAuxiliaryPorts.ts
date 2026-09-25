@@ -145,8 +145,14 @@ export function createProductionAuxiliaryPorts(
   };
 }
 
-function workspaceAuthorityCheckedRead(
-  input: ProductionAuxiliaryPortInput,
+type WorkspaceBoundReadInput = Pick<
+  ProductionAuxiliaryPortInput,
+  "workspaceRoot" | "resolveWorkspaceRootAccess" | "secureWorkspaceTextRead"
+>;
+
+/** The secure read, answered only while the run's exact managed workspace is the active one. */
+export function workspaceAuthorityCheckedRead(
+  input: WorkspaceBoundReadInput,
 ): SecureWorkspaceTextReadPort {
   return {
     readText: async (request): ReturnType<SecureWorkspaceTextReadPort["readText"]> => {
@@ -157,7 +163,7 @@ function workspaceAuthorityCheckedRead(
   };
 }
 
-function hasExactWorkspaceAccess(input: ProductionAuxiliaryPortInput): boolean {
+function hasExactWorkspaceAccess(input: WorkspaceBoundReadInput): boolean {
   try {
     const access = input.resolveWorkspaceRootAccess();
     return access?.kind === "managed-task" && access.canonicalRoot === input.workspaceRoot;

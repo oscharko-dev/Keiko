@@ -29,7 +29,11 @@ import {
   UNKNOWN_CORRELATION_ID,
 } from "../correlation.js";
 import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";
-import { isExactEditorAgentChangeset, type CodingToolReadResult } from "./codingToolIpc.js";
+import {
+  isExactEditorAgentChangeset,
+  isGovernedReadPath,
+  type CodingToolReadResult,
+} from "./codingToolIpc.js";
 import type { CodingToolActionOf, GovernedCodingToolPort } from "./codingToolGovernedDelegate.js";
 import type {
   CodingRuntimeEditorMutationLeaseCoordinator,
@@ -585,11 +589,35 @@ function completedRead(
       byteCount: Buffer.byteLength(window.text, "utf8"),
       // The digest always covers the WHOLE file so a later changeset's expectedContentHash stays
       // anchored to the governed read even when the model only saw a window of it.
-      digest: createHash("sha256").update(text, "utf8").digest("hex"),
+      digest: wholeFileDigest(text),
       totalLines: window.totalLines,
       ...(window.nextStartLine === undefined ? {} : { nextStartLine: window.nextStartLine }),
     },
   };
+}
+
+// One formula for the digest a read reports and the pre-ask base check compares against (#3612).
+function wholeFileDigest(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+/**
+ * The digest a governed read of `relativePath` reports now, or undefined when that read would not
+ * return the whole file (denied path, missing file, over the read bound, read refused). The pre-ask
+ * base check of a changeset compares it with the model's `expectedContentHash` (#3612); only the
+ * comparison leaves the server, never the text. A denied path is never read, so the check cannot
+ * serve as a digest oracle for a file the model is not allowed to read.
+ */
+export async function governedWorkspaceFileDigest(
+  read: SecureWorkspaceTextReadPort,
+  relativePath: string,
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  if (!isGovernedReadPath(relativePath)) return undefined;
+  const result = await read.readText({ relativePath, signal });
+  return result.ok && Buffer.byteLength(result.text, "utf8") <= MAX_READ_BYTES
+    ? wholeFileDigest(result.text)
+    : undefined;
 }
 
 function recordCompletedRead(

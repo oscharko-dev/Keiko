@@ -205,6 +205,19 @@ contract. Request kinds are closed and action-class aligned, including:
 A permission request carries only ids, enums, expiry, requested connector scopes, and redacted safe
 labels. It never carries raw command logs, file contents, prompts, or credentials.
 
+The V2 governed ask a generated OpenCode plugin sends (`action: "permission-request"`) also names the
+tool call it asks for (`actionId`, the call's own `sessionID:id` identity, bound to the ask id) and,
+for a changeset edit, one base digest per asked file (`baseDigests`: the file and the
+`expectedContentHash` the edit is built on). Both are body-free. The approval registry validates
+them fail-closed with exact keys, so an ask that names another call or session, or whose bases do not
+match the asked files, never reaches the human (#3612). Before an edit ask is put to the human, the
+server compares each base with the digest a governed read of the file reports now; a stale base is
+refused without asking anyone, answered 409 with the edit's own `CONTENT_HASH_MISMATCH` refusal and
+re-read guidance for the model, and logged as `approval-stale` on the existing
+`coding-sidecar.tool-facade.rejected` line. A denied ask settles its tool call as `denied`, an expired
+or cancelled one as `cancelled`, so the timeline shows the human's verdict instead of the generic
+failure OpenCode reports for a refused call.
+
 ### D7 — Coding evidence is content-free by construction
 
 Coding Workbench evidence records are contract-validated and redacted before persistence or review.

@@ -74,4 +74,11 @@ export interface CodingToolFacadeInput {
 
 export interface CodingToolFacade {
   readonly execute: (input: CodingToolFacadeInput) => Promise<CodingToolResult>;
+  /**
+   * The digest a governed read of the file reports now, or undefined when it cannot say (#3612).
+   * The governed ask checks a changeset's base digests with it before any human is asked; a facade
+   * without it leaves that check to the editor route after the approval.
+   */
+  readonly editBaseDigest?:
+    ((relativePath: string, signal: AbortSignal) => Promise<string | undefined>) | undefined;
 }

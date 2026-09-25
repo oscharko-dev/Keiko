@@ -620,6 +620,40 @@ describe("verified Code-task commit service", () => {
     ).toMatchObject({ extra: { state: "blocked", reason: "buffers-dirty" } });
   });
 
+  // #3612: the verification answered the same dirty buffers as candidate-not-staged with
+  // stage-then-verify, which the model could never satisfy, since nothing was unstaged.
+  it("refuses a verification over unsaved editor buffers as buffers-dirty, and logs that cause", async () => {
+    service = createVerifiedCommitService({
+      ...options,
+      context: () => ({ ...context(), buffersClean: (): boolean => false }),
+    });
+    expect(await service.beginVerification()).toEqual({
+      kind: "refused",
+      reason: "buffers-dirty",
+      blocking: { unstagedCount: 0, untrackedCount: 0, unstaged: [], untracked: [] },
+    });
+    expect(events.find((event) => event.extra?.phase === "verification-unavailable")).toMatchObject(
+      {
+        op: "git.verified-commit",
+        extra: { reason: "buffers-dirty", unstagedCount: 0, untrackedCount: 0 },
+      },
+    );
+  });
+
+  // Unstaged work stays the cause while it exists, even with dirty buffers beside it.
+  it("names an unstaged candidate before dirty buffers", async () => {
+    writeFileSync(join(root, "code.js"), "export const value = 3;\n");
+    service = createVerifiedCommitService({
+      ...options,
+      context: () => ({ ...context(), buffersClean: (): boolean => false }),
+    });
+    expect(await service.beginVerification()).toMatchObject({
+      kind: "refused",
+      reason: "candidate-not-staged",
+      blocking: { unstagedCount: 1, unstaged: ["code.js"] },
+    });
+  });
+
   it("requires verification and refuses forged or cross-proposal approvals without a Git effect", async () => {
     const before = git(["rev-parse", "HEAD"]);
     expect(await service.propose("feat: no verification")).toMatchObject({

@@ -47,6 +47,7 @@ import {
   type CodingToolResult,
 } from "./codingToolIpc.js";
 import type { CodingToolFacade } from "./codingToolFacadePorts.js";
+import { staleEditBaseToolResult } from "./codingToolFacade.js";
 import type { OpenCodeQuestionRequest } from "./opencodeHttpClient.js";
 import {
   createOpenCodeV2HttpClient,
@@ -57,6 +58,7 @@ import { createOpenCodeV2HistoryProjection, OpenCodeV2HistoryError } from "./ope
 import { recordContextPresentation } from "./codingRuntimeHistory.js";
 import {
   createOpenCodeV2ApprovalRequests,
+  type OpenCodeV2ApprovalDecision,
   type OpenCodeV2ApprovalOutcome,
   type ToolBridgeApprovalRejection,
 } from "./opencodeV2ApprovalRequests.js";
@@ -1388,7 +1390,7 @@ function handleDirectToolRequest(
   }
   const permission = parseV2PermissionRequest(input.body);
   if (permission !== undefined) {
-    return handleV2PermissionRequest(permission, input.signal, approvals, runs);
+    return handleV2PermissionRequest(permission, input.signal, deps, approvals, runs);
   }
   const admission = gate.admit(
     toolBridgeRequestDeadlineMs(gate.limits.requestDeadlineMs, input.body),
@@ -1410,6 +1412,7 @@ function parseV2PermissionRequest(body: string): Readonly<Record<string, unknown
 async function handleV2PermissionRequest(
   value: Readonly<Record<string, unknown>>,
   signal: AbortSignal | undefined,
+  deps: ToolBridgeExecutionDeps,
   approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>,
   runs: ReadonlyMap<string, PreparedRun>,
 ): Promise<OpenCodeToolBridgeResponse> {
@@ -1417,16 +1420,50 @@ async function handleV2PermissionRequest(
   if (signal?.aborted === true) return refusedApproval("cancelled");
   if (run?.ready !== true || run.sessionId === undefined || run.onPermission === undefined)
     return refusedApproval("unavailable");
-  const outcome = await approvals.request({
+  const decision = await approvals.request({
     value,
     runId: run.runId,
     sessionId: run.sessionId,
     onPermission: run.onPermission,
     signal: signal ?? new AbortController().signal,
+    editBaseDigest: deps.facade.editBaseDigest,
   });
-  return outcome === "approved"
-    ? { status: 200, body: '{"status":"approved"}' }
-    : refusedApproval(outcome);
+  settleDecidedTool(deps.settleTool, decision);
+  return approvalResponse(decision);
+}
+
+// The tool call a refused ask ends is settled with Keiko's own verdict (#3612): OpenCode reports
+// any refused call as a generic failure, which read "Failed" for a human's denial. A stale base is
+// a failed edit, reached without asking anyone.
+const DECIDED_TOOL_STATES: Readonly<
+  Partial<Record<OpenCodeV2ApprovalOutcome, OpenCodeToolSettlementState>>
+> = {
+  denied: "denied",
+  expired: "cancelled",
+  cancelled: "cancelled",
+  stale: "failed",
+};
+
+function settleDecidedTool(
+  settleTool: SafeToolSettlement | undefined,
+  decision: OpenCodeV2ApprovalDecision,
+): void {
+  const state = DECIDED_TOOL_STATES[decision.outcome];
+  if (state !== undefined) settleSafeTool(settleTool, decision.actionId, state);
+}
+
+// A stale base answers with the edit's own refusal result, which the plugin hands to the model in
+// place of the tool call, so the model reads the same re-read guidance as after an approval.
+function approvalResponse(decision: OpenCodeV2ApprovalDecision): OpenCodeToolBridgeResponse {
+  if (decision.outcome === "approved") return { status: 200, body: '{"status":"approved"}' };
+  if (decision.outcome === "stale") {
+    return {
+      status: 409,
+      body: JSON.stringify(staleEditBaseToolResult(decision.staleFile)),
+      rejection: "approval-stale",
+    };
+  }
+  return refusedApproval(decision.outcome);
 }
 
 const APPROVAL_REJECTIONS: Readonly<
@@ -1436,6 +1473,7 @@ const APPROVAL_REJECTIONS: Readonly<
   expired: "approval-expired",
   cancelled: "approval-cancelled",
   unavailable: "approval-unavailable",
+  stale: "approval-stale",
 };
 
 // The plugin only reads `response.ok`, so the status stays 403; the outcome rides beside it.

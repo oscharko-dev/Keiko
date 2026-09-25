@@ -58,6 +58,7 @@ import {
   projectOpenCodeV2ProtocolSurface,
 } from "./opencodeProtocolSurface.js";
 import { OPENCODE_HISTORY_RESPONSE_MAX_BYTES } from "./opencodeProtocol.js";
+import { capturedGeneratedV2Ask } from "./opencodeFunctionalHarness/_governedTools.js";
 import { createOpenCodeV2HistoryProjection } from "./opencodeV2History.js";
 import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
 import { openCodeToolClientTimeoutMs } from "./opencodeRuntimeAdapter.js";
@@ -588,6 +589,7 @@ async function startBridgeFixture(
       input.body === '{"action":"permission-event","requestId":"keiko-readiness"}'
         ? Promise.resolve({ status: "observed", evidence: [] })
         : facade.execute(input),
+    editBaseDigest: facade.editBaseDigest,
   };
   const runtime = (await compositionModule()).createOpenCodeRuntimeComposition({
     portable: { verification: portable.verification, resourceRoot, target: "macos-arm64" },
@@ -1231,6 +1233,56 @@ describe("private OpenCode run control", () => {
     }
   });
 
+  // The ask as the generated V2 plugin sends it for one keiko_changeset_edit call (#3612).
+  const editAsk = (callId: string): Promise<Record<string, unknown>> =>
+    capturedGeneratedV2Ask({
+      runId: FIXTURE_RUN_ID,
+      sessionId: "ses_tool",
+      callId,
+      tool: "keiko_changeset_edit",
+      args: {
+        changeset: {
+          patch: "--- a/src/example.ts\n+++ b/src/example.ts\n@@ -1 +1 @@\n-old\n+new\n",
+          files: [{ file: "src/example.ts", expectedContentHash: "a".repeat(64) }],
+        },
+      },
+    });
+  const settlementRecorder = (): {
+    readonly safeActivity: NonNullable<StartBridgeControl["safeActivity"]>;
+    readonly settlements: Parameters<
+      NonNullable<StartBridgeControl["safeActivity"]>["settleTool"]
+    >[0][];
+  } => {
+    const settlements: Parameters<
+      NonNullable<StartBridgeControl["safeActivity"]>["settleTool"]
+    >[0][] = [];
+    return {
+      settlements,
+      safeActivity: {
+        arm: vi.fn(),
+        clear: vi.fn(),
+        ingest: () => true,
+        recordDrops: vi.fn(),
+        settleTool: (settlement): void => {
+          settlements.push(settlement);
+        },
+      },
+    };
+  };
+  const permissionRequested = async (
+    runtimeEvents: readonly CodingWorkbenchRuntimeEvent[],
+  ): Promise<string> => {
+    await vi.waitFor(() => {
+      expect(runtimeEvents.some((event) => event.kind === "permission-requested")).toBe(true);
+    });
+    const event = runtimeEvents.find((candidate) => candidate.kind === "permission-requested");
+    const permission = event?.permissionRequest;
+    if (permission === undefined || Array.isArray(permission)) {
+      throw new Error("expected public permission request");
+    }
+    return permission.requestId;
+  };
+
   it("aliases live permission ids and resolves only the run-owned upstream request", async () => {
     const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
     const permissionRequests: {
@@ -1238,32 +1290,13 @@ describe("private OpenCode run control", () => {
       readonly path: string;
       readonly body?: string;
     }[] = [];
-    const upstreamPermission = {
-      id: "per_upstream_1",
-      sessionID: "ses_tool",
-      permission: "keiko_governed_action",
-      patterns: ["src/example.ts"],
-      always: [],
-      tool: { messageID: "msg_1", callID: "call_1" },
-      metadata: {
-        kind: "workspace-write",
-        actionClass: "workspace-write",
-        reasonCode: "approval-required",
-        expiresAt: "2099-07-23T14:05:00.000Z",
-        actionKind: "file-edit",
-        scopeLabel: "workspace-scope",
-        risk: "medium",
-        policyReason: "approval-required",
-        targetPath: "src/example.ts",
-        allowedRelativePaths: ["src/example.ts"],
-        fileCount: 1,
-        addedLines: 1,
-        deletedLines: 1,
-      },
-    };
+    const ask = await editAsk("call_1");
+    const upstreamPermission = ask.properties as { readonly id: string };
+    const recorder = settlementRecorder();
     const fixture = await startBridgeFixture(facade, undefined, {
       mode: "governed-assist",
       runtimeEvents,
+      safeActivity: recorder.safeActivity,
       runControl: {
         promptBodies: [],
         abortSessions: [],
@@ -1276,23 +1309,10 @@ describe("private OpenCode run control", () => {
       const decision = fixture.runtime.toolBridge.handle({
         method: "POST",
         headers: new Headers({ authorization: `Bearer ${TOOL_CAPABILITY}` }),
-        body: JSON.stringify({
-          action: "permission-request",
-          runId: FIXTURE_RUN_ID,
-          properties: upstreamPermission,
-        }),
+        body: JSON.stringify(ask),
       });
-      await vi.waitFor(() => {
-        expect(runtimeEvents.some((event) => event.kind === "permission-requested")).toBe(true);
-      });
-      const event = runtimeEvents.find((candidate) => candidate.kind === "permission-requested");
-      const permission = event?.permissionRequest;
-      if (permission === undefined || Array.isArray(permission)) {
-        throw new Error("expected public permission request");
-      }
-      expect(permission.requestId).toMatch(/^permission-[0-9]+$/u);
-      expect(permission.scopeLabel).toBe("workspace-scope");
-      const { requestId } = permission;
+      const requestId = await permissionRequested(runtimeEvents);
+      expect(requestId).toMatch(/^permission-[0-9]+$/u);
       expect(requestId).not.toBe(upstreamPermission.id);
       await expect(
         fixture.runtime.runPort.replyPermission(FIXTURE_RUN_ID, upstreamPermission.id, "reject"),
@@ -1304,6 +1324,91 @@ describe("private OpenCode run control", () => {
       // #3610: the refusal names the human decision, so the route never logs it as an origin refusal.
       await expect(decision).resolves.toMatchObject({ status: 403, rejection: "approval-denied" });
       expect(permissionRequests).toEqual([]);
+      // #3612: the refused call is settled with the human's verdict, never left to OpenCode's
+      // generic failure that read "Failed" for a denial.
+      expect(recorder.settlements).toEqual([
+        { actionId: "ses_tool:call_1", state: "denied", occurredAt: expect.any(String) as string },
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("settles an ask whose caller went away as cancelled (#3612)", async () => {
+    const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
+    const recorder = settlementRecorder();
+    const fixture = await startBridgeFixture(facade, undefined, {
+      mode: "governed-assist",
+      runtimeEvents,
+      safeActivity: recorder.safeActivity,
+      runControl: { promptBodies: [], abortSessions: [], statusResponses: [] },
+    });
+    try {
+      const caller = new AbortController();
+      const decision = fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers({ authorization: `Bearer ${TOOL_CAPABILITY}` }),
+        body: JSON.stringify(await editAsk("call_gone")),
+        signal: caller.signal,
+      });
+      await permissionRequested(runtimeEvents);
+      caller.abort();
+      await expect(decision).resolves.toMatchObject({
+        status: 403,
+        rejection: "approval-cancelled",
+      });
+      expect(recorder.settlements).toEqual([
+        {
+          actionId: "ses_tool:call_gone",
+          state: "cancelled",
+          occurredAt: expect.any(String) as string,
+        },
+      ]);
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  it("refuses a stale changeset base before any human is asked (#3612)", async () => {
+    const runtimeEvents: CodingWorkbenchRuntimeEvent[] = [];
+    const recorder = settlementRecorder();
+    const checked: string[] = [];
+    const staleFacade: CodingToolFacade = {
+      execute: facade.execute,
+      editBaseDigest: (relativePath) => {
+        checked.push(relativePath);
+        return Promise.resolve("b".repeat(64));
+      },
+    };
+    const fixture = await startBridgeFixture(staleFacade, undefined, {
+      mode: "governed-assist",
+      runtimeEvents,
+      safeActivity: recorder.safeActivity,
+      runControl: { promptBodies: [], abortSessions: [], statusResponses: [] },
+    });
+    try {
+      const response = await fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers({ authorization: `Bearer ${TOOL_CAPABILITY}` }),
+        body: JSON.stringify(await editAsk("call_stale")),
+      });
+      expect(response).toMatchObject({ status: 409, rejection: "approval-stale" });
+      // The model reads the edit's own re-read guidance, exactly as after an approval.
+      expect(JSON.parse(response.body)).toEqual({
+        status: "failed",
+        evidence: [{ kind: "governed-delegate", code: "CONTENT_HASH_MISMATCH" }],
+        detail: "The file changed after its read: src/example.ts",
+        guidance: expect.stringContaining("Re-read the file with keiko_workspace_read") as string,
+      });
+      expect(checked).toEqual(["src/example.ts"]);
+      expect(runtimeEvents.some((event) => event.kind === "permission-requested")).toBe(false);
+      expect(recorder.settlements).toEqual([
+        {
+          actionId: "ses_tool:call_stale",
+          state: "failed",
+          occurredAt: expect.any(String) as string,
+        },
+      ]);
     } finally {
       await fixture.stop();
     }

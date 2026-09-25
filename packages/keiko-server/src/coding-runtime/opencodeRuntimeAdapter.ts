@@ -1320,6 +1320,7 @@ function governedPermissionSource(version: "v1" | "v2" = "v1"): readonly string[
     String.raw`  const deletedLines = patch.split("\n").filter((line) => line.startsWith("-") && !line.startsWith("---")).length;`,
     "  return {",
     "    patterns,",
+    "    baseDigests: files.map((file) => ({ file: file.file, expectedContentHash: file.expectedContentHash })),",
     '    metadata: { kind: "workspace-write", actionClass: "workspace-write", reasonCode: "approval-required", actionKind: "file-edit", scopeLabel: "workspace-scope", risk: "medium", policyReason: "approval-required", targetPath: patterns[0], allowedRelativePaths: patterns, fileCount: patterns.length, addedLines, deletedLines },',
     "  };",
     "}",
@@ -1343,19 +1344,36 @@ function governedPermissionSource(version: "v1" | "v2" = "v1"): readonly string[
       ? [
           "  await context.ask({ permission: governedPermission, patterns: request.patterns, always: [], metadata });",
         ]
-      : [
-          "  const endpoint = process.env.KEIKO_TOOL_FACADE_URL;",
-          "  const capability = process.env.KEIKO_TOOL_FACADE_CAPABILITY;",
-          "  const runId = process.env.KEIKO_CODING_RUN_ID;",
-          '  if (!endpoint || !capability || !runId) throw new Error("keiko-tool-unavailable");',
-          "  const seed = `${context.sessionID}:${context.id}`;",
-          '  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(seed));',
-          '  const id = "per_" + Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("").slice(0, 32);',
-          "  const body = JSON.stringify({ action: 'permission-request', runId, properties: { id, sessionID: context.sessionID, permission: governedPermission, patterns: request.patterns, always: [], metadata } });",
-          `  const response = await fetch(endpoint, { method: "POST", redirect: "manual", signal: AbortSignal.timeout(${String(GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS + GOVERNED_TOOL_SETTLEMENT_GRACE_MS)}), headers: { Authorization: "Bearer " + capability, "Content-Type": "application/json" }, body });`,
-          '  if (!response.ok || response.type === "opaqueredirect") throw new Error("keiko-tool-denied");',
-        ]),
+      : v2GovernedAskSource()),
     "}",
+  ];
+}
+
+// V2 plugin tools have no native ask API: the ask goes to Keiko's governed approval lane over the
+// tool facade transport, and a stale changeset base comes back as the edit's own refusal (#3612).
+function v2GovernedAskSource(): readonly string[] {
+  return [
+    "  const endpoint = process.env.KEIKO_TOOL_FACADE_URL;",
+    "  const capability = process.env.KEIKO_TOOL_FACADE_CAPABILITY;",
+    "  const runId = process.env.KEIKO_CODING_RUN_ID;",
+    '  if (!endpoint || !capability || !runId) throw new Error("keiko-tool-unavailable");',
+    "  const seed = `${context.sessionID}:${context.id}`;",
+    '  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(seed));',
+    '  const id = "per_" + Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("").slice(0, 32);',
+    // #3612: the ask names its tool call and, for an edit, the changeset's base digests, so the
+    // server can settle the call with the decision and refuse a stale base before any human.
+    "  const bases = request.baseDigests ? { baseDigests: request.baseDigests } : {};",
+    "  const body = JSON.stringify({ action: 'permission-request', runId, actionId: seed, properties: { id, sessionID: context.sessionID, permission: governedPermission, patterns: request.patterns, always: [], metadata }, ...bases });",
+    `  const response = await fetch(endpoint, { method: "POST", redirect: "manual", signal: AbortSignal.timeout(${String(GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS + GOVERNED_TOOL_SETTLEMENT_GRACE_MS)}), headers: { Authorization: "Bearer " + capability, "Content-Type": "application/json" }, body });`,
+    "  if (response.status === 409) return staleBaseResult(response);",
+    '  if (!response.ok || response.type === "opaqueredirect") throw new Error("keiko-tool-denied");',
+    "}",
+    // The edit's own refusal result, which the tool returns in place of the call (#3612).
+    "async function staleBaseResult(response) {",
+    "  const text = await response.text();",
+    '  if (text.length > MAX_RESPONSE_BYTES) throw new Error("keiko-tool-oversized");',
+    '  if (!validResult(JSON.parse(text))) throw new Error("keiko-tool-invalid");',
+    "  return text;",
   ];
 }
 
@@ -1421,7 +1439,12 @@ function toolSource(
     "      for (const name of argumentNames) delete request[name];",
     "    }",
     "    const approvalProof = await toolApprovalProof(request);",
-    "    await askForGovernedPermission(args, context, approvalProof);",
+    ...(version === "v1"
+      ? ["    await askForGovernedPermission(args, context, approvalProof);"]
+      : [
+          "    const refusal = await askForGovernedPermission(args, context, approvalProof);",
+          "    if (refusal !== undefined) return { content: refusal, metadata: {} };",
+        ]),
     "    if (approvalProof) request.approvalProof = { approvalId: approvalProof.approvalId, approvalDigest: approvalProof.approvalDigest };",
     "    const body = JSON.stringify(request);",
     "    const controller = new AbortController();",
