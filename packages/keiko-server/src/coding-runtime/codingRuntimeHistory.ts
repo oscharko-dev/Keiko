@@ -19,6 +19,7 @@ import type { UiStore } from "../store/types.js";
 import type { ActiveWorkspaceView } from "../task-workspace/types.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 import type { CodingSafeActivityContent } from "./codingSafeActivityProjection.js";
+import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./opencodeLaunchProfile.js";
 
 // Keep source offsets stable across streaming captures without splitting a UTF-16 surrogate pair.
 function nativeChunkEnd(content: string, offset: number): number {
@@ -217,6 +218,44 @@ export interface CodingHistoryMessage {
 }
 
 /** Native history and the bounded display feed share the same local conversation store. */
+function displayText(message: CodingSafeActivityMessage): string {
+  return message.segments.map((segment) => segment.text).join("");
+}
+
+// The runtime's readiness handshake opens every OpenCode session before the operator's prompt
+// (#3610): its fixed user message and the answer to it are runtime plumbing, never conversation.
+function isReadinessHandshake(role: string, content: string): boolean {
+  return role === "user" && content.trim() === OPENCODE_RUNTIME_READINESS_PROMPT;
+}
+
+/**
+ * The part of a run's conversation the operator wrote or was answered in: the handshake turn is
+ * dropped, and so is the run's first operator message, because `begin` already stored it as the
+ * run's intent. Later operator messages of the same run stay — they are follow-ups, not echoes.
+ */
+function operatorConversation<T extends { readonly role: string }>(
+  messages: readonly T[],
+  contentOf: (message: T) => string,
+): readonly T[] {
+  const conversation: T[] = [];
+  let inHandshake = false;
+  let intentEchoed = false;
+  for (const message of messages) {
+    if (isReadinessHandshake(message.role, contentOf(message))) {
+      inHandshake = true;
+      continue;
+    }
+    if (message.role === "user") inHandshake = false;
+    if (inHandshake) continue;
+    if (message.role === "user" && !intentEchoed) {
+      intentEchoed = true;
+      continue;
+    }
+    conversation.push(message);
+  }
+  return conversation;
+}
+
 export function createNativeHistoryCapture(
   store: UiStore,
   log: ServerLogSink | undefined,
@@ -355,9 +394,7 @@ export class CodingRuntimeHistory {
         });
         return false;
       }
-      const firstUser = messages.find((message) => message.role === "user");
-      for (const message of messages) {
-        if (message === firstUser) continue;
+      for (const message of operatorConversation(messages, (item) => item.content)) {
         messageCount += this.captureNativeMessage(task.id, runId, message);
       }
       if (messageCount > 0)
@@ -453,13 +490,8 @@ export class CodingRuntimeHistory {
     runId: string,
     messages: readonly CodingSafeActivityMessage[],
   ): void {
-    let firstUser = true;
-    for (const message of messages) {
-      if (message.role === "user" && firstUser) {
-        firstUser = false;
-        continue;
-      }
-      const text = message.segments.map((segment) => segment.text).join("");
+    for (const message of operatorConversation(messages, displayText)) {
+      const text = displayText(message);
       if (text.length > 0)
         this.store.codingHistory?.append(id, runId, message.messageId, message.role, text);
     }

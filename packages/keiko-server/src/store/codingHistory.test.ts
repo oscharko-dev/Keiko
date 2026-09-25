@@ -121,6 +121,49 @@ describe("Coding History on the existing conversation store", () => {
     );
   });
 
+  // #3610: 1.1.x stored every run's task prompt twice — once as the run's intent and once more
+  // under the runtime's own message id. Reading such a task shows each question once, and the
+  // context handed to a continued run carries it once, without rewriting the stored rows.
+  it("reads a task prompt that a run stored twice only once", () => {
+    const history = codingHistory();
+    const task = history.create({
+      projectPath: root,
+      title: "Duplicated intent",
+      modelId: "coding",
+      workspaceId: "ws_dup",
+      taskId: "task_dup",
+      branch: "keiko/task/dup",
+      operatorDigest: "a".repeat(64),
+    });
+    history.bindRun(task.id, "run-first");
+    history.append(task.id, "run-first", "intent", "user", "Fix the failing test");
+    history.append(task.id, "run-first", "msg_native_user", "user", "Fix the failing test");
+    history.append(task.id, "run-first", "msg_native_answer", "assistant", "Fixed.");
+    history.bindRun(task.id, "run-second");
+    history.append(task.id, "run-second", "intent", "user", "Now add a test");
+    history.append(task.id, "run-second", "msg_second_user", "user", "Now add a test");
+    // A later user message of the same run with the same words is the operator's own, not an echo.
+    history.append(task.id, "run-first", "msg_repeat_elsewhere", "user", "Now add a test");
+
+    const detail = history.detail(task.id, "a".repeat(64));
+    expect(detail?.messages.map(({ role, content }) => [role, content])).toEqual([
+      ["user", "Fix the failing test"],
+      ["assistant", "Fixed."],
+      ["user", "Now add a test"],
+      ["user", "Now add a test"],
+    ]);
+    expect(
+      detail?.messages.filter(({ content }) => content === "Fix the failing test"),
+    ).toHaveLength(1);
+    expect(
+      history.messagesBeforeRun(task.id, "run-second").map(({ role, content }) => [role, content]),
+    ).toEqual([
+      ["user", "Fix the failing test"],
+      ["assistant", "Fixed."],
+      ["user", "Now add a test"],
+    ]);
+  });
+
   it("refuses a run binding to a second task and cascades when its chat is removed", () => {
     const history = codingHistory();
     const input = {

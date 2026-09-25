@@ -254,6 +254,33 @@ function upsertMessage(
   });
 }
 
+/**
+ * Message ids of user rows that repeat their own run's intent word for word under the runtime's
+ * message id. Through 1.1.7 both capture paths stored the task prompt once more next to the intent
+ * `begin` had already written (#3610); reading them out keeps existing histories and continuation
+ * context correct without rewriting stored rows. A user row of the same words bound to a DIFFERENT
+ * run is the operator's own message and stays.
+ */
+function repeatedIntentMessageIds(db: DatabaseSync, id: string): ReadonlySet<string> {
+  const rows = db
+    .prepare(
+      `SELECT echo.message_id AS message_id
+         FROM coding_history_message_bindings echo
+         JOIN coding_history_runs run ON run.run_id = echo.run_id
+         JOIN coding_history_message_bindings intent
+           ON intent.run_id = echo.run_id AND intent.source_id = 'intent'
+         JOIN chat_messages echoed ON echoed.id = echo.message_id
+         JOIN chat_messages stored ON stored.id = intent.message_id
+        WHERE run.chat_id = ?
+          AND echo.source_id <> 'intent'
+          AND echoed.role = 'user'
+          AND stored.role = 'user'
+          AND echoed.content = stored.content`,
+    )
+    .all(id);
+  return new Set(rows.map((row) => String(row.message_id)));
+}
+
 function readDetail(
   db: DatabaseSync,
   store: UiStore,
@@ -265,11 +292,15 @@ function readDetail(
   const binding = db.prepare(
     "SELECT run_id FROM coding_history_message_bindings WHERE message_id = ?",
   );
-  const messages = store.listMessages(id, 200).map((message) => {
-    const row = binding.get(message.id);
-    return { ...message, ...(typeof row?.run_id === "string" ? { runId: row.run_id } : {}) };
-  });
-  return { task, messages, truncated: store.countMessages(id) > messages.length };
+  const listed = store.listMessages(id, 200);
+  const repeated = repeatedIntentMessageIds(db, id);
+  const messages = listed
+    .filter((message) => !repeated.has(message.id))
+    .map((message) => {
+      const row = binding.get(message.id);
+      return { ...message, ...(typeof row?.run_id === "string" ? { runId: row.run_id } : {}) };
+    });
+  return { task, messages, truncated: store.countMessages(id) > listed.length };
 }
 
 function updateTask(
@@ -315,7 +346,10 @@ export function createCodingHistoryStore(
           .all(runId)
           .map((row) => row.message_id),
       );
-      return store.listMessages(id, 200).filter((message) => !ids.has(message.id));
+      const repeated = repeatedIntentMessageIds(db, id);
+      return store
+        .listMessages(id, 200)
+        .filter((message) => !ids.has(message.id) && !repeated.has(message.id));
     },
     detail: (id, operator) => readDetail(db, store, id, operator),
     forRun: (runId): CodingHistoryTask | undefined => {

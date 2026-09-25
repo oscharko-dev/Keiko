@@ -58,7 +58,10 @@ import { recordContextPresentation } from "./codingRuntimeHistory.js";
 import { createOpenCodeV2ApprovalRequests } from "./opencodeV2ApprovalRequests.js";
 import type { SidecarPermissionEvent } from "./codingSidecarEventParser.js";
 import { answerOpenCodeV2Form, projectOpenCodeV2Form, v2FormId } from "./opencodeV2Questions.js";
-import { buildOpenCodeLaunchProfile } from "./opencodeLaunchProfile.js";
+import {
+  buildOpenCodeLaunchProfile,
+  OPENCODE_RUNTIME_READINESS_PROMPT,
+} from "./opencodeLaunchProfile.js";
 import type { OpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
 import {
   createGeneratedOpenCodeV2Plugins,
@@ -1073,7 +1076,9 @@ async function challengeV2Gateway(
   const observed = input.gatewayReadiness.waitForObservedRequest(run.runId, signal);
   let verified = false;
   try {
-    await client.prompt(sessionId, "Keiko runtime readiness handshake.", signal);
+    // One constant for the prompt and for every reader that must recognise it: the sidecar's fixed
+    // readiness answer and the Coding History capture, which never stores this turn (#3610).
+    await client.prompt(sessionId, OPENCODE_RUNTIME_READINESS_PROMPT, signal);
     const accepted = await observed;
     await client.interrupt(sessionId, signal);
     verified = accepted && (await fixedV2SessionIsTerminal(client, sessionId, signal));
