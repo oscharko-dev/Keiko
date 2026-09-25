@@ -370,6 +370,21 @@ describe("observed issue journey handoff", () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
   });
+  // #3610 (W11): the handoff summary read "1 changed files".
+  it.each([
+    [1, "1 changed file"],
+    [3, "3 changed files"],
+  ] as const)("counts %s changed file(s) in the right number", (fileCount, sentence) => {
+    const fixture = journeyFixture();
+    render(
+      <CodingWorkbenchJourneyOutcome
+        {...fixture}
+        changedFiles={{ status: "ready", fileCount, truncated: false }}
+      />,
+    );
+    expect(screen.getByText(sentence)).toBeInTheDocument();
+  });
+
   it("keeps unavailable description and CI facts explicit", () => {
     const fixture = journeyFixture();
     fixture.outcome = {

@@ -123,7 +123,7 @@ function renderChanges(
 }
 
 async function expandChanges(): Promise<void> {
-  const summary = await screen.findByText(/^(?:\d+ changed files|Changes)$/u, {
+  const summary = await screen.findByText(/^(?:\d+ changed files?|Changes)$/u, {
     selector: "summary",
   });
   fireEvent.click(summary);
@@ -257,6 +257,16 @@ describe("CodingWorkbenchChanges", () => {
     );
     expect(view.container.querySelector(".rv-add .rv-src")).toBeNull();
     expect(changesClient.getStatus).toHaveBeenCalledTimes(1);
+  });
+
+  // #3610 (W11): a single changed file read "1 changed files" in the summary and the file pane.
+  it("names a single changed file in the singular", async () => {
+    renderChanges(client());
+    await expandChanges();
+
+    expect(await screen.findByText("1 changed file", { selector: "summary" })).toBeVisible();
+    expect(screen.getByText("1 changed file", { selector: "p" })).toBeVisible();
+    expect(screen.queryByText(/1 changed files/u)).not.toBeInTheDocument();
   });
 
   it("virtualizes a 500-file change set to a bounded 24 rendered file buttons", async () => {

@@ -52,6 +52,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.journey.proposeReadyPending":
     "Der Freigabepfad für die Review-Bereitschaft ist noch nicht verfügbar.",
   "codingWorkbench.journey.changedFiles": "{count} geänderte Dateien",
+  "codingWorkbench.journey.changedFiles.one": "1 geänderte Datei",
   "codingWorkbench.journey.changedFilesTruncated": "(Liste gekürzt)",
   "codingWorkbench.journey.busy": "Übergabestatus wird aktualisiert…",
   "codingWorkbench.journey.actionError.refresh":
@@ -468,6 +469,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.empty":
     "Dieser Lauf enthält in dieser Revision keine Workspace-Änderungen.",
   "codingWorkbench.changes.changedFiles": "{count} geänderte Dateien",
+  "codingWorkbench.changes.changedFiles.one": "1 geänderte Datei",
   "codingWorkbench.changes.virtualInstructions":
     "Liste der geänderten Dateien fokussieren und dann mit Pfeil- oder Bild-auf- und Bild-ab-Tasten scrollen.",
   "codingWorkbench.changes.filesTruncated":

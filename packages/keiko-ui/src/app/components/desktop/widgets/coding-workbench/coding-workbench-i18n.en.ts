@@ -46,6 +46,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.journey.proposeReadyPending":
     "The ready-for-review approval path is not available yet.",
   "codingWorkbench.journey.changedFiles": "{count} changed files",
+  "codingWorkbench.journey.changedFiles.one": "1 changed file",
   "codingWorkbench.journey.changedFilesTruncated": "(list truncated)",
   "codingWorkbench.journey.busy": "Updating handoff status…",
   "codingWorkbench.journey.actionError.refresh":
@@ -444,6 +445,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.asOf": "As of {head}",
   "codingWorkbench.changes.empty": "This run has no workspace changes at this revision.",
   "codingWorkbench.changes.changedFiles": "{count} changed files",
+  "codingWorkbench.changes.changedFiles.one": "1 changed file",
   "codingWorkbench.changes.virtualInstructions":
     "Focus the changed-file list, then use Arrow or Page Up and Page Down keys to scroll.",
   "codingWorkbench.changes.filesTruncated":
