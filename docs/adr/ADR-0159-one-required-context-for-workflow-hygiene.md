@@ -80,7 +80,7 @@ grep verbatim, including its `./` and `docker://` exemptions and its 40-hex patt
 through `zizmorcore/zizmor-action@70fb788f84895a7701f5643d103d587e460b5c99` (v0.6.3) with
 `config: .github/zizmor.yml`, `advanced-security: false` and `annotations: true`, and `.github/zizmor.yml`
 itself unchanged; and OSV-Scanner through
-`google/osv-scanner-action/osv-scanner-action@6e4298ebc4db23e847df9b2e2de2939d6f066c67` (v2.5.1)
+`google/osv-scanner-action/osv-scanner-action@a345acffa64b0eaede81a3d9aae6141214d9c8fc` (v2.6.0)
 with `--config=osv-scanner.toml --recursive ./`. The job holds `permissions: contents: read` — the
 union of the four, which is also each of the four, so no step gains an authority its own job did not
 have.
