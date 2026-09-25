@@ -72,7 +72,7 @@ describe("external quality integration configuration", () => {
     expect(findings({ packageJson: JSON.stringify(parsed) })).toEqual(
       expect.arrayContaining([
         "fallow must be pinned to 3.9.1",
-        "yaml must be pinned to 2.9.0 for semantic reviewer-policy validation",
+        "yaml must be pinned to 2.9.1 for semantic reviewer-policy validation",
         "check:external-quality-config script is missing or redirected",
         "check:review-bot-suppression script is missing or redirected",
         "semantic duplication must fail on every changed clone group",

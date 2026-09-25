@@ -143,8 +143,8 @@ function validatePackage(packageJson) {
     [parsed.value.devDependencies?.fallow, "3.9.1", "fallow must be pinned to 3.9.1"],
     [
       parsed.value.devDependencies?.yaml,
-      "2.9.0",
-      "yaml must be pinned to 2.9.0 for semantic reviewer-policy validation",
+      "2.9.1",
+      "yaml must be pinned to 2.9.1 for semantic reviewer-policy validation",
     ],
     [
       parsed.value.scripts?.["check:external-quality-config"],
