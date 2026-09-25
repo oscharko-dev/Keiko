@@ -62,12 +62,18 @@ import {
 import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   codingToolFullAccessDeliveryAllowed,
+  createCodingToolAuthorityPreview,
   createRuntimeCodingToolFacade,
+  type CodingToolAuthorityContextProvider,
   type CommitExecutionApproval,
 } from "./codingToolAuthorityPort.js";
 import type { GovernedVerificationReasonCode } from "./codingToolFacade.js";
 import type { CodingToolApprovalProofVerifier } from "./codingToolApprovalBridge.js";
-import type { CodingToolFacade, CodingToolMutationGuard } from "./codingToolFacadePorts.js";
+import type {
+  CodingToolEditBaseRead,
+  CodingToolFacade,
+  CodingToolMutationGuard,
+} from "./codingToolFacadePorts.js";
 import type {
   CodingToolGovernedPorts,
   GovernedCodingToolResult,
@@ -106,7 +112,9 @@ import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import type { CodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import {
   createProductionAuxiliaryPorts,
+  hasExactWorkspaceAccess,
   PRODUCTION_SKILL_STATIC_FACTS,
+  workspaceAuthorityCheckedRead,
 } from "./productionAuxiliaryPorts.js";
 import {
   createExplicitSkillInvocationTracker,
@@ -118,6 +126,7 @@ import { createServerApprovedSkillCatalog, type SkillCatalog } from "./skillCata
 import { staticSkillReadiness } from "./skillDiscovery.js";
 import {
   createCodingToolReadEditPorts,
+  governedWorkspaceFileDigest,
   type CodingToolReadEditPortDeps,
   type CodingToolReadEditPorts,
 } from "./codingToolReadEditPorts.js";
@@ -356,7 +365,7 @@ const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["candidate-not-staged", "candidate-drift", "proof-unavailable"],
+      values: ["candidate-not-staged", "buffers-dirty", "candidate-drift", "proof-unavailable"],
     },
     proofStage: {
       type: "string",
@@ -704,23 +713,10 @@ export function createProductionManagedWorktreeToolFacade(
   input: ProductionManagedWorktreeToolInput,
 ): CodingToolFacade {
   const readEdit = createReadEditPorts(input);
-  return createRuntimeCodingToolFacade(
+  const authorityContext = managedWorktreeAuthorityContext(input);
+  const facade = createRuntimeCodingToolFacade(
     input.authority,
-    () => ({
-      adapterKind: input.adapterKind ?? "model-gateway-sidecar",
-      liveFacts: input.liveFacts(),
-      workspaceRoot: input.workspaceRoot,
-      deploymentCeiling: input.deploymentCeiling,
-      nowIso: new Date().toISOString(),
-      runId: input.authorityRef.runId,
-      envelopeDigest: input.authorityRef.envelopeDigest,
-      authorityExpiresAt: input.authorityExpiresAt,
-      // F8 (#3413): the run's own correlation id (the same value `buildRepositorySearchPort`
-      // already threads into its H1 search-handler invocation below), so the catalog facade
-      // bridge's tool-catalog.* lifecycle lines join the rest of this run's activity log instead
-      // of falling back to UNKNOWN_CORRELATION_ID.
-      correlationId: input.authorityRef.runId,
-    }),
+    authorityContext,
     governedPorts(input, readEdit),
     {
       invocationRegistry: input.invocationRegistry,
@@ -738,7 +734,62 @@ export function createProductionManagedWorktreeToolFacade(
       unavailableOptionalTools: () => deriveOptionalToolAvailability(input),
     },
   );
+  return { ...facade, editBaseDigest: editBaseDigestPort(input, authorityContext) };
 }
+
+function managedWorktreeAuthorityContext(
+  input: ProductionManagedWorktreeToolInput,
+): CodingToolAuthorityContextProvider {
+  return () => ({
+    adapterKind: input.adapterKind ?? "model-gateway-sidecar",
+    liveFacts: input.liveFacts(),
+    workspaceRoot: input.workspaceRoot,
+    deploymentCeiling: input.deploymentCeiling,
+    nowIso: new Date().toISOString(),
+    runId: input.authorityRef.runId,
+    envelopeDigest: input.authorityRef.envelopeDigest,
+    authorityExpiresAt: input.authorityExpiresAt,
+    // F8 (#3413): the run's own correlation id (the same value `buildRepositorySearchPort`
+    // already threads into its H1 search-handler invocation below), so the catalog facade
+    // bridge's tool-catalog.* lifecycle lines join the rest of this run's activity log instead
+    // of falling back to UNKNOWN_CORRELATION_ID.
+    correlationId: input.authorityRef.runId,
+  });
+}
+
+// The governed ask's base check (#3612) reads a file only as far as keiko_workspace_read would: the
+// run's live authority and producer binding must admit a read of that path, and the run's exact
+// managed workspace must still be the active one, before the same secure read and again after it.
+// An expired or revoked run, or one that lost its workspace, reads nothing and says so, so its ask
+// never reaches the human unverified (PR #3617 review). The check reserves no delegation; it is no
+// tool call.
+function editBaseDigestPort(
+  input: ProductionManagedWorktreeToolInput,
+  authorityContext: CodingToolAuthorityContextProvider,
+): NonNullable<CodingToolFacade["editBaseDigest"]> {
+  const read = workspaceAuthorityCheckedRead(input);
+  const admitsRead = createCodingToolAuthorityPreview(input.authority, authorityContext, {
+    requireProducerBinding: true,
+  });
+  return async (capability, relativePath, signal) => {
+    const request = {
+      action: "read",
+      relativePath,
+      actionId: EDIT_BASE_CHECK_ID,
+      idempotencyKey: EDIT_BASE_CHECK_ID,
+    } as const;
+    const admitted = (): boolean =>
+      hasExactWorkspaceAccess(input) && admitsRead(capability, request).ok;
+    if (!admitted()) return EDIT_BASE_AUTHORITY_DENIED;
+    const digest = await governedWorkspaceFileDigest(read, relativePath, signal);
+    if (!admitted()) return EDIT_BASE_AUTHORITY_DENIED;
+    return digest === undefined ? EDIT_BASE_UNREADABLE : { kind: "digest", digest };
+  };
+}
+
+const EDIT_BASE_CHECK_ID = "edit-base-check";
+const EDIT_BASE_UNREADABLE: CodingToolEditBaseRead = { kind: "unreadable" };
+const EDIT_BASE_AUTHORITY_DENIED: CodingToolEditBaseRead = { kind: "authority-denied" };
 
 function createReadEditPorts(input: ProductionManagedWorktreeToolInput): CodingToolReadEditPorts {
   return createCodingToolReadEditPorts({
@@ -2046,13 +2097,7 @@ async function recordCandidateVerification(
   if (begun.kind !== "ticket") {
     // Not a commit proof, but still a check the run ran: kept for the pull request's list (F57).
     service.observeVerification(report);
-    return {
-      commitProof: "unavailable",
-      reasonCode: "candidate-not-staged",
-      nextAction: "stage-then-verify",
-      // The paths the model has to stage (run 16, 2026-09-10); a vanished run context has none.
-      ...(begun.kind === "refused" ? { blocking: begun.blocking } : {}),
-    };
+    return refusedCommitProof(begun);
   }
   const recorded = await service.completeVerification(begun.ticket, report, {
     check: guard.check,
@@ -2062,6 +2107,26 @@ async function recordCandidateVerification(
     ? { commitProof: "recorded" }
     : { commitProof: "unavailable", reasonCode: "candidate-drift", nextAction: "verify-again" };
 }
+// Unsaved editor buffers are saved, not staged (#3612); every other refusal names the paths the
+// model has to stage (run 16, 2026-09-10), and a vanished run context has none.
+function refusedCommitProof(
+  begun: Exclude<VerificationTicketOutcome, { readonly kind: "ticket" }>,
+): CodingToolCommitProofResult {
+  if (begun.kind === "refused" && begun.reason === "buffers-dirty") {
+    return {
+      commitProof: "unavailable",
+      reasonCode: "buffers-dirty",
+      nextAction: "save-then-verify",
+    };
+  }
+  return {
+    commitProof: "unavailable",
+    reasonCode: "candidate-not-staged",
+    nextAction: "stage-then-verify",
+    ...(begun.kind === "refused" ? { blocking: begun.blocking } : {}),
+  };
+}
+
 export type VerificationLivenessRefusal = "signal-aborted" | "guard-rejected" | "run-not-live";
 
 /**

@@ -892,6 +892,10 @@ describe("Coding Workbench runtime API failure branches", () => {
     expect(
       validateCodingWorkbenchRuntimeSseEvent({ ...event, failureCode: "empty-answer" }).ok,
     ).toBe(true);
+    // A tool call that never parsed or matched its schema is the model's result as well.
+    expect(
+      validateCodingWorkbenchRuntimeSseEvent({ ...event, failureCode: "invalid-tool-call" }).ok,
+    ).toBe(true);
     expect(
       validateCodingWorkbenchRuntimeSseEvent({ ...event, eventKind: "task-submitted" }).ok,
     ).toBe(false);

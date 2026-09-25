@@ -1810,6 +1810,47 @@ describe("coding runtime manager", () => {
     expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(fixture.workspaceRoot);
   });
 
+  // #3593: a sidecar that dies mid-run with a non-zero exit is one closed failure event, never a
+  // blank transcript, and its exit line carries the Keiko-code frames of the site that observed it.
+  it("reports a non-zero sidecar exit as one failure event and one framed exit line", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const events: CodingWorkbenchRuntimeEvent[] = [];
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      diagnostics,
+      onRuntimeEvent: (event) => {
+        events.push(event);
+      },
+    });
+
+    await manager.start(
+      launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+    );
+    const beforeExit = events.length;
+    harness.children[0]?.exit(1);
+    await settle();
+
+    expect(events.slice(beforeExit)).toEqual([
+      expect.objectContaining({
+        runId: "run-1988",
+        kind: "failure-redacted",
+        failureCode: "failure-redacted",
+        failureSummary: "runtime-failed",
+      }),
+    ]);
+    const exitLines = diagnostics.record.mock.calls
+      .map(([record]) => record)
+      .filter((record) => record.operation === "coding-runtime.exit");
+    expect(exitLines).toEqual([expect.objectContaining({ correlationId: "run-1988", code: "1" })]);
+    expect(exitLines[0]?.frames?.[0]).toMatch(
+      /^packages\/keiko-server\/(?:dist|src)\/coding-runtime\/codingRuntimeManager\.(?:js|ts):\d+:\d+$/u,
+    );
+    expect(JSON.stringify(exitLines)).not.toContain(fixture.workspaceRoot);
+  });
+
   it("projects bounded body-free summaries for hostile stdout, stderr and non-zero exit", async () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
@@ -3978,6 +4019,8 @@ describe("coding runtime manager", () => {
   it.each([
     ["authenticated-health-version", "runtime-version-mismatch"],
     ["authenticated-health", "protocol-schema-mismatch"],
+    // #3603: a refused gateway challenge is not a protocol schema mismatch.
+    ["gateway-challenge", "gateway-challenge-failed"],
     ["endpoint-invalid", "protocol-schema-mismatch"],
     ["preparation-missing", "protocol-schema-mismatch"],
     ["readiness-failed", "protocol-schema-mismatch"],

@@ -77,8 +77,11 @@ export type CodingToolCommitProofResult =
   | { readonly commitProof: "recorded" }
   | {
       readonly commitProof: "unavailable";
-      readonly reasonCode: "candidate-not-staged" | "candidate-drift" | "proof-unavailable";
-      readonly nextAction: "stage-then-verify" | "verify-again";
+      /** `buffers-dirty`: nothing is unstaged, but unsaved editor buffers keep the candidate from
+       * equalling the working tree; staging cannot resolve that (#3612). */
+      readonly reasonCode:
+        "candidate-not-staged" | "buffers-dirty" | "candidate-drift" | "proof-unavailable";
+      readonly nextAction: "stage-then-verify" | "save-then-verify" | "verify-again";
       /**
        * For `candidate-not-staged`: the unstaged and untracked workspace-relative paths that keep
        * the proof from forming, bounded, with exact counts — what `stage-then-verify` has to stage
@@ -476,8 +479,7 @@ function readRequest(value: Record<string, unknown>): CodingToolActionRequest | 
       "startLine",
       "maxLines",
     ]) &&
-    normalizedRelativePath(value.relativePath) &&
-    !isDenied(value.relativePath) &&
+    isGovernedReadPath(value.relativePath) &&
     startLine !== "invalid" &&
     maxLines !== "invalid"
     ? {
@@ -804,6 +806,11 @@ function requestIdentity(value: Record<string, unknown>): CodingToolRequestIdent
   return nonEmpty(value.actionId) && nonEmpty(value.idempotencyKey)
     ? { actionId: value.actionId, idempotencyKey: value.idempotencyKey }
     : undefined;
+}
+
+/** A path the governed read admits: workspace-relative and not denied by the sensitive-path policy. */
+export function isGovernedReadPath(value: unknown): value is string {
+  return normalizedRelativePath(value) && !isDenied(value);
 }
 
 function normalizedRelativePath(value: unknown): value is string {

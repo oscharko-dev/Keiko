@@ -12,7 +12,10 @@
 // This carries the structured code along with the throw so the classifier below can map it to the
 // wire-facing failure code instead of collapsing it. Failures stay observable; nothing is swallowed.
 
-import type { CodingWorkbenchRuntimeFailureCode } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchModelRefusalReason,
+  CodingWorkbenchRuntimeFailureCode,
+} from "@oscharko-dev/keiko-contracts";
 import type { CodingRuntimeFailureCode } from "./codingRuntimeManager.js";
 
 /** A launch refused by a runtime backend, carrying the manager's structured failure code. */
@@ -94,6 +97,22 @@ const LAUNCH_FAILURE_CODES: ReadonlyMap<
 ]);
 
 /**
+ * The two model refusals the Workbench names with a sentence of their own (#3603): the chosen
+ * model's window cannot hold a coding run's prompt, or the verification that could raise the
+ * window is still running. Every other model refusal keeps the generic model-unavailable sentence.
+ */
+export function launchModelRefusalReason(
+  error: unknown,
+): CodingWorkbenchModelRefusalReason | undefined {
+  if (!(error instanceof CodingRuntimeLaunchRejectedError)) return undefined;
+  if (error.failureCode !== "model-unavailable") return undefined;
+  return error.reason === "model-context-window-insufficient" ||
+    error.reason === "model-verification-pending"
+    ? error.reason
+    : undefined;
+}
+
+/**
  * Maps a thrown launch rejection to the wire-facing failure code. Anything this module does not
  * recognize keeps the historical `authority-resolution-failed`: an unrecognized throw must not be
  * reported as a specific, wrong cause, and must never be reported as success.
@@ -101,4 +120,18 @@ const LAUNCH_FAILURE_CODES: ReadonlyMap<
 export function classifyLaunchRejection(error: unknown): CodingWorkbenchRuntimeFailureCode {
   if (!(error instanceof CodingRuntimeLaunchRejectedError)) return "authority-resolution-failed";
   return LAUNCH_FAILURE_CODES.get(error.failureCode) ?? "authority-resolution-failed";
+}
+
+/** The refused start a thrown launch rejection becomes: its wire code and any named model reason. */
+export function refusedLaunch(error: unknown): {
+  readonly ok: false;
+  readonly failureCode: CodingWorkbenchRuntimeFailureCode;
+  readonly modelRefusalReason?: CodingWorkbenchModelRefusalReason;
+} {
+  const modelRefusalReason = launchModelRefusalReason(error);
+  return {
+    ok: false,
+    failureCode: classifyLaunchRejection(error),
+    ...(modelRefusalReason === undefined ? {} : { modelRefusalReason }),
+  };
 }

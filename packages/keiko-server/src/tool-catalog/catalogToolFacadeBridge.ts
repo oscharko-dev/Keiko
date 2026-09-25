@@ -2,7 +2,13 @@ import { randomUUID } from "node:crypto";
 import type {
   CatalogJsonValue,
   ToolDescriptor,
+  ToolResultReason,
+  ToolResultStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import type {
+  EditorAgentConflictCode,
+  EditorAgentFailureCode,
+} from "@oscharko-dev/keiko-contracts";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import {
   activityLogEvent,
@@ -446,7 +452,7 @@ function bindingFor(
     ): Promise<CatalogHandlerResult> => {
       const result = await run(context.signal, context.mutationGuard);
       recordResult(result);
-      if (result.status === "failed") throw new CatalogDispatchFault("failed", "handler-failed");
+      if (result.status === "failed") throw handlerFault(result);
       return {
         data: captureCatalogJson(result),
         resultCount: 1,
@@ -472,7 +478,7 @@ function executionOverride(
     execute: async (_argumentsValue, context): Promise<CatalogHandlerResult> => {
       const result = await run(context.signal, context.mutationGuard);
       recordResult(result);
-      if (result.status === "failed") throw new CatalogDispatchFault("failed", "handler-failed");
+      if (result.status === "failed") throw handlerFault(result);
       return {
         data: captureCatalogJson(result),
         resultCount: 1,
@@ -486,20 +492,81 @@ type CatalogDispatchOutcome = Awaited<
   ReturnType<ReturnType<typeof createCatalogToolBinderFromPreparation>["dispatch"]>
 >;
 
+// A handler that ran and refused the request settles as that verdict: a stale base or unsaved
+// buffer, a patch or precondition the file does not meet, a path outside the workspace or denied by
+// policy, an approval still owed, an editor that is busy, timed out, cancelled or not connected, a
+// read of a missing, non-text or oversized file. Only a bare failure -- no closed reason, or one
+// this table does not know -- is a handler fault, which the lifecycle logs at error level and
+// which opens a support incident (#3615).
+type HandlerRefusal = readonly [Exclude<ToolResultStatus, "completed">, ToolResultReason];
+// Every editor-agent conflict and failure code is classified here, so a code added to the contract
+// fails the build until it is (PR #3617 review). `undefined` keeps a code a handler fault. An
+// editor that is not connected, or a language provider the workspace cannot serve, is a capability
+// that is unavailable right now, not a Keiko fault: none of them settles as `failed`.
+const EDITOR_REFUSALS: Readonly<
+  Record<EditorAgentConflictCode | EditorAgentFailureCode, HandlerRefusal | undefined>
+> = {
+  DIRTY: ["invalid", "workspace-stale"],
+  VERSION_MISMATCH: ["invalid", "workspace-stale"],
+  CONTENT_HASH_MISMATCH: ["invalid", "workspace-stale"],
+  NO_ACTIVE_SESSION: ["invalid", "unsupported-capability"],
+  NO_ACTIVE_BRIDGE: ["invalid", "unsupported-capability"],
+  INVALID_EDITS: ["invalid", "invalid-arguments"],
+  OUT_OF_SCOPE: ["denied", "workspace-denied"],
+  DECOMPOSE_PER_ROOT: ["invalid", "invalid-arguments"],
+  PRECONDITION_REQUIRED: ["invalid", "invalid-arguments"],
+  POLICY_DENIED: ["denied", "workspace-denied"],
+  APPROVAL_REQUIRED: ["denied", "approval-required"],
+  TIMED_OUT: ["timeout", "deadline-exceeded"],
+  QUEUE_FULL: ["busy", "capacity-exhausted"],
+  CANCELLED: ["cancelled", "explicit-cancellation"],
+  PROVIDER_UNAVAILABLE: ["invalid", "unsupported-capability"],
+  UNSUPPORTED_OPERATION: ["invalid", "unsupported-capability"],
+  LIMIT_EXCEEDED: ["invalid", "invalid-arguments"],
+  DUPLICATE_ACTION: ["invalid", "replay-conflict"],
+  MUTATION_IN_FLIGHT: ["busy", "invocation-in-flight"],
+};
+const HANDLER_REFUSALS: ReadonlyMap<string, HandlerRefusal> = new Map<string, HandlerRefusal>([
+  ...Object.entries(EDITOR_REFUSALS).flatMap(([code, refusal]): [string, HandlerRefusal][] =>
+    refusal === undefined ? [] : [[code, refusal]],
+  ),
+  // The workspace the run is bound to stopped resolving: the run lost its authority to edit.
+  ["WORKSPACE_ACCESS_LOST", ["denied", "workspace-denied"]],
+  ["workspace-read-denied", ["denied", "workspace-denied"]],
+  ["workspace-read-not-found", ["invalid", "invalid-arguments"]],
+  ["workspace-read-not-text", ["invalid", "invalid-arguments"]],
+  ["workspace-read-too-large", ["invalid", "invalid-arguments"]],
+]);
+
+function handlerFault(
+  result: Extract<CodingToolResult, { readonly status: "failed" }>,
+): CatalogDispatchFault {
+  const code = result.evidence[0]?.code;
+  const refusal = code === undefined ? undefined : HANDLER_REFUSALS.get(code);
+  return refusal === undefined
+    ? new CatalogDispatchFault("failed", "handler-failed")
+    : new CatalogDispatchFault(refusal[0], refusal[1]);
+}
+
+function handlerVerdict(status: ToolResultStatus, reason: ToolResultReason): boolean {
+  if (status === "failed" && reason === "handler-failed") return true;
+  return [...HANDLER_REFUSALS.values()].some(
+    ([refusalStatus, refusalReason]) => refusalStatus === status && refusalReason === reason,
+  );
+}
+
+// The facade result of a handler that ran reaches the model unchanged, whether it completed, failed,
+// or refused the request; the catalog's own verdict only replaces a result no handler produced.
 function preservedExecutedResult(
   outcome: CatalogDispatchOutcome,
   executed: CodingToolResult | undefined,
 ): CodingToolResult | undefined {
   if (outcome.kind === "replayed") return undefined;
   if (outcome.result.status === "completed" && executed !== undefined) return executed;
-  if (
-    outcome.result.status === "failed" &&
-    outcome.result.reason === "handler-failed" &&
-    executed?.status === "failed"
-  ) {
-    return executed;
-  }
-  return undefined;
+  return executed?.status === "failed" &&
+    handlerVerdict(outcome.result.status, outcome.result.reason)
+    ? executed
+    : undefined;
 }
 
 function resultFor(

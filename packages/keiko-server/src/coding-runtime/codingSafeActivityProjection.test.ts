@@ -181,6 +181,198 @@ describe("bounded coding safe-activity projection", () => {
     expect(JSON.stringify(content)).not.toMatch(/typo|url or port/u);
   });
 
+  // #3612: Keiko settles a refused governed ask with the human's verdict. OpenCode then reports the
+  // refused call as a generic failure; that report keeps the verdict and counts as no omitted update.
+  it.each(["denied", "cancelled"] as const)(
+    "keeps a %s verdict when OpenCode later reports the call failed, without an omitted update",
+    (verdict) => {
+      const projection = createCodingSafeActivityProjection({
+        now: () => 1_721_323_200_000,
+        diagnostics: { record: (): void => undefined },
+      });
+      projection.open({
+        runId: RUN_ID,
+        workspaceId: WORKSPACE_ID,
+        authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+        workspaceIsCurrent: () => true,
+      });
+      projection.ingest(RUN_ID, message("msg_user", "user"));
+      projection.ingest(RUN_ID, message("msg_assistant", "assistant", "msg_user"));
+      const signals: readonly CodingSafeActivitySignal[] = [
+        {
+          kind: "tool",
+          messageId: "msg_assistant",
+          callId: "call_1",
+          tool: "keiko_changeset_edit",
+          state: "running",
+          occurredAt: "2026-07-18T17:00:00.002Z",
+        },
+        // Keiko's own settlement carries no message id; it locates the call by id.
+        { kind: "tool", callId: "call_1", state: verdict, occurredAt: "2026-07-18T17:00:00.003Z" },
+        {
+          kind: "tool",
+          messageId: "msg_assistant",
+          callId: "call_1",
+          state: "failed",
+          occurredAt: "2026-07-18T17:00:00.004Z",
+        },
+      ];
+      for (const signal of signals) expect(projection.ingest(RUN_ID, signal)).toBe(true);
+
+      expect(projection.currentContent()).toMatchObject({
+        feed: {
+          droppedEventCount: 0,
+          turns: [
+            {
+              tools: [
+                {
+                  callId: "call_1",
+                  tool: "keiko_changeset_edit",
+                  state: verdict,
+                  occurredAt: "2026-07-18T17:00:00.003Z",
+                },
+              ],
+            },
+          ],
+        },
+      });
+    },
+  );
+
+  // A lab run of 1.1.8: Keiko settled a 10 ms read before OpenCode's earlier running update arrived
+  // over the event stream, and the late update was refused and counted as an omitted update, with an
+  // error-level diagnostic, after every fast tool call.
+  it.each([
+    ["succeeded", "pending"],
+    ["succeeded", "running"],
+    ["failed", "running"],
+    ["denied", "running"],
+    ["cancelled", "pending"],
+  ] as const)(
+    "keeps a settled %s call when OpenCode's earlier %s update arrives late",
+    (settled, late) => {
+      const activityLog = createBufferedServerLogSink();
+      const projection = createCodingSafeActivityProjection({
+        now: () => 1_721_323_200_000,
+        diagnostics: { record: (): void => undefined },
+        activityLog,
+      });
+      projection.open({
+        runId: RUN_ID,
+        workspaceId: WORKSPACE_ID,
+        authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+        workspaceIsCurrent: () => true,
+      });
+      projection.ingest(RUN_ID, message("msg_user", "user"));
+      projection.ingest(RUN_ID, message("msg_assistant", "assistant", "msg_user"));
+      const signals: readonly CodingSafeActivitySignal[] = [
+        {
+          kind: "tool",
+          messageId: "msg_assistant",
+          callId: "call_fast",
+          tool: "keiko_workspace_read",
+          state: "pending",
+          occurredAt: "2026-07-18T17:00:00.002Z",
+        },
+        {
+          kind: "tool",
+          callId: "call_fast",
+          state: settled,
+          occurredAt: "2026-07-18T17:00:00.003Z",
+        },
+        {
+          kind: "tool",
+          messageId: "msg_assistant",
+          callId: "call_fast",
+          state: late,
+          occurredAt: "2026-07-18T17:00:00.004Z",
+        },
+      ];
+      const [created, settle, lateUpdate] = signals;
+      if (created === undefined || settle === undefined || lateUpdate === undefined)
+        throw new Error("expected three tool signals");
+      expect(projection.ingest(RUN_ID, created)).toBe(true);
+      expect(projection.ingest(RUN_ID, settle)).toBe(true);
+      const beforeLate = projection.currentContent();
+      const notified = vi.fn();
+      projection.subscribeContent(notified);
+      expect(projection.ingest(RUN_ID, lateUpdate)).toBe(true);
+      // PR #3617 review: the late update changes neither the feed nor its timestamp, and notifies
+      // no one.
+      expect(projection.currentContent()).toEqual(beforeLate);
+      expect(notified).not.toHaveBeenCalled();
+      expect(projection.currentContent()).toMatchObject({
+        feed: {
+          droppedEventCount: 0,
+          updatedAt: "2026-07-18T17:00:00.003Z",
+          turns: [{ tools: [{ callId: "call_fast", state: settled }] }],
+        },
+      });
+      // PR #3617 review: the late update is set aside, not silently discarded, and its line names
+      // the call, as a digest, and both states.
+      const superseded = activityLog.events.filter(
+        (event) => event.op === "coding-runtime.safe-activity",
+      );
+      expect(superseded).toEqual([
+        expect.objectContaining({
+          correlationId: RUN_ID,
+          extra: expect.objectContaining({
+            event: "superseded",
+            reason: "late-restatement",
+            occurrenceCount: 1,
+            callIdSha256: expect.stringMatching(/^[a-f0-9]{64}$/u) as unknown,
+            settledState: settled,
+            restatedState: late,
+          }) as unknown,
+        }),
+      ]);
+      const [supersededLine] = superseded;
+      if (supersededLine === undefined) throw new Error("expected one superseded line");
+      expect(supersededLine.level).toBeUndefined();
+      expect(validateRegisteredActivityLogEvent(supersededLine)).toMatchObject({
+        op: "coding-runtime.safe-activity",
+      });
+    },
+  );
+
+  it("still refuses to reopen a failed or succeeded call", () => {
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      diagnostics: { record: (): void => undefined },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    projection.ingest(RUN_ID, message("msg_assistant", "assistant", "msg_user"));
+    projection.ingest(RUN_ID, {
+      kind: "tool",
+      messageId: "msg_assistant",
+      callId: "call_1",
+      tool: "keiko_workspace_read",
+      state: "succeeded",
+      occurredAt: "2026-07-18T17:00:00.002Z",
+    });
+    // Only a Keiko verdict absorbs a later generic failure; a success does not turn into one.
+    expect(
+      projection.ingest(RUN_ID, {
+        kind: "tool",
+        callId: "call_1",
+        state: "failed",
+        occurredAt: "2026-07-18T17:00:00.003Z",
+      }),
+    ).toBe(false);
+    expect(projection.currentContent()).toMatchObject({
+      feed: {
+        droppedEventCount: 1,
+        turns: [{ tools: [{ callId: "call_1", state: "succeeded" }] }],
+      },
+    });
+  });
+
   it("marks over-limit text and evicted turns explicitly instead of silently clipping", () => {
     const projection = createCodingSafeActivityProjection({
       now: () => 1_721_323_200_000,

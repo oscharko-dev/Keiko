@@ -95,7 +95,8 @@ export type VerificationTicketOutcome =
   | { readonly kind: "ticket"; readonly ticket: object }
   | {
       readonly kind: "refused";
-      readonly reason: "candidate-not-staged";
+      /** `buffers-dirty`: nothing unstaged or untracked, but unsaved editor buffers (#3612). */
+      readonly reason: "candidate-not-staged" | "buffers-dirty";
       readonly blocking: VerifiedCommitBlockingPaths;
     }
   /** No live run context (authority revoked or run gone); the liveness check names it. */

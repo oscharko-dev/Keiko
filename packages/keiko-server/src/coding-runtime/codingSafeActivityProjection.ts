@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   CodingSafeActivityFeed,
   CodingSafeActivityMessageRole,
@@ -51,11 +52,13 @@ const CODING_RUNTIME_SAFE_ACTIVITY_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "coding-runtime.codingSafeActivityProjection.lifecycle",
   fields: {
+    // `superseded`: a late runtime update for a call Keiko already settled was set aside, not lost
+    // (PR #3617 review), so a reader can reconstruct that the update arrived.
     event: {
       type: "string",
       dataClass: "closed-enum",
       required: true,
-      values: ["purged", "dropped"],
+      values: ["purged", "dropped", "superseded"],
     },
     reason: {
       type: "string",
@@ -72,9 +75,25 @@ const CODING_RUNTIME_SAFE_ACTIVITY_OPERATION = defineActivityLogOperation({
         "projection-rejected",
         "capacity-rejected",
         "subscriber-rejected",
+        "late-restatement",
       ],
     },
     occurrenceCount: { type: "integer", dataClass: "count", required: false },
+    // On a superseded update only: which call it restated, as a digest, and the call's settled state
+    // against the state the late update restated (PR #3617 review).
+    callIdSha256: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    settledState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["succeeded", "failed", "denied", "cancelled"],
+    },
+    restatedState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["pending", "running", "failed"],
+    },
     // #3610: why the projection refused a well-formed signal, on a projection-rejected drop only.
     rejection: {
       type: "string",
@@ -294,10 +313,17 @@ type ProjectionRejection =
   | "tool-name-missing"
   | "feed-unavailable";
 
-type SignalApplication = "accepted" | "capacity-dropped" | ProjectionRejection;
+type SignalApplication =
+  "accepted" | "capacity-dropped" | "restatement-superseded" | ProjectionRejection;
+
+const APPLIED: ReadonlySet<SignalApplication> = new Set<SignalApplication>([
+  "accepted",
+  "capacity-dropped",
+  "restatement-superseded",
+]);
 
 function projectionRejection(application: SignalApplication): ProjectionRejection | undefined {
-  return application === "accepted" || application === "capacity-dropped" ? undefined : application;
+  return APPLIED.has(application) ? undefined : (application as ProjectionRejection);
 }
 
 class SafeActivityProjection implements CodingSafeActivityProjection {
@@ -314,6 +340,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
   private subscriberRunId: string | undefined;
   private expiryTimer: ReturnType<typeof setTimeout> | undefined;
   private faultDropCount = 0;
+  private supersededRestatementCount = 0;
 
   public constructor(options: CodingSafeActivityProjectionOptions) {
     this.now = options.now ?? Date.now;
@@ -343,6 +370,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     if (!validOpenInput(input, expiresAtMs, now)) this.expireCurrent();
     else {
       this.faultDropCount = 0;
+      this.supersededRestatementCount = 0;
       this.scheduleExpiry(this.entry);
       this.notify();
     }
@@ -364,8 +392,8 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     const priorFeed = rollbackNeeded ? structuredClone(entry.feed) : undefined;
     const priorMessageTurns = rollbackNeeded ? new Map(entry.messageTurns) : undefined;
     const application = applySignal(entry, signal, this.limits);
-    const rejection = projectionRejection(application);
-    if (rejection !== undefined) return this.reject(runId, "projection-rejected", rejection);
+    const ended = this.endedApplication(runId, entry, signal, application);
+    if (ended !== undefined) return ended;
     if (signal.signalId !== undefined) {
       rememberBoundedIdentity(entry.signalIds, signal.signalId, this.maxSignalIdentities);
     }
@@ -594,6 +622,44 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     if (this.subscribers.size === 0) this.subscriberRunId = undefined;
   }
 
+  // A refused signal is a drop and a superseded one is set aside; either ends the ingest here.
+  private endedApplication(
+    runId: string,
+    entry: ProjectionEntry,
+    signal: CodingSafeActivitySignal,
+    application: SignalApplication,
+  ): boolean | undefined {
+    const rejection = projectionRejection(application);
+    if (rejection !== undefined) return this.reject(runId, "projection-rejected", rejection);
+    return application === "restatement-superseded"
+      ? this.supersede(runId, entry, signal)
+      : undefined;
+  }
+
+  // A late update that restates an earlier state of a call Keiko already settled is set aside: it
+  // changes neither the feed nor its timestamp and notifies no one. Its line names the call, as a
+  // digest, and both states, so the log reconstructs every update (PR #3617 review).
+  private supersede(runId: string, entry: ProjectionEntry, signal: CodingSafeActivitySignal): true {
+    if (signal.signalId !== undefined) {
+      rememberBoundedIdentity(entry.signalIds, signal.signalId, this.maxSignalIdentities);
+    }
+    this.supersededRestatementCount += 1;
+    const restatement = signal.kind === "tool" ? supersededRestatement(entry, signal) : {};
+    this.activityLog?.write(
+      activityLogEvent(
+        CODING_RUNTIME_SAFE_ACTIVITY_OPERATION,
+        { correlationId: correlationIdOrUnknown(runId) },
+        {
+          event: "superseded",
+          reason: "late-restatement",
+          occurrenceCount: this.supersededRestatementCount,
+          ...restatement,
+        },
+      ),
+    );
+    return true;
+  }
+
   private emitDropMilestones(
     runId: string,
     reason: CodingSafeActivityDropReason,
@@ -800,6 +866,7 @@ function applyTool(
   const existingIndex = located.turn.tools.findIndex(({ callId }) => callId === signal.callId);
   const existing = located.turn.tools[existingIndex];
   if (existing !== undefined) {
+    if (staleOpenCodeRestatement(existing.state, signal)) return "restatement-superseded";
     if (!allowedToolTransition(existing.state, signal.state)) return "tool-transition-refused";
     located.turn.tools[existingIndex] = {
       ...existing,
@@ -861,6 +928,38 @@ function shrinkPlan(plan: MutablePlan, maxBytes: number): void {
     plan.steps.pop();
     plan.truncated = true;
   }
+}
+
+type SettledToolState = "succeeded" | "failed" | "denied" | "cancelled";
+type RestatedToolState = "pending" | "running" | "failed";
+
+function isSettledToolState(state: CodingSafeActivityToolState): state is SettledToolState {
+  return TERMINAL_TOOL_STATES.has(state);
+}
+
+function isRestatedToolState(state: CodingSafeActivityToolState): state is RestatedToolState {
+  return state === "pending" || state === "running" || state === "failed";
+}
+
+function supersededRestatement(
+  entry: ProjectionEntry,
+  signal: Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>,
+): {
+  readonly callIdSha256: string;
+  readonly settledState?: SettledToolState;
+  readonly restatedState?: RestatedToolState;
+} {
+  const settled = locateToolTurn(entry, signal)?.turn.tools.find(
+    ({ callId }) => callId === signal.callId,
+  )?.state;
+  return {
+    callIdSha256: createHash("sha256")
+      .update("keiko.safe-activity.call.v1\0")
+      .update(signal.callId)
+      .digest("hex"),
+    ...(settled !== undefined && isSettledToolState(settled) ? { settledState: settled } : {}),
+    ...(isRestatedToolState(signal.state) ? { restatedState: signal.state } : {}),
+  };
 }
 
 function locateToolTurn(
@@ -989,6 +1088,29 @@ function boundedCharacters(value: string, maxChars: number): readonly string[] {
 function candidateMessageBytes(message: MutableMessage, text: string, truncated: boolean): number {
   const segment: CodingSafeActivityTextSegment = { kind: "text", text, truncated };
   return bytes({ ...message, segments: [...message.segments, segment], truncated });
+}
+
+const TERMINAL_TOOL_STATES: ReadonlySet<CodingSafeActivityToolState> = new Set([
+  "succeeded",
+  "failed",
+  "denied",
+  "cancelled",
+]);
+
+// A late OpenCode part update (it names its message) for a call that has already ended. Keiko settles
+// a call from the facade result, independently of OpenCode's part updates, and can do so before
+// OpenCode's earlier pending or running update arrives over the event stream (a lab run of 1.1.8: a
+// 10 ms read); only Keiko settles a call as denied or cancelled, which OpenCode then reports as a
+// generic failure. Each restates a state the call already passed and is kept as a no-op, not an
+// omitted update (#3612). A settlement never restates pending or running, so one that tries is
+// still a refused regression.
+function staleOpenCodeRestatement(
+  from: CodingSafeActivityToolState,
+  signal: Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>,
+): boolean {
+  if (signal.messageId === undefined || !TERMINAL_TOOL_STATES.has(from)) return false;
+  if (signal.state === "pending" || signal.state === "running") return true;
+  return (from === "denied" || from === "cancelled") && signal.state === "failed";
 }
 
 function allowedToolTransition(

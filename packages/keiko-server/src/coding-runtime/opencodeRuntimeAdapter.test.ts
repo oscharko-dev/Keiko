@@ -16,6 +16,7 @@ import {
   openCodeToolClientTimeoutMs,
 } from "./opencodeRuntimeAdapter.js";
 import { CODING_TOOL_MAX_BODY_BYTES, parseCodingToolRequest } from "./codingToolIpc.js";
+import { ScriptedGovernedTools } from "./opencodeFunctionalHarness/_governedTools.js";
 import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
 import {
   expectActivityLogProof,
@@ -476,6 +477,100 @@ function readinessPorts(failAt?: ReadinessPhase): {
     materialized,
   };
 }
+
+// #3612: the V2 governed ask names its tool call and the changeset's base digests. A stale base is
+// answered 409 with the edit's own refusal result, which the plugin returns to the model in place of
+// the call, so no human is asked and the tool endpoint is never reached.
+describe("generated V2 governed ask", () => {
+  const ASK_ENV = {
+    KEIKO_CODING_MODE: "governed-assist",
+    KEIKO_TOOL_FACADE_URL: "http://127.0.0.1/api/coding-sidecar/tool",
+    KEIKO_TOOL_FACADE_CAPABILITY: "capability-token",
+    KEIKO_CODING_RUN_ID: "run-ask",
+  };
+  const EDIT_CALL = {
+    id: "call_edit",
+    name: "keiko_changeset_edit",
+    args: {
+      changeset: {
+        patch: "--- a/src/example.ts\n+++ b/src/example.ts\n@@ -1 +1 @@\n-old\n+new\n",
+        files: [{ file: "src/example.ts", expectedContentHash: "a".repeat(64) }],
+      },
+    },
+  };
+  const REFUSAL = {
+    status: "failed",
+    evidence: [{ kind: "governed-delegate", code: "CONTENT_HASH_MISMATCH" }],
+    guidance: "Re-read the file.",
+  };
+
+  function editTool(askResponse: () => Response): {
+    readonly tools: ScriptedGovernedTools;
+    readonly bodies: unknown[];
+  } {
+    const bodies: unknown[] = [];
+    const tools = new ScriptedGovernedTools({
+      env: ASK_ENV,
+      pluginVersion: "v2",
+      sessionId: "ses_ask",
+      broadcast: (): void => undefined,
+      fetch: (_url, init): Promise<Response> => {
+        const body: unknown = typeof init?.body === "string" ? JSON.parse(init.body) : undefined;
+        bodies.push(body);
+        return Promise.resolve(askResponse());
+      },
+    });
+    return { tools, bodies };
+  }
+
+  it("names the call and its base digests, and returns a stale base's refusal as the result", async () => {
+    const { tools, bodies } = editTool(
+      () => new Response(JSON.stringify(REFUSAL), { status: 409 }),
+    );
+    const output = await tools.execute(EDIT_CALL, new AbortController().signal);
+    expect(JSON.parse(output)).toEqual(REFUSAL);
+    // Only the ask went out: the edit itself never reached the tool endpoint.
+    expect(bodies).toHaveLength(1);
+    expect(bodies[0]).toMatchObject({
+      action: "permission-request",
+      runId: "run-ask",
+      actionId: "ses_ask:call_edit",
+      baseDigests: [{ file: "src/example.ts", expectedContentHash: "a".repeat(64) }],
+    });
+  });
+
+  it.each([
+    [
+      "a result of an unknown status",
+      JSON.stringify({ status: "approved-anyway" }),
+      "keiko-tool-invalid",
+    ],
+    [
+      "an oversized result",
+      JSON.stringify({ ...REFUSAL, guidance: "x".repeat(CODING_TOOL_MAX_BODY_BYTES) }),
+      "keiko-tool-oversized",
+    ],
+  ])("refuses %s on a 409", async (_name, body, message) => {
+    const { tools } = editTool(() => new Response(body, { status: 409 }));
+    await expect(tools.execute(EDIT_CALL, new AbortController().signal)).rejects.toThrow(message);
+  });
+
+  it("still fails a refused ask as denied, and proceeds with the call once approved", async () => {
+    const denied = editTool(() => new Response(null, { status: 403 }));
+    await expect(denied.tools.execute(EDIT_CALL, new AbortController().signal)).rejects.toThrow(
+      "keiko-tool-denied",
+    );
+    const responses = [
+      new Response('{"status":"approved"}', { status: 200 }),
+      new Response(JSON.stringify({ status: "completed", evidence: [] }), { status: 200 }),
+    ];
+    const approved = editTool(() => responses.shift() ?? new Response(null, { status: 500 }));
+    const output = await approved.tools.execute(EDIT_CALL, new AbortController().signal);
+    expect(JSON.parse(output)).toEqual({ status: "completed", evidence: [] });
+    expect(approved.bodies).toHaveLength(2);
+    expect(approved.bodies[1]).toMatchObject({ action: "edit", actionId: "ses_ask:call_edit" });
+  });
+});
 
 describe("OpenCode runtime adapter readiness", () => {
   it("records the entered phase while the real readiness operation is still pending", async () => {

@@ -953,6 +953,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The model used its whole output budget before producing an answer, usually on reasoning. Have the gateway declare a larger max_output_tokens for this model, or choose a model with a smaller reasoning share, then retry.",
   "codingWorkbench.event.turnFailure.empty-answer":
     "The model finished this turn without any text or tool call. The provider answered, so this is not a connection problem. Retry the turn; if it repeats, rephrase the task or choose another model.",
+  "codingWorkbench.event.turnFailure.invalid-tool-call":
+    "The model called a tool with arguments that do not match the tool, on every attempt. The provider answered, so this is not a connection problem. Retry the turn; if it repeats, rephrase the task or choose another model.",
   "codingWorkbench.event.detailOutcome": "Outcome: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Untrusted content: the fetched page was quarantined as data, not instructions.",
@@ -988,6 +990,10 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The requested runtime action failed ({code}). Review the live state and retry.",
   "codingWorkbench.alert.startRefusedModelUnavailable":
     "The selected model is not admitted for a coding run right now ({code}). Run the readiness check for it under Settings → Models, or choose a model that passed its check today, then start again.",
+  "codingWorkbench.alert.startRefusedModelWindow":
+    "The selected model's context window is too small for a coding run (minimum 32,000 tokens; {code}). Keiko could not confirm 32,000 tokens for it. Choose a larger model, or have the gateway declare this model's max_input_tokens, then start again.",
+  "codingWorkbench.alert.startRefusedModelVerificationPending":
+    "Keiko is still verifying the selected model's context window with the gateway ({code}). On a busy gateway this can take a few minutes; start again once the check has settled.",
   "codingWorkbench.alert.startRefusedWorkspaceUnqualified":
     "The bound repository could not be qualified for a coding run ({code}). Choose the repository again with Browse… so its real path is bound, then start again.",
   "codingWorkbench.alert.actionFailedSupportId": "Support id: {correlationId}.",

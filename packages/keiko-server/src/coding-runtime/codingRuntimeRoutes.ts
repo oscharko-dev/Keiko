@@ -5,6 +5,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type {
   CodingWorkbenchIssueBindingFailure,
   CodingWorkbenchMode,
+  CodingWorkbenchModelRefusalReason,
   CodingWorkbenchRuntimeApprovalReviewChannelPayload,
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchRuntimeQuestionsChannelPayload,
@@ -202,6 +203,7 @@ function failureResult(
   failureCode: CodingWorkbenchRuntimeFailureCode,
   correlationId?: string,
   issueBindingFailure?: CodingWorkbenchIssueBindingFailure,
+  modelRefusalReason?: CodingWorkbenchModelRefusalReason,
 ): RouteResult {
   const status = failureStatus(failureCode);
   return {
@@ -213,6 +215,7 @@ function failureResult(
         correlationId,
       ),
       ...(issueBindingFailure === undefined ? {} : { issueBindingFailure }),
+      ...(modelRefusalReason === undefined ? {} : { modelRefusalReason }),
     },
   };
 }
@@ -408,7 +411,12 @@ async function mutation(
       // and a retry's URL names only the predecessor -- keyed on that, the refusal and its cause
       // shared no key (review of PR #3452). The URL run is the fallback for a result without one.
       logMutationRefusal(deps, ctx, operationName, result.runId ?? runId, result.failureCode);
-      return failureResult(result.failureCode, ctx.correlationId, result.issueBindingFailure);
+      return failureResult(
+        result.failureCode,
+        ctx.correlationId,
+        result.issueBindingFailure,
+        result.modelRefusalReason,
+      );
     },
     ctx.correlationId,
     () => {

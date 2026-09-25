@@ -29,7 +29,11 @@ import {
   UNKNOWN_CORRELATION_ID,
 } from "../correlation.js";
 import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";
-import { isExactEditorAgentChangeset, type CodingToolReadResult } from "./codingToolIpc.js";
+import {
+  isExactEditorAgentChangeset,
+  isGovernedReadPath,
+  type CodingToolReadResult,
+} from "./codingToolIpc.js";
 import type { CodingToolActionOf, GovernedCodingToolPort } from "./codingToolGovernedDelegate.js";
 import type {
   CodingRuntimeEditorMutationLeaseCoordinator,
@@ -296,7 +300,7 @@ async function executeRead(
   mutationGuard: CodingToolMutationGuard,
 ): Promise<
   | { readonly status: "completed"; readonly read: CodingToolReadResult }
-  | { readonly status: "failed" }
+  | { readonly status: "failed"; readonly reasonCode?: string }
 > {
   let binding = safeMutationBinding(mutationGuard);
   try {
@@ -585,11 +589,35 @@ function completedRead(
       byteCount: Buffer.byteLength(window.text, "utf8"),
       // The digest always covers the WHOLE file so a later changeset's expectedContentHash stays
       // anchored to the governed read even when the model only saw a window of it.
-      digest: createHash("sha256").update(text, "utf8").digest("hex"),
+      digest: wholeFileDigest(text),
       totalLines: window.totalLines,
       ...(window.nextStartLine === undefined ? {} : { nextStartLine: window.nextStartLine }),
     },
   };
+}
+
+// One formula for the digest a read reports and the pre-ask base check compares against (#3612).
+function wholeFileDigest(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+/**
+ * The digest a governed read of `relativePath` reports now, or undefined when that read would not
+ * return the whole file (denied path, missing file, over the read bound, read refused). The pre-ask
+ * base check of a changeset compares it with the model's `expectedContentHash` (#3612); only the
+ * comparison leaves the server, never the text. A denied path is never read, so the check cannot
+ * serve as a digest oracle for a file the model is not allowed to read.
+ */
+export async function governedWorkspaceFileDigest(
+  read: SecureWorkspaceTextReadPort,
+  relativePath: string,
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  if (!isGovernedReadPath(relativePath)) return undefined;
+  const result = await read.readText({ relativePath, signal });
+  return result.ok && Buffer.byteLength(result.text, "utf8") <= MAX_READ_BYTES
+    ? wholeFileDigest(result.text)
+    : undefined;
 }
 
 function recordCompletedRead(
@@ -611,13 +639,31 @@ function recordCompletedRead(
   );
 }
 
+// The refusals the secure read gives for the model's own request, by closed code: a path the policy
+// denies, a file that does not exist, is not text, or exceeds the helper's bound. They reach the
+// model and let the catalog settle the call as a refusal, not as a handler fault (#3615). A fault
+// stays bare -- including a port that returns more than the read bound, which is not the model's
+// request but a port this server must not trust.
+export const WORKSPACE_READ_REFUSAL_CODES = {
+  denied: "workspace-read-denied",
+  "not-found": "workspace-read-not-found",
+  "not-text": "workspace-read-not-text",
+  "too-large": "workspace-read-too-large",
+} as const satisfies Partial<Record<WorkspaceReadFailureReason, string>>;
+
+function readRefusalCode(reason: WorkspaceReadFailureReason): string | undefined {
+  return Object.hasOwn(WORKSPACE_READ_REFUSAL_CODES, reason)
+    ? WORKSPACE_READ_REFUSAL_CODES[reason as keyof typeof WORKSPACE_READ_REFUSAL_CODES]
+    : undefined;
+}
+
 function failedRead(
   deps: CodingToolReadEditPortDeps,
   binding: RuntimeProducerBinding | undefined,
   request: RepositoryReadRequest,
   reason: WorkspaceReadFailureReason,
   error?: unknown,
-): { readonly status: "failed" } {
+): { readonly status: "failed"; readonly reasonCode?: string } {
   const correlationId = correlationIdOrUnknown(binding?.runId);
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
@@ -634,7 +680,8 @@ function failedRead(
     ),
   );
   if (error !== undefined) emitReadFailureDiagnostic(deps.diagnostics, correlationId, error);
-  return { status: "failed" };
+  const reasonCode = readRefusalCode(reason);
+  return reasonCode === undefined ? { status: "failed" } : { status: "failed", reasonCode };
 }
 
 function emitReadFailureDiagnostic(

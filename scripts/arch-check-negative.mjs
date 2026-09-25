@@ -30,6 +30,7 @@ import {
   checkToolCatalogConformanceNegatives,
   checkToolCatalogSemanticNegatives,
 } from "./check-tool-catalog-conformance.mjs";
+import { resolveDependencyCruiserEntrypoint } from "./lib/dependency-cruiser-cli.mjs";
 import { runBareSpecifierVisibilityProbe } from "./lib/bare-specifier-visibility-probe.mjs";
 
 const RULES_FILE = ".dependency-cruiser.cjs";
@@ -240,11 +241,21 @@ if (!probeOutcome.ok) {
 }
 
 // Calling the dependency-cruiser bin through Node keeps the gate hermetic without
-// going through platform-specific npm/npx shell shims.
+// going through platform-specific npm/npx shell shims. The entry point is resolved from the
+// installed package's own `bin` map (#3607) rather than a hardcoded filename, since
+// dependency-cruiser has renamed it upstream before. A package that names none fails the gate with
+// a bounded reason, never a stack trace (PR #3617 review).
+let dependencyCruiserEntrypoint;
+try {
+  dependencyCruiserEntrypoint = resolveDependencyCruiserEntrypoint(process.cwd());
+} catch {
+  console.error("arch-check-negative: FAIL — dependency-cruiser entry point unresolved");
+  process.exit(1);
+}
 const result = spawnSync(
   process.execPath,
   [
-    join(process.cwd(), "node_modules", "dependency-cruiser", "bin", "dependency-cruise.mjs"),
+    dependencyCruiserEntrypoint,
     "--validate",
     RULES_FILE,
     "--include-only",

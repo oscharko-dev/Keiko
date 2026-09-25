@@ -129,6 +129,7 @@ const TURN_FAILURE_CODES: Readonly<Record<CodingWorkbenchTurnFailureCode, true>>
   "turn-rejected": true,
   "output-exhausted": true,
   "empty-answer": true,
+  "invalid-tool-call": true,
 };
 
 function isTurnFailureCode(value: unknown): boolean {

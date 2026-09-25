@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type {
   CodingWorkbenchCodexSubscriptionProfile,
+  CodingWorkbenchModelRefusalReason,
   CodingWorkbenchRuntimeResearchGrant,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
@@ -243,6 +244,7 @@ describe("eventDetail auxiliary outcome", () => {
     "turn-rejected",
     "output-exhausted",
     "empty-answer",
+    "invalid-tool-call",
   ] as const)("shows the actionable %s cause for a redacted gateway failure", (failureCode) => {
     expect(eventDetail(runtimeEvent({ eventKind: "failure-redacted", failureCode }), t)).toBe(
       `codingWorkbench.event.detailFailure codingWorkbench.event.turnFailure.${failureCode}`,
@@ -343,6 +345,7 @@ describe("visibleAlert mutation failures (F-09a)", () => {
   function failedMutationState(
     correlationId?: string,
     code = "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
+    modelRefusalReason?: CodingWorkbenchModelRefusalReason,
   ): CodingWorkbenchRuntimeState {
     return {
       ...createInitialCodingWorkbenchRuntimeState(),
@@ -355,6 +358,7 @@ describe("visibleAlert mutation failures (F-09a)", () => {
           message: "Runtime request was rejected.",
           retryable: false,
           ...(correlationId === undefined ? {} : { correlationId }),
+          ...(modelRefusalReason === undefined ? {} : { modelRefusalReason }),
         },
       },
     };
@@ -387,6 +391,23 @@ describe("visibleAlert mutation failures (F-09a)", () => {
     expect(alert).toContain(key);
     expect(alert).toContain(code);
     expect(alert).toContain("ui-correlation-3");
+  });
+
+  // #3603: a model refused because its window cannot hold a coding run's prompt, or because that
+  // window is still being verified, says so instead of "the model is unavailable".
+  it.each([
+    ["model-context-window-insufficient", "codingWorkbench.alert.startRefusedModelWindow"],
+    ["model-verification-pending", "codingWorkbench.alert.startRefusedModelVerificationPending"],
+  ] as const)("explains a model refused with %s through %s", (reason, key) => {
+    const alert = visibleAlert(
+      failedMutationState("ui-correlation-4", "CODING_RUNTIME_MODEL_UNAVAILABLE", reason),
+      tv,
+      false,
+    );
+    expect(alert).toContain(key);
+    expect(alert).not.toContain("codingWorkbench.alert.startRefusedModelUnavailable");
+    expect(alert).toContain("CODING_RUNTIME_MODEL_UNAVAILABLE");
+    expect(alert).toContain("ui-correlation-4");
   });
 });
 

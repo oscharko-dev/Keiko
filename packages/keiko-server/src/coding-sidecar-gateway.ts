@@ -1,8 +1,10 @@
 import { gatewaySpendRejectionReason } from "./gateway-spend-budget.js";
+import { CodingRuntimeLaunchRejectedError } from "./coding-runtime/launchFailure.js";
 import {
   AuthenticationError,
   CircuitOpenError,
   ContextOverflowError,
+  MalformedToolCallError,
   ModelRefusalError,
   ProviderEmptyAnswerError,
   ProviderError,
@@ -15,6 +17,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   findConfiguredCapability,
   resolveCodingSafeSidecarGatewayProfile,
+  ResponseRedactionError,
   type Gateway,
   type GatewayCallRequest,
   type GatewayConfig,
@@ -69,7 +72,11 @@ import {
 } from "./coding-runtime/opencodeToolSchemas.js";
 import type { OpenCodeOptionalToolName } from "./coding-runtime/opencodeLaunchProfile.js";
 import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "./correlation.js";
-import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import {
+  describeError,
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+} from "./diagnostics-log.js";
 import { readJsonObject } from "./files.js";
 import { safetyMarginTokensFor } from "@oscharko-dev/keiko-contracts/context-engineering";
 import {
@@ -456,6 +463,7 @@ const CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION = defineActivityLogOperation(
         "turn-rejected",
         "output-exhausted",
         "empty-answer",
+        "invalid-tool-call",
       ],
     },
     published: { type: "boolean", dataClass: "closed-enum", required: true },
@@ -471,6 +479,23 @@ const CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION = defineActivityLogOperation(
         "sequence-exhausted",
         "capacity-pressure",
       ],
+    },
+    // The Keiko-code frames and cause classes of the failure, when the turn failed on an error
+    // (PR #3617 review): a model-answer failure writes no error-level diagnostic, so this line is
+    // where its frames live.
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
     loss: { type: "string", dataClass: "loss-state", required: true },
@@ -718,9 +743,38 @@ export interface OpenCodeGatewayReadinessRegistry {
   readonly verifyObserved: (runId: string) => void;
   readonly isVerified: (runId: string) => boolean;
   readonly waitForObservedRequest: (runId: string, signal: AbortSignal) => Promise<boolean>;
+  /**
+   * Ends a run's pending gateway challenge at once when the route refused its request: a
+   * deterministic 400 cannot turn into an observed request later, so the handshake must not wait
+   * out the start timeout for it (#3603). A run without a pending challenge is unaffected.
+   */
+  readonly refuseChallenge: (runId: string) => void;
   /** True only on the first call per run — bounds the adoption-gap diagnostic to one per run. */
   readonly noteAdoptionGapDiagnosed: (runId: string) => boolean;
   readonly clear: (runId: string, preserveVerification?: boolean) => void;
+}
+
+// A run's one pending challenge wait: an observed request ends it with true; a refused request, a
+// clear, the start signal, or a newer wait for the same run ends it with false and disarms the run.
+function pendingChallengeWait(
+  runId: string,
+  signal: AbortSignal,
+  armed: Set<string>,
+  waiters: Map<string, (result: boolean) => void>,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const settle = (result: boolean): void => {
+      signal.removeEventListener("abort", abort);
+      if (waiters.get(runId) === settle) waiters.delete(runId);
+      if (!result) armed.delete(runId);
+      resolve(result);
+    };
+    const abort = (): void => {
+      settle(false);
+    };
+    waiters.set(runId, settle);
+    signal.addEventListener("abort", abort, { once: true });
+  });
 }
 
 export function createOpenCodeGatewayReadinessRegistry(): OpenCodeGatewayReadinessRegistry {
@@ -745,19 +799,11 @@ export function createOpenCodeGatewayReadinessRegistry(): OpenCodeGatewayReadine
       if (signal.aborted) return Promise.resolve(false);
       waiters.get(runId)?.(false);
       armed.add(runId);
-      return new Promise((resolve) => {
-        const settle = (result: boolean): void => {
-          signal.removeEventListener("abort", abort);
-          if (waiters.get(runId) === settle) waiters.delete(runId);
-          if (!result) armed.delete(runId);
-          resolve(result);
-        };
-        const abort = (): void => {
-          settle(false);
-        };
-        waiters.set(runId, settle);
-        signal.addEventListener("abort", abort, { once: true });
-      });
+      return pendingChallengeWait(runId, signal, armed, waiters);
+    },
+    refuseChallenge: (runId): void => {
+      if (!armed.delete(runId)) return;
+      waiters.get(runId)?.(false);
     },
     noteAdoptionGapDiagnosed: (runId): boolean => {
       if (adoptionGapDiagnosed.has(runId)) return false;
@@ -1546,12 +1592,33 @@ function gatewayDiagnosticCorrelation(
     : { correlationId, parentCorrelationId: runId };
 }
 
+// A turn the model ended without a usable answer -- nothing at all, reasoning until its output budget
+// ran out, or a tool call that never parsed or matched its schema -- is the model's answer, not a
+// server fault: the warn-level turn-failed line names it. An error-level diagnostic opened a support
+// incident for every such turn; a lab run of the 1.1.8 candidate behind a LiteLLM hosted_vllm route
+// opened one on its first empty answer.
+const MODEL_ANSWER_FAILURES: ReadonlySet<CodingWorkbenchTurnFailureCode> = new Set([
+  "output-exhausted",
+  "empty-answer",
+  "invalid-tool-call",
+]);
+
+function isModelAnswerFailure(error: unknown): boolean {
+  const cause = modelTurnFailureCode(error);
+  return cause !== undefined && MODEL_ANSWER_FAILURES.has(cause);
+}
+
+// A model-answer failure writes no error-level diagnostic only when its warn-level turn-failed line
+// was written. A run no longer running or paused gets no such line, so the diagnostic keeps the
+// failure's class and frames (PR #3617 review).
 function emitGatewayFailureDiagnostic(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   error: unknown,
   runId: string,
+  turnFailureRecorded: boolean,
 ): void {
+  if (turnFailureRecorded && isModelAnswerFailure(error)) return;
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
@@ -1564,23 +1631,20 @@ function emitGatewayFailureDiagnostic(
   );
 }
 
+/** Writes the run's turn-failed line; false for a run that is no longer running or paused. */
 function reportGatewayTurnFailure(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   runId: string,
   failureCode: CodingWorkbenchTurnFailureCode,
-): void {
+  error?: unknown,
+): boolean {
   const snapshot = deps.codingRuntimeOrchestrator?.getSnapshot(runId);
-  if (snapshot?.state !== "running" && snapshot?.state !== "paused") return;
+  if (snapshot?.state !== "running" && snapshot?.state !== "paused") return false;
   const publicationReason = gatewayTurnFailurePublication(deps, runId, snapshot, failureCode);
-  logGatewayTurnFailure(
-    ctx,
-    runId,
-    snapshot.revision,
-    snapshot.state,
-    failureCode,
-    publicationReason,
-  );
+  const run = { revision: snapshot.revision, state: snapshot.state };
+  logGatewayTurnFailure(ctx, runId, run, failureCode, publicationReason, error);
+  return true;
 }
 
 type GatewayFailurePublicationReason =
@@ -1611,11 +1675,12 @@ function gatewayTurnFailurePublication(
 function logGatewayTurnFailure(
   ctx: RouteContext,
   runId: string,
-  revision: number,
-  state: "running" | "paused",
+  { revision, state }: { readonly revision: number; readonly state: "running" | "paused" },
   failureCode: CodingWorkbenchTurnFailureCode,
   publicationReason: GatewayFailurePublicationReason,
+  error: unknown,
 ): void {
+  const { frames, causeChain } = describeError(error);
   getServerLogger().warn(
     activityLogEvent(
       CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION,
@@ -1630,6 +1695,8 @@ function logGatewayTurnFailure(
         failureCode,
         published: publicationReason === "published",
         publicationReason,
+        ...(error === undefined || frames === undefined ? {} : { frames }),
+        ...(error === undefined || causeChain === undefined ? {} : { causeChain }),
         completeness: "complete",
         loss: "none",
       },
@@ -1640,10 +1707,19 @@ function logGatewayTurnFailure(
 // The causes the buffered and the streamed path name the same way. Both output-budget exhaustion
 // and an empty answer are HTTP 200 provider errors, so they are resolved before any status check.
 function modelTurnFailureCode(error: unknown): CodingWorkbenchTurnFailureCode | undefined {
-  if (error instanceof ContextOverflowError || error instanceof ModelRefusalError)
+  // The gateway's own redaction refused an answer nested too deep to walk: a Workbench guard
+  // rejected the turn, whether or not a tool was called, so it is no invalid tool call and keeps
+  // its error-level diagnostic (PR #3617 review). It extends MalformedToolCallError, so it is named
+  // before that check.
+  if (
+    error instanceof ContextOverflowError ||
+    error instanceof ModelRefusalError ||
+    error instanceof ResponseRedactionError
+  )
     return "turn-rejected";
   if (error instanceof ProviderOutputExhaustedError) return "output-exhausted";
   if (error instanceof ProviderEmptyAnswerError) return "empty-answer";
+  if (error instanceof MalformedToolCallError) return "invalid-tool-call";
   return undefined;
 }
 
@@ -1687,7 +1763,9 @@ function emitGatewayStreamFailureDiagnostic(
   deps: UiHandlerDeps,
   error: unknown,
   runId: string,
+  turnFailureRecorded: boolean,
 ): void {
+  if (turnFailureRecorded && isModelAnswerFailure(error)) return;
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
@@ -1856,8 +1934,9 @@ function emitGatewayToolContractDiagnostic(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   runId: string,
-  tools: readonly ToolDefinition[] | undefined,
+  parsed: CodingSidecarGatewayChatCompletionRequest,
 ): void {
+  const { tools } = parsed;
   const { code, reason } = toolContractRejectionReason(tools);
   emitServerDiagnostic(deps.diagnostics, {
     correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
@@ -1870,7 +1949,22 @@ function emitGatewayToolContractDiagnostic(
     code,
   });
   logGatewayRejection(ctx, runId, 403, reason, toolContractMismatch(tools));
+  refuseReadinessChallenge(deps, runId, parsed);
   reportGatewayTurnFailure(ctx, deps, runId, "turn-rejected");
+}
+
+// Ends a pending readiness challenge at once when the route refused the challenge's own request: a
+// deterministic refusal of the readiness prompt cannot turn into an observed request later (#3603).
+// A refused side request, a title or compaction call the runtime sends meanwhile, leaves the
+// challenge waiting for the readiness prompt (PR #3617 review).
+function refuseReadinessChallenge(
+  deps: UiHandlerDeps,
+  runId: string,
+  parsed: CodingSidecarGatewayChatCompletionRequest | undefined,
+): void {
+  if (parsed !== undefined && isRuntimeReadinessProbe(parsed)) {
+    gatewayReadinessRegistry(deps)?.refuseChallenge(runId);
+  }
 }
 
 /**
@@ -2351,15 +2445,17 @@ function settleFailedGatewayChat(
 ): RouteResult | typeof STREAMING {
   const cancelled = cancellation.signal.aborted;
   recordGatewayOutcome(ctx, deps, runId, cancellation, cancelled ? "cancelled" : "failed", 0, 0);
-  emitGatewayFailureDiagnostic(ctx, deps, error, runId);
   const spendReason = gatewaySpendRejectionReason(error);
-  if (!cancelled)
+  const turnFailureRecorded =
+    !cancelled &&
     reportGatewayTurnFailure(
       ctx,
       deps,
       runId,
       spendReason === undefined ? gatewayTurnFailureCode(error) : "turn-rejected",
+      error,
     );
+  emitGatewayFailureDiagnostic(ctx, deps, error, runId, turnFailureRecorded);
   settlePromptTokenReservation(deps, delivery.promptTokenReservation);
   if (spendReason !== undefined && bufferedStream === undefined) {
     logGatewayRejection(ctx, runId, 403, spendReason);
@@ -2447,8 +2543,14 @@ async function streamGatewayChat(
     )(request)[Symbol.asyncIterator]();
   } catch (error) {
     recordGatewayOutcome(ctx, deps, runId, dispatch.cancellation, "failed", 0, 0);
-    emitGatewayFailureDiagnostic(ctx, deps, error, runId);
-    reportGatewayTurnFailure(ctx, deps, runId, gatewayTurnFailureCode(error));
+    const turnFailureRecorded = reportGatewayTurnFailure(
+      ctx,
+      deps,
+      runId,
+      gatewayTurnFailureCode(error),
+      error,
+    );
+    emitGatewayFailureDiagnostic(ctx, deps, error, runId, turnFailureRecorded);
     settlePromptTokenReservation(deps, promptTokenReservation);
     return unavailableError();
   }
@@ -2483,10 +2585,22 @@ async function pumpGatewayStreamWithCancellation(
   try {
     await pumpGatewayStream(session);
   } catch (error) {
-    emitGatewayStreamFailureDiagnostic(session.ctx, deps, error, session.runId);
-    if (!cancellationSignal.aborted) {
-      reportGatewayTurnFailure(session.ctx, deps, session.runId, gatewayStreamFailureCode(error));
-    }
+    const turnFailureRecorded =
+      !cancellationSignal.aborted &&
+      reportGatewayTurnFailure(
+        session.ctx,
+        deps,
+        session.runId,
+        gatewayStreamFailureCode(error),
+        error,
+      );
+    emitGatewayStreamFailureDiagnostic(
+      session.ctx,
+      deps,
+      error,
+      session.runId,
+      turnFailureRecorded,
+    );
     settleGatewayStreamError(session);
   } finally {
     cancellationSignal.removeEventListener("abort", cancelIterator);
@@ -2956,11 +3070,7 @@ function gatewayReadinessProjection(
   deps: UiHandlerDeps,
 ): CodingWorkbenchSidecarGatewayResult {
   const result = resolveGatewayProfile(deps).result;
-  if (
-    result.status === "available" &&
-    result.runMetadata.maxPromptTokens >= CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS
-  )
-    return result;
+  if (codingContextFits(result)) return result;
   const shortfall =
     result.status === "available" ? "model-context-window-insufficient" : result.reason;
   if (
@@ -2981,6 +3091,78 @@ function gatewayReadinessProjection(
   // reading and keep the refusal until an unrelated refresh.
   if (result.status === "available" || pending) return { status: "unavailable", reason };
   return result;
+}
+
+// One owner for the rule a coding run's prompt needs: the readiness projection of the default model
+// and the start of a run with a model chosen in the picker both read it (#3603).
+function codingContextFits(result: CodingWorkbenchSidecarGatewayResult): boolean {
+  return (
+    result.status === "available" &&
+    result.runMetadata.maxPromptTokens >= CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS
+  );
+}
+
+/**
+ * Why an available coding profile cannot hold a coding run's prompt, or undefined when it can
+ * (#3603). While the automatic probe that could raise the window is still running, the shortfall
+ * is not a verdict yet; the start then names the pending verification instead.
+ */
+export function codingContextShortfall(
+  config: GatewayConfig | undefined,
+  result: Extract<CodingWorkbenchSidecarGatewayResult, { readonly status: "available" }>,
+): "model-context-window-insufficient" | "model-verification-pending" | undefined {
+  if (codingContextFits(result)) return undefined;
+  return config !== undefined && isCodingWorkbenchProbePending(config, result.modelAlias)
+    ? "model-verification-pending"
+    : "model-context-window-insufficient";
+}
+
+/**
+ * The profile a coding run starts with, for the model chosen in the picker or the default one. A
+ * model the gateway does not admit right now is a typed refusal that names the sidecar's reason
+ * (#3565 Observation 17), never a bare Error the orchestrator can only report as
+ * `authority-resolution-failed`; so is a model whose window cannot hold the run's prompt (#3603).
+ */
+export function admitCodingRunModel(
+  config: GatewayConfig | undefined,
+  modelId: string | undefined,
+  reasoningEffort: ModelReasoningEffort | undefined,
+): { readonly profileId: string; readonly reasoningEffort?: ModelReasoningEffort } {
+  const resolved = resolveCodingSafeSidecarGatewayProfile(config, {
+    ...(modelId === undefined ? {} : { modelId }),
+  });
+  if (resolved.status !== "available" || config === undefined) {
+    throw new CodingRuntimeLaunchRejectedError(
+      "model-unavailable",
+      false,
+      resolved.status === "available" ? "missing-config" : resolved.reason,
+    );
+  }
+  const contextShortfall = codingContextShortfall(config, resolved);
+  if (contextShortfall !== undefined) {
+    throw new CodingRuntimeLaunchRejectedError("model-unavailable", false, contextShortfall);
+  }
+  return {
+    profileId: resolved.modelAlias,
+    ...admittedReasoningEffort(config, resolved.modelAlias, reasoningEffort),
+  };
+}
+
+function admittedReasoningEffort(
+  config: GatewayConfig,
+  modelAlias: string,
+  reasoningEffort: ModelReasoningEffort | undefined,
+): { readonly reasoningEffort?: ModelReasoningEffort } {
+  if (reasoningEffort === undefined) return {};
+  const efforts = findConfiguredCapability(config, modelAlias)?.reasoningEfforts;
+  if (efforts?.includes(reasoningEffort) !== true) {
+    throw new CodingRuntimeLaunchRejectedError(
+      "model-unavailable",
+      false,
+      "reasoning-effort-unavailable",
+    );
+  }
+  return { reasoningEffort };
 }
 
 type CodingWorkbenchReadinessShortfall =
@@ -3095,7 +3277,7 @@ function rejectUnmanagedGatewayToolContract(
 ): RouteResult | undefined {
   const declaresTools = parsed.tools !== undefined && parsed.tools.length > 0;
   if (!declaresTools || isExactManagedToolSet(parsed.tools)) return undefined;
-  emitGatewayToolContractDiagnostic(ctx, deps, authentication.runId, parsed.tools);
+  emitGatewayToolContractDiagnostic(ctx, deps, authentication.runId, parsed);
   return forbiddenGatewayRequest();
 }
 
@@ -3121,7 +3303,7 @@ function authenticatedGatewayAdmission(
 ): RuntimeGatewayAdmission {
   const registry = gatewayReadinessRegistry(deps);
   if (!isAdmittedManagedToolSet(parsed.tools, registry, authentication.runId)) {
-    emitGatewayToolContractDiagnostic(ctx, deps, authentication.runId, parsed.tools);
+    emitGatewayToolContractDiagnostic(ctx, deps, authentication.runId, parsed);
     return { kind: "handled", result: forbiddenGatewayRequest() };
   }
   if (
@@ -3189,6 +3371,7 @@ function logChatRequestRejection(
         }
       : undefined;
   logGatewayRejection(ctx, runId, validationError.status, reason, boundedEvidence);
+  refuseReadinessChallenge(deps, runId, observed?.parsed);
   reportGatewayTurnFailure(ctx, deps, runId, "turn-rejected");
 }
 

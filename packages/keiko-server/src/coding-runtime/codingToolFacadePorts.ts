@@ -72,6 +72,27 @@ export interface CodingToolFacadeInput {
   readonly signal?: AbortSignal | undefined;
 }
 
+/** What a governed read of an asked file answers for an edit ask's base check (#3612). */
+export type CodingToolEditBaseRead =
+  | { readonly kind: "digest"; readonly digest: string }
+  // The read cannot answer for the file (a new file, a denied path); the editor route checks it.
+  | { readonly kind: "unreadable" }
+  // The run's live authority does not admit the read: the ask must not reach the human.
+  | { readonly kind: "authority-denied" };
+
 export interface CodingToolFacade {
   readonly execute: (input: CodingToolFacadeInput) => Promise<CodingToolResult>;
+  /**
+   * The digest a governed read of the file reports now (#3612), whether the read cannot answer for
+   * it, or whether the run's live authority, for this capability, does not admit the read at all.
+   * The governed ask checks a changeset's base digests with it before any human is asked; a facade
+   * without it leaves that check to the editor route after the approval.
+   */
+  readonly editBaseDigest?:
+    | ((
+        capability: string | undefined,
+        relativePath: string,
+        signal: AbortSignal,
+      ) => Promise<CodingToolEditBaseRead>)
+    | undefined;
 }

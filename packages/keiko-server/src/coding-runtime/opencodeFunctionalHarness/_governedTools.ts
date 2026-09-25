@@ -163,6 +163,47 @@ function generatedToolOutput(result: object, pluginVersion: "v1" | "v2" | undefi
   return "output" in result ? result.output : undefined;
 }
 
+/**
+ * The governed ask the generated V2 plugin sends for one tool call (#3612), as its own source
+ * builds it: a fixture derived from the plugin, never a hand-written copy of its protocol. The
+ * capturing transport refuses the ask, so the tool call itself never runs.
+ */
+export async function capturedGeneratedV2Ask(input: {
+  readonly runId: string;
+  readonly sessionId: string;
+  readonly callId: string;
+  readonly tool: string;
+  readonly args: Record<string, unknown>;
+}): Promise<Record<string, unknown>> {
+  const bodies: unknown[] = [];
+  const tools = new ScriptedGovernedTools({
+    env: {
+      KEIKO_CODING_MODE: "governed-assist",
+      KEIKO_TOOL_FACADE_URL: "http://127.0.0.1/api/coding-sidecar/tool",
+      KEIKO_TOOL_FACADE_CAPABILITY: "captured-ask",
+      KEIKO_CODING_RUN_ID: input.runId,
+    },
+    pluginVersion: "v2",
+    sessionId: input.sessionId,
+    broadcast: (): void => undefined,
+    fetch: (_url, init): Promise<Response> => {
+      bodies.push(typeof init?.body === "string" ? JSON.parse(init.body) : undefined);
+      return Promise.resolve(new Response(null, { status: 403 }));
+    },
+  });
+  await Promise.allSettled([
+    tools.execute(
+      { id: input.callId, name: input.tool, args: input.args },
+      new AbortController().signal,
+    ),
+  ]);
+  const [ask] = bodies;
+  if (bodies.length !== 1 || typeof ask !== "object" || ask === null) {
+    throw new Error("functional-generated-v2-ask-missing");
+  }
+  return ask as Record<string, unknown>;
+}
+
 /** Only the fake upstream permission queue lives here; the real manager issues every approval. */
 export class ScriptedGovernedTools {
   private readonly pending = new Map<string, PendingPermission>();

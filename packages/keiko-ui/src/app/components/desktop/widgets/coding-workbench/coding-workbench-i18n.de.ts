@@ -987,6 +987,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Das Modell hat sein gesamtes Ausgabebudget verbraucht, bevor eine Antwort entstand – meist durch Reasoning. Lass das Gateway ein größeres max_output_tokens für dieses Modell melden oder wähle ein Modell mit geringerem Reasoning-Anteil, und versuche es erneut.",
   "codingWorkbench.event.turnFailure.empty-answer":
     "Das Modell hat diesen Schritt ohne Text und ohne Werkzeugaufruf beendet. Der Anbieter hat geantwortet, es ist also kein Verbindungsproblem. Versuche den Schritt erneut; wiederholt es sich, formuliere die Aufgabe um oder wähle ein anderes Modell.",
+  "codingWorkbench.event.turnFailure.invalid-tool-call":
+    "Das Modell hat bei jedem Versuch ein Werkzeug mit Argumenten aufgerufen, die nicht zum Werkzeug passen. Der Anbieter hat geantwortet, es ist also kein Verbindungsproblem. Versuche den Schritt erneut; wiederholt es sich, formuliere die Aufgabe um oder wähle ein anderes Modell.",
   "codingWorkbench.event.detailOutcome": "Ergebnis: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Nicht vertrauenswürdiger Inhalt: Die abgerufene Seite wurde als Daten isoliert, nicht als Anweisungen.",
@@ -1022,6 +1024,10 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die angeforderte Runtime-Aktion ist fehlgeschlagen ({code}). Prüfe den Live-Zustand und versuche es erneut.",
   "codingWorkbench.alert.startRefusedModelUnavailable":
     "Das gewählte Modell ist für einen Coding-Lauf gerade nicht zugelassen ({code}). Führe unter Einstellungen → Modelle die Bereitschaftsprüfung dafür aus oder wähle ein Modell, das die Prüfung heute bestanden hat, und starte erneut.",
+  "codingWorkbench.alert.startRefusedModelWindow":
+    "Das Kontextfenster des gewählten Modells ist für einen Coding-Lauf zu klein (mindestens 32.000 Tokens; {code}). Keiko konnte 32.000 Tokens dafür nicht bestätigen. Wähle ein größeres Modell oder lass das Gateway max_input_tokens für dieses Modell angeben und starte dann erneut.",
+  "codingWorkbench.alert.startRefusedModelVerificationPending":
+    "Keiko prüft das Kontextfenster des gewählten Modells gerade beim Gateway ({code}). Bei einem ausgelasteten Gateway kann das einige Minuten dauern; starte erneut, sobald die Prüfung abgeschlossen ist.",
   "codingWorkbench.alert.startRefusedWorkspaceUnqualified":
     "Das gebundene Repository konnte für einen Coding-Lauf nicht qualifiziert werden ({code}). Wähle das Repository erneut über „Browse…“, damit sein echter Pfad gebunden wird, und starte erneut.",
   "codingWorkbench.alert.actionFailedSupportId": "Support-ID: {correlationId}.",

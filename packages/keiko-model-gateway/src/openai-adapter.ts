@@ -700,8 +700,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 // Locally defined (not in @oscharko-dev/keiko-security's gateway error taxonomy) for the same
-// reason GatewayToolCatalogError lives in toolCatalogBridge.ts rather than there: it is
-// gateway-internal, thrown and caught entirely within this package. Never the provider's fault —
+// reason GatewayToolCatalogError lives in toolCatalogBridge.ts rather than there: it is thrown only
+// within this package. Exported like that sibling, so a caller can name it apart from a malformed
+// tool call: the coding sidecar gateway reports it as a rejected turn (PR #3617 review). Never the
+// provider's fault —
 // the gateway's OWN redaction pass refused to keep walking a pathologically deep response body —
 // so recordProviderFailure (gateway.ts) excludes it from circuit breaker accounting the same way
 // it already excludes CancelledError/ConfigInvalidError (review findings on PR #3394 against

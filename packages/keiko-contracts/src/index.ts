@@ -1347,6 +1347,7 @@ export type {
   CodingWorkbenchRuntimeAuthorityFacts,
   CodingWorkbenchIssueBinding,
   CodingWorkbenchIssueBindingFailure,
+  CodingWorkbenchModelRefusalReason,
   CodingWorkbenchRuntimeDelegationUsage,
   CodingWorkbenchRuntimeExecutionBinding,
   CodingWorkbenchRuntimeFailureCode,

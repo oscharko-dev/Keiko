@@ -72,6 +72,7 @@ import {
 } from "./codingToolApprovalBridge.js";
 import {
   contentFreeErrorClass,
+  describeError,
   emitServerDiagnostic,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
@@ -103,6 +104,9 @@ export type CodingRuntimeFailureCode =
   | "env-secret-denied"
   | "egress-unqualified"
   | "executable-tree-digest-mismatch"
+  // The gateway challenge failed: the route refused the challenge request, it never arrived, or a
+  // challenge precondition was missing (#3603). Not a protocol schema mismatch.
+  | "gateway-challenge-failed"
   | "gateway-non-loopback"
   // #3565: launch-resolution refusals that used to be bare Errors (see launchFailure.ts).
   | "host-unavailable"
@@ -1654,12 +1658,16 @@ function emitInvalidRuntimeEventDiagnostic(
   });
 }
 
+// A runtime exit is observed, not thrown. Its line still carries the Keiko-code frames of the site
+// that observed it (ADR-0173 D3), the frames every thrown failure line carries, so a customer's log
+// names the exit handler of the installed build (#3593).
 function emitRuntimeExitDiagnostic(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
   code: number | null,
   now: () => number,
 ): void {
+  const { frames } = describeError(new Error("runtime-exit-observed"));
   emitServerDiagnostic(diagnostics, {
     correlationId: runId,
     timestamp: new Date(now()).toISOString(),
@@ -1670,6 +1678,7 @@ function emitRuntimeExitDiagnostic(
     // label — moved to `code` (the field this data actually belongs on), `message` stays fixed.
     message: "runtime-exit-code",
     code: code === null ? "signal" : String(code),
+    frames,
   });
 }
 
@@ -2113,9 +2122,8 @@ const OPEN_CODE_HANDSHAKE_PHASES: ReadonlySet<string> = new Set([
 ]);
 
 function openCodeHandshakeFailureCode(reason: string): CodingRuntimeFailureCode {
-  return reason === "authenticated-health-version"
-    ? "runtime-version-mismatch"
-    : "protocol-schema-mismatch";
+  if (reason === "authenticated-health-version") return "runtime-version-mismatch";
+  return reason === "gateway-challenge" ? "gateway-challenge-failed" : "protocol-schema-mismatch";
 }
 
 function emitOpenCodeHandshakeDiagnostic(

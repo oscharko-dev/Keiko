@@ -12,6 +12,7 @@ import {
 import { isVerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import { isVerificationKind } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
 import { isCodingRepositoryResult } from "./codingRepositorySearchHandler.js";
+import { WORKSPACE_READ_REFUSAL_CODES } from "./codingToolReadEditPorts.js";
 import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
 
@@ -143,6 +144,9 @@ const GOVERNED_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
   "delivery-authority-revoked",
   "connector-authority-revoked",
   "search-authority-revoked",
+  // A read the port refused for the model's own request (#3615): named, so the model can act on it
+  // and the catalog settles the call as a refusal instead of a handler fault.
+  ...Object.values(WORKSPACE_READ_REFUSAL_CODES),
   ...GOVERNED_VERIFICATION_REASON_CODES,
   // The verification runner's own closed codes (editor/verificationRunnerErrors.ts), sourced rather
   // than restated for the same reason the two contract enums above are. A verification the runner
@@ -402,22 +406,25 @@ function isCodingToolVerificationResult(value: unknown): value is CodingToolVeri
     : Object.keys(value).length === 3 && isCodingToolCommitProofResult(value.commit);
 }
 
-const RETRYABLE_COMMIT_PROOF_REASONS = new Set<unknown>(["candidate-drift", "proof-unavailable"]);
+// The one next action each unavailable-proof reason admits. Unsaved editor buffers are saved, not
+// staged: the stage-then-verify answer they got before sent the model into a loop (#3612).
+const COMMIT_PROOF_NEXT_ACTIONS: ReadonlyMap<unknown, string> = new Map([
+  ["candidate-drift", "verify-again"],
+  ["proof-unavailable", "verify-again"],
+  ["buffers-dirty", "save-then-verify"],
+  ["candidate-not-staged", "stage-then-verify"],
+]);
 
 function isCodingToolCommitProofResult(value: unknown): value is CodingToolCommitProofResult {
   if (!isRecord(value)) return false;
   if (value.commitProof === "recorded") return Object.keys(value).length === 1;
   if (value.commitProof !== "unavailable") return false;
-  if (RETRYABLE_COMMIT_PROOF_REASONS.has(value.reasonCode)) {
-    return value.nextAction === "verify-again" && Object.keys(value).length === 3;
+  const nextAction = COMMIT_PROOF_NEXT_ACTIONS.get(value.reasonCode);
+  if (nextAction === undefined || value.nextAction !== nextAction) return false;
+  if (value.reasonCode !== "candidate-not-staged" || value.blocking === undefined) {
+    return Object.keys(value).length === 3;
   }
-  return (
-    value.reasonCode === "candidate-not-staged" &&
-    value.nextAction === "stage-then-verify" &&
-    (value.blocking === undefined
-      ? Object.keys(value).length === 3
-      : Object.keys(value).length === 4 && isVerifiedCommitBlockingPaths(value.blocking))
-  );
+  return Object.keys(value).length === 4 && isVerifiedCommitBlockingPaths(value.blocking);
 }
 
 // Bounded, workspace-relative and exact-keyed, like every other payload crossing this boundary. A
@@ -828,6 +835,21 @@ function editFailureCoaching(
   return {
     ...(detail === undefined ? {} : { detail }),
     ...(guidance === undefined ? {} : { guidance }),
+  };
+}
+
+/**
+ * The result of a changeset whose base digest is already stale when it asks the human (#3612): the
+ * same refusal and re-read guidance the editor route gives after an approval, before any human is
+ * asked. A path outside the detail's printable bound is left out, as for every edit refusal.
+ */
+export function staleEditBaseToolResult(staleFile: string): CodingToolResult {
+  return {
+    ...projected("failed", "CONTENT_HASH_MISMATCH"),
+    ...editFailureCoaching(
+      "CONTENT_HASH_MISMATCH",
+      `The file changed after its read: ${staleFile}`,
+    ),
   };
 }
 

@@ -2,6 +2,7 @@ import { gatewayVerificationContradictsReadiness } from "@oscharko-dev/keiko-con
 import type {
   CodingWorkbenchIssueBindingFailure,
   CodingWorkbenchMode,
+  CodingWorkbenchModelRefusalReason,
   CodingWorkbenchModelSource,
   CodingWorkbenchRuntimeResearchGrant,
   CodingWorkbenchRuntimeSseEvent,
@@ -293,6 +294,8 @@ function turnFailureDetail(
     return t("codingWorkbench.event.turnFailure.output-exhausted");
   if (event.failureCode === "empty-answer")
     return t("codingWorkbench.event.turnFailure.empty-answer");
+  if (event.failureCode === "invalid-tool-call")
+    return t("codingWorkbench.event.turnFailure.invalid-tool-call");
   return "";
 }
 
@@ -504,9 +507,17 @@ function standingConditionAlert(
 }
 
 // #3565 Observation 17: a start the server refused for a nameable cause gets the sentence that
-// tells the operator what to do, not the generic "review the live state and retry".
-function startRefusalSummaryKey(code: string): CodingWorkbenchMessageKey {
+// tells the operator what to do, not the generic "review the live state and retry". #3603: a model
+// whose window cannot hold a coding run's prompt, or whose window is still being verified, says so.
+function startRefusalSummaryKey(
+  code: string,
+  modelRefusalReason?: CodingWorkbenchModelRefusalReason,
+): CodingWorkbenchMessageKey {
   if (code === "CODING_RUNTIME_MODEL_UNAVAILABLE") {
+    if (modelRefusalReason === "model-context-window-insufficient")
+      return "codingWorkbench.alert.startRefusedModelWindow";
+    if (modelRefusalReason === "model-verification-pending")
+      return "codingWorkbench.alert.startRefusedModelVerificationPending";
     return "codingWorkbench.alert.startRefusedModelUnavailable";
   }
   if (code === "CODING_RUNTIME_WORKSPACE_UNQUALIFIED") {
@@ -523,7 +534,7 @@ export function visibleAlert(
 ): string | null {
   if (state.mutation.error) {
     return actionFailureAlert(
-      startRefusalSummaryKey(state.mutation.error.code),
+      startRefusalSummaryKey(state.mutation.error.code, state.mutation.error.modelRefusalReason),
       state.mutation.error,
       t,
     );

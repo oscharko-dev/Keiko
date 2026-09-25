@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  EDITOR_AGENT_CONFLICT_CODES,
+  EDITOR_AGENT_FAILURE_CODES,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 
 const catalogWork = vi.hoisted(() => ({
   compileProjection: vi.fn(),
@@ -27,7 +31,7 @@ import type { CodingToolActionRequest, CodingToolResult } from "../coding-runtim
 import { createCodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
 import type { OpenCodeOptionalToolName } from "../coding-runtime/opencodeLaunchProfile.js";
 import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
-import { createBufferedServerLogSink } from "../observability/server-log.js";
+import { createBufferedServerLogSink, type ServerLogEvent } from "../observability/server-log.js";
 import {
   createCanonicalOpenCodeHandlerCoverage,
   createCanonicalCatalogFacadeBridge,
@@ -323,6 +327,92 @@ describe("canonical catalog facade bridge", () => {
       },
     });
   });
+
+  // #3615: a refusal the handler gave for the model's own input -- a stale base, a patch that does
+  // not apply, a denied or missing path -- settles as that verdict below error level, so it opens no
+  // support incident, and the model still receives the handler's own result.
+  it.each([
+    ["CONTENT_HASH_MISMATCH", "invalid", "workspace-stale"],
+    ["INVALID_EDITS", "invalid", "invalid-arguments"],
+    ["OUT_OF_SCOPE", "denied", "workspace-denied"],
+    ["workspace-read-denied", "denied", "workspace-denied"],
+    ["workspace-read-not-found", "invalid", "invalid-arguments"],
+    // PR #3617 review: the routine editor refusals are verdicts too.
+    ["POLICY_DENIED", "denied", "workspace-denied"],
+    ["DIRTY", "invalid", "workspace-stale"],
+    ["APPROVAL_REQUIRED", "denied", "approval-required"],
+    ["UNSUPPORTED_OPERATION", "invalid", "unsupported-capability"],
+    ["DUPLICATE_ACTION", "invalid", "replay-conflict"],
+    ["QUEUE_FULL", "busy", "capacity-exhausted"],
+    ["MUTATION_IN_FLIGHT", "busy", "invocation-in-flight"],
+    ["TIMED_OUT", "timeout", "deadline-exceeded"],
+    ["CANCELLED", "cancelled", "explicit-cancellation"],
+    ["WORKSPACE_ACCESS_LOST", "denied", "workspace-denied"],
+  ] as const)(
+    "settles a %s refusal as %s / %s below error level and keeps the handler result",
+    async (code, status, reason) => {
+      const { bridge, log } = createBridge();
+      const refusal = {
+        status: "failed" as const,
+        evidence: [{ kind: "governed-delegate", code }],
+        guidance: "Re-read the file and rebuild the patch.",
+      };
+
+      await expect(
+        bridge.execute(discoverRequest, facadeInput(), (_signal, mutationGuard) => {
+          expect(mutationGuard.check()).toBe(true);
+          return Promise.resolve(refusal);
+        }),
+      ).resolves.toEqual(refusal);
+      const settled = log.events.at(-1);
+      expect(settled).toMatchObject({
+        op: "tool-catalog.invocation-settled",
+        extra: { status, reason, effectStarted: true, budgetDisposition: "committed" },
+      });
+      expect(settled?.level).not.toBe("error");
+    },
+  );
+
+  // PR #3617 review: every editor-agent conflict and failure code is classified at the bridge, so
+  // none becomes a handler fault, none settles as failed, and none opens a support incident. An
+  // editor that is not connected is a capability that is unavailable right now.
+  const UNAVAILABLE_EDITOR_CODES: ReadonlySet<string> = new Set([
+    "NO_ACTIVE_SESSION",
+    "NO_ACTIVE_BRIDGE",
+    "PROVIDER_UNAVAILABLE",
+  ]);
+  const EDITOR_CODES = [...EDITOR_AGENT_CONFLICT_CODES, ...EDITOR_AGENT_FAILURE_CODES];
+
+  async function settledEditorRefusal(code: string): Promise<ServerLogEvent | undefined> {
+    const { bridge, log } = createBridge();
+    const refusal = { status: "failed" as const, evidence: [{ kind: "governed-delegate", code }] };
+    await expect(
+      bridge.execute(discoverRequest, facadeInput(), (_signal, mutationGuard) => {
+        expect(mutationGuard.check()).toBe(true);
+        return Promise.resolve(refusal);
+      }),
+    ).resolves.toEqual(refusal);
+    return log.events.at(-1);
+  }
+
+  it.each(EDITOR_CODES)(
+    "settles the editor refusal %s as its own verdict below error level",
+    async (code) => {
+      const settled = await settledEditorRefusal(code);
+      expect(settled?.op).toBe("tool-catalog.invocation-settled");
+      expect(settled?.extra?.status).not.toBe("failed");
+      expect(settled?.level).not.toBe("error");
+    },
+  );
+
+  it.each([...UNAVAILABLE_EDITOR_CODES])(
+    "settles the editor code %s as an unavailable capability, not a handler fault",
+    async (code) => {
+      const settled = await settledEditorRefusal(code);
+      expect(settled?.extra).toMatchObject({ status: "invalid", reason: "unsupported-capability" });
+      expect(settled?.errorKind).toBe("unavailable");
+    },
+  );
 
   it("settles a governed failure without re-entering a revoked live context for its clock", async () => {
     const started = deferred<undefined>();

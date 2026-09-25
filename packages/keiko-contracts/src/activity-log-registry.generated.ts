@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "b22efcb639973c2bdd7ec5f885666399fcf7c935ddfa7031a99f100b2d13424a" as const;
+  "3803a5ba31a2f59d9b6ed48159af80c032a2897891322c1493355b622ca7f78a" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -3428,6 +3428,66 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "coding-runtime.approval.base-checked",
+    category: "process",
+    owner: "keiko-server",
+    emitter: "coding-runtime.opencodeV2ApprovalRequests.recordBaseCheck",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      runId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: true,
+        maxLength: 128,
+      },
+      requestId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: true,
+        maxLength: 128,
+      },
+      outcome: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["current", "stale", "denied", "failed", "cancelled"],
+      },
+      fileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      checkedFileCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      staleFileSha256: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["coding-runtime-approval-wait"],
+    proofIds: ["coding-runtime.approval.base-checked.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "coding-runtime.approval.waiting",
     category: "process",
     owner: "keiko-server",
@@ -6405,7 +6465,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["purged", "dropped"],
+        values: ["purged", "dropped", "superseded"],
       },
       reason: {
         type: "string",
@@ -6422,12 +6482,31 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "projection-rejected",
           "capacity-rejected",
           "subscriber-rejected",
+          "late-restatement",
         ],
       },
       occurrenceCount: {
         type: "integer",
         dataClass: "count",
         required: false,
+      },
+      callIdSha256: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
+      },
+      settledState: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["succeeded", "failed", "denied", "cancelled"],
+      },
+      restatedState: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["pending", "running", "failed"],
       },
       rejection: {
         type: "string",
@@ -6925,7 +7004,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: false,
-        values: ["candidate-not-staged", "candidate-drift", "proof-unavailable"],
+        values: ["candidate-not-staged", "buffers-dirty", "candidate-drift", "proof-unavailable"],
       },
       proofStage: {
         type: "string",
@@ -7522,6 +7601,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "turn-rejected",
           "output-exhausted",
           "empty-answer",
+          "invalid-tool-call",
         ],
       },
       published: {
@@ -7541,6 +7621,20 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "sequence-exhausted",
           "capacity-pressure",
         ],
+      },
+      frames: {
+        type: "string-array",
+        dataClass: "safe-platform-class",
+        required: false,
+        maxLength: 512,
+        maxItems: 8,
+      },
+      causeChain: {
+        type: "string-array",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 128,
+        maxItems: 5,
       },
     },
     causal: "correlation",
@@ -7648,7 +7742,21 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "approval-expired",
           "approval-cancelled",
           "approval-unavailable",
+          "approval-stale",
+          "approval-authority-denied",
         ],
+      },
+      runId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 128,
+      },
+      requestId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 128,
       },
     },
     causal: "correlation",
@@ -31909,21 +32017,86 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["state"],
       lifecycleOperations: {
         start: [],
-        state: ["coding-runtime.approval.waiting"],
+        state: ["coding-runtime.approval.base-checked", "coding-runtime.approval.waiting"],
         end: [],
         failure: [],
         loss: [],
       },
       causalEdges: [
         {
+          op: "coding-runtime.approval.base-checked",
+          mode: "correlation",
+        },
+        {
           op: "coding-runtime.approval.waiting",
           mode: "correlation",
         },
       ],
       lossSignals: [],
-      resourceSignals: ["coding-runtime.approval.waiting"],
+      resourceSignals: ["coding-runtime.approval.base-checked", "coding-runtime.approval.waiting"],
       replayReferences: [],
       operations: [
+        {
+          op: "coding-runtime.approval.base-checked",
+          owner: "keiko-server",
+          category: "process",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "checkedFileCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "fileCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "outcome",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "requestId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "runId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "staleFileSha256",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-runtime.approval.base-checked.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "coding-runtime.approval.waiting",
           owner: "keiko-server",
@@ -35392,6 +35565,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "callIdSha256",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
               name: "event",
               type: "string",
               dataClass: "closed-enum",
@@ -35421,8 +35600,20 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               dataClass: "closed-enum",
               required: false,
             },
+            {
+              name: "restatedState",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
+            {
+              name: "settledState",
+              type: "string",
+              dataClass: "closed-enum",
+              required: false,
+            },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "digest", "loss-state"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -35876,10 +36067,22 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "failure-cluster",
           safeContextFields: [
             {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
               name: "failureCode",
               type: "string",
               dataClass: "closed-enum",
               required: true,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "safe-platform-class",
+              required: false,
             },
             {
               name: "publicationReason",
@@ -35916,12 +36119,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "closed-enum",
             "completeness-state",
             "count",
+            "error-kind",
             "loss-state",
             "opaque-id",
+            "safe-platform-class",
           ],
           frameCauseEvidence: {
-            frames: false,
-            causeChain: false,
+            frames: true,
+            causeChain: true,
           },
           proofIds: ["coding-sidecar.gateway.turn-failed.emitted-line"],
           replayReferences: [],
@@ -36054,8 +36259,20 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               dataClass: "closed-enum",
               required: true,
             },
+            {
+              name: "requestId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
+            {
+              name: "runId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: false,
+            },
           ],
-          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state", "opaque-id"],
           frameCauseEvidence: {
             frames: false,
             causeChain: false,
@@ -61330,6 +61547,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-context.pack": "tools-workflows",
     "coding-repository-handler.settled": "tools-workflows",
     "coding-repository-handler.started": "tools-workflows",
+    "coding-runtime.approval.base-checked": "tools-workflows",
     "coding-runtime.approval.waiting": "tools-workflows",
     "coding-runtime.authority.mint-failed": "tools-workflows",
     "coding-runtime.authority.minted": "tools-workflows",

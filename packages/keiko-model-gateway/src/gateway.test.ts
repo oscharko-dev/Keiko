@@ -13,6 +13,7 @@ import {
   CircuitOpenError,
   ERROR_CODES,
   GatewayEgressError,
+  MalformedToolCallError,
   ProviderEmptyAnswerError,
   ProviderError,
   ProviderOutputExhaustedError,
@@ -30,6 +31,7 @@ import type {
   NormalizedResponse,
   ProviderAdapter,
 } from "./types.js";
+import { GatewayToolCatalogError } from "./toolCatalogBridge.js";
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -622,6 +624,10 @@ describe("Gateway.chatStream", () => {
       "ProviderEmptyAnswerError",
       (): ProviderEmptyAnswerError => new ProviderEmptyAnswerError("example-chat-model"),
     ],
+    [
+      "MalformedToolCallError",
+      (): MalformedToolCallError => new MalformedToolCallError("tool call has non-JSON arguments"),
+    ],
   ])(
     "keeps admitting calls after a half-open probe ends in a %s",
     async (_label, buildProbeFault) => {
@@ -663,6 +669,40 @@ describe("Gateway.chatStream", () => {
       await expect(gateway.chat(REQUEST)).resolves.toMatchObject({ content: "answer" });
     },
   );
+
+  // A lab run of the 1.1.8 candidate behind a LiteLLM hosted_vllm route: the model's changeset tool
+  // calls did not match the tool schema five times in a row, the breaker opened, and every later
+  // call of the healthy model failed on CircuitOpenError until the run itself failed. A malformed
+  // tool call is the model's answer: it may be retried, but it never counts as a provider fault.
+  it.each([
+    [
+      "an unparseable tool call",
+      (): Error => new MalformedToolCallError("tool call has non-JSON arguments"),
+    ],
+    [
+      "a retryable schema rejection",
+      (): Error => new GatewayToolCatalogError("invalid-arguments", undefined, true),
+    ],
+  ])("does not count %s as a breaker fault, however often it recurs", async (_label, fault) => {
+    const breakerConfig = { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 1 } as const;
+    let calls = 0;
+    const gateway = new Gateway(
+      { providers: [provider({ maxRetries: 2 })], circuitBreaker: breakerConfig },
+      {
+        adapter: fakeAdapter(() => {
+          calls += 1;
+          return Promise.reject(fault());
+        }),
+        clock: createScriptedGatewayClock(),
+      },
+    );
+    for (let i = 0; i < 6; i += 1) {
+      await expect(gateway.chat(REQUEST)).rejects.toBeInstanceOf(MalformedToolCallError);
+    }
+    expect(calls).toBeGreaterThanOrEqual(6);
+    expect(gateway.circuitStatus("example-chat-model").consecutiveFailures).toBe(0);
+    expect(gateway.circuitStatus("example-chat-model").state).toBe("closed");
+  });
 
   it("throws UnknownModelError for an unconfigured model without touching the breaker", async () => {
     const gateway = new Gateway(config([provider()]), {

@@ -388,6 +388,18 @@ function guardedVerificationContext(
   };
 }
 
+// The cause split of `recordMissingProof`, for a verification that cannot form a proof (#3612):
+// with nothing unstaged or untracked, unsaved editor buffers are what keeps the candidate from
+// equalling the working tree, and staging cannot resolve them.
+function unverifiableCandidateReason(
+  context: VerifiedCommitRunContext,
+  blocking: VerifiedCommitBlockingPaths,
+): "candidate-not-staged" | "buffers-dirty" {
+  return blocking.unstagedCount + blocking.untrackedCount === 0 && !context.buffersClean()
+    ? "buffers-dirty"
+    : "candidate-not-staged";
+}
+
 function verificationGuardLive(
   context: VerifiedCommitRunContext,
   guard: { readonly check: () => boolean; readonly signal?: AbortSignal | undefined } | undefined,
@@ -457,12 +469,13 @@ class VerifiedCommitController implements VerifiedCommitService {
       // Named, not merely counted, for the model: the blocking paths travel on the tool result,
       // only their counts on this line (run 16, 2026-09-10).
       const blocking = facts.blocking ?? NO_BLOCKING_PATHS;
+      const reason = unverifiableCandidateReason(context, blocking);
       this.log(context, "verification-unavailable", {
-        reason: "candidate-not-staged",
+        reason,
         unstagedCount: blocking.unstagedCount,
         untrackedCount: blocking.untrackedCount,
       });
-      return { kind: "refused", reason: "candidate-not-staged", blocking };
+      return { kind: "refused", reason, blocking };
     }
     const ticket = {};
     this.tickets.set(ticket, { context, facts, startedAtMs: this.now() });

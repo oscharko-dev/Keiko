@@ -2047,6 +2047,34 @@ describe("CodingRuntimeOrchestrator", () => {
     );
   });
 
+  // #3603: a model whose window cannot hold a coding run's prompt is refused before the run starts,
+  // and the refused start names that reason so the Workbench can say what to do.
+  it("names a model window refusal on the refused start and in its diagnostic", async () => {
+    const captured = captureDiagnostics();
+    const f = fixture(undefined, undefined, [], captured.diagnostics);
+    f.launchResolver.resolve.mockImplementationOnce(() => {
+      throw new CodingRuntimeLaunchRejectedError(
+        "model-unavailable",
+        false,
+        "model-context-window-insufficient",
+      );
+    });
+
+    expect(await f.orchestrator.start(start)).toEqual({
+      ok: false,
+      failureCode: "model-unavailable",
+      modelRefusalReason: "model-context-window-insufficient",
+      runId: "run-1",
+    });
+    expect(captured.records).toContainEqual(
+      expect.objectContaining({
+        operation: "coding-runtime.start",
+        message: "runtime-start-failed",
+        code: "stage=start:reason=launch-resolution:model-unavailable:model-context-window-insufficient",
+      }),
+    );
+  });
+
   it("diagnoses a rejected model selection without exposing selection content", async () => {
     const captured = captureDiagnostics();
     const f = fixture(undefined, undefined, [], captured.diagnostics);

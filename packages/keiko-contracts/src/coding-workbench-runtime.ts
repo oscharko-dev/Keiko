@@ -152,6 +152,15 @@ export const CODING_WORKBENCH_ISSUE_BINDING_FAILURES: readonly CodingWorkbenchIs
   ] as const);
 
 /**
+ * Why a run start refused the chosen model with a sentence of its own (#3603), carried beside the
+ * `model-unavailable` failure code as `modelRefusalReason`: the model's window cannot hold a coding
+ * run's prompt, or the verification that could prove a larger window is still running. Every other
+ * model refusal carries no reason and keeps the generic sentence.
+ */
+export type CodingWorkbenchModelRefusalReason =
+  "model-context-window-insufficient" | "model-verification-pending";
+
+/**
  * The server-resolved, immutable facts that bind one run to exactly one GitHub issue.
  *
  * Deliberately NOT a second run binding. Task, project, workspace and branch identity already live

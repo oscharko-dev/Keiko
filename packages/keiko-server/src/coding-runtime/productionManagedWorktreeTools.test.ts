@@ -435,6 +435,101 @@ describe("production managed worktree tools", () => {
     expect(readText).toHaveBeenCalledOnce();
   });
 
+  // #3612: the governed ask checks a changeset's base digests before the human sees it. The check
+  // reads through the same secure read as keiko_workspace_read and answers with the very digest that
+  // read reports, never a second formula.
+  it("answers a changeset base check with the governed read's own digest", async () => {
+    let access: WorkspaceRootAccess | undefined = resolveWorkspaceRootAccess();
+    let authorityLive = true;
+    let revokeDuringRead = false;
+    const readText = vi.fn((request: { readonly relativePath: string }) => {
+      if (revokeDuringRead) authorityLive = false;
+      return Promise.resolve(
+        request.relativePath === "src/missing.ts"
+          ? { ok: false as const, reason: "not-found" as const }
+          : { ok: true as const, text: "export const value = 1;\n" },
+      );
+    });
+    const facade = createProductionManagedWorktreeToolFacade({
+      authority: {
+        revalidateCapabilityForMutation: () =>
+          authorityLive
+            ? { ok: true as const, envelope: authorizedEnvelope() }
+            : { ok: false as const, reason: "authority-expired" },
+        resolveCapabilityForDelegation: () => ({
+          ok: true as const,
+          envelope: authorizedEnvelope(),
+        }),
+      },
+      authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
+      workspaceRoot: "/managed/worktree",
+      resolveWorkspaceRootAccess: () => access,
+      authorityExpiresAt: "2099-01-01T00:00:00.000Z",
+      effectiveMode: "governed-assist",
+      deploymentCeiling: "governed-assist",
+      liveFacts: () => FACTS,
+      secureWorkspaceTextRead: { readText },
+      editorAgentClient: {
+        action: () =>
+          Promise.resolve({
+            ok: false as const,
+            error: { kind: "route" as const, code: "denied", message: "denied" },
+          }),
+      },
+      invocationRegistry: createCodingToolInvocationRegistry(),
+      verificationRunner: { runToReport: vi.fn() },
+      onRuntimeEvent: vi.fn(),
+    });
+    const read = await facade.execute({
+      body: JSON.stringify({
+        action: "read",
+        actionId: "action-base",
+        idempotencyKey: "key-base",
+        relativePath: "src/example.ts",
+      }),
+      capability: "opaque-capability",
+    });
+    if (read.status !== "completed" || !("read" in read)) throw new Error("governed read failed");
+    const baseCheck = facade.editBaseDigest;
+    if (baseCheck === undefined) throw new Error("the production facade has no base check");
+    const signal = new AbortController().signal;
+    const editBaseDigest = (path: string): Promise<unknown> =>
+      baseCheck("opaque-capability", path, signal);
+    const unreadable = { kind: "unreadable" };
+    const denied = { kind: "authority-denied" };
+
+    await expect(editBaseDigest("src/example.ts")).resolves.toEqual({
+      kind: "digest",
+      digest: read.read.digest,
+    });
+    // A file the read cannot return (a new file) leaves the check to the editor route.
+    await expect(editBaseDigest("src/missing.ts")).resolves.toEqual(unreadable);
+    // A denied path is never read, so the check is no digest oracle for a file the model may not read.
+    readText.mockClear();
+    await expect(editBaseDigest(".env")).resolves.toEqual(unreadable);
+    await expect(editBaseDigest("../outside.ts")).resolves.toEqual(unreadable);
+    expect(readText).not.toHaveBeenCalled();
+    // PR #3617 review: the run's live authority admits the read first, like keiko_workspace_read,
+    // so an expired or revoked run, or a missing capability, reads nothing and says it was denied.
+    await expect(baseCheck(undefined, "src/example.ts", signal)).resolves.toEqual(denied);
+    authorityLive = false;
+    await expect(editBaseDigest("src/example.ts")).resolves.toEqual(denied);
+    expect(readText).not.toHaveBeenCalled();
+    // Authority that ends during the read is a denial too.
+    authorityLive = true;
+    revokeDuringRead = true;
+    await expect(editBaseDigest("src/example.ts")).resolves.toEqual(denied);
+    expect(readText).toHaveBeenCalledOnce();
+    revokeDuringRead = false;
+    authorityLive = true;
+    readText.mockClear();
+    // Only while this run's exact managed workspace is the active one: a run that lost it reads
+    // nothing and says it was denied, so its ask never reaches the human (PR #3617 review).
+    access = undefined;
+    await expect(editBaseDigest("src/example.ts")).resolves.toEqual(denied);
+    expect(readText).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["governed-assist", true],
     ["supervised-coding", true],
@@ -1610,6 +1705,18 @@ describe("production managed worktree tools", () => {
           untracked: ["package-lock.json"],
         },
       },
+    ],
+    // #3612: with nothing unstaged, dirty editor buffers were answered with stage-then-verify, which
+    // no staging could satisfy. They are saved, then verified, and name no paths to stage.
+    [
+      "unsaved editor buffers",
+      {
+        kind: "refused",
+        reason: "buffers-dirty",
+        blocking: { unstagedCount: 0, untrackedCount: 0, unstaged: [], untracked: [] },
+      } as const,
+      true,
+      { commitProof: "unavailable", reasonCode: "buffers-dirty", nextAction: "save-then-verify" },
     ],
     [
       "candidate drift",

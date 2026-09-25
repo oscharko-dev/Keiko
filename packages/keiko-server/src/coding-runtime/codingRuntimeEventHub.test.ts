@@ -111,6 +111,26 @@ describe("CodingRuntimeEventHub", () => {
     ).toBe(true);
   });
 
+  // #3593: an approval published while no browser is connected is not lost. The hub retains it, and
+  // the first subscriber that connects afterwards receives it once, ahead of the live events.
+  it("delivers an approval published with no subscriber to the next one that connects", () => {
+    const hub = new CodingRuntimeEventHub();
+    expect(hub.publish(approval("run-a", 1)).ok).toBe(true);
+    const received: CodingRuntimeEventHubInput[] = [];
+    const subscribed = hub.subscribe("run-a", undefined, {
+      write: (event): boolean => {
+        received.push(event);
+        return true;
+      },
+      close: (): void => undefined,
+    });
+    expect(subscribed.ok).toBe(true);
+    expect(hub.publish(status("run-a", 2)).ok).toBe(true);
+    expect(
+      received.map((event) => (event.kind === "runtime-event" ? event.eventKind : event.state)),
+    ).toEqual(["permission-requested", "running"]);
+  });
+
   it("replays approval and terminal facts exactly once across three forced reconnects", () => {
     const hub = new CodingRuntimeEventHub();
     const first = hub.publish(approval("run-a", 1));
