@@ -142,7 +142,7 @@ describe("Coding History on the existing conversation store", () => {
     history.bindRun(task.id, "run-second");
     history.append(task.id, "run-second", "intent", "user", "Now add a test");
     history.append(task.id, "run-second", "msg_second_user", "user", "Now add a test");
-    // A later user message of the same run with the same words is the operator's own, not an echo.
+    // The words of ANOTHER run's intent, sent in this run, are the operator's own message.
     history.append(task.id, "run-first", "msg_repeat_elsewhere", "user", "Now add a test");
 
     const detail = history.detail(task.id, "a".repeat(64));
@@ -162,6 +162,40 @@ describe("Coding History on the existing conversation store", () => {
       ["assistant", "Fixed."],
       ["user", "Now add a test"],
     ]);
+  });
+
+  // The 1.1.x echo is the first repeat of the intent, before the model answered in that run. The
+  // operator sending the same words again after an answer (the model stalled, say) is a real
+  // message and must stay in the transcript and in continuation context.
+  it("keeps the operator's verbatim resend after an answer and hides only the 1.1.x echo", () => {
+    const history = codingHistory();
+    const task = history.create({
+      projectPath: root,
+      title: "Resend",
+      modelId: "coding",
+      workspaceId: "ws_resend",
+      taskId: "task_resend",
+      branch: "keiko/task/resend",
+      operatorDigest: "a".repeat(64),
+    });
+    history.bindRun(task.id, "run-resend");
+    history.append(task.id, "run-resend", "intent", "user", "Fix the failing test");
+    history.append(task.id, "run-resend", "msg_echo", "user", "Fix the failing test");
+    history.append(task.id, "run-resend", "msg_answer", "assistant", "Working on it.");
+    history.append(task.id, "run-resend", "msg_resend", "user", "Fix the failing test");
+    history.bindRun(task.id, "run-next");
+
+    const expected = [
+      ["user", "Fix the failing test"],
+      ["assistant", "Working on it."],
+      ["user", "Fix the failing test"],
+    ];
+    expect(
+      history.detail(task.id, "a".repeat(64))?.messages.map(({ role, content }) => [role, content]),
+    ).toEqual(expected);
+    expect(
+      history.messagesBeforeRun(task.id, "run-next").map(({ role, content }) => [role, content]),
+    ).toEqual(expected);
   });
 
   it("refuses a run binding to a second task and cascades when its chat is removed", () => {

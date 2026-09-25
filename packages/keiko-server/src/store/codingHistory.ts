@@ -255,13 +255,25 @@ function upsertMessage(
 }
 
 /**
- * Message ids of user rows that repeat their own run's intent word for word under the runtime's
- * message id. Through 1.1.7 both capture paths stored the task prompt once more next to the intent
- * `begin` had already written (#3610); reading them out keeps existing histories and continuation
- * context correct without rewriting stored rows. A user row of the same words bound to a DIFFERENT
- * run is the operator's own message and stays.
+ * Message ids of the one user row per run that 1.1.x stored as an echo of the run's intent (#3610):
+ * through 1.1.7 both capture paths stored the task prompt once more next to the intent `begin` had
+ * already written. The echo is the first user row of the run, other than the intent itself, that
+ * repeats the intent word for word before the model answered in that run. Reading it out keeps
+ * existing histories and continuation context correct without rewriting stored rows. The same
+ * words sent again after an answer, or in another run, are the operator's own message and stay.
  */
-function repeatedIntentMessageIds(db: DatabaseSync, id: string): ReadonlySet<string> {
+function repeatedIntentMessageIds(
+  db: DatabaseSync,
+  id: string,
+  listed: readonly ChatMessage[],
+): ReadonlySet<string> {
+  const candidates = intentRepeatCandidates(db, id);
+  return candidates.size === 0
+    ? candidates
+    : firstEchoPerRun(listed, candidates, runsByMessage(db, id));
+}
+
+function intentRepeatCandidates(db: DatabaseSync, id: string): ReadonlySet<string> {
   const rows = db
     .prepare(
       `SELECT echo.message_id AS message_id
@@ -281,6 +293,34 @@ function repeatedIntentMessageIds(db: DatabaseSync, id: string): ReadonlySet<str
   return new Set(rows.map((row) => String(row.message_id)));
 }
 
+function runsByMessage(db: DatabaseSync, id: string): ReadonlyMap<string, string> {
+  const rows = db
+    .prepare(
+      `SELECT binding.message_id AS message_id, binding.run_id AS run_id
+         FROM coding_history_message_bindings binding
+         JOIN coding_history_runs run ON run.run_id = binding.run_id
+        WHERE run.chat_id = ?`,
+    )
+    .all(id);
+  return new Map(rows.map((row) => [String(row.message_id), String(row.run_id)] as const));
+}
+
+function firstEchoPerRun(
+  listed: readonly ChatMessage[],
+  candidates: ReadonlySet<string>,
+  runOf: ReadonlyMap<string, string>,
+): ReadonlySet<string> {
+  const answered = new Set<string>();
+  const echoes = new Map<string, string>();
+  for (const message of listed) {
+    const runId = runOf.get(message.id);
+    if (runId === undefined || echoes.has(runId) || answered.has(runId)) continue;
+    if (message.role === "assistant" && message.content.trim().length > 0) answered.add(runId);
+    else if (candidates.has(message.id)) echoes.set(runId, message.id);
+  }
+  return new Set(echoes.values());
+}
+
 function readDetail(
   db: DatabaseSync,
   store: UiStore,
@@ -293,7 +333,7 @@ function readDetail(
     "SELECT run_id FROM coding_history_message_bindings WHERE message_id = ?",
   );
   const listed = store.listMessages(id, 200);
-  const repeated = repeatedIntentMessageIds(db, id);
+  const repeated = repeatedIntentMessageIds(db, id, listed);
   const messages = listed
     .filter((message) => !repeated.has(message.id))
     .map((message) => {
@@ -346,10 +386,9 @@ export function createCodingHistoryStore(
           .all(runId)
           .map((row) => row.message_id),
       );
-      const repeated = repeatedIntentMessageIds(db, id);
-      return store
-        .listMessages(id, 200)
-        .filter((message) => !ids.has(message.id) && !repeated.has(message.id));
+      const listed = store.listMessages(id, 200);
+      const repeated = repeatedIntentMessageIds(db, id, listed);
+      return listed.filter((message) => !ids.has(message.id) && !repeated.has(message.id));
     },
     detail: (id, operator) => readDetail(db, store, id, operator),
     forRun: (runId): CodingHistoryTask | undefined => {
