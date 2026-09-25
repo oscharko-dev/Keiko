@@ -191,6 +191,16 @@ existing probe spend ledger. It never runs when a subscription source is selecte
 deployment policy disables the gateway source, or when the gateway is not configured. The same
 gateway capability evidence gates all models.
 
+A run start admits the chosen model — the default one or one picked in the model selector — only
+when its prompt window holds the coding minimum, the rule the default model's readiness already
+applies (#3603). A model below it is refused before any runtime starts, as `model-unavailable` with
+the body-free `modelRefusalReason` `model-context-window-insufficient`, or
+`model-verification-pending` while the automatic probe that could prove a larger window is still
+running, and the Workbench names that reason in both locales. When the gateway route refuses the
+runtime's readiness challenge request, a deterministic 400, the start ends at once as
+`gateway-challenge-failed` (handshake diagnostic reason `gateway-refused`) instead of waiting out
+the start timeout.
+
 ### D6 — Permission requests are typed, explicit, and content-free
 
 The sidecar runtime may request additional approval only through the shared permission-request

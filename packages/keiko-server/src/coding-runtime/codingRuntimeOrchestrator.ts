@@ -6,6 +6,7 @@ import type {
   CodingWorkbenchAuxiliaryStatus,
   CodingWorkbenchIssueBinding,
   CodingWorkbenchMode,
+  CodingWorkbenchModelRefusalReason,
   CodingWorkbenchOperatorDecision,
   CodingWorkbenchRuntimeApprovalDecisionRequest,
   CodingWorkbenchRuntimeEvent,
@@ -71,7 +72,7 @@ import type {
   CodingRuntimeOrchestratorResult,
   CodingRuntimeQuestionOperationResult,
 } from "./codingRuntimeOrchestratorTypes.js";
-import { classifyLaunchRejection, launchRejectionDiagnosticReason } from "./launchFailure.js";
+import { launchRejectionDiagnosticReason, refusedLaunch } from "./launchFailure.js";
 import type {
   CodingRuntimeTaskDispatchResult,
   CodingRuntimeTaskOutcome,
@@ -2834,7 +2835,7 @@ export class CodingRuntimeOrchestrator {
       issue.binding,
       correlationId,
     );
-    if (!resolved.ok) return { ok: false, failureCode: resolved.failureCode, runId };
+    if (!resolved.ok) return { ...resolved, runId };
     const launch = resolved.launch;
     const initialSnapshot = this.buildStartSnapshot(
       request,
@@ -3156,7 +3157,11 @@ export class CodingRuntimeOrchestrator {
     correlationId?: string,
   ): Promise<
     | { readonly ok: true; readonly launch: ReturnType<CodingRuntimeLaunchResolver["resolve"]> }
-    | { readonly ok: false; readonly failureCode: CodingWorkbenchRuntimeFailureCode }
+    | {
+        readonly ok: false;
+        readonly failureCode: CodingWorkbenchRuntimeFailureCode;
+        readonly modelRefusalReason?: CodingWorkbenchModelRefusalReason;
+      }
   > {
     try {
       const input = {
@@ -3181,7 +3186,7 @@ export class CodingRuntimeOrchestrator {
       // Never a bare `catch {}`: a rejected launch used to lose its identity here and surface as
       // `authority-resolution-failed` whatever the real cause was (KEIKO-0150).
       recordRuntimeStartFailure(this.deps.diagnostics, runId, "launch-resolution", error);
-      return { ok: false, failureCode: classifyLaunchRejection(error) };
+      return refusedLaunch(error);
     }
   }
 

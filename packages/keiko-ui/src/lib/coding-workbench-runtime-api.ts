@@ -3,6 +3,7 @@
 import type {
   CodingWorkbenchMode,
   CodingWorkbenchIssueBindingFailure,
+  CodingWorkbenchModelRefusalReason,
   CodingWorkbenchRuntimeApprovalDecisionRequest,
   CodingWorkbenchRuntimeApprovalReviewChannelPayload,
   CodingWorkbenchRuntimeQuestionAnswerRequest,
@@ -37,7 +38,7 @@ import {
 import { ApiError } from "./api";
 import { bffFetchJson } from "./http";
 import { createSameOriginApiEventSource } from "./safe-event-source";
-import { runtimeIssueFailure } from "./coding-workbench-issue-errors";
+import { runtimeIssueFailure, runtimeModelRefusal } from "./coding-workbench-issue-errors";
 import { secureRandomId } from "./secure-random";
 
 const RUNTIME_ROOT = "/api/coding-workbench/runtime";
@@ -53,11 +54,13 @@ export interface CodingWorkbenchRuntimeApiError {
    */
   readonly correlationId?: string;
   readonly issueBindingFailure?: CodingWorkbenchIssueBindingFailure;
+  readonly modelRefusalReason?: CodingWorkbenchModelRefusalReason;
 }
 
 export function codingWorkbenchRuntimeApiError(error: unknown): CodingWorkbenchRuntimeApiError {
   if (error instanceof ApiError) {
     const issueBindingFailure = runtimeIssueFailure(error);
+    const modelRefusalReason = runtimeModelRefusal(error);
     return {
       code: error.code,
       message: error.message,
@@ -65,6 +68,7 @@ export function codingWorkbenchRuntimeApiError(error: unknown): CodingWorkbenchR
         error.status === 0 || error.status === 408 || error.status === 429 || error.status >= 500,
       ...(error.correlationId === undefined ? {} : { correlationId: error.correlationId }),
       ...(issueBindingFailure === undefined ? {} : { issueBindingFailure }),
+      ...(modelRefusalReason === undefined ? {} : { modelRefusalReason }),
     };
   }
   return {
@@ -178,6 +182,8 @@ function runPath(runId: string, suffix = ""): string {
 function enrichRuntimeIssueFailure(error: ApiError, envelope: unknown): void {
   const failure = runtimeIssueFailure(envelope);
   if (failure !== undefined) Object.assign(error, { issueBindingFailure: failure });
+  const modelRefusalReason = runtimeModelRefusal(envelope);
+  if (modelRefusalReason !== undefined) Object.assign(error, { modelRefusalReason });
 }
 
 function postSnapshot<T>(

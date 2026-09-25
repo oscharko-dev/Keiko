@@ -3978,6 +3978,8 @@ describe("coding runtime manager", () => {
   it.each([
     ["authenticated-health-version", "runtime-version-mismatch"],
     ["authenticated-health", "protocol-schema-mismatch"],
+    // #3603: a refused gateway challenge is not a protocol schema mismatch.
+    ["gateway-challenge", "gateway-challenge-failed"],
     ["endpoint-invalid", "protocol-schema-mismatch"],
     ["preparation-missing", "protocol-schema-mismatch"],
     ["readiness-failed", "protocol-schema-mismatch"],

@@ -1,4 +1,7 @@
-import type { CodingWorkbenchIssueBindingFailure } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchIssueBindingFailure,
+  CodingWorkbenchModelRefusalReason,
+} from "@oscharko-dev/keiko-contracts";
 
 const ISSUE_FAILURES: ReadonlySet<string> = new Set([
   "invalid-reference",
@@ -28,6 +31,16 @@ export function codingWorkbenchIssueFailure(
   return ISSUE_FAILURES.has(value)
     ? (value as CodingWorkbenchIssueBindingFailure)
     : PREVIEW_CODES[value];
+}
+
+/** Only the closed model refusal vocabulary (#3603) can cross the browser's boundary. */
+export function runtimeModelRefusal(value: unknown): CodingWorkbenchModelRefusalReason | undefined {
+  if (typeof value !== "object" || value === null || !("modelRefusalReason" in value))
+    return undefined;
+  const reason = value.modelRefusalReason;
+  return reason === "model-context-window-insufficient" || reason === "model-verification-pending"
+    ? reason
+    : undefined;
 }
 
 export function runtimeIssueFailure(

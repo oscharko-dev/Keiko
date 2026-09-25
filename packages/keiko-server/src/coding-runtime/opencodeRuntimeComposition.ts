@@ -1098,8 +1098,14 @@ async function challengeV2Gateway(
     const accepted = await observed;
     await client.interrupt(sessionId, signal);
     verified = accepted && (await fixedV2SessionIsTerminal(client, sessionId, signal));
+    // An unaccepted wait the start signal did not end is the gateway route refusing the challenge
+    // request (#3603): named apart from a request that never arrived or a turn that did not end.
     if (!verified)
-      recordGatewayChallengeFailure(input.diagnostics, run.runId, "live-verification-failed");
+      recordGatewayChallengeFailure(
+        input.diagnostics,
+        run.runId,
+        accepted || signal.aborted ? "live-verification-failed" : "gateway-refused",
+      );
     return verified;
   } catch {
     recordGatewayChallengeFailure(input.diagnostics, run.runId, "live-verification-failed");
@@ -1110,7 +1116,11 @@ async function challengeV2Gateway(
 }
 
 type GatewayChallengePreconditionFailure =
-  "startup-unread" | "session-missing" | "capability-invalid" | "live-verification-failed";
+  | "startup-unread"
+  | "session-missing"
+  | "capability-invalid"
+  | "live-verification-failed"
+  | "gateway-refused";
 
 function gatewayChallengePrecondition(
   input: OpenCodeRuntimeCompositionInput,

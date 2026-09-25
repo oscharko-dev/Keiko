@@ -527,6 +527,47 @@ describe("coding runtime routes", () => {
     ]);
   });
 
+  // #3603: a start refused because of the chosen model's window names that reason in the body the
+  // Workbench reads; a refusal without one carries no reason key at all.
+  it.each([
+    [
+      "model-context-window-insufficient",
+      { modelRefusalReason: "model-context-window-insufficient" },
+    ],
+    ["model-verification-pending", { modelRefusalReason: "model-verification-pending" }],
+    [undefined, {}],
+  ] as const)(
+    "returns the model refusal reason %s in the refused start's body",
+    async (reason, extra) => {
+      const session = pairedAppSession();
+      const deps = runtime({ codingAppSessionChannel: session.channel });
+      (
+        deps.codingRuntimeOrchestrator as unknown as {
+          start: (body: unknown) => Promise<Readonly<Record<string, unknown>>>;
+        }
+      ).start = () =>
+        Promise.resolve({
+          ok: false as const,
+          failureCode: "model-unavailable",
+          runId: "run-9",
+          ...(reason === undefined ? {} : { modelRefusalReason: reason }),
+        });
+      const refused = await handleCreateCodingRuntimeRun(
+        context("{}", {}, "/api/coding-workbench/runtime/runs", session.cookie, "start-corr-2"),
+        deps,
+      );
+      expect(refused.status).toBe(409);
+      expect(refused.body).toEqual({
+        error: {
+          code: "CODING_RUNTIME_MODEL_UNAVAILABLE",
+          message: "Runtime request was rejected.",
+          correlationId: "start-corr-2",
+        },
+        ...extra,
+      });
+    },
+  );
+
   // A retry mints a NEW run against the predecessor named in the URL; when the runtime refuses it
   // after minting, every cause line is keyed to the new run. Keyed on the URL's predecessor, the
   // refusal line and the cause again shared no key (review of PR #3452).

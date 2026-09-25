@@ -2,6 +2,7 @@ import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import type {
   CodingWorkbenchIssueBinding,
   CodingWorkbenchIssueBindingFailure,
+  CodingWorkbenchModelRefusalReason,
   CodingWorkbenchContextUsage,
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchRuntimeQuestionsResponse,
@@ -122,6 +123,8 @@ export type CodingRuntimeOrchestratorResult =
       readonly ok: false;
       readonly failureCode: CodingWorkbenchRuntimeFailureCode;
       readonly issueBindingFailure?: CodingWorkbenchIssueBindingFailure;
+      // #3603: the closed reason a start refused the chosen model with, for the Workbench's sentence.
+      readonly modelRefusalReason?: CodingWorkbenchModelRefusalReason | undefined;
       // The run id a refused start had already minted (issue admission, launch resolution). The
       // route's refusal line carries it, so the request correlation the operator sees as the support
       // id leads to the run-scoped lines that hold the actual cause; without it the two halves of one

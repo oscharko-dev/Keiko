@@ -990,6 +990,10 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The requested runtime action failed ({code}). Review the live state and retry.",
   "codingWorkbench.alert.startRefusedModelUnavailable":
     "The selected model is not admitted for a coding run right now ({code}). Run the readiness check for it under Settings → Models, or choose a model that passed its check today, then start again.",
+  "codingWorkbench.alert.startRefusedModelWindow":
+    "The selected model's context window is too small for a coding run ({code}). Choose a model with a larger window, or let the readiness check prove this model's window under Settings → Models, then start again.",
+  "codingWorkbench.alert.startRefusedModelVerificationPending":
+    "The selected model's context window is still being verified ({code}). Wait until the check under Settings → Models has finished, then start again.",
   "codingWorkbench.alert.startRefusedWorkspaceUnqualified":
     "The bound repository could not be qualified for a coding run ({code}). Choose the repository again with Browse… so its real path is bound, then start again.",
   "codingWorkbench.alert.actionFailedSupportId": "Support id: {correlationId}.",

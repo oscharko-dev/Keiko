@@ -1,4 +1,5 @@
 import { gatewaySpendRejectionReason } from "./gateway-spend-budget.js";
+import { CodingRuntimeLaunchRejectedError } from "./coding-runtime/launchFailure.js";
 import {
   AuthenticationError,
   CircuitOpenError,
@@ -720,9 +721,38 @@ export interface OpenCodeGatewayReadinessRegistry {
   readonly verifyObserved: (runId: string) => void;
   readonly isVerified: (runId: string) => boolean;
   readonly waitForObservedRequest: (runId: string, signal: AbortSignal) => Promise<boolean>;
+  /**
+   * Ends a run's pending gateway challenge at once when the route refused its request: a
+   * deterministic 400 cannot turn into an observed request later, so the handshake must not wait
+   * out the start timeout for it (#3603). A run without a pending challenge is unaffected.
+   */
+  readonly refuseChallenge: (runId: string) => void;
   /** True only on the first call per run — bounds the adoption-gap diagnostic to one per run. */
   readonly noteAdoptionGapDiagnosed: (runId: string) => boolean;
   readonly clear: (runId: string, preserveVerification?: boolean) => void;
+}
+
+// A run's one pending challenge wait: an observed request ends it with true; a refused request, a
+// clear, the start signal, or a newer wait for the same run ends it with false and disarms the run.
+function pendingChallengeWait(
+  runId: string,
+  signal: AbortSignal,
+  armed: Set<string>,
+  waiters: Map<string, (result: boolean) => void>,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const settle = (result: boolean): void => {
+      signal.removeEventListener("abort", abort);
+      if (waiters.get(runId) === settle) waiters.delete(runId);
+      if (!result) armed.delete(runId);
+      resolve(result);
+    };
+    const abort = (): void => {
+      settle(false);
+    };
+    waiters.set(runId, settle);
+    signal.addEventListener("abort", abort, { once: true });
+  });
 }
 
 export function createOpenCodeGatewayReadinessRegistry(): OpenCodeGatewayReadinessRegistry {
@@ -747,19 +777,11 @@ export function createOpenCodeGatewayReadinessRegistry(): OpenCodeGatewayReadine
       if (signal.aborted) return Promise.resolve(false);
       waiters.get(runId)?.(false);
       armed.add(runId);
-      return new Promise((resolve) => {
-        const settle = (result: boolean): void => {
-          signal.removeEventListener("abort", abort);
-          if (waiters.get(runId) === settle) waiters.delete(runId);
-          if (!result) armed.delete(runId);
-          resolve(result);
-        };
-        const abort = (): void => {
-          settle(false);
-        };
-        waiters.set(runId, settle);
-        signal.addEventListener("abort", abort, { once: true });
-      });
+      return pendingChallengeWait(runId, signal, armed, waiters);
+    },
+    refuseChallenge: (runId): void => {
+      if (!armed.delete(runId)) return;
+      waiters.get(runId)?.(false);
     },
     noteAdoptionGapDiagnosed: (runId): boolean => {
       if (adoptionGapDiagnosed.has(runId)) return false;
@@ -2977,11 +2999,7 @@ function gatewayReadinessProjection(
   deps: UiHandlerDeps,
 ): CodingWorkbenchSidecarGatewayResult {
   const result = resolveGatewayProfile(deps).result;
-  if (
-    result.status === "available" &&
-    result.runMetadata.maxPromptTokens >= CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS
-  )
-    return result;
+  if (codingContextFits(result)) return result;
   const shortfall =
     result.status === "available" ? "model-context-window-insufficient" : result.reason;
   if (
@@ -3002,6 +3020,78 @@ function gatewayReadinessProjection(
   // reading and keep the refusal until an unrelated refresh.
   if (result.status === "available" || pending) return { status: "unavailable", reason };
   return result;
+}
+
+// One owner for the rule a coding run's prompt needs: the readiness projection of the default model
+// and the start of a run with a model chosen in the picker both read it (#3603).
+function codingContextFits(result: CodingWorkbenchSidecarGatewayResult): boolean {
+  return (
+    result.status === "available" &&
+    result.runMetadata.maxPromptTokens >= CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS
+  );
+}
+
+/**
+ * Why an available coding profile cannot hold a coding run's prompt, or undefined when it can
+ * (#3603). While the automatic probe that could raise the window is still running, the shortfall
+ * is not a verdict yet; the start then names the pending verification instead.
+ */
+export function codingContextShortfall(
+  config: GatewayConfig | undefined,
+  result: Extract<CodingWorkbenchSidecarGatewayResult, { readonly status: "available" }>,
+): "model-context-window-insufficient" | "model-verification-pending" | undefined {
+  if (codingContextFits(result)) return undefined;
+  return config !== undefined && isCodingWorkbenchProbePending(config, result.modelAlias)
+    ? "model-verification-pending"
+    : "model-context-window-insufficient";
+}
+
+/**
+ * The profile a coding run starts with, for the model chosen in the picker or the default one. A
+ * model the gateway does not admit right now is a typed refusal that names the sidecar's reason
+ * (#3565 Observation 17), never a bare Error the orchestrator can only report as
+ * `authority-resolution-failed`; so is a model whose window cannot hold the run's prompt (#3603).
+ */
+export function admitCodingRunModel(
+  config: GatewayConfig | undefined,
+  modelId: string | undefined,
+  reasoningEffort: ModelReasoningEffort | undefined,
+): { readonly profileId: string; readonly reasoningEffort?: ModelReasoningEffort } {
+  const resolved = resolveCodingSafeSidecarGatewayProfile(config, {
+    ...(modelId === undefined ? {} : { modelId }),
+  });
+  if (resolved.status !== "available" || config === undefined) {
+    throw new CodingRuntimeLaunchRejectedError(
+      "model-unavailable",
+      false,
+      resolved.status === "available" ? "missing-config" : resolved.reason,
+    );
+  }
+  const contextShortfall = codingContextShortfall(config, resolved);
+  if (contextShortfall !== undefined) {
+    throw new CodingRuntimeLaunchRejectedError("model-unavailable", false, contextShortfall);
+  }
+  return {
+    profileId: resolved.modelAlias,
+    ...admittedReasoningEffort(config, resolved.modelAlias, reasoningEffort),
+  };
+}
+
+function admittedReasoningEffort(
+  config: GatewayConfig,
+  modelAlias: string,
+  reasoningEffort: ModelReasoningEffort | undefined,
+): { readonly reasoningEffort?: ModelReasoningEffort } {
+  if (reasoningEffort === undefined) return {};
+  const efforts = findConfiguredCapability(config, modelAlias)?.reasoningEfforts;
+  if (efforts?.includes(reasoningEffort) !== true) {
+    throw new CodingRuntimeLaunchRejectedError(
+      "model-unavailable",
+      false,
+      "reasoning-effort-unavailable",
+    );
+  }
+  return { reasoningEffort };
 }
 
 type CodingWorkbenchReadinessShortfall =
@@ -3210,6 +3300,7 @@ function logChatRequestRejection(
         }
       : undefined;
   logGatewayRejection(ctx, runId, validationError.status, reason, boundedEvidence);
+  gatewayReadinessRegistry(deps)?.refuseChallenge(runId);
   reportGatewayTurnFailure(ctx, deps, runId, "turn-rejected");
 }
 

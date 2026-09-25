@@ -7,8 +7,44 @@ import {
   CodingRuntimeLaunchRejectedError,
   CodingRuntimeLaunchResolutionError,
   classifyLaunchRejection,
+  launchModelRefusalReason,
   launchRejectionDiagnosticReason,
 } from "./launchFailure.js";
+
+// #3603: a start refused because the chosen model's window cannot hold a coding run's prompt, or
+// because the verification that could prove a larger window is still running, names that reason
+// to the Workbench. Only these two, and only under model-unavailable.
+describe("launchModelRefusalReason", () => {
+  it.each(["model-context-window-insufficient", "model-verification-pending"] as const)(
+    "names the %s model refusal",
+    (reason) => {
+      expect(
+        launchModelRefusalReason(
+          new CodingRuntimeLaunchRejectedError("model-unavailable", false, reason),
+        ),
+      ).toBe(reason);
+    },
+  );
+
+  it.each([
+    [
+      "another model refusal",
+      new CodingRuntimeLaunchRejectedError("model-unavailable", false, "tool-calling-unverified"),
+    ],
+    ["a model refusal without a reason", new CodingRuntimeLaunchRejectedError("model-unavailable")],
+    [
+      "the reason under another failure code",
+      new CodingRuntimeLaunchRejectedError(
+        "workspace-unqualified",
+        false,
+        "model-context-window-insufficient",
+      ),
+    ],
+    ["a bare Error", new Error("model-context-window-insufficient")],
+  ])("names no reason for %s", (_label, error) => {
+    expect(launchModelRefusalReason(error)).toBeUndefined();
+  });
+});
 
 describe("classifyLaunchRejection", () => {
   it("maps an adapter profile mismatch to the source-drift code the contract already defines", () => {

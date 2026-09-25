@@ -362,6 +362,8 @@ interface StartBridgeControl {
   readonly diagnostics?: ServerDiagnosticSink;
   readonly runtimeEvents?: CodingWorkbenchRuntimeEvent[];
   readonly mode?: "governed-assist" | "supervised-coding" | "autonomous-delivery";
+  /** The gateway route refused the readiness challenge's model request (#3603). */
+  readonly gatewayRefused?: boolean;
   readonly runControl?: {
     readonly promptBodies: string[];
     readonly abortSessions: string[];
@@ -618,7 +620,8 @@ async function startBridgeFixture(
     ...optionalActivityLog(control),
     ...optionalRuntimeEvents(control),
     gatewayReadiness: {
-      waitForObservedRequest: (): Promise<boolean> => Promise.resolve(true),
+      waitForObservedRequest: (): Promise<boolean> =>
+        Promise.resolve(control?.gatewayRefused !== true),
       verifyObserved: (): void => undefined,
       clear: (): void => undefined,
     },
@@ -2095,6 +2098,33 @@ describe("private OpenCode tool bridge", () => {
         causeChain: ["TypeError"],
       });
       expect(diagnostics.read()).not.toContain("PRIVATE_");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // #3603: the gateway route refused the readiness challenge's model request (a deterministic
+  // 400). The handshake ends at once under its own cause instead of waiting out the start timeout
+  // as a request that never arrived, and the start is no protocol schema mismatch.
+  it("ends a start whose gateway challenge the route refused under gateway-refused", async () => {
+    const diagnostics = persistedDiagnostics();
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: diagnostics.sink,
+        gatewayRefused: true,
+        startTimeoutMs: 60_000,
+        expectedStart: { ok: false, failureCode: "gateway-challenge-failed", retryable: false },
+      },
+    );
+    try {
+      expect(
+        expectPersistedDiagnostic(diagnostics.read(), "opencode.gateway-challenge"),
+      ).toMatchObject({
+        diagnosticOperation: "coding-runtime.handshake",
+        code: "stage=gateway-challenge:reason=gateway-refused",
+      });
     } finally {
       await fixture.stop();
     }

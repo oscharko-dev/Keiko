@@ -1024,6 +1024,10 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die angeforderte Runtime-Aktion ist fehlgeschlagen ({code}). Prüfe den Live-Zustand und versuche es erneut.",
   "codingWorkbench.alert.startRefusedModelUnavailable":
     "Das gewählte Modell ist für einen Coding-Lauf gerade nicht zugelassen ({code}). Führe unter Einstellungen → Modelle die Bereitschaftsprüfung dafür aus oder wähle ein Modell, das die Prüfung heute bestanden hat, und starte erneut.",
+  "codingWorkbench.alert.startRefusedModelWindow":
+    "Das Kontextfenster des gewählten Modells ist für einen Coding-Lauf zu klein ({code}). Wähle ein Modell mit größerem Fenster oder lass die Bereitschaftsprüfung unter Einstellungen → Modelle das Fenster dieses Modells nachweisen und starte dann erneut.",
+  "codingWorkbench.alert.startRefusedModelVerificationPending":
+    "Das Kontextfenster des gewählten Modells wird noch geprüft ({code}). Warte, bis die Prüfung unter Einstellungen → Modelle abgeschlossen ist, und starte dann erneut.",
   "codingWorkbench.alert.startRefusedWorkspaceUnqualified":
     "Das gebundene Repository konnte für einen Coding-Lauf nicht qualifiziert werden ({code}). Wähle das Repository erneut über „Browse…“, damit sein echter Pfad gebunden wird, und starte erneut.",
   "codingWorkbench.alert.actionFailedSupportId": "Support-ID: {correlationId}.",

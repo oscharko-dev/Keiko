@@ -103,6 +103,9 @@ export type CodingRuntimeFailureCode =
   | "env-secret-denied"
   | "egress-unqualified"
   | "executable-tree-digest-mismatch"
+  // The gateway challenge failed: the route refused the challenge request, it never arrived, or a
+  // challenge precondition was missing (#3603). Not a protocol schema mismatch.
+  | "gateway-challenge-failed"
   | "gateway-non-loopback"
   // #3565: launch-resolution refusals that used to be bare Errors (see launchFailure.ts).
   | "host-unavailable"
@@ -2113,9 +2116,8 @@ const OPEN_CODE_HANDSHAKE_PHASES: ReadonlySet<string> = new Set([
 ]);
 
 function openCodeHandshakeFailureCode(reason: string): CodingRuntimeFailureCode {
-  return reason === "authenticated-health-version"
-    ? "runtime-version-mismatch"
-    : "protocol-schema-mismatch";
+  if (reason === "authenticated-health-version") return "runtime-version-mismatch";
+  return reason === "gateway-challenge" ? "gateway-challenge-failed" : "protocol-schema-mismatch";
 }
 
 function emitOpenCodeHandshakeDiagnostic(

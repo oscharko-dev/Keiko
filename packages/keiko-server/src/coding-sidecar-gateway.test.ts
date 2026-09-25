@@ -38,6 +38,7 @@ import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
   _classifyBadRequestReasonForTests,
+  admitCodingRunModel,
   codingSidecarGatewayRequestDeadlineMs,
   createOpenCodeGatewayReadinessRegistry,
   handleCodingSidecarGatewayChatCompletions,
@@ -1353,6 +1354,44 @@ describe("coding-sidecar gateway", () => {
         ([record]) => record.code === "CODING_GATEWAY_TOOL_ADOPTION_GAP",
       ),
     ).toBe(false);
+  });
+
+  // #3603: the route refused the gateway challenge's request with a deterministic 400, and the
+  // handshake waited 120 s for an observed request that could never come before it failed.
+  it("ends a pending gateway challenge at once when the route refuses its request", async () => {
+    const readiness = createOpenCodeGatewayReadinessRegistry();
+    const observed = readiness.waitForObservedRequest("run-1", new AbortController().signal);
+    const deps = runtimeGatewayDeps(
+      () => ({ ok: true, binding: { runId: "run-1" } }),
+      undefined,
+      readiness,
+    );
+    const refused = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "not-the-run-model",
+        messages: [{ role: "user", content: OPENCODE_RUNTIME_READINESS_PROMPT }],
+        tools: modelVisibleTools(),
+      }),
+      deps,
+    );
+    expect(refused).toMatchObject({ status: 400 });
+    await expect(observed).resolves.toBe(false);
+    expect(readiness.isVerified("run-1")).toBe(false);
+  });
+
+  it("leaves a run without a pending challenge untouched when a later request is refused", async () => {
+    const readiness = createOpenCodeGatewayReadinessRegistry();
+    readiness.refuseChallenge("run-1");
+    const controller = new AbortController();
+    const observed = readiness.waitForObservedRequest("run-1", controller.signal);
+    let settled = false;
+    void observed.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(readiness.claim("run-1")).toBe(true);
+    await expect(observed).resolves.toBe(true);
   });
 
   it("admits tool-free compaction only after the exact runtime handshake and before disposal", async () => {
@@ -3166,6 +3205,75 @@ describe("coding-sidecar gateway", () => {
         status: "unavailable",
         reason: "model-verification-pending",
       });
+    } finally {
+      vi.useRealTimers();
+      resetCodingWorkbenchContextWindowProbesForTests();
+    }
+  });
+
+  // #3603: a model chosen in the picker whose window cannot hold a coding run's prompt was admitted
+  // to a run; the sidecar rejected its first call and the run waited out the start timeout. The start
+  // now refuses it with the same rule the readiness projection applies to the default model.
+  it("admits a run's model only when its window holds a coding run's prompt", () => {
+    const roomy = configValue(provider(), capability({ contextWindow: 128_000 }));
+    expect(admitCodingRunModel(roomy, "azure-coding-model", undefined)).toEqual({
+      profileId: "azure-coding-model",
+    });
+    const cramped = configValue(provider(), capability({ contextWindow: 4_096 }));
+    expect(() => admitCodingRunModel(cramped, "azure-coding-model", undefined)).toThrow(
+      expect.objectContaining({
+        name: "CodingRuntimeLaunchRejectedError",
+        failureCode: "model-unavailable",
+        reason: "model-context-window-insufficient",
+      }) as Error,
+    );
+    expect(() => admitCodingRunModel(undefined, undefined, undefined)).toThrow(
+      expect.objectContaining({ failureCode: "model-unavailable" }) as Error,
+    );
+    expect(() => admitCodingRunModel(roomy, "azure-coding-model", "high")).toThrow(
+      expect.objectContaining({ reason: "reasoning-effort-unavailable" }) as Error,
+    );
+  });
+
+  it("names a pending window verification at the start instead of refusing the model outright", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    resetCodingWorkbenchContextWindowProbesForTests();
+    try {
+      const config = configValue(provider(), capability({ contextWindow: 4_096 }));
+      const deps: UiHandlerDeps = {
+        ...depsValue(config),
+        gatewayConfig: {
+          storagePath: "/dev/null",
+          current: () => config,
+          present: () => true,
+          set: () => undefined,
+          generation: () => 0,
+          verification: () => "verified",
+          recordVerification: () => undefined,
+          verifiedCapability: () => undefined,
+          recordVerifiedCapability: () => undefined,
+          clearVerifiedCapability: () => false,
+        },
+        gatewayReadinessFetch: (): Promise<Response> =>
+          new Promise<Response>(() => {
+            // The gateway never answers within the test: the probe stays in flight.
+          }),
+      };
+      const read = handleCodingSidecarGatewayProfile(
+        {
+          req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile" }),
+          res: mockResponse().res,
+          params: {},
+          url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+          correlationId: undefined,
+        },
+        deps,
+      );
+      expect(() => admitCodingRunModel(config, "azure-coding-model", undefined)).toThrow(
+        expect.objectContaining({ reason: "model-verification-pending" }) as Error,
+      );
+      await vi.advanceTimersByTimeAsync(PROFILE_PROBE_WAIT_MS);
+      await read;
     } finally {
       vi.useRealTimers();
       resetCodingWorkbenchContextWindowProbesForTests();

@@ -92,6 +92,45 @@ describe("Coding Workbench runtime API", () => {
     });
   });
 
+  // #3603: a start refused because the chosen model's window cannot hold a coding run's prompt
+  // keeps that closed reason; a reason outside the vocabulary never reaches the Workbench.
+  it.each([
+    ["model-context-window-insufficient", "model-context-window-insufficient"],
+    ["model-verification-pending", "model-verification-pending"],
+    ["<script>alert(1)</script>", undefined],
+    [42, undefined],
+  ] as const)("reads the model refusal reason %s from a refused start", async (sent, kept) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonResponse(
+          {
+            error: {
+              code: "CODING_RUNTIME_MODEL_UNAVAILABLE",
+              message: "Runtime request was rejected.",
+            },
+            modelRefusalReason: sent,
+          },
+          409,
+        ),
+      ),
+    );
+    let failure: unknown;
+    try {
+      await startCodingWorkbenchRuntime({
+        requestId: "model-start",
+        taskIntent: "implement",
+        requestedMode: "supervised-coding",
+      });
+    } catch (error) {
+      failure = error;
+    }
+    const projected = codingWorkbenchRuntimeApiError(failure);
+    expect(projected.code).toBe("CODING_RUNTIME_MODEL_UNAVAILABLE");
+    expect(projected.modelRefusalReason).toBe(kept);
+    if (kept === undefined) expect(projected).not.toHaveProperty("modelRefusalReason");
+  });
+
   it("reads only the server-owned readiness projection and rejects a forged effective mode", async () => {
     const readiness = {
       schemaVersion: "1",

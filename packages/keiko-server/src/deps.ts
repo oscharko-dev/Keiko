@@ -8,7 +8,6 @@ import { createNativeHistoryCapture } from "./coding-runtime/codingRuntimeHistor
 // the inspector; no store → an empty evidence list).
 
 import { configuredRuntimePromptTokenBudget } from "./coding-runtime/productionRuntimeWorkspaceAuthority.js";
-import { CodingRuntimeLaunchRejectedError } from "./coding-runtime/launchFailure.js";
 import {
   createDefaultChatCapability,
   findConfiguredCapability,
@@ -424,6 +423,7 @@ import type { SessionPairingPort } from "./coding-app-session/sessionPairingPort
 import { resolveLauncherSessionPairingPort } from "./coding-app-session/launcherSessionPairingPort.js";
 import { CodingAppSessionDenialWindows } from "./coding-app-session/denialWindows.js";
 import {
+  admitCodingRunModel,
   createOpenCodeGatewayReadinessRegistry,
   type OpenCodeGatewayReadinessRegistry,
 } from "./coding-sidecar-gateway.js";
@@ -697,6 +697,7 @@ export interface UiHandlerDeps {
         readonly isVerified: (runId: string) => boolean;
         readonly verifyObserved: (runId: string) => void;
         readonly waitForObservedRequest: (runId: string, signal: AbortSignal) => Promise<boolean>;
+        readonly refuseChallenge: (runId: string) => void;
         readonly noteAdoptionGapDiagnosed: (runId: string) => boolean;
         readonly clear: (runId: string, preserveVerification?: boolean) => void;
       }
@@ -5443,37 +5444,8 @@ function runtimeWorkspaceAuthority(
     resolveManagedModelProfile: (
       modelId,
       reasoningEffort,
-    ): { readonly profileId: string; readonly reasoningEffort?: ModelReasoningEffort } => {
-      const config = args.runtimeConfig.current();
-      const resolved = resolveCodingSafeSidecarGatewayProfile(config, {
-        ...(modelId === undefined ? {} : { modelId }),
-      });
-      // #3565 Observation 17: a model the gateway does not admit right now is a typed refusal
-      // that names the sidecar's reason, never a bare Error the orchestrator can only report as
-      // `authority-resolution-failed`.
-      if (resolved.status !== "available" || config === undefined) {
-        throw new CodingRuntimeLaunchRejectedError(
-          "model-unavailable",
-          false,
-          resolved.status === "available" ? "missing-config" : resolved.reason,
-        );
-      }
-      const capability = findConfiguredCapability(config, resolved.modelAlias);
-      if (
-        reasoningEffort !== undefined &&
-        capability?.reasoningEfforts?.includes(reasoningEffort) !== true
-      ) {
-        throw new CodingRuntimeLaunchRejectedError(
-          "model-unavailable",
-          false,
-          "reasoning-effort-unavailable",
-        );
-      }
-      return {
-        profileId: resolved.modelAlias,
-        ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
-      };
-    },
+    ): { readonly profileId: string; readonly reasoningEffort?: ModelReasoningEffort } =>
+      admitCodingRunModel(args.runtimeConfig.current(), modelId, reasoningEffort),
   };
 }
 

@@ -6,6 +6,7 @@ import type {
   CodingWorkbenchCodexAuthSetupPlan,
   CodingWorkbenchCodexSubscriptionProfile,
   CodingWorkbenchMode,
+  CodingWorkbenchModelRefusalReason,
   CodingWorkbenchModelSource,
   CodingWorkbenchRuntimePreference,
   CodingWorkbenchRuntimeReadiness,
@@ -37,6 +38,8 @@ export interface CodingWorkbenchClientError {
   readonly retryable: boolean;
   /** Copyable support id tying a surfaced failure to one redacted server diagnostic (RB-6). */
   readonly correlationId?: string;
+  /** Why a refused start refused the chosen model, when the server named it (#3603). */
+  readonly modelRefusalReason?: CodingWorkbenchModelRefusalReason;
 }
 
 export interface CodingWorkbenchResourceState<T> {

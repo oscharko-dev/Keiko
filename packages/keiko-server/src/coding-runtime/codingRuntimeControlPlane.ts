@@ -124,6 +124,7 @@ export interface CodingRuntimeHost {
         readonly isVerified: (runId: string) => boolean;
         readonly verifyObserved: (runId: string) => void;
         readonly waitForObservedRequest: (runId: string, signal: AbortSignal) => Promise<boolean>;
+        readonly refuseChallenge: (runId: string) => void;
         readonly noteAdoptionGapDiagnosed: (runId: string) => boolean;
         readonly clear: (runId: string, preserveVerification?: boolean) => void;
       }
