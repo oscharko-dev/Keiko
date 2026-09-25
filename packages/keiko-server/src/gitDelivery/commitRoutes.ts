@@ -115,6 +115,7 @@ export type GitDeliveryCommitErrorCode =
   | "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT"
   | "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED"
   | "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT"
+  | "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED"
   | "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE"
   | "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES"
   | "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT"
@@ -155,9 +156,13 @@ const COMMIT_DRAFT_COMPLETED_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "gitDelivery/commitRoutes.logCommitDraft",
   fields: {
-    stagedFileCount: { type: "integer", dataClass: "count", required: true },
-    areaCount: { type: "integer", dataClass: "count", required: true },
-    touchesTests: { type: "boolean", dataClass: "closed-enum", required: true },
+    // The staged changeset's counts, present once the route has read it. A client that
+    // disconnects before that read ends the draft as `GIT_DELIVERY_COMMIT_DRAFT_CANCELLED` with
+    // the counts absent, never invented (PR #3602 review): an absent count means "not observed",
+    // a zero means "observed and empty".
+    stagedFileCount: { type: "integer", dataClass: "count", required: false },
+    areaCount: { type: "integer", dataClass: "count", required: false },
+    touchesTests: { type: "boolean", dataClass: "closed-enum", required: false },
     outcome: {
       type: "string",
       dataClass: "closed-enum",
@@ -176,6 +181,7 @@ const COMMIT_DRAFT_COMPLETED_OPERATION = defineActivityLogOperation({
         "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
         "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED",
         "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT",
+        "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED",
         "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE",
         "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES",
         "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT",
@@ -204,6 +210,7 @@ const COMMIT_DRAFT_COMPLETED_OPERATION = defineActivityLogOperation({
 function commitDraftErrorKind(code: GitDeliveryCommitErrorCode): ActivityLogErrorKind {
   if (code === "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE") return "unavailable";
   if (code === "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT") return "timeout";
+  if (code === "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED") return "cancelled";
   if (
     code === "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT" ||
     code === "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED"
@@ -220,6 +227,8 @@ const SAFE_MESSAGES: Readonly<Record<GitDeliveryCommitErrorCode, string>> = {
   GIT_DELIVERY_COMMIT_FORBIDDEN_PAYLOAD:
     "The request contained a forbidden field. Requests may not carry credentials, headers, or URLs.",
   GIT_DELIVERY_COMMIT_DRAFT_FAILED: "Keiko could not generate a commit draft from the staged diff.",
+  GIT_DELIVERY_COMMIT_DRAFT_CANCELLED:
+    "The commit draft was cancelled because the client disconnected before it was ready.",
   GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT:
     "Keiko generated a commit draft that did not pass validation.",
   GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED:
@@ -861,6 +870,8 @@ function classifyCommitDraftModelFailure(
   if (error instanceof TimeoutError || routeDeadlineFired(signal)) {
     return "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT";
   }
+  // The composed signal aborted without the deadline: the client left during the model call.
+  if (signal.aborted) return "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED";
   return "GIT_DELIVERY_COMMIT_DRAFT_FAILED";
 }
 
@@ -910,10 +921,12 @@ async function generateModelCommitMessage(
   }
 }
 
+// `summary` is undefined only when the draft ended before the staged changeset was read (a client
+// disconnect during the policy lookup): the counts are then absent from the line, never invented.
 function logCommitDraft(
   log: ServerLogSink,
   correlationId: string,
-  summary: GitCommitChangeSummary,
+  summary: GitCommitChangeSummary | undefined,
   status: number,
   failureCode?: GitDeliveryCommitErrorCode,
   bounds?: CommitDraftBounds,
@@ -927,9 +940,13 @@ function logCommitDraft(
         ...(failureCode === undefined ? {} : { errorKind: commitDraftErrorKind(failureCode) }),
       },
       {
-        stagedFileCount: summary.stagedFileCount,
-        areaCount: summary.areaCount,
-        touchesTests: summary.touchesTests,
+        ...(summary === undefined
+          ? {}
+          : {
+              stagedFileCount: summary.stagedFileCount,
+              areaCount: summary.areaCount,
+              touchesTests: summary.touchesTests,
+            }),
         outcome: status === 200 ? "succeeded" : "failed",
         ...(failureCode === undefined ? {} : { failureCode }),
         ...bounds,
@@ -941,13 +958,36 @@ function logCommitDraft(
 function draftFailureResult(
   log: ServerLogSink,
   correlationId: string,
-  summary: GitCommitChangeSummary,
+  summary: GitCommitChangeSummary | undefined,
   status: number,
   code: GitDeliveryCommitErrorCode,
   bounds?: CommitDraftBounds,
 ): RouteResult {
   logCommitDraft(log, correlationId, summary, status, code, bounds);
   return errResult(status, code);
+}
+
+// Read through a call so the abort state is looked at afresh after each await: a property read
+// narrows to `false` after the first guard and would make every later guard dead code to the
+// compiler, although the signal can flip between two awaits.
+function clientLeft(signal: AbortSignal): boolean {
+  return signal.aborted;
+}
+
+// A client that leaves while the draft is still being prepared ends it as cancelled — no further
+// worktree read, no model call — with whatever the route had observed by then (PR #3602 review).
+function draftCancelled(
+  log: ServerLogSink,
+  correlationId: string,
+  summary: GitCommitChangeSummary | undefined,
+): RouteResult {
+  return draftFailureResult(
+    log,
+    correlationId,
+    summary,
+    commitDraftFailureStatus("GIT_DELIVERY_COMMIT_DRAFT_CANCELLED"),
+    "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED",
+  );
 }
 
 // S7776: a Set, not `.includes()` on a constant array.
@@ -958,8 +998,10 @@ const COMMIT_DRAFT_BAD_GATEWAY_CODES: ReadonlySet<GitDeliveryCommitErrorCode> = 
 
 function commitDraftFailureStatus(code: GitDeliveryCommitErrorCode): number {
   // Matches repositoryInitializationRoutes.ts / gitRepositoryRoutes.ts: a bounded operation that
-  // did not finish in time reports 504, never the generic 503 an unavailable model reports.
+  // did not finish in time reports 504, never the generic 503 an unavailable model reports; a
+  // client that left reports 499 like the chat stream and grounded routes do.
   if (code === "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT") return 504;
+  if (code === "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED") return 499;
   return COMMIT_DRAFT_BAD_GATEWAY_CODES.has(code) ? 502 : 503;
 }
 
@@ -1003,6 +1045,9 @@ async function computeModelCommitDraft(
   const log = seams.activityLog ?? processServerLogSink();
   const stagedPaths = await readStagedPathsFor(workspace, seams, now, correlationId);
   const summary = summarizeStagedChangeset(stagedPaths);
+  // Re-checked after every await that can outlast a disconnect (PR #3602 review): a client that
+  // left while a worktree read was pending gets no further read and no model call.
+  if (clientLeft(signal)) return draftCancelled(log, correlationId, summary);
   if (summary.stagedFileCount === 0 || stagedPaths.length === 0) {
     return draftFailureResult(
       log,
@@ -1013,6 +1058,7 @@ async function computeModelCommitDraft(
     );
   }
   const stagedDiff = await readStagedDiffFor(workspace, seams, now, correlationId);
+  if (clientLeft(signal)) return draftCancelled(log, correlationId, summary);
   const suggested = await generateModelCommitMessage(
     deps,
     {
@@ -1094,9 +1140,8 @@ export const createHandleCommitDraft = (
         workspace.root,
         options.messagePolicy,
       );
-      if (cancellation.signal.aborted) {
-        return draftCancelledBeforeReads(activityLog, correlationId);
-      }
+      // Nothing has been read yet, so the completion line carries no staged counts.
+      if (cancellation.signal.aborted) return draftCancelled(activityLog, correlationId, undefined);
       return await draftWithModel(deps, workspace, req, policy, seams, now, {
         correlationId,
         signal: cancellation.signal,
@@ -1106,19 +1151,6 @@ export const createHandleCommitDraft = (
     }
   };
 };
-
-// A client that left during the policy lookup gets neither worktree read nor model call (PR #3602
-// review). The completion line still records the draft's end; nothing has been read yet, so the
-// staged counts it carries are the empty changeset's.
-function draftCancelledBeforeReads(log: ServerLogSink, correlationId: string): RouteResult {
-  return draftFailureResult(
-    log,
-    correlationId,
-    summarizeStagedChangeset([]),
-    503,
-    "GIT_DELIVERY_COMMIT_DRAFT_FAILED",
-  );
-}
 
 // The model call's own failure envelope: a worktree that cannot be read for the staged diff is a
 // 409, never a 500, and it is reported once with the request's correlation id.

@@ -51,7 +51,7 @@ import {
   forgetMemory,
   loadMemoryAutonomyMode,
   rejectMemoryProposal,
-} from "@/lib/memory-api";
+} from "@/lib/memory-session-api";
 import {
   GATEWAY_CONFIG_UPDATED_EVENT,
   GATEWAY_MODEL_CATALOG_REFRESH_REQUESTED_EVENT,

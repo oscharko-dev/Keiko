@@ -1223,9 +1223,86 @@ describe("commit draft — explicit model-backed generation", () => {
     });
     ctx.req.emit("aborted");
 
+    // A client that left is reported as cancelled (499), never as an internal draft failure.
     const result = await pending;
-    expect(result.status).toBe(503);
-    expect(result.body).toMatchObject({ error: { code: "GIT_DELIVERY_COMMIT_DRAFT_FAILED" } });
+    expect(result.status).toBe(499);
+    expect(result.body).toMatchObject({ error: { code: "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED" } });
+  });
+
+  // PR #3602 review: a client that leaves while a worktree read is pending must get no further
+  // read and no model call, and the completion line must carry the counts the route actually
+  // observed by then.
+  it("stops after the staged-paths read when the client left during it", async () => {
+    const ctx = ctxFor(DRAFT, { schemaVersion: "1", projectId });
+    const stagedPathsReader = vi.fn((): Promise<string[]> => {
+      ctx.req.emit("aborted");
+      return Promise.resolve(["packages/keiko-ui/a.ts", "docs/b.md"]);
+    });
+    const stagedDiffReader = vi.fn(() =>
+      Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+    );
+    const modelCall = vi.fn((): Promise<NormalizedResponse> =>
+      Promise.reject(new CancelledError("client cancelled")),
+    );
+    const events: ServerLogEvent[] = [];
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedPathsReader,
+        stagedDiffReader,
+        activityLog: { write: (event): void => void events.push(event) },
+      }),
+    });
+
+    const result = await handler(
+      ctx,
+      deps({ config: DRAFT_GATEWAY_CONFIG, modelPortFactory: () => ({ call: modelCall }) }),
+    );
+    expect(result.status).toBe(499);
+    expect(result.body).toMatchObject({ error: { code: "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED" } });
+    expect(stagedDiffReader).not.toHaveBeenCalled();
+    expect(modelCall).not.toHaveBeenCalled();
+    expect(events.find((event) => event.op === "git.commit.draft.completed")).toMatchObject({
+      status: 499,
+      errorKind: "cancelled",
+      extra: {
+        outcome: "failed",
+        failureCode: "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED",
+        stagedFileCount: 2,
+        areaCount: 2,
+      },
+    });
+  });
+
+  it("stops after the staged-diff read when the client left during it", async () => {
+    const ctx = ctxFor(DRAFT, { schemaVersion: "1", projectId });
+    const stagedDiffReader = vi.fn((): Promise<string> => {
+      ctx.req.emit("aborted");
+      return Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change");
+    });
+    const modelCall = vi.fn((): Promise<NormalizedResponse> =>
+      Promise.reject(new CancelledError("client cancelled")),
+    );
+    const events: ServerLogEvent[] = [];
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader,
+        activityLog: { write: (event): void => void events.push(event) },
+      }),
+    });
+
+    const result = await handler(
+      ctx,
+      deps({ config: DRAFT_GATEWAY_CONFIG, modelPortFactory: () => ({ call: modelCall }) }),
+    );
+    expect(result.status).toBe(499);
+    expect(result.body).toMatchObject({ error: { code: "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED" } });
+    expect(stagedDiffReader).toHaveBeenCalledTimes(1);
+    expect(modelCall).not.toHaveBeenCalled();
+    expect(events.find((event) => event.op === "git.commit.draft.completed")).toMatchObject({
+      status: 499,
+      errorKind: "cancelled",
+      extra: { outcome: "failed", failureCode: "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED" },
+    });
   });
 
   // PR #3602 review: the disconnect listeners used to be registered only after the commit policy
@@ -1278,15 +1355,21 @@ describe("commit draft — explicit model-backed generation", () => {
     releasePolicyLookup?.();
 
     const result = await pending;
-    expect(result.status).toBe(503);
-    expect(result.body).toMatchObject({ error: { code: "GIT_DELIVERY_COMMIT_DRAFT_FAILED" } });
+    expect(result.status).toBe(499);
+    expect(result.body).toMatchObject({ error: { code: "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED" } });
     expect(stagedPathsReader).not.toHaveBeenCalled();
     expect(stagedDiffReader).not.toHaveBeenCalled();
     expect(modelCall).not.toHaveBeenCalled();
-    expect(events.find((event) => event.op === "git.commit.draft.completed")).toMatchObject({
-      status: 503,
-      extra: { outcome: "failed", failureCode: "GIT_DELIVERY_COMMIT_DRAFT_FAILED" },
+    // Nothing was read, so the line carries no staged counts — absent, not zero.
+    const completed = events.find((event) => event.op === "git.commit.draft.completed");
+    expect(completed).toMatchObject({
+      status: 499,
+      errorKind: "cancelled",
+      extra: { outcome: "failed", failureCode: "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED" },
     });
+    expect(completed?.extra).not.toHaveProperty("stagedFileCount");
+    expect(completed?.extra).not.toHaveProperty("areaCount");
+    expect(completed?.extra).not.toHaveProperty("touchesTests");
   });
 });
 

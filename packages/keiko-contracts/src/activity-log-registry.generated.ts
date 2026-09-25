@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "9f5dea9f15b119cc75f42f22df46e6da17fec85eaa578ad345253d8ffa1dac79" as const;
+  "b0f7caf5c0a08f6a93c76e869bc59672606133cd15193a0c5580076925eb22d9" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -13318,17 +13318,17 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
       stagedFileCount: {
         type: "integer",
         dataClass: "count",
-        required: true,
+        required: false,
       },
       areaCount: {
         type: "integer",
         dataClass: "count",
-        required: true,
+        required: false,
       },
       touchesTests: {
         type: "boolean",
         dataClass: "closed-enum",
-        required: true,
+        required: false,
       },
       outcome: {
         type: "string",
@@ -13348,6 +13348,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
           "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED",
           "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT",
+          "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED",
           "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE",
           "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES",
           "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT",
@@ -44882,7 +44883,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "areaCount",
               type: "integer",
               dataClass: "count",
-              required: true,
+              required: false,
             },
             {
               name: "deadlineMs",
@@ -44912,13 +44913,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "stagedFileCount",
               type: "integer",
               dataClass: "count",
-              required: true,
+              required: false,
             },
             {
               name: "touchesTests",
               type: "boolean",
               dataClass: "closed-enum",
-              required: true,
+              required: false,
             },
           ],
           evidenceClasses: ["closed-enum", "completeness-state", "count", "duration", "loss-state"],

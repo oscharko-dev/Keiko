@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "9f5dea9f15b119cc75f42f22df46e6da17fec85eaa578ad345253d8ffa1dac79",
+    "catalogDigest": "b0f7caf5c0a08f6a93c76e869bc59672606133cd15193a0c5580076925eb22d9",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -13999,17 +13999,17 @@
           "stagedFileCount": {
             "type": "integer",
             "dataClass": "count",
-            "required": true
+            "required": false
           },
           "areaCount": {
             "type": "integer",
             "dataClass": "count",
-            "required": true
+            "required": false
           },
           "touchesTests": {
             "type": "boolean",
             "dataClass": "closed-enum",
-            "required": true
+            "required": false
           },
           "outcome": {
             "type": "string",
@@ -14029,6 +14029,7 @@
               "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
               "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED",
               "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT",
+              "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED",
               "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE",
               "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES",
               "GIT_DELIVERY_COMMIT_UNKNOWN_PROJECT",
@@ -14052,8 +14053,8 @@
         "failureClasses": ["git-commit-draft"],
         "proofIds": ["git.commit.draft.completed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:150",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:922"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:151",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:935"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -14106,8 +14107,8 @@
         "failureClasses": ["git-commit-preview"],
         "proofIds": ["git.commit.preview.completed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:123",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:352"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:124",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/commitRoutes.ts:361"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -55077,7 +55078,7 @@
                   "name": "areaCount",
                   "type": "integer",
                   "dataClass": "count",
-                  "required": true
+                  "required": false
                 },
                 {
                   "name": "deadlineMs",
@@ -55107,13 +55108,13 @@
                   "name": "stagedFileCount",
                   "type": "integer",
                   "dataClass": "count",
-                  "required": true
+                  "required": false
                 },
                 {
                   "name": "touchesTests",
                   "type": "boolean",
                   "dataClass": "closed-enum",
-                  "required": true
+                  "required": false
                 }
               ],
               "evidenceClasses": [
@@ -74488,54 +74489,54 @@
     {
       "op": "git.commit.draft.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:153",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:154",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.draft.model",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:429",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:438",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.draft.worktree",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:415",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:424",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.execute.conflict-scan",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:443",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:452",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.execute.mutation",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:457",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:466",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.preview.branch-protection",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:387",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:396",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.preview.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:126",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:127",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.preview.worktree",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:401",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:410",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -74566,7 +74567,7 @@
     {
       "op": "git.delivery.commit.approval.minted",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1444",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1476",
       "package": "keiko-server"
     },
     {
@@ -74578,7 +74579,7 @@
     {
       "op": "git.delivery.commit.approval.required",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1298",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1330",
       "package": "keiko-server"
     },
     {
