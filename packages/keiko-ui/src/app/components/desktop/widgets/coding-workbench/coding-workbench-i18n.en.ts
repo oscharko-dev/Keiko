@@ -748,6 +748,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Current authority does not permit this commit.",
   "codingWorkbench.commitResult.reason.verification-missing":
     "Run the required verification before proposing this commit.",
+  "codingWorkbench.commitResult.reason.candidate-not-staged":
+    "Part of the change is not staged yet. Stage it, verify the staged change, then propose the commit again.",
   "codingWorkbench.commitResult.reason.verification-failed":
     "The required verification did not pass.",
   "codingWorkbench.commitResult.reason.verification-stale":

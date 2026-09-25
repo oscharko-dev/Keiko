@@ -65,6 +65,7 @@ const VERIFIED_COMMIT_RESULT_REASONS = [
   "approval-invalid",
   "authority-denied",
   "verification-missing",
+  "candidate-not-staged",
   "verification-failed",
   "verification-stale",
   "candidate-drift",
@@ -138,7 +139,7 @@ const VERIFIED_COMMIT_OPERATION = defineActivityLogOperation({
       type: "string",
       dataClass: "closed-enum",
       required: false,
-      values: ["candidate-not-staged", ...VERIFIED_COMMIT_RESULT_REASONS],
+      values: [...VERIFIED_COMMIT_RESULT_REASONS],
     },
     state: {
       type: "string",
@@ -224,7 +225,7 @@ type VerifiedCommitActivityPhase =
 interface VerifiedCommitActivityFields {
   readonly verificationGeneration?: number;
   readonly currentGeneration?: number;
-  readonly reason?: VerifiedCommitReason | "candidate-not-staged";
+  readonly reason?: VerifiedCommitReason;
   readonly state?: VerifiedCommitStatus | "issued" | "consumed" | "policy-authorized" | "failed";
   readonly unstagedCount?: number;
   readonly untrackedCount?: number;
@@ -589,8 +590,17 @@ class VerifiedCommitController implements VerifiedCommitService {
     // latest verification that did not pass (it failed, or executed nothing). Rehearsal run-16's
     // model read "verification-missing" after a verification it had just watched succeed and gave
     // the delivery up; the proof it lacked was a PASSING latest verification.
+    // No proof at all has two causes that need different next steps (#3610): an unstaged or
+    // untracked part of the change, which no verification can prove until it is staged, and a clean
+    // staged candidate nobody verified yet. Naming the first as "verification-missing" sent the
+    // model back to a verification that answered candidate-not-staged, round and round.
     if (verification === undefined)
-      return this.record(context, binding, "verification-failed", "verification-missing");
+      return this.record(
+        context,
+        binding,
+        "verification-failed",
+        facts.clean ? "verification-missing" : "candidate-not-staged",
+      );
     if (!verification.passed)
       return this.record(context, binding, "verification-failed", "verification-failed");
     if (

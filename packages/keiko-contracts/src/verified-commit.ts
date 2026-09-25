@@ -25,6 +25,9 @@ export const VERIFIED_COMMIT_REASONS = [
   "approval-invalid",
   "authority-denied",
   "verification-missing",
+  // #3610: part of the change is still unstaged, so no verification can prove the commit yet; the
+  // model must stage it and verify the staged change — never re-verify the unstaged working tree.
+  "candidate-not-staged",
   "verification-failed",
   "verification-stale",
   "candidate-drift",
@@ -114,7 +117,7 @@ const STATUS_REASONS: Readonly<Record<VerifiedCommitStatus, readonly VerifiedCom
   ],
   failed: ["execution-failed"],
   "recovery-required": ["execution-uncertain", "restart-reconciliation"],
-  "verification-failed": ["verification-missing", "verification-failed"],
+  "verification-failed": ["verification-missing", "candidate-not-staged", "verification-failed"],
   drift: ["verification-stale", "candidate-drift", "repository-drift"],
 };
 function validStatusReason(value: Record<string, unknown>): boolean {

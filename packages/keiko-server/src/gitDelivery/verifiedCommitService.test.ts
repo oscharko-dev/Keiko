@@ -578,6 +578,30 @@ describe("verified Code-task commit service", () => {
     });
     expect(git(["rev-parse", "HEAD"])).toBe(before);
   });
+  // #3610: a commit proposed while part of the change is still unstaged used to be refused as
+  // "verification-missing"; the model re-ran the verification, which reported candidate-not-staged,
+  // and the two answers sent it round in a loop. The refusal names the cause the verification names.
+  it("refuses an unstaged candidate as candidate-not-staged and an unverified staged one as verification-missing", async () => {
+    writeFileSync(join(root, "code.js"), "export const value = 3;\n");
+    expect(await service.propose("feat: part of the change is unstaged")).toMatchObject({
+      status: "verification-failed",
+      reason: "candidate-not-staged",
+    });
+    const refusal = events.find(
+      (event) => event.extra?.phase === "result" && event.extra.reason === "candidate-not-staged",
+    );
+    expect(refusal).toMatchObject({
+      op: "git.verified-commit",
+      correlationId: "verified-commit-test",
+      extra: { state: "verification-failed", reason: "candidate-not-staged" },
+    });
+    git(["add", "code.js"]);
+    expect(await service.propose("feat: staged but not verified")).toMatchObject({
+      status: "verification-failed",
+      reason: "verification-missing",
+    });
+  });
+
   it("requires verification and refuses forged or cross-proposal approvals without a Git effect", async () => {
     const before = git(["rev-parse", "HEAD"]);
     expect(await service.propose("feat: no verification")).toMatchObject({

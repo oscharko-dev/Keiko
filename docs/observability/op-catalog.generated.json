@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "5288e2e555e23a49f38cb1d0f435b09eda0076bb054b8cbb42459c464696b7fd",
+    "catalogDigest": "4193f3d746cc138ca92ec933ad976dc4b33c1bcf5bb73f9e5455b03bc5d86404",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -4729,8 +4729,8 @@
         "failureClasses": ["coding-history-persistence"],
         "proofIds": ["coding-runtime.history.emitted-line"],
         "releaseImpact": "minor",
-        "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeHistory.ts:29",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingRuntimeHistory.ts:159"]
+        "registrationSite": "packages/keiko-server/src/coding-runtime/codingRuntimeHistory.ts:30",
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/codingRuntimeHistory.ts:160"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -17718,11 +17718,11 @@
             "dataClass": "closed-enum",
             "required": false,
             "values": [
-              "candidate-not-staged",
               "approval-required",
               "approval-invalid",
               "authority-denied",
               "verification-missing",
+              "candidate-not-staged",
               "verification-failed",
               "verification-stale",
               "candidate-drift",
@@ -17851,6 +17851,7 @@
               "approval-invalid",
               "authority-denied",
               "verification-missing",
+              "candidate-not-staged",
               "verification-failed",
               "verification-stale",
               "candidate-drift",
@@ -17912,8 +17913,8 @@
         "failureClasses": ["git-verified-commit"],
         "proofIds": ["git.verified-commit.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:110",
-        "emitterSites": ["packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:1036"]
+        "registrationSite": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:111",
+        "emitterSites": ["packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:1046"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -73672,20 +73673,20 @@
     {
       "op": "coding-runtime.handshake",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1112",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1117",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.history",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeHistory.ts:32",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeHistory.ts:33",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.history",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:994",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:997",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -73723,14 +73724,14 @@
     {
       "op": "coding-runtime.opencode-composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:397",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:400",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.opencode-composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:665",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:668",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -73976,14 +73977,14 @@
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1571",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1576",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1647",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1652",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -74922,7 +74923,7 @@
     {
       "op": "git.verified-commit",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:113",
+      "site": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:114",
       "package": "keiko-server"
     },
     {

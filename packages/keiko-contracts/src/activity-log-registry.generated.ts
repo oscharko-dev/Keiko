@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "5288e2e555e23a49f38cb1d0f435b09eda0076bb054b8cbb42459c464696b7fd" as const;
+  "4193f3d746cc138ca92ec933ad976dc4b33c1bcf5bb73f9e5455b03bc5d86404" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -16905,11 +16905,11 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "closed-enum",
         required: false,
         values: [
-          "candidate-not-staged",
           "approval-required",
           "approval-invalid",
           "authority-denied",
           "verification-missing",
+          "candidate-not-staged",
           "verification-failed",
           "verification-stale",
           "candidate-drift",
@@ -17038,6 +17038,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "approval-invalid",
           "authority-denied",
           "verification-missing",
+          "candidate-not-staged",
           "verification-failed",
           "verification-stale",
           "candidate-drift",
