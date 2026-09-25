@@ -11,8 +11,8 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
-import type { Server, IncomingMessage, ServerResponse } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { Server, IncomingMessage } from "node:http";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   GitDeliveryApprovalClaim,
   GitDeliveryExecutionResult,
@@ -23,7 +23,13 @@ import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contract
 import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import type { GitLocalMutationAdapter, GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import {
+  CancelledError,
+  ProviderOutputExhaustedError,
+  TimeoutError,
+} from "@oscharko-dev/keiko-security";
 import { UI_HOST } from "../server.js";
+import { mockResponse } from "../_support.js";
 import { buildCspHeader } from "../csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import { startUiTestServer } from "../ui-test-server/_support.js";
@@ -44,6 +50,7 @@ import type {
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   createHandleCommitApprove,
+  COMMIT_DRAFT_MAX_OUTPUT_TOKENS,
   createHandleCommitDraft,
   createHandleCommitExecute,
   createHandleCommitPreview,
@@ -51,6 +58,7 @@ import {
   type GitDeliveryCommitDraftBody,
   type GitDeliveryCommitPreviewBody,
 } from "./commitRoutes.js";
+import { gatewayRouteDeadlineMs } from "../gateway-route-deadline.js";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryExecutionSeams } from "./execution.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
@@ -134,6 +142,11 @@ const DRAFT_GATEWAY_CONFIG: GatewayConfig = {
   circuitBreaker: { failureThreshold: 3, cooldownMs: 1_000, halfOpenProbes: 1 },
   capabilities: [DRAFT_MODEL_CAPABILITY],
 };
+
+// The route deadline the draft arms for this fixture's model, taken from the production derivation.
+const DRAFT_ROUTE_DEADLINE_MS = gatewayRouteDeadlineMs(DRAFT_GATEWAY_CONFIG, "draft-model", [
+  "buffered",
+]);
 
 function draftResponse(candidate: Readonly<Record<string, string>>): NormalizedResponse {
   return {
@@ -318,7 +331,12 @@ function ctxFor(path: string, body: unknown): RouteContext {
   return {
     correlationId: undefined,
     req,
-    res: {} as ServerResponse,
+    // A real EventEmitter-backed stream (#3591): the commit-draft route now listens for
+    // `req.once("aborted", ...)` / `res.once("close", ...)` to cancel an in-flight model call on
+    // client disconnect (commitDraftCancellation), which a plain `{} as ServerResponse` cannot
+    // support. mockResponse() is the repository's existing genuine-stream fake (_support.ts),
+    // already used for this exact pattern elsewhere (coding-sidecar-gateway.test.ts).
+    res: mockResponse().res,
     params: {},
     url: new URL(`http://127.0.0.1${path}`),
   };
@@ -903,8 +921,455 @@ describe("commit draft — explicit model-backed generation", () => {
         touchesTests: false,
         outcome: "failed",
         failureCode: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
+        maxOutputTokens: COMMIT_DRAFT_MAX_OUTPUT_TOKENS,
+        deadlineMs: DRAFT_ROUTE_DEADLINE_MS,
       },
     });
+  });
+
+  // #3591: the field customer's LiteLLM-fronted vLLM gateway takes 30-120s+ to answer at peak load.
+  // The route used to pass a flat `AbortSignal.timeout(30_000)` as the buffered call's own
+  // `cancellationSignal`, capping the WHOLE call (including the gateway's own retries) well under a
+  // healthy slow answer. `AbortSignal.timeout`'s internal timer is not one vitest's fake timers can
+  // intercept (it does not run through the public `setTimeout` fake timers patch), so the deadline
+  // is pinned by spying on the constructor call itself rather than by simulating elapsed time. Fails
+  // before the fix: old code calls `AbortSignal.timeout(30_000)` directly as the request signal, so
+  // the spy would record 30_000 and never the route deadline derived from the gateway's own retry
+  // budget for the resolved model (`gatewayRouteDeadlineMs`, PR #3602 review: a fixed 300 s
+  // backstop sat under the 600 s buffered attempt the gateway now allows).
+  // The draft only buffers: its backstop is the buffered budget (600 s floor for this fixture's
+  // `maxRetries: 0`, plus the route's grace), never the streamed read's, which would let a stalled
+  // model port that only the route's signal can stop hang for the 30-minute stream floor
+  // (PR #3602 review).
+  it("derives the draft's route deadline from the buffered budget alone", () => {
+    expect(DRAFT_ROUTE_DEADLINE_MS).toBe(601_000);
+    expect(DRAFT_ROUTE_DEADLINE_MS).toBeLessThan(
+      gatewayRouteDeadlineMs(DRAFT_GATEWAY_CONFIG, "draft-model", ["buffered", "streamed"]),
+    );
+  });
+
+  it("arms the route deadline behind the gateway's own retry budget for the resolved model", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    try {
+      const handler = createHandleCommitDraft({
+        execution: seams({
+          stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+        }),
+      });
+      const result = await handler(
+        ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+        deps({
+          config: DRAFT_GATEWAY_CONFIG,
+          modelPortFactory: () =>
+            draftModelPort(() => draftResponse({ subject: "fix: repair", body: "Detail." })),
+        }),
+      );
+
+      expect(result.status).toBe(200);
+      expect(timeoutSpy).toHaveBeenCalledWith(DRAFT_ROUTE_DEADLINE_MS);
+      expect(DRAFT_ROUTE_DEADLINE_MS).toBeGreaterThan(300_000);
+      expect(timeoutSpy).not.toHaveBeenCalledWith(30_000);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("requests the raised reasoning-model output budget under the coding-workbench latency profile", async () => {
+    let captured: GatewayCallRequest | undefined;
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () =>
+          draftModelPort((request) => {
+            captured = request;
+            return draftResponse({ subject: "fix: repair", body: "Detail." });
+          }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(captured?.maxOutputTokens).toBe(COMMIT_DRAFT_MAX_OUTPUT_TOKENS);
+    expect(captured?.latencyProfile).toBe("coding-workbench");
+  });
+
+  // Review of #3591: the raised budget must not exceed what the model declares — the spend-budget
+  // port refuses a request above `capability.maxOutputTokens` before any provider call. A model
+  // that declares no limit keeps the full budget.
+  it.each([
+    ["clamps to a smaller declared limit", 2_048, 2_048],
+    ["keeps the budget under a larger declared limit", 8_192, COMMIT_DRAFT_MAX_OUTPUT_TOKENS],
+    ["keeps the budget when the model declares no limit", 0, COMMIT_DRAFT_MAX_OUTPUT_TOKENS],
+  ])("%s", async (_label, declared, expected) => {
+    let captured: GatewayCallRequest | undefined;
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: {
+          ...DRAFT_GATEWAY_CONFIG,
+          capabilities: [{ ...DRAFT_MODEL_CAPABILITY, maxOutputTokens: declared }],
+        },
+        modelPortFactory: () =>
+          draftModelPort((request) => {
+            captured = request;
+            return draftResponse({ subject: "fix: repair", body: "Detail." });
+          }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(captured?.maxOutputTokens).toBe(expected);
+  });
+
+  // Review of #3591: the route deadline can fire while the gateway sleeps before a retry, which
+  // the gateway reports as CancelledError. The composed signal's reason still names the deadline,
+  // so the draft must report the timeout code, not the generic failure.
+  it("classifies a route deadline that fired during retry backoff as a timeout", async () => {
+    const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockImplementation((ms) =>
+        ms === DRAFT_ROUTE_DEADLINE_MS
+          ? AbortSignal.abort(new DOMException("route deadline", "TimeoutError"))
+          : nativeTimeout(ms),
+      );
+    try {
+      const handler = createHandleCommitDraft({
+        execution: seams({
+          stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+        }),
+      });
+      const res = await handler(
+        ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+        deps({
+          config: DRAFT_GATEWAY_CONFIG,
+          modelPortFactory: () => ({
+            call: (): Promise<never> =>
+              Promise.reject(new CancelledError("cancelled while waiting to retry")),
+          }),
+        }),
+      );
+      expect(res.status).toBe(504);
+      expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT" } });
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("classifies a provider timeout as GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT, not a generic failure", async () => {
+    const events: ServerLogEvent[] = [];
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+      activityLog: {
+        write(event): void {
+          events.push(event);
+        },
+      },
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () => ({
+          call: (): Promise<never> =>
+            Promise.reject(new TimeoutError("provider did not answer in time")),
+        }),
+      }),
+    );
+
+    expect(res.status).toBe(504);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT" } });
+    const draftCompleted = events.find((event) => event.op === "git.commit.draft.completed");
+    expect(draftCompleted).toMatchObject({
+      status: 504,
+      errorKind: "timeout",
+      // The bounds the call ran under travel with the failure (#3591 review).
+      extra: {
+        outcome: "failed",
+        failureCode: "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT",
+        maxOutputTokens: COMMIT_DRAFT_MAX_OUTPUT_TOKENS,
+        deadlineMs: DRAFT_ROUTE_DEADLINE_MS,
+      },
+    });
+    const persisted = expectActivityLogProof(
+      "git.commit.draft.completed.emitted-line",
+      formatActivityLogProofLine(draftCompleted ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      outcome: "failed",
+      failureCode: "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT",
+    });
+  });
+
+  it("classifies a thrown ProviderOutputExhaustedError as output-exhausted, not a generic failure", async () => {
+    const events: ServerLogEvent[] = [];
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+      activityLog: {
+        write(event): void {
+          events.push(event);
+        },
+      },
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () => ({
+          call: (): Promise<never> =>
+            Promise.reject(new ProviderOutputExhaustedError("draft-model")),
+        }),
+      }),
+    );
+
+    expect(res.status).toBe(502);
+    expect(res.body).toMatchObject({
+      error: { code: "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED" },
+    });
+    const draftCompleted = events.find((event) => event.op === "git.commit.draft.completed");
+    expect(draftCompleted).toMatchObject({
+      status: 502,
+      errorKind: "validation-failed",
+      extra: { outcome: "failed", failureCode: "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED" },
+    });
+  });
+
+  // The adapter only THROWS ProviderOutputExhaustedError when content is empty; a reasoning model
+  // that produced a partial fragment before running out of budget instead returns normally with
+  // `finishReason: "length"` and truncated content. That fragment must never be trusted as a real
+  // answer even though it happens to look content-bearing.
+  it("classifies a truncated finishReason=length response as output-exhausted, never a trusted draft", async () => {
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () =>
+          draftModelPort(() => ({
+            modelId: "draft-model",
+            content: '{"subject":"fix: rep',
+            finishReason: "length",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "draft-model-request",
+              promptTokens: 100,
+              completionTokens: 4_000,
+              latencyMs: 12,
+              costClass: "low",
+            },
+          })),
+      }),
+    );
+
+    expect(res.status).toBe(502);
+    expect(res.body).toMatchObject({
+      error: { code: "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED" },
+    });
+  });
+
+  it("aborts the in-flight model call when the client disconnects", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const port: ModelPort = {
+      call: (_request, signal): Promise<NormalizedResponse> => {
+        capturedSignal = signal;
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              reject(new CancelledError("client cancelled"));
+            },
+            { once: true },
+          );
+        });
+      },
+    };
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+    });
+    const ctx = ctxFor(DRAFT, { schemaVersion: "1", projectId });
+
+    const pending = handler(
+      ctx,
+      deps({ config: DRAFT_GATEWAY_CONFIG, modelPortFactory: () => port }),
+    );
+    await vi.waitFor(() => {
+      expect(capturedSignal).toBeDefined();
+    });
+    ctx.req.emit("aborted");
+
+    // A client that left is reported as cancelled (499), never as an internal draft failure.
+    const result = await pending;
+    expect(result.status).toBe(499);
+    expect(result.body).toMatchObject({ error: { code: "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED" } });
+  });
+
+  // PR #3602 review: a client that leaves while a worktree read is pending must get no further
+  // read and no model call, and the completion line must carry the counts the route actually
+  // observed by then.
+  it("stops after the staged-paths read when the client left during it", async () => {
+    const ctx = ctxFor(DRAFT, { schemaVersion: "1", projectId });
+    const stagedPathsReader = vi.fn((): Promise<string[]> => {
+      ctx.req.emit("aborted");
+      return Promise.resolve(["packages/keiko-ui/a.ts", "docs/b.md"]);
+    });
+    const stagedDiffReader = vi.fn(() =>
+      Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+    );
+    const modelCall = vi.fn((): Promise<NormalizedResponse> =>
+      Promise.reject(new CancelledError("client cancelled")),
+    );
+    const events: ServerLogEvent[] = [];
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedPathsReader,
+        stagedDiffReader,
+        activityLog: { write: (event): void => void events.push(event) },
+      }),
+    });
+
+    const result = await handler(
+      ctx,
+      deps({ config: DRAFT_GATEWAY_CONFIG, modelPortFactory: () => ({ call: modelCall }) }),
+    );
+    expect(result.status).toBe(499);
+    expect(result.body).toMatchObject({ error: { code: "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED" } });
+    expect(stagedDiffReader).not.toHaveBeenCalled();
+    expect(modelCall).not.toHaveBeenCalled();
+    expect(events.find((event) => event.op === "git.commit.draft.completed")).toMatchObject({
+      status: 499,
+      errorKind: "cancelled",
+      extra: {
+        outcome: "failed",
+        failureCode: "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED",
+        stagedFileCount: 2,
+        areaCount: 2,
+      },
+    });
+  });
+
+  it("stops after the staged-diff read when the client left during it", async () => {
+    const ctx = ctxFor(DRAFT, { schemaVersion: "1", projectId });
+    const stagedDiffReader = vi.fn((): Promise<string> => {
+      ctx.req.emit("aborted");
+      return Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change");
+    });
+    const modelCall = vi.fn((): Promise<NormalizedResponse> =>
+      Promise.reject(new CancelledError("client cancelled")),
+    );
+    const events: ServerLogEvent[] = [];
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader,
+        activityLog: { write: (event): void => void events.push(event) },
+      }),
+    });
+
+    const result = await handler(
+      ctx,
+      deps({ config: DRAFT_GATEWAY_CONFIG, modelPortFactory: () => ({ call: modelCall }) }),
+    );
+    expect(result.status).toBe(499);
+    expect(result.body).toMatchObject({ error: { code: "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED" } });
+    expect(stagedDiffReader).toHaveBeenCalledTimes(1);
+    expect(modelCall).not.toHaveBeenCalled();
+    expect(events.find((event) => event.op === "git.commit.draft.completed")).toMatchObject({
+      status: 499,
+      errorKind: "cancelled",
+      extra: { outcome: "failed", failureCode: "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED" },
+    });
+  });
+
+  // PR #3602 review: the disconnect listeners used to be registered only after the commit policy
+  // had been resolved, so a client that left DURING that lookup was never recorded, and the
+  // worktree reads and the model call that followed ran for nobody. The cancellation is now armed
+  // before the lookup and checked right after it: neither reader nor the model port is reached,
+  // and the completion line records the cancelled draft.
+  it("skips the worktree reads and the model call when the client left during the policy lookup", async () => {
+    let policyLookupStarted = false;
+    let releasePolicyLookup: (() => void) | undefined;
+    const policyLookup = new Promise<undefined>((resolve) => {
+      releasePolicyLookup = (): void => {
+        resolve(undefined);
+      };
+    });
+    // Only `read` is reached: the route resolves the policy through the settings control and
+    // nothing else on it, so the seam stands in for exactly that one call.
+    const editorSettingsControl = {
+      read: (): Promise<undefined> => {
+        policyLookupStarted = true;
+        return policyLookup;
+      },
+    } as unknown as NonNullable<UiHandlerDeps["editorSettingsControl"]>;
+    const stagedPathsReader = vi.fn(() => Promise.resolve(["packages/keiko-ui/a.ts"]));
+    const stagedDiffReader = vi.fn(() =>
+      Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+    );
+    const modelCall = vi.fn((): Promise<NormalizedResponse> =>
+      Promise.reject(new CancelledError("client cancelled")),
+    );
+    const port: ModelPort = { call: modelCall };
+    const events: ServerLogEvent[] = [];
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedPathsReader,
+        stagedDiffReader,
+        activityLog: { write: (event): void => void events.push(event) },
+      }),
+    });
+    const ctx = ctxFor(DRAFT, { schemaVersion: "1", projectId });
+
+    const pending = handler(
+      ctx,
+      deps({ config: DRAFT_GATEWAY_CONFIG, modelPortFactory: () => port, editorSettingsControl }),
+    );
+    await vi.waitFor(() => {
+      expect(policyLookupStarted).toBe(true);
+    });
+    ctx.req.emit("aborted");
+    releasePolicyLookup?.();
+
+    const result = await pending;
+    expect(result.status).toBe(499);
+    expect(result.body).toMatchObject({ error: { code: "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED" } });
+    expect(stagedPathsReader).not.toHaveBeenCalled();
+    expect(stagedDiffReader).not.toHaveBeenCalled();
+    expect(modelCall).not.toHaveBeenCalled();
+    // Nothing was read, so the line carries no staged counts — absent, not zero.
+    const completed = events.find((event) => event.op === "git.commit.draft.completed");
+    expect(completed).toMatchObject({
+      status: 499,
+      errorKind: "cancelled",
+      extra: { outcome: "failed", failureCode: "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED" },
+    });
+    expect(completed?.extra).not.toHaveProperty("stagedFileCount");
+    expect(completed?.extra).not.toHaveProperty("areaCount");
+    expect(completed?.extra).not.toHaveProperty("touchesTests");
   });
 });
 

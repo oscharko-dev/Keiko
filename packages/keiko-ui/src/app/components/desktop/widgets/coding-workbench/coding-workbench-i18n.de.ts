@@ -549,6 +549,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die Abo-Quelle ist ausgewählt; das Gateway wird nicht verwendet.",
   "codingWorkbench.source.unavailableReason.model-context-window-insufficient":
     "Das Kontextfenster des konfigurierten Modells ist für einen Coding-Lauf zu klein (mindestens 32.000 Tokens). Keiko hat es automatisch geprüft und konnte 32.000 Tokens nicht bestätigen. Wähle ein größeres Modell oder lass das Gateway max_input_tokens für dieses Modell angeben.",
+  "codingWorkbench.source.unavailableReason.model-verification-pending":
+    "Keiko prüft dieses Modell gerade beim Gateway (ein Kontextfenster von mindestens 32.000 Token und Tool-Calling). Bei einem ausgelasteten Gateway kann das einige Minuten dauern; die Workbench aktualisiert sich von selbst, sobald die Prüfung abgeschlossen ist.",
   "codingWorkbench.source.unavailableReason.tool-calling-unverified":
     "Die automatische Tool-Calling-Prüfung des Coding-Modells wurde nicht erfolgreich abgeschlossen. Prüfe das letzte Readiness-Ergebnis unter Einstellungen → Modelle.",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
@@ -973,6 +975,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Der Antwort-Stream des Modells endete vor Abschluss des Schritts. Prüfe die Verbindung zum Anbieter und versuche es erneut.",
   "codingWorkbench.event.turnFailure.turn-rejected":
     "Das Modell oder eine Schutzprüfung der Workbench hat diesen Schritt abgelehnt. Prüfe die Gateway- und Berechtigungsdiagnose des Runs und passe Modell, Aufgabe oder Berechtigungen vor einem erneuten Versuch an.",
+  "codingWorkbench.event.turnFailure.output-exhausted":
+    "Das Modell hat sein gesamtes Ausgabebudget verbraucht, bevor eine Antwort entstand – meist durch Reasoning. Lass das Gateway ein größeres max_output_tokens für dieses Modell melden oder wähle ein Modell mit geringerem Reasoning-Anteil, und versuche es erneut.",
   "codingWorkbench.event.detailOutcome": "Ergebnis: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Nicht vertrauenswürdiger Inhalt: Die abgerufene Seite wurde als Daten isoliert, nicht als Anweisungen.",

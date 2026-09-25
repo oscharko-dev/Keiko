@@ -8,7 +8,7 @@ import { TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { Gateway } from "./gateway.js";
 import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
-import { providerRequestBudgetMs } from "./resilience.js";
+import { GATEWAY_BUFFERED_BUDGET_FLOOR_MS, providerRequestBudgetMs } from "./resilience.js";
 import type {
   Clock,
   GatewayConfig,
@@ -277,7 +277,10 @@ describe("Gateway.chat — activity log", () => {
     expect(started.extra).toMatchObject({
       modelId: "example-chat-model",
       endpointDigest: sha256Hex("https://provider.example"),
-      timeoutMs: 30_000,
+      // The configured 30_000ms is below the buffered-answer floor (#3591, PR #3602 review), so
+      // the line reports the EFFECTIVE deadline this whole-body (non-streaming adapter) attempt
+      // actually runs under — the buffered floor, not the shorter silence floor.
+      timeoutMs: GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
       maxRetries: 0,
       requestBudgetMs: providerRequestBudgetMs(provider()),
       reasoningEffort: "high",
@@ -645,7 +648,15 @@ describe("Gateway — caller correlation", () => {
     await gateway.chat(request);
     const buffered = eventFor(log.events, "gateway.chat.started");
     expect(buffered.correlationId).toBe("run-slow-workbench");
-    expect(buffered.extra).toMatchObject({ timeoutMs: 90_000, requestBudgetMs: 90_000 });
+    // #3591 / PR #3602 review: the adapter has no `callStream`, so this attempt is whole-body and
+    // its actual bound is the buffered-answer floor, not the (shorter) silence floor — the Workbench
+    // pre-floor (equal to the silence floor) is dominated by it. The end-to-end budget derives from
+    // the SAME floored attempt bound, so a single (maxRetries: 0) attempt's budget lands on the
+    // identical floor.
+    expect(buffered.extra).toMatchObject({
+      timeoutMs: GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
+      requestBudgetMs: GATEWAY_BUFFERED_BUDGET_FLOOR_MS,
+    });
     expectActivityLogProof(
       "gateway.chat.started.emitted-line",
       formatActivityLogProofLine(buffered),
@@ -655,7 +666,10 @@ describe("Gateway — caller correlation", () => {
     await drainStream(gateway.chatStream(request));
     const streamed = eventFor(log.events, "gateway.stream.started");
     expect(streamed.correlationId).toBe("run-slow-workbench");
-    expect(streamed.extra).toMatchObject({ timeoutMs: 90_000 });
+    // Same adapter, no `callStream`: chatStream() degrades to its buffered fallback, which now
+    // applies (and reports) the identical buffered floor instead of the shorter silence floor it
+    // used to report without actually applying it (PR #3602 review).
+    expect(streamed.extra).toMatchObject({ timeoutMs: GATEWAY_BUFFERED_BUDGET_FLOOR_MS });
     expect(streamed.extra).not.toHaveProperty("requestBudgetMs");
     expectActivityLogProof(
       "gateway.stream.started.emitted-line",

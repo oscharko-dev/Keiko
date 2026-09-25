@@ -32,10 +32,62 @@ import type {
 } from "./types.js";
 
 const MAX_BACKOFF_MS = 30_000;
-export const CODING_WORKBENCH_PROVIDER_TIMEOUT_FLOOR_MS = 90_000;
 
+// #3591: the field customer's LiteLLM proxy in front of vLLM answers slowly at peak load — 30s,
+// 45s, 120s and longer before the first byte, with stalls between stream chunks — and Keiko must
+// stay in the request rather than abort on its own for such delays. Bounded, but generous: a slow
+// gateway is not a broken gateway. These floors are the minimum every interactive gateway surface
+// waits before treating silence or total duration as a failure; a caller's own configuration may
+// only raise them, never lower them.
+//
+// The buffered-vs-stream rule (review finding on PR #3602): a STREAMED read can prove it is alive
+// as it goes — a chunk every so often is the provider saying "still here" — so it only needs to be
+// watched for SILENCE (no data for `GATEWAY_SILENCE_FLOOR_MS`) while its total duration is allowed
+// to run to the much larger stream/budget floor below. A BUFFERED (whole-body) read cannot observe
+// progress at all: an OpenAI-compatible endpoint sends nothing, headers included, until the whole
+// generation is ready, so there is no "silence" to watch — the single number that bounds it must
+// already cover the longest legitimate generation. That is why `chatAttemptTimeoutMs` below floors
+// a buffered `Gateway.chat()` attempt to `GATEWAY_BUFFERED_BUDGET_FLOOR_MS`, the SAME floor as the
+// end-to-end budget, rather than to the shorter silence floor: with `maxRetries: 0` the one attempt
+// IS the whole call, and flooring it to the silence floor left a healthy six-minute buffered answer
+// aborted at five minutes while the budget "advertised" ten (PR #3602 review). A `chat()` attempt
+// that happens to read over the provider's own stream keeps the silence floor for that read
+// instead (`gateway.ts`'s `effectiveSilenceMs`, threaded through `streamedReadBounds`) — only the
+// WHOLE-BODY case, and `chatStream()`'s own buffered fallback for a non-streaming adapter (same
+// reasoning: no incremental progress to observe), use the buffered floor as their per-attempt bound.
+// Longest wait for the first byte, and between two stream data events.
+export const GATEWAY_SILENCE_FLOOR_MS = 300_000;
+// Longest total read of a streamed answer (`Gateway.chatStream()` — Conversation Center and any
+// other true streaming consumer).
+export const GATEWAY_STREAM_BUDGET_FLOOR_MS = 1_800_000;
+// Longest total read of a buffered answer (`Gateway.chat()` — coding-workbench and every buffered
+// call that answers a user action: commit draft, prompt enhancer, memory salience, quality judge).
+export const GATEWAY_BUFFERED_BUDGET_FLOOR_MS = 600_000;
+// Per-call floor for retrieval/indexing transports (embeddings, rerank): the actual outbound HTTP
+// deadline for ONE call, never the ladder/batch bookkeeping deadline those transports derive from
+// the caller's configured value (that bookkeeping must stay driven by what the caller asked for,
+// including an intentionally exhausted budget).
+export const GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS = 120_000;
+// Per-call floor for the voice adapters (realtime, text-to-speech, speech-to-text).
+export const GATEWAY_VOICE_TIMEOUT_FLOOR_MS = 120_000;
+
+// The provider timeout a coding-workbench-profiled call runs under: the configured value, never
+// below the universal silence floor. A slow Coding Workbench provider gets no special treatment
+// past what every other interactive Gateway.chat() caller already receives (#3591); the route
+// deadlines behind such calls (`gateway-route-deadline.ts` in keiko-server) derive from it.
 export function codingWorkbenchProviderTimeoutMs(timeoutMs: number): number {
-  return Math.max(timeoutMs, CODING_WORKBENCH_PROVIDER_TIMEOUT_FLOOR_MS);
+  return Math.max(timeoutMs, GATEWAY_SILENCE_FLOOR_MS);
+}
+
+// The end-to-end budget of the ONE, unretried read `Gateway.chatStream()` performs: the provider's
+// `timeoutMs` (a coding-workbench-profiled caller raises it through `codingWorkbenchProviderTimeoutMs`
+// first), never below the silence floor its first byte is held to, and never below the
+// streamed-answer floor. `gateway.ts`'s `chatStreamBounds` takes its budget from here, and so does
+// the route deadline armed behind a streamed call (`gateway-route-deadline.ts` in keiko-server): a
+// route that backed a streamed call with the BUFFERED budget cut a healthy stream at ten minutes
+// while the gateway itself was still reading it (PR #3602 review).
+export function streamRequestBudgetMs(provider: { readonly timeoutMs: number }): number {
+  return Math.max(provider.timeoutMs, GATEWAY_SILENCE_FLOOR_MS, GATEWAY_STREAM_BUDGET_FLOOR_MS);
 }
 
 const GATEWAY_RETRY_BUDGET_EXHAUSTED_OPERATION = defineActivityLogOperation({
@@ -548,6 +600,19 @@ type ProviderRetryPolicy = Pick<
   "timeoutMs" | "maxRetries" | "retryBaseDelayMs"
 >;
 
+// The per-attempt bound `Gateway.chat()` runs a BUFFERED (whole-body) attempt under: the
+// provider's configured `timeoutMs`, floored to the BUFFERED budget floor, never the shorter
+// silence floor (#3591, PR #3602 review — see the buffered-vs-stream rule above). A buffered read
+// cannot observe progress, so with `maxRetries: 0` this one attempt IS the whole call: flooring it
+// to the silence floor left a healthy six-minute answer cut off at five. A `chat()` attempt that
+// reads over the provider's own stream is bounded differently by its caller (`gateway.ts`'s
+// `effectiveSilenceMs`/`streamedReadBounds`) and does not use this value for its read deadline —
+// this function only floors the WHOLE-BODY read and the retry loop's own bookkeeping (attempt
+// scheduling, the end-to-end budget derived below).
+function chatAttemptTimeoutMs(provider: ProviderRetryPolicy): number {
+  return Math.max(provider.timeoutMs, GATEWAY_BUFFERED_BUDGET_FLOOR_MS);
+}
+
 // The end-to-end budget of one buffered call to `provider`: every attempt its full `timeoutMs`
 // (ADR-0003), and before every retry the longest sleep the loop honours. The backoff cap and the
 // cap on a provider's Retry-After are both MAX_BACKOFF_MS, so a rate-limited provider keeps all its
@@ -556,12 +621,18 @@ type ProviderRetryPolicy = Pick<
 // here, so the two cannot drift apart again. They had: the provider's `timeoutMs` was passed to
 // the loop as the budget of the WHOLE call, an attempt that hung spent it, and the retry a
 // `TimeoutError` is declared retryable for never ran (coding run 23, 2026-09-11).
+//
+// The per-attempt bound is floored first (`chatAttemptTimeoutMs`, now the SAME buffered floor this
+// function floors to), so the trailing `Math.max` below is a provable no-op today — kept as an
+// explicit invariant ("this budget is never less than the buffered floor, however the per-attempt
+// term is computed") rather than relying on the reader to re-derive that from the arithmetic.
 export function providerRequestBudgetMs(provider: ProviderRetryPolicy): number {
+  const attemptTimeoutMs = chatAttemptTimeoutMs(provider);
   const budgetMs =
-    (provider.maxRetries + 1) * provider.timeoutMs + provider.maxRetries * MAX_BACKOFF_MS;
+    (provider.maxRetries + 1) * attemptTimeoutMs + provider.maxRetries * MAX_BACKOFF_MS;
   // Config validation holds each term to the timer ceiling, never their sum: past it, every
   // deadline armed from this budget would fire the moment it is set (PR #3452 review).
-  return Math.min(budgetMs, MAX_TIMER_DELAY_MS);
+  return Math.min(Math.max(budgetMs, GATEWAY_BUFFERED_BUDGET_FLOOR_MS), MAX_TIMER_DELAY_MS);
 }
 
 // The retry configuration a provider's settings stand for: `timeoutMs` bounds each attempt, and
@@ -570,7 +641,7 @@ export function providerRetryConfig(provider: ProviderRetryPolicy): RetryConfig 
   return {
     maxRetries: provider.maxRetries,
     retryBaseDelayMs: provider.retryBaseDelayMs,
-    attemptTimeoutMs: provider.timeoutMs,
+    attemptTimeoutMs: chatAttemptTimeoutMs(provider),
     timeoutMs: providerRequestBudgetMs(provider),
   };
 }
@@ -710,6 +781,20 @@ export class CircuitBreaker {
     if (this.consecutiveFailures >= this.config.failureThreshold) {
       this.open(correlationId);
     }
+  }
+
+  // A non-provider fault (a client cancel, our own invalid configuration, the gateway's own
+  // redaction limit, a caller-fixable output-budget exhaustion) never tested whether the provider
+  // recovered, so it must move the breaker NEITHER toward open (mistaking the caller's own fault
+  // for a fresh outage) nor toward closed (mistaking an untested call for a health signal) — but a
+  // half-open probe still claimed one of the limited `probesInFlight` slots in `admitProbeOrReject`,
+  // and neither `recordSuccess` nor `recordFailure` is the right call to release it. Left
+  // unreleased, the slot stays occupied forever: once every half-open probe is stuck this way the
+  // breaker rejects every later call with `CircuitOpenError` although the provider may be healthy
+  // (review finding on PR #3602). A no-op while closed or open: there is no probe slot to free.
+  recordNonProviderFault(): void {
+    if (this.state !== "half-open") return;
+    this.probesInFlight = Math.max(0, this.probesInFlight - 1);
   }
 
   status(modelId: string): CircuitBreakerStatus {

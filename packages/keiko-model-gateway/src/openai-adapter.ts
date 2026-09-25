@@ -18,6 +18,7 @@ import {
   MalformedToolCallError,
   ModelRefusalError,
   ProviderError,
+  ProviderOutputExhaustedError,
   RateLimitError,
   TimeoutError,
   TransportError,
@@ -104,6 +105,12 @@ const CHAT_REQUEST_DISPATCH_OPERATION = defineActivityLogOperation({
     // Historical chat.request.dispatch lines predate this diagnostic; old bundles remain readable.
     toolCount: { type: "integer", dataClass: "count", required: false },
     readBudgetMs: { type: "number", dataClass: "duration", required: false },
+    // #3591: the output-token budget actually sent on the wire (as `max_tokens` or
+    // `max_completion_tokens`, per providerOutputTokenLimit) — absent when the request declared
+    // none, in which case the provider's own default governs. Lets an operator tell "the model
+    // spent a small budget on reasoning" (finish_reason "length", ProviderOutputExhaustedError)
+    // apart from "no budget was ever declared".
+    maxOutputTokens: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "start",
@@ -207,6 +214,16 @@ const CHAT_RESPONSE_STREAMED_OPERATION = defineActivityLogOperation({
     silenceMs: { type: "number", dataClass: "duration", required: true },
     readBudgetMs: { type: "number", dataClass: "duration", required: false },
     silentForMs: { type: "number", dataClass: "duration", required: false },
+    // #3591: true only when this read failed on a ProviderOutputExhaustedError — an HTTP 200
+    // answer that spent its whole output budget on reasoning before any content — false on every
+    // other outcome, including a genuine success. `required: false` (PR #3602 review): a record
+    // written before this field existed (1.1.6) lacks it, and a missing REQUIRED field reads as an
+    // incomplete record to the analyzer, which this one is not.
+    outputExhausted: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: false,
+    },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -265,6 +282,9 @@ interface ChatDispatchFields {
   readonly streamUsageRequested?: boolean;
   readonly toolCount: number;
   readonly readBudgetMs?: number;
+  // #3591: the output-token budget actually sent, so a spent-on-reasoning failure
+  // (ProviderOutputExhaustedError) can be told apart from "no budget was ever declared".
+  readonly maxOutputTokens?: number;
 }
 
 // `info`, not `debug`: a line that only appears once the operator has already reproduced the hang
@@ -287,6 +307,18 @@ function logChatDispatch(log: ModelGatewayLogSink, fields: ChatDispatchFields): 
   );
 }
 
+// The output-token budget actually placed on the wire, whichever of `max_tokens` /
+// `max_completion_tokens` `providerOutputTokenLimit` chose for this provider — the single source
+// both `buildBody`/`buildStreamBody` and this dispatch line derive from, so the two can never drift
+// (#3591).
+function dispatchedMaxOutputTokens(
+  request: GatewayRequest,
+  config: ModelProviderConfig,
+): number | undefined {
+  const limit = providerOutputTokenLimit(request.maxOutputTokens, config);
+  return limit.max_tokens ?? limit.max_completion_tokens;
+}
+
 function chatDispatchFields(
   url: string,
   request: ProviderGatewayRequest,
@@ -296,6 +328,7 @@ function chatDispatchFields(
   includeUsage: boolean,
   bounds?: StreamReadBounds,
 ): ChatDispatchFields {
+  const maxOutputTokens = dispatchedMaxOutputTokens(request, config);
   return {
     endpointDigest: sha256Hex(logEndpointHost(url) ?? "invalid-endpoint"),
     modelId: logModelId(config.modelId),
@@ -306,6 +339,7 @@ function chatDispatchFields(
     ...(stream ? { streamUsageRequested: includeUsage } : {}),
     toolCount: request.tools?.length ?? 0,
     ...(bounds === undefined ? {} : { readBudgetMs: bounds.budgetMs }),
+    ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
   };
 }
 
@@ -783,6 +817,10 @@ function assertUsableAssistantResponse(
 ): void {
   if (response.content.trim().length > 0 || response.toolCalls.length > 0) {
     return;
+  }
+  // The budget ran out before any content: a reasoning model spent it on reasoning (#3591).
+  if (response.finishReason === "length") {
+    throw new ProviderOutputExhaustedError(modelId, secrets);
   }
   throw new ProviderError(
     `provider returned an empty assistant response for '${modelId}'`,
@@ -1432,6 +1470,7 @@ export class OpenAiAdapter implements ProviderAdapter {
         {
           ...streamReadFields(read, report, outcome),
           ...(settled ? {} : { silentForMs: durationMs - report.lastDataMs }),
+          outputExhausted: error instanceof ProviderOutputExhaustedError,
         },
       ),
     );

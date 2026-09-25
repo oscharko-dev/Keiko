@@ -1,3 +1,4 @@
+import { resetCodingWorkbenchContextWindowProbesForTests } from "./gateway-readiness.js";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
@@ -14,18 +15,24 @@ import {
   type ModelProviderConfig,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
-import { providerRequestBudgetMs } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
+import {
+  codingWorkbenchProviderTimeoutMs,
+  providerRequestBudgetMs,
+  streamRequestBudgetMs,
+} from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import {
   AuthenticationError,
   CircuitOpenError,
   ConfigInvalidError,
   ContextOverflowError,
+  ProviderOutputExhaustedError,
   RateLimitError,
   TimeoutError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { TOOL_CALLING_VERIFICATION_MAX_AGE_MS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
   _classifyBadRequestReasonForTests,
@@ -33,6 +40,10 @@ import {
   createOpenCodeGatewayReadinessRegistry,
   handleCodingSidecarGatewayChatCompletions,
   handleCodingSidecarGatewayProfile,
+  PROFILE_PROBE_WAIT_MS,
+  MINIMUM_ADMITTED_OUTPUT_TOKENS,
+  admissiblePromptTokens,
+  admittedOutputTokens,
 } from "./coding-sidecar-gateway.js";
 import { mockRequest, mockResponse, probeVerifiedGatewayConfig } from "./_support.js";
 import {
@@ -1853,6 +1864,162 @@ describe("coding-sidecar gateway", () => {
     ).toMatchObject({ source: "output-byte-estimate" });
   });
 
+  // #3602 review: a buffered stream whose opening frame the client will not take (the shared SSE
+  // path kills the stream) must not start a provider call for an answer nobody can receive — the
+  // same early exit `beginGatewayStream` gives the streamed path.
+  it("starts no provider call when the buffered stream's opening frame cannot be delivered", async () => {
+    const sink = captureServerLog("info");
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const chat = vi.fn((): Promise<NormalizedResponse> =>
+      Promise.resolve(assistantResponse("azure-coding-model")),
+    );
+    const response = mockResponse({ captureBody: true });
+    response.res.write = vi.fn(() => false);
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "undeliverable" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+
+    const settlePromptTokens = vi.fn(
+      (_capability: string, _reserved: number, _actual: number): unknown => ({ ok: true }),
+    );
+    const result = await handleCodingSidecarGatewayChatCompletions(context, {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-undeliverable" } }),
+        () => chat,
+      ),
+      diagnostics,
+      runtimeCapabilityAuthenticator: {
+        authenticate: () => ({ ok: true, binding: { runId: "run-undeliverable" } }),
+        reservePromptTokens: () => ({ ok: true, runId: "run-undeliverable" }),
+        settlePromptTokens,
+      },
+    });
+
+    expect(result).toBe(STREAMING);
+    expect(chat).not.toHaveBeenCalled();
+    expect(response.res.destroyed).toBe(true);
+    const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
+    expect(outcome?.extra).toMatchObject({
+      runId: "run-undeliverable",
+      outcome: "cancelled",
+      cancellationCause: "backpressure-killed",
+      completionTokens: 0,
+      outputBytes: 0,
+    });
+    // No provider call ran, so the reservation goes back to the run's budget in full (actual usage
+    // 0, never the conservative estimate a dispatched-but-unobserved call keeps), and the usage
+    // line records the release.
+    expect(settlePromptTokens).toHaveBeenCalledOnce();
+    const [, reserved, actual] = settlePromptTokens.mock.calls[0] ?? [];
+    expect(reserved).toBeGreaterThan(0);
+    expect(actual).toBe(0);
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.usage-settled")?.extra,
+    ).toMatchObject({
+      runId: "run-undeliverable",
+      promptTokens: 0,
+      promptSource: "released-unspent",
+      promptSettlementStatus: "settled",
+      completionTokens: 0,
+      outputBytes: 0,
+    });
+    // One id joins the outcome line, the backpressure diagnostic and the stream's terminal line —
+    // for a context without a correlation id the sanctioned fallback on all three, never a fresh
+    // mint on one of them.
+    expect(outcome?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+    expect(diagnostics.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        errorClass: "SseBackpressureKill",
+        correlationId: UNKNOWN_CORRELATION_ID,
+      }),
+    );
+    // The terminal line arrives on the response's `close`, a tick after destroy; the sink may also
+    // hold a late close from an earlier test's response, so the join is asserted on this stream's
+    // own reason and id rather than on whichever terminal line comes first.
+    await vi.waitFor(() => {
+      const closed = sink.events
+        .filter((event) => event.op === "sse.stream.closed")
+        .map((event) => ({ correlationId: event.correlationId, ...event.extra }));
+      expect(closed).toContainEqual(
+        expect.objectContaining({
+          correlationId: UNKNOWN_CORRELATION_ID,
+          reason: "backpressure-killed",
+        }),
+      );
+    });
+  });
+
+  // The streamed counterpart: the gateway's stream is an async generator that dispatches on its
+  // first pull, and a failed handshake comes before that pull, so the reservation is released too.
+  it("releases the prompt reservation when the streamed handshake cannot be delivered", async () => {
+    const sink = captureServerLog("info");
+    let pulls = 0;
+    const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+      await Promise.resolve();
+      pulls += 1;
+      yield { type: "delta", token: "never" };
+    };
+    const response = mockResponse({ captureBody: true });
+    response.res.write = vi.fn(() => false);
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "undeliverable stream" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+    const settlePromptTokens = vi.fn(
+      (_capability: string, _reserved: number, _actual: number): unknown => ({ ok: true }),
+    );
+    const deps: UiHandlerDeps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-stream-undeliverable" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+          stream(),
+      ),
+      runtimeCapabilityAuthenticator: {
+        authenticate: () => ({ ok: true, binding: { runId: "run-stream-undeliverable" } }),
+        reservePromptTokens: () => ({ ok: true, runId: "run-stream-undeliverable" }),
+        settlePromptTokens,
+      },
+    };
+
+    const result = await handleCodingSidecarGatewayChatCompletions(context, deps);
+
+    expect(result).toBe(STREAMING);
+    expect(pulls).toBe(0);
+    expect(response.res.destroyed).toBe(true);
+    expect(settlePromptTokens).toHaveBeenCalledOnce();
+    const [, reserved, actual] = settlePromptTokens.mock.calls[0] ?? [];
+    expect(reserved).toBeGreaterThan(0);
+    expect(actual).toBe(0);
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome")?.extra,
+    ).toMatchObject({
+      runId: "run-stream-undeliverable",
+      outcome: "cancelled",
+      cancellationCause: "backpressure-killed",
+    });
+    expect(
+      sink.events.find((event) => event.op === "coding-sidecar.gateway.usage-settled")?.extra,
+    ).toMatchObject({
+      runId: "run-stream-undeliverable",
+      promptTokens: 0,
+      promptSource: "released-unspent",
+      promptSettlementStatus: "settled",
+    });
+  });
+
   it("commits the buffered SSE handshake before waiting for the provider", async () => {
     vi.useFakeTimers();
     let resolveProvider: ((response: NormalizedResponse) => void) | undefined;
@@ -1899,6 +2066,7 @@ describe("coding-sidecar gateway", () => {
   });
 
   it("aborts a buffered provider call on response close and run stop", async () => {
+    const sink = captureServerLog("info");
     for (const cancellation of ["response-close", "run-stop"] as const) {
       const run = new AbortController();
       let seenSignal: AbortSignal | undefined;
@@ -1942,6 +2110,16 @@ describe("coding-sidecar gateway", () => {
       await expect(providerAborted).resolves.toBeUndefined();
       await expect(pending).resolves.toMatchObject({ status: 503 });
       expect(seenSignal?.aborted).toBe(true);
+      // #3602 review: the outcome line names which abort source ended the turn.
+      const outcome = sink.events
+        .filter((event) => event.op === "coding-sidecar.gateway.outcome")
+        .at(-1);
+      expect(outcome?.extra).toMatchObject({
+        runId: "run-cancel",
+        outcome: "cancelled",
+        cancellationCause: cancellation === "response-close" ? "client-disconnect" : "run-stopped",
+        deadlineMs: expect.any(Number) as number,
+      });
     }
   });
 
@@ -1959,11 +2137,41 @@ describe("coding-sidecar gateway", () => {
     }
   });
 
+  // #3591: a 30 s configured timeout no longer bounds a Workbench turn. The one attempt is held to
+  // the 300 s silence floor, the buffered call to the 600 s budget floor, a streamed read to the
+  // 1,800 s stream floor, and the route adds its one-second grace behind the LONGER of the two
+  // budgets — with no retries the buffered budget is the shorter one, and a deadline derived from
+  // it alone cancelled a healthy stream the gateway was still reading (PR #3602 review).
   it("keeps a slow Coding Workbench turn alive past a 30-second provider spike", () => {
     const slow = provider({ timeoutMs: 30_000, maxRetries: 0 });
     expect(
       codingSidecarGatewayRequestDeadlineMs(configValue(slow, capability()), slow.modelId),
-    ).toBe(91_000);
+    ).toBe(1_801_000);
+  });
+
+  // The sidecar reaches the gateway both ways (`chat()` buffered, `chatStream()` streamed), so the
+  // backstop must sit behind whichever budget is longer: the streamed read's when retries are few,
+  // the buffered retry budget when they are many.
+  it("sets the route deadline behind the streamed read's budget as well as the buffered one", () => {
+    for (const value of [
+      provider({ maxRetries: 0 }),
+      provider({ timeoutMs: 120_000, maxRetries: 1 }),
+      provider({ timeoutMs: 30_000, maxRetries: 3 }),
+      provider({ timeoutMs: 2_400_000, maxRetries: 0 }),
+    ]) {
+      const raised = { ...value, timeoutMs: codingWorkbenchProviderTimeoutMs(value.timeoutMs) };
+      const deadline = codingSidecarGatewayRequestDeadlineMs(
+        configValue(value, capability()),
+        value.modelId,
+      );
+      expect(deadline).toBeGreaterThan(streamRequestBudgetMs(raised));
+      expect(deadline).toBeGreaterThan(providerRequestBudgetMs(raised));
+    }
+    // The fixture that makes the buffered budget the longer one, so the assertion above is not
+    // satisfied by the stream floor alone.
+    const retried = provider({ timeoutMs: 30_000, maxRetries: 3 });
+    const raised = { ...retried, timeoutMs: codingWorkbenchProviderTimeoutMs(retried.timeoutMs) };
+    expect(providerRequestBudgetMs(raised)).toBeGreaterThan(streamRequestBudgetMs(raised));
   });
 
   // A timer armed with more than 2^31 - 1 ms fires at once: a budget that large must not turn the
@@ -2029,7 +2237,8 @@ describe("coding-sidecar gateway", () => {
         }),
         deps,
       );
-      await vi.advanceTimersByTimeAsync(90_050);
+      // The hung attempt ends at the floored Workbench timeout, not at the configured 50 ms.
+      await vi.advanceTimersByTimeAsync(codingWorkbenchProviderTimeoutMs(50) + 50);
       const result = await pending;
       assertRouteResult(result);
       expect(result.status).toBe(200);
@@ -2117,10 +2326,19 @@ describe("coding-sidecar gateway", () => {
   });
 
   it("passes the sidecar deadline through to an in-flight provider call", async () => {
+    // No retries: the route deadline is the floored single attempt plus the route's grace. The
+    // value is taken from the route's own derivation so the mock follows the floors, not a literal.
+    const sink = captureServerLog("info");
+    const deadlineProvider = provider({ timeoutMs: 10, maxRetries: 0 });
+    const deadlineConfig = configValue(deadlineProvider, capability());
+    const routeDeadlineMs = codingSidecarGatewayRequestDeadlineMs(
+      deadlineConfig,
+      deadlineProvider.modelId,
+    );
     const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
     const timeoutSpy = vi
       .spyOn(AbortSignal, "timeout")
-      .mockImplementation((ms) => nativeTimeout(ms === 91_000 ? 10 : ms));
+      .mockImplementation((ms) => nativeTimeout(ms === routeDeadlineMs ? 10 : ms));
     let seenSignal: AbortSignal | undefined;
     let observeAbort: (() => void) | undefined;
     const providerAborted = new Promise<void>((resolve) => {
@@ -2145,8 +2363,7 @@ describe("coding-sidecar gateway", () => {
         () => ({ ok: true, binding: { runId: "run-deadline" } }),
         () => chat,
       ),
-      // No retries: the route deadline is one 10 ms attempt plus the route's grace.
-      config: configValue(provider({ timeoutMs: 10, maxRetries: 0 }), capability()),
+      config: deadlineConfig,
     } as UiHandlerDeps;
 
     try {
@@ -2161,6 +2378,15 @@ describe("coding-sidecar gateway", () => {
       await expect(providerAborted).resolves.toBeUndefined();
       expect(result).toMatchObject({ status: 503 });
       expect(seenSignal?.aborted).toBe(true);
+      // #3602 review: a backstop expiry is logged as the deadline, with the deadline that was
+      // applied, never as an anonymous cancellation a client disconnect would also produce.
+      const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
+      expect(outcome?.extra).toMatchObject({
+        runId: "run-deadline",
+        outcome: "cancelled",
+        cancellationCause: "route-deadline",
+        deadlineMs: routeDeadlineMs,
+      });
     } finally {
       timeoutSpy.mockRestore();
     }
@@ -2444,6 +2670,7 @@ describe("coding-sidecar gateway", () => {
   });
 
   it("returns the injected stream and aborts its provider signal when the client disconnects", async () => {
+    const sink = captureServerLog("info");
     let returned = false;
     let seenSignal: AbortSignal | undefined;
     let started: (() => void) | undefined;
@@ -2493,9 +2720,88 @@ describe("coding-sidecar gateway", () => {
     await expect(pending).resolves.toBe(STREAMING);
     expect(seenSignal?.aborted).toBe(true);
     expect(returned).toBe(true);
+    const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
+    expect(outcome?.extra).toMatchObject({
+      runId: "run-stream-cancel",
+      outcome: "cancelled",
+      cancellationCause: "client-disconnect",
+      deadlineMs: expect.any(Number) as number,
+    });
+  });
+
+  // #3602 review: a stream that stalls until the route backstop fires used to leave the same
+  // `cancelled` line as a client that left. The outcome line now names the deadline as the cause
+  // and records the deadline that was applied, so the log alone says why the turn stopped.
+  it("names the route deadline on the outcome line when a stalled stream hits the backstop", async () => {
+    const sink = captureServerLog("info");
+    const deadlineProvider = provider({ timeoutMs: 10, maxRetries: 0 });
+    const deadlineConfig = configValue(deadlineProvider, capability());
+    const routeDeadlineMs = codingSidecarGatewayRequestDeadlineMs(
+      deadlineConfig,
+      deadlineProvider.modelId,
+    );
+    const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockImplementation((ms) => nativeTimeout(ms === routeDeadlineMs ? 10 : ms));
+    let returned = false;
+    const stalled = async function* (request: GatewayRequest): AsyncGenerator<GatewayStreamChunk> {
+      try {
+        await new Promise<void>((resolve) => {
+          request.cancellationSignal?.addEventListener(
+            "abort",
+            () => {
+              resolve();
+            },
+            { once: true },
+          );
+        });
+        yield* [] as GatewayStreamChunk[];
+      } finally {
+        returned = true;
+      }
+    };
+    const response = mockResponse({ captureBody: true });
+    const context: RouteContext = {
+      ...authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "stall" }],
+        tools: modelVisibleTools(),
+      }),
+      res: response.res,
+    };
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({ ok: true, binding: { runId: "run-stream-deadline" } }),
+        undefined,
+        createOpenCodeGatewayReadinessRegistry(),
+        (): ((request: GatewayRequest) => AsyncIterable<GatewayStreamChunk>) =>
+          (request: GatewayRequest): AsyncIterable<GatewayStreamChunk> =>
+            stalled(request),
+      ),
+      config: deadlineConfig,
+    } as UiHandlerDeps;
+
+    try {
+      await expect(handleCodingSidecarGatewayChatCompletions(context, deps)).resolves.toBe(
+        STREAMING,
+      );
+      expect(returned).toBe(true);
+      const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
+      expect(outcome?.extra).toMatchObject({
+        runId: "run-stream-deadline",
+        outcome: "cancelled",
+        cancellationCause: "route-deadline",
+        deadlineMs: routeDeadlineMs,
+      });
+    } finally {
+      timeoutSpy.mockRestore();
+    }
   });
 
   it("cancels the provider iterator when the streaming response applies backpressure", async () => {
+    const sink = captureServerLog("info");
     let pulls = 0;
     let returned = false;
     const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
@@ -2540,6 +2846,15 @@ describe("coding-sidecar gateway", () => {
     expect(returned).toBe(true);
     expect(pulls).toBe(1);
     expect(response.res.destroyed).toBe(true);
+    // #3602 review: the frames go through the shared protective SSE path, so a client that stops
+    // draining is killed the way every other SSE route kills it, and the outcome line names the
+    // kill rather than a disconnect the client never made.
+    const outcome = sink.events.find((event) => event.op === "coding-sidecar.gateway.outcome");
+    expect(outcome?.extra).toMatchObject({
+      runId: "run-backpressure",
+      outcome: "cancelled",
+      cancellationCause: "backpressure-killed",
+    });
   });
 
   it.each(["empty", "partial"] as const)(
@@ -2760,6 +3075,107 @@ describe("coding-sidecar gateway", () => {
     });
 
     expect(verified.body).toMatchObject({ status: "available", verification: "verified" });
+  });
+
+  // #3591 (1.1.7): the browser reads this profile with a 15 s deadline. While the automatic probe
+  // of a slow gateway is still running, the read must answer within the bounded wait and say that
+  // the verification is pending, instead of hanging until the browser gives up or refusing.
+  it("answers within the bounded wait with a pending verification while the probe still runs", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    resetCodingWorkbenchContextWindowProbesForTests();
+    try {
+      const context = {
+        req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile" }),
+        res: mockResponse().res,
+        params: {},
+        url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+        correlationId: undefined,
+      } satisfies RouteContext;
+      const config = configValue(provider(), capability({ contextWindow: 4_096 }));
+      const deps: UiHandlerDeps = {
+        ...depsValue(config),
+        gatewayConfig: {
+          storagePath: "/dev/null",
+          current: () => config,
+          present: () => true,
+          set: () => undefined,
+          generation: () => 0,
+          verification: () => "verified",
+          recordVerification: () => undefined,
+          verifiedCapability: () => undefined,
+          recordVerifiedCapability: () => undefined,
+          clearVerifiedCapability: () => false,
+        },
+        gatewayReadinessFetch: (): Promise<Response> =>
+          new Promise<Response>(() => {
+            // The gateway never answers within the test: the probe stays in flight.
+          }),
+      };
+      const read = handleCodingSidecarGatewayProfile(context, deps);
+      await vi.advanceTimersByTimeAsync(PROFILE_PROBE_WAIT_MS);
+      const result = await read;
+      expect(result.body).toEqual({
+        status: "unavailable",
+        reason: "model-verification-pending",
+      });
+    } finally {
+      vi.useRealTimers();
+      resetCodingWorkbenchContextWindowProbesForTests();
+    }
+  });
+
+  // Review of #3591: an unverified tool-calling proof answers `unavailable` before the automatic
+  // probe has run. While that probe is still open the read must say so too — the Workbench polls
+  // only that reason — instead of a refusal that stands until an unrelated refresh.
+  it("answers with a pending verification while the tool-calling probe of an unverified model runs", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    resetCodingWorkbenchContextWindowProbesForTests();
+    try {
+      const context = {
+        req: mockRequest({ method: "GET", url: "/api/coding-sidecar/gateway/profile" }),
+        res: mockResponse().res,
+        params: {},
+        url: new URL("http://127.0.0.1/api/coding-sidecar/gateway/profile"),
+        correlationId: undefined,
+      } satisfies RouteContext;
+      const aged = capability({
+        toolCallingVerification: {
+          status: "verified",
+          checkedAt: new Date(
+            Date.now() - TOOL_CALLING_VERIFICATION_MAX_AGE_MS - 60_000,
+          ).toISOString(),
+          probe: "gateway-tool-calling-v1",
+          configurationFingerprint: "test-fingerprint",
+        },
+      });
+      const config = configValue(provider(), aged);
+      const deps: UiHandlerDeps = {
+        ...depsValue(config),
+        gatewayConfig: {
+          storagePath: "/dev/null",
+          current: () => config,
+          present: () => true,
+          set: () => undefined,
+          generation: () => 0,
+          verification: () => "verified",
+          recordVerification: () => undefined,
+          verifiedCapability: () => undefined,
+          recordVerifiedCapability: () => undefined,
+          clearVerifiedCapability: () => false,
+        },
+        gatewayReadinessFetch: (): Promise<Response> =>
+          new Promise<Response>(() => {
+            // The gateway never answers within the test: the tool-calling probe stays in flight.
+          }),
+      };
+      const read = handleCodingSidecarGatewayProfile(context, deps);
+      await vi.advanceTimersByTimeAsync(PROFILE_PROBE_WAIT_MS);
+      const result = await read;
+      expect(result.body).toEqual({ status: "unavailable", reason: "model-verification-pending" });
+    } finally {
+      vi.useRealTimers();
+      resetCodingWorkbenchContextWindowProbesForTests();
+    }
   });
 
   it("fails closed through the profile route when the injected model source is subscription-backed", async () => {
@@ -3189,6 +3605,8 @@ describe("coding-sidecar gateway", () => {
       loss: "none",
     });
     expect(validated?.extra?.estimatedPromptTokens).toEqual(expect.any(Number));
+    // #3591 (1.1.7): the output allowance actually sent is part of the request's evidence.
+    expect(validated?.extra?.maxOutputTokens).toEqual(expect.any(Number));
     expect(
       activityLogEventRegistration(validated as unknown as Readonly<Record<PropertyKey, unknown>>),
     ).toBeDefined();
@@ -3249,7 +3667,9 @@ describe("coding-sidecar gateway", () => {
       body: {
         error: {
           code: "context_length_exceeded",
-          message: "Request body estimated prompt tokens exceed profile maxPromptTokens (128000).",
+          message: expect.stringMatching(
+            /^Request body estimated prompt tokens exceed profile maxPromptTokens \(128000\) less the reserved output allowance \(\d+ admissible\)\.$/,
+          ) as string,
         },
       },
     });
@@ -3316,7 +3736,9 @@ describe("coding-sidecar gateway", () => {
       body: {
         error: {
           code: "context_length_exceeded",
-          message: "Request body estimated prompt tokens exceed profile maxPromptTokens (16).",
+          message: expect.stringMatching(
+            /^Request body estimated prompt tokens exceed profile maxPromptTokens \(16\) less the reserved output allowance \(-?\d+ admissible\)\.$/,
+          ) as string,
         },
       },
     });
@@ -3876,6 +4298,8 @@ describe("coding sidecar gateway turn failure projection", () => {
   it.each([
     [new ProviderError("synthetic unavailable", 503), "provider-failed"],
     [new ProviderError("empty assistant stream", 200), "stream-incomplete"],
+    // #3591 (1.1.7): the budget ran out before any content — a budget to raise, not a broken stream.
+    [new ProviderOutputExhaustedError("coding"), "output-exhausted"],
     [new TimeoutError("synthetic timeout"), "stream-incomplete"],
     [new ContextOverflowError("synthetic context limit"), "turn-rejected"],
   ] as const)("projects %s as %s without exposing provider text", async (error, code) => {
@@ -3972,6 +4396,10 @@ describe("coding sidecar gateway rejection activity log", () => {
     expect(result).toMatchObject({ status: 400 });
     const estimatedPromptTokens = sink.events[0]?.extra?.estimatedPromptTokens;
     expect(typeof estimatedPromptTokens).toBe("number");
+    // The bound the prompt was admitted against sits below the raw window (#3591 review).
+    const admissible = sink.events[0]?.extra?.admissiblePromptTokens;
+    expect(typeof admissible).toBe("number");
+    expect(admissible).toBeLessThan(16);
     expect(sink.events).toEqual([
       {
         level: "warn",
@@ -3987,6 +4415,7 @@ describe("coding sidecar gateway rejection activity log", () => {
           runId: "run-gateway-test",
           estimatedPromptTokens,
           maxPromptTokens: 16,
+          admissiblePromptTokens: admissible,
           inputMessageCount: 1,
           maxInputMessages: 512,
           completeness: "complete",
@@ -4021,6 +4450,10 @@ describe("coding sidecar gateway rejection activity log", () => {
           runId: "run-gateway-test",
           estimatedPromptTokens,
           maxPromptTokens: 128_000,
+          admissiblePromptTokens: admissiblePromptTokens({
+            maxPromptTokens: 128_000,
+            maxOutputTokens: 4_096,
+          }),
           inputMessageCount: 513,
           maxInputMessages: 512,
           completeness: "complete",
@@ -4640,5 +5073,51 @@ describe("coding-sidecar gateway runtime prompt-token settlement", () => {
       promptSource: "reserved-estimate",
       promptSettlementStatus: "retained-after-refusal",
     });
+  });
+});
+
+// #3591 (1.1.7): the run's output reserve is a reserve against the whole window; the allowance
+// actually sent must fit into what the prompt leaves, or a 30k prompt in a 32k window would send
+// an 8k allowance and a request larger than the model window.
+describe("admittedOutputTokens", () => {
+  const bounds = { maxPromptTokens: 32_000, maxOutputTokens: 8_000 };
+
+  it("keeps the full reserve while the prompt leaves room for it", () => {
+    expect(admittedOutputTokens(bounds, 7_000)).toBe(8_000);
+  });
+
+  it("shrinks the allowance to what remains after the prompt and the safety margin", () => {
+    // 32,000 window, 1,000 safety margin at that size: 30,000 prompt leaves 1,000.
+    expect(admittedOutputTokens(bounds, 30_000)).toBe(1_000);
+  });
+
+  // Review of #3591 (P1): the allowance used to floor at 512 for a prompt just under the window,
+  // which sent 512 output tokens PAST the proven window. Admission now stops such a prompt, and
+  // the largest admissible prompt still gets exactly the minimum allowance.
+  it("grants the largest admissible prompt exactly the minimum allowance", () => {
+    // 32,000 window, 1,000 safety margin, 512 minimum: 30,488 is the last admissible prompt.
+    expect(admissiblePromptTokens(bounds)).toBe(30_488);
+    expect(admittedOutputTokens(bounds, admissiblePromptTokens(bounds))).toBe(
+      MINIMUM_ADMITTED_OUTPUT_TOKENS,
+    );
+    expect(
+      admissiblePromptTokens(bounds) +
+        admittedOutputTokens(bounds, admissiblePromptTokens(bounds)) +
+        1_000,
+    ).toBe(bounds.maxPromptTokens);
+  });
+
+  it("reserves the whole output budget when it is smaller than the minimum allowance", () => {
+    const tiny = { maxPromptTokens: 128_000, maxOutputTokens: 4 };
+    // 4,000 safety margin at that size, then the 4-token reserve.
+    expect(admissiblePromptTokens(tiny)).toBe(128_000 - 4_000 - 4);
+    expect(admittedOutputTokens(tiny, admissiblePromptTokens(tiny))).toBe(4);
+  });
+
+  it("never exceeds the run's reserve, even a reserve below the floor", () => {
+    expect(admittedOutputTokens({ maxPromptTokens: 128_000, maxOutputTokens: 8_000 }, 10)).toBe(
+      8_000,
+    );
+    expect(admittedOutputTokens({ maxPromptTokens: 128_000, maxOutputTokens: 4 }, 10)).toBe(4);
   });
 });

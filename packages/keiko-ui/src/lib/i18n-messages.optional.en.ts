@@ -368,6 +368,10 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
     "Keiko reads the selected staged diff only when you click this button.",
   "commitComposer.draft.unavailable":
     "This repository policy needs details that Keiko cannot safely draft.",
+  "commitComposer.error.draftTimedOut":
+    "The gateway did not answer in time; the draft was not generated. Retry, or write the message yourself.",
+  "commitComposer.error.draftOutputExhausted":
+    "Keiko's model spent its whole output budget reasoning about the change and produced no draft. Retry, or write the message yourself.",
   "commitComposer.copy.copied": "Copied",
   "commitComposer.copy.failed": "Copy failed",
   "commitComposer.preview.messageViolations": "Message-policy violations",

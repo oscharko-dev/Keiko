@@ -22,6 +22,11 @@ export const ERROR_CODES = {
   PROXY_EGRESS_FAILED: "GATEWAY_PROXY_EGRESS_FAILED",
   PROXY_BLOCKED_BY_POLICY: "GATEWAY_PROXY_BLOCKED_BY_POLICY",
   TLS_CA_FAILURE: "GATEWAY_TLS_CA_FAILURE",
+  // #3591: a reasoning model that spends its whole output budget before any content is a
+  // different, actionable failure from a generic provider error — the chat surfaces need to tell
+  // them apart to show a distinct message, so this carries its own code instead of inheriting
+  // PROVIDER_ERROR from ProviderOutputExhaustedError's base class.
+  OUTPUT_EXHAUSTED: "GATEWAY_OUTPUT_EXHAUSTED",
 } as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[keyof typeof ERROR_CODES];
@@ -133,7 +138,9 @@ export class CircuitOpenError extends GatewayError {
 const RETRYABLE_PROVIDER_HTTP_STATUS: ReadonlySet<number> = new Set([500, 502, 503, 529]);
 
 export class ProviderError extends GatewayError {
-  readonly code = ERROR_CODES.PROVIDER_ERROR;
+  // Explicit `ErrorCode` (rather than the inferred narrow literal) so a subclass — currently
+  // ProviderOutputExhaustedError (#3591) — can override it with its own, more specific code.
+  readonly code: ErrorCode = ERROR_CODES.PROVIDER_ERROR;
   readonly retryable: boolean;
   readonly httpStatus: number;
 
@@ -141,6 +148,26 @@ export class ProviderError extends GatewayError {
     super(message, secrets);
     this.httpStatus = httpStatus;
     this.retryable = RETRYABLE_PROVIDER_HTTP_STATUS.has(httpStatus);
+  }
+}
+
+// #3591 (1.1.7): a reasoning model that spends its whole output budget before the first content
+// token answers with HTTP 200, `finish_reason: "length"` and no content. That is neither a broken
+// stream nor a provider refusal; it is a budget the caller can raise. It keeps the provider error
+// code (no wire change) and is never retried as is — the same request would exhaust the same budget.
+export class ProviderOutputExhaustedError extends ProviderError {
+  // Overrides ProviderError's inherited GATEWAY_PROVIDER_ERROR: the chat surfaces map on `.code`,
+  // and this failure needs a distinct, actionable message (#3591) — httpStatus/retryable are still
+  // set by the ProviderError constructor below (200 / false) and are unaffected by this override.
+  override readonly code = ERROR_CODES.OUTPUT_EXHAUSTED;
+  readonly outputExhausted = true;
+
+  constructor(modelId: string, secrets: readonly string[] = []) {
+    super(
+      `provider exhausted the output budget for '${modelId}' before producing any content`,
+      200,
+      secrets,
+    );
   }
 }
 

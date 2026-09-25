@@ -5,7 +5,6 @@
 
 import { bffFetchJson } from "./http";
 import type {
-  AcceptMemoryProposalOptions,
   CodingWorkbenchMode,
   MemoryId,
   MemoryRecord,
@@ -33,7 +32,6 @@ import type {
   MemoryConsolidationApplyPreconditionWire,
   MemoryConsolidationApplyResponseWire,
   MemoryHealthScanResultWire,
-  MemoryAutonomyPolicyWire,
   MemoryCorrectionPredecessorsResponse,
 } from "@oscharko-dev/keiko-contracts";
 
@@ -62,9 +60,19 @@ export interface MemoryReviewQueueResponse {
   readonly total: number;
 }
 
-export interface MemoryActionResponse {
-  readonly memory: MemoryRecord;
-}
+// The five calls the first-load desktop shell makes (chat proposals, forget, autonomy policy) and
+// the two response shapes they share live in memory-session-api.ts so this module — everything the
+// lazily loaded MemoriaViva window needs — stays out of the initial chunk (PR #3602); they are
+// re-exported here so every MemoriaViva consumer keeps one import surface.
+export {
+  acceptMemoryProposal,
+  forgetMemory,
+  loadMemoryAutonomyMode,
+  persistMemoryAutonomyMode,
+  rejectMemoryProposal,
+} from "./memory-session-api";
+export type { MemoryActionResponse, MemoryForgetResponse } from "./memory-session-api";
+import type { MemoryActionResponse, MemoryForgetResponse } from "./memory-session-api";
 
 export type MemoryConsolidationJobState = MemoryConsolidationJobStateWire;
 export type MemoryConsolidationStaleReason = MemoryConsolidationStaleReasonWire;
@@ -83,13 +91,6 @@ export type MemoryConsolidationJobEnvelope = MemoryConsolidationJobEnvelopeWire;
 export type MemoryConsolidationJobResponse = MemoryConsolidationJobResponseWire;
 export type MemoryConsolidationApplyPrecondition = MemoryConsolidationApplyPreconditionWire;
 export type MemoryConsolidationApplyResponse = MemoryConsolidationApplyResponseWire;
-
-export interface MemoryForgetResponse {
-  readonly forgotten: true;
-  readonly memoryId?: string;
-  readonly memoryIds: readonly string[];
-  readonly count: number;
-}
 
 export interface MemoryDeleteResponse {
   readonly deleted: true;
@@ -258,25 +259,6 @@ export async function fetchMemoryReviewQueue(
   return fetchImpl("/api/memory/review-queue");
 }
 
-export async function loadMemoryAutonomyMode(
-  fetchImpl = fetchJson<MemoryAutonomyPolicyWire>,
-): Promise<MemoryAutonomyPolicyWire> {
-  return fetchImpl("/api/memory/autonomy-policy");
-}
-
-export async function persistMemoryAutonomyMode(
-  requestedMode: CodingWorkbenchMode,
-  expectedRevision: number,
-  signal?: AbortSignal,
-  fetchImpl = fetchJson<MemoryAutonomyPolicyWire>,
-): Promise<MemoryAutonomyPolicyWire> {
-  return fetchImpl("/api/memory/autonomy-policy", {
-    method: "PUT",
-    body: JSON.stringify({ requestedMode, expectedRevision }),
-    ...(signal === undefined ? {} : { signal }),
-  });
-}
-
 // ---------------------------------------------------------------------------
 // Health scan (Issue #2129)
 // ---------------------------------------------------------------------------
@@ -398,18 +380,6 @@ export async function archiveMemory(
 // Forget (destructive — requires acknowledged: true)
 // ---------------------------------------------------------------------------
 
-export async function forgetMemory(
-  id: MemoryId,
-  fetchImpl = fetchJson<MemoryForgetResponse>,
-): Promise<MemoryForgetResponse> {
-  return fetchImpl(`/api/memory/${encodeURIComponent(id)}/forget`, {
-    method: "POST",
-    body: JSON.stringify({
-      acknowledged: true,
-    }),
-  });
-}
-
 export async function forgetMemories(
   input: SelectiveForgetInput,
   fetchImpl = fetchJson<MemoryForgetResponse>,
@@ -468,38 +438,9 @@ export async function resolveMemoryConflict(
 // Accept / reject proposal
 // ---------------------------------------------------------------------------
 
-// `id` is the proposal/record identifier the route encodes into the path. It is typed as a
-// plain string because both call sites supply a branded id (chat: MemoryProposalId, review
-// queue: MemoryId) and this HTTP boundary only needs the URL path segment, not the brand.
-type MemoryActionFetch = (path: string, init?: RequestInit) => Promise<MemoryActionResponse>;
-
-export async function acceptMemoryProposal(
-  id: string,
-  optionsOrFetch: AcceptMemoryProposalOptions | MemoryActionFetch = {},
-  fetchOverride: MemoryActionFetch = fetchJson<MemoryActionResponse>,
-): Promise<MemoryActionResponse> {
-  const options = typeof optionsOrFetch === "function" ? {} : optionsOrFetch;
-  const fetchImpl = typeof optionsOrFetch === "function" ? optionsOrFetch : fetchOverride;
-  return fetchImpl(`/api/memory/proposals/${encodeURIComponent(id)}/accept`, {
-    method: "POST",
-    body: JSON.stringify(options),
-  });
-}
-
 export async function fetchCorrectionPredecessors(
   id: string,
   fetchImpl = fetchJson<MemoryCorrectionPredecessorsResponse>,
 ): Promise<MemoryCorrectionPredecessorsResponse> {
   return fetchImpl(`/api/memory/proposals/${encodeURIComponent(id)}/correction-predecessors`);
-}
-
-export async function rejectMemoryProposal(
-  id: string,
-  reason?: string,
-  fetchImpl = fetchJson<MemoryActionResponse>,
-): Promise<MemoryActionResponse> {
-  return fetchImpl(`/api/memory/proposals/${encodeURIComponent(id)}/reject`, {
-    method: "POST",
-    body: JSON.stringify({ ...(reason !== undefined ? { reason } : {}) }),
-  });
 }

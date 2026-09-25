@@ -237,7 +237,7 @@ function runtimeEvent(extra: Record<string, unknown>): CodingWorkbenchRuntimeSse
 }
 
 describe("eventDetail auxiliary outcome", () => {
-  it.each(["provider-failed", "stream-incomplete", "turn-rejected"] as const)(
+  it.each(["provider-failed", "stream-incomplete", "turn-rejected", "output-exhausted"] as const)(
     "shows the actionable %s cause for a redacted gateway failure",
     (failureCode) => {
       expect(eventDetail(runtimeEvent({ eventKind: "failure-redacted", failureCode }), t)).toBe(

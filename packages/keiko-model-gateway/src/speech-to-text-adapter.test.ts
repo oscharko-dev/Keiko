@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { requestSpeechToText } from "./speech-to-text-adapter.js";
+import { describe, expect, it, vi } from "vitest";
+import { classifyDispatchError, requestSpeechToText } from "./speech-to-text-adapter.js";
 import { OutboundHttpEgressError } from "./http.js";
+import { GATEWAY_VOICE_TIMEOUT_FLOOR_MS } from "./resilience.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import {
   expectActivityLogProof,
@@ -117,32 +118,77 @@ describe("requestSpeechToText", () => {
     expect(body).toContain('name="language"');
     expect(body).toContain("\r\n\r\nde\r\n");
     expect(body).not.toContain("\r\n\r\nde-DE\r\n");
-    expect(events).toEqual([
-      {
-        level: "info",
-        category: "gateway",
-        op: "speech.stt.language.normalized",
-        correlationId: "corr-stt-language",
-        extra: {
-          completeness: "complete",
-          declaredSubtagCount: 2,
-          loss: "none",
-          resolvedSubtagCount: 1,
-          primaryLanguagePreserved: true,
-        },
+    // THE ATTEMPT LINE (speech.stt.request.dispatch) is always first, ahead of the narrower,
+    // conditional normalization line (#3602 review — the new per-call deadline had no line
+    // recording the applied bound), and THE COMPLETION LINE (speech.stt.request.completed) is
+    // always last (#3602 review — a timeout, a rate limit, and an invalid response were
+    // indistinguishable from a still-running call once only the dispatch line existed).
+    expect(events).toHaveLength(3);
+    expect(events[0]).toMatchObject({
+      level: "info",
+      category: "gateway",
+      op: "speech.stt.request.dispatch",
+      correlationId: "corr-stt-language",
+      extra: { modelId: "keiko-stt", timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS },
+    });
+    expect(events[1]).toMatchObject({
+      level: "info",
+      category: "gateway",
+      op: "speech.stt.language.normalized",
+      correlationId: "corr-stt-language",
+      extra: {
+        completeness: "complete",
+        declaredSubtagCount: 2,
+        loss: "none",
+        resolvedSubtagCount: 1,
+        primaryLanguagePreserved: true,
       },
-    ]);
+    });
+    expect(events[2]).toMatchObject({
+      level: "info",
+      category: "gateway",
+      op: "speech.stt.request.completed",
+      correlationId: "corr-stt-language",
+      extra: {
+        modelId: "keiko-stt",
+        outcome: "succeeded",
+        timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS,
+      },
+    });
+    expect(events[2]?.extra).not.toHaveProperty("failureKind");
+    expect(events[2]?.errorKind).toBeUndefined();
 
     // Activity Log proof (#3532): the normalization line as the production file sink would
     // persist it.
     const persisted = expectActivityLogProof(
       "speech.stt.language.normalized.emitted-line",
-      formatActivityLogProofLine(events[0] ?? {}),
+      formatActivityLogProofLine(events[1] ?? {}),
     );
     expect(persisted).toMatchObject({
       declaredSubtagCount: 2,
       resolvedSubtagCount: 1,
       primaryLanguagePreserved: true,
+    });
+    // The dispatch line as the production file sink would persist it: the applied deadline is the
+    // floor, not the caller's configured value (#3591).
+    const dispatched = expectActivityLogProof(
+      "speech.stt.request.dispatch.emitted-line",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(dispatched).toMatchObject({
+      modelId: "keiko-stt",
+      timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS,
+    });
+    // The completed line as the production file sink would persist it: the outcome and the
+    // applied deadline travel together (#3602 review).
+    const completed = expectActivityLogProof(
+      "speech.stt.request.completed.emitted-line",
+      formatActivityLogProofLine(events[2] ?? {}),
+    );
+    expect(completed).toMatchObject({
+      modelId: "keiko-stt",
+      outcome: "succeeded",
+      timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS,
     });
   });
 
@@ -169,7 +215,12 @@ describe("requestSpeechToText", () => {
 
     expect(outcome.ok).toBe(true);
     expect(body).toContain("\r\n\r\nde\r\n");
-    expect(events).toEqual([]);
+    // The unconditional dispatch and completed lines — no normalization event for an
+    // already-primary tag.
+    expect(events.map((event) => event.op)).toEqual([
+      "speech.stt.request.dispatch",
+      "speech.stt.request.completed",
+    ]);
   });
 
   it("omits an empty language hint without emitting a normalization event", async () => {
@@ -191,7 +242,12 @@ describe("requestSpeechToText", () => {
 
     expect(outcome.ok).toBe(true);
     expect(body).not.toContain('name="language"');
-    expect(events).toEqual([]);
+    // The unconditional dispatch and completed lines — no normalization event for an absent
+    // language hint.
+    expect(events.map((event) => event.op)).toEqual([
+      "speech.stt.request.dispatch",
+      "speech.stt.request.completed",
+    ]);
   });
 
   it("normalizes a maximum-length validated language hint and logs the boundary", async () => {
@@ -214,21 +270,22 @@ describe("requestSpeechToText", () => {
 
     expect(outcome.ok).toBe(true);
     expect(body).toContain("\r\n\r\nabc\r\n");
-    expect(events).toEqual([
-      {
-        level: "info",
-        category: "gateway",
-        op: "speech.stt.language.normalized",
-        correlationId: "corr-stt-language-boundary",
-        extra: {
-          completeness: "complete",
-          declaredSubtagCount: 5,
-          loss: "none",
-          resolvedSubtagCount: 1,
-          primaryLanguagePreserved: true,
-        },
+    expect(events).toHaveLength(3);
+    expect(events[0]).toMatchObject({ op: "speech.stt.request.dispatch" });
+    expect(events[1]).toMatchObject({
+      level: "info",
+      category: "gateway",
+      op: "speech.stt.language.normalized",
+      correlationId: "corr-stt-language-boundary",
+      extra: {
+        completeness: "complete",
+        declaredSubtagCount: 5,
+        loss: "none",
+        resolvedSubtagCount: 1,
+        primaryLanguagePreserved: true,
       },
-    ]);
+    });
+    expect(events[2]).toMatchObject({ op: "speech.stt.request.completed" });
   });
 
   it("includes an optional domain-keyword prompt field in the multipart body", async () => {
@@ -448,23 +505,123 @@ describe("requestSpeechToText", () => {
     expect(cancelled).toEqual({ ok: false, kind: "cancelled" });
   });
 
-  it("maps a fired internal timeout signal to timeout (timeoutSignal.aborted branch)", async () => {
-    // timeoutMs is tiny and the mock resolves only after a real delay, so the adapter's internal
-    // AbortSignal.timeout fires before the throw — exercising the timeoutSignal.aborted path (a bare
-    // AbortError without TimeoutError name), which differs from the thrown-TimeoutError path above.
+  // #3591: the internal AbortSignal.timeout is now floored to GATEWAY_VOICE_TIMEOUT_FLOOR_MS
+  // (120s) regardless of a smaller configured value, so it can no longer be made to fire for real
+  // inside a unit test the way a tiny `timeoutMs` used to. `classifyDispatchError` is the exact
+  // production function `requestSpeechToText` calls to map a bare AbortError onto "timeout" when
+  // its OWN internal signal (not the caller's) is the one that fired — proven directly here
+  // against a manually-aborted signal instead of waiting on the real timer.
+  it("maps a fired internal timeout signal to timeout (timeoutSignal.aborted branch)", () => {
+    const timeoutSignal = new AbortController();
+    timeoutSignal.abort();
+    const outcome = classifyDispatchError(
+      new DOMException("aborted", "AbortError"),
+      timeoutSignal.signal,
+      undefined,
+    );
+    expect(outcome).toBe("timeout");
+  });
+
+  // Proves `requestSpeechToText` itself — not just `classifyDispatchError` in isolation — wires
+  // its internal deadline into the outbound fetch (review finding on PR #3602: the end-to-end pin
+  // this test replaces was deleted when the floor made it impossible to fire for real inside a
+  // unit test, leaving nothing proving the wiring still exists). `AbortSignal.timeout` is spied so
+  // the call it receives for the internal deadline can be asserted directly, then swapped for an
+  // already-fired signal so the whole request path — dispatch, classification, and the outcome
+  // `requestSpeechToText` returns — is exercised exactly as it would be for a real fired timeout.
+  it("wires the floored internal deadline into the outbound fetch and ends in a timeout outcome", async () => {
+    const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+      if (ms !== GATEWAY_VOICE_TIMEOUT_FLOOR_MS) return nativeTimeout(ms);
+      const controller = new AbortController();
+      controller.abort(new DOMException("the provider did not answer in time", "TimeoutError"));
+      return controller.signal;
+    });
+    try {
+      const outcome = await requestSpeechToText({
+        endpoint: ENDPOINT,
+        apiKey: SECRET_API_KEY,
+        modelId: "keiko-stt",
+        audio: AUDIO,
+        mimeType: "audio/webm",
+        // Below the floor: proves the CALL that reaches AbortSignal.timeout carries the floored
+        // value, not the caller's smaller configured one.
+        timeoutMs: 5_000,
+        fetchImpl: mockFetch((_url, init) => {
+          if (init.signal?.aborted === true) {
+            throw init.signal.reason as Error;
+          }
+          throw new Error("the request should have carried an already-aborted signal");
+        }),
+      });
+      expect(timeoutSpy).toHaveBeenCalledWith(GATEWAY_VOICE_TIMEOUT_FLOOR_MS);
+      expect(outcome).toEqual({ ok: false, kind: "timeout" });
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  // THE COMPLETION LINE (review finding on PR #3602: the dispatch line alone left a timeout, a
+  // rate limit, and an invalid response indistinguishable from a still-running call). Proves the
+  // timeout path specifically, since that is the scenario the finding names.
+  it("logs the completed line with a timeout failureKind and errorKind on a timeout outcome", async () => {
+    const events: ModelGatewayLogEvent[] = [];
     const outcome = await requestSpeechToText({
       endpoint: ENDPOINT,
       apiKey: SECRET_API_KEY,
       modelId: "keiko-stt",
       audio: AUDIO,
       mimeType: "audio/webm",
-      timeoutMs: 1,
-      fetchImpl: mockFetch(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 20));
-        throw new DOMException("aborted", "AbortError");
+      correlationId: "corr-stt-timeout",
+      log: { write: (event): void => void events.push(event) },
+      fetchImpl: mockFetch(() => {
+        throw new DOMException("timed out", "TimeoutError");
       }),
     });
     expect(outcome).toEqual({ ok: false, kind: "timeout" });
+    const completed = events.find((event) => event.op === "speech.stt.request.completed");
+    expect(completed).toMatchObject({
+      level: "warn",
+      category: "gateway",
+      op: "speech.stt.request.completed",
+      correlationId: "corr-stt-timeout",
+      errorKind: "timeout",
+      extra: {
+        outcome: "failed",
+        failureKind: "timeout",
+        timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS,
+      },
+    });
+  });
+
+  // A non-timeout failure: proves the completed line's failureKind/errorKind distinguish a rate
+  // limit from a timeout instead of collapsing every failure into one shape.
+  it("logs the completed line with a rate-limited failureKind and errorKind on a 429 outcome", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const outcome = await requestSpeechToText({
+      endpoint: ENDPOINT,
+      apiKey: SECRET_API_KEY,
+      modelId: "keiko-stt",
+      audio: AUDIO,
+      mimeType: "audio/webm",
+      correlationId: "corr-stt-rate-limit",
+      log: { write: (event): void => void events.push(event) },
+      fetchImpl: mockFetch(() => new Response("", { status: 429 })),
+    });
+    expect(outcome).toEqual({ ok: false, kind: "rate-limited" });
+    const completed = events.find((event) => event.op === "speech.stt.request.completed");
+    expect(completed).toMatchObject({
+      level: "warn",
+      category: "gateway",
+      op: "speech.stt.request.completed",
+      correlationId: "corr-stt-rate-limit",
+      errorKind: "rate-limited",
+      extra: {
+        outcome: "failed",
+        failureKind: "rate-limited",
+        timeoutMs: GATEWAY_VOICE_TIMEOUT_FLOOR_MS,
+      },
+    });
   });
 
   it("never leaks the provider URL or credential into the outcome on failure", async () => {

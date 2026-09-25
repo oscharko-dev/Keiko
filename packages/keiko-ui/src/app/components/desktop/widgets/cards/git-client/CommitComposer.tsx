@@ -14,9 +14,10 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import type { GitCommitMessageViolationCode } from "@oscharko-dev/keiko-contracts";
-import type { GitDeliveryCommitPreviewResponse } from "@/lib/api";
+import { ApiError, type GitDeliveryCommitPreviewResponse } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { copyTextToClipboard } from "@/lib/clipboard";
+import type { OptionalWidgetMessageKey } from "@/lib/i18n-messages.optional.en";
 import {
   useOptionalWidgetTranslate,
   type OptionalWidgetTranslate,
@@ -1052,7 +1053,21 @@ interface CommitDraftFields {
   readonly applyDraft: (message: string) => void;
 }
 
-function draftGenerationErrorText(error: unknown): string {
+// #3591: the server distinguishes a provider timeout and an output-budget exhaustion from a
+// generic draft failure (GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT / _OUTPUT_EXHAUSTED); the Git window
+// gives those two classes their own, localized, actionable text instead of relaying the server's
+// English-only safe message. Every other code (including GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT)
+// keeps surfacing the server's own message unchanged.
+const DRAFT_ERROR_MESSAGE_KEYS: Readonly<Partial<Record<string, OptionalWidgetMessageKey>>> = {
+  GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT: "commitComposer.error.draftTimedOut",
+  GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED: "commitComposer.error.draftOutputExhausted",
+};
+
+function draftGenerationErrorText(error: unknown, t: OptionalWidgetTranslate): string {
+  if (error instanceof ApiError) {
+    const key = DRAFT_ERROR_MESSAGE_KEYS[error.code];
+    if (key !== undefined) return t(key);
+  }
   if (error instanceof Error && error.message.trim() !== "") return error.message;
   return "Keiko could not generate a commit draft.";
 }
@@ -1161,6 +1176,7 @@ function useCommitDraftGeneration(
   onGenerateDraft: (() => Promise<string>) | undefined,
   applyDraft: (message: string) => void,
   readToken: () => DraftGenerationToken,
+  t: OptionalWidgetTranslate,
 ): DraftGenerationController {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1191,10 +1207,10 @@ function useCommitDraftGeneration(
       (err: unknown) => {
         if (seqRef.current !== seq) return;
         setBusy(false);
-        setError(draftGenerationErrorText(err));
+        setError(draftGenerationErrorText(err, t));
       },
     );
-  }, [applyDraft, onGenerateDraft, readToken]);
+  }, [applyDraft, onGenerateDraft, readToken, t]);
   return { busy, error, generate: onGenerateDraft === undefined ? undefined : generate };
 }
 
@@ -1245,6 +1261,7 @@ function useCommitComposerController(
     props.onGenerateDraft,
     fields.applyDraft,
     readToken,
+    t,
   );
   const previewFresh =
     (props.previewRequestRevision ?? props.previewRevision) === props.previewRevision;

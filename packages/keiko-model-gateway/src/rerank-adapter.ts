@@ -9,6 +9,7 @@ import {
   readJsonCapped,
   type OutboundHttpEgressErrorCode,
 } from "./http.js";
+import { GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS } from "./resilience.js";
 import type { OutboundHttpEgressConfig } from "./types.js";
 
 export interface RerankRequest {
@@ -103,7 +104,11 @@ function buildRequest(request: LiteLLMRerankRequest): BuiltRequest {
     documents: request.documents,
     top_n: request.topN,
   });
-  const timeoutSignal = AbortSignal.timeout(request.timeoutMs ?? 30_000);
+  // #3591: per-call floor — a slow gateway's rerank call is not a broken one, so the actual
+  // outbound deadline never goes below this regardless of a smaller configured value.
+  const timeoutSignal = AbortSignal.timeout(
+    Math.max(request.timeoutMs ?? 30_000, GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS),
+  );
   const signal =
     request.signal !== undefined ? AbortSignal.any([timeoutSignal, request.signal]) : timeoutSignal;
   return {

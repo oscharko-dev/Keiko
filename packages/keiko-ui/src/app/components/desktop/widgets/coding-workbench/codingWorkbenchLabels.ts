@@ -50,6 +50,9 @@ const SOURCE_UNAVAILABLE_REASON_KEYS: Readonly<Record<string, CodingWorkbenchMes
   // real request to survive (readiness gap, epic #3384). Appended, never renumbered.
   "model-context-window-insufficient":
     "codingWorkbench.source.unavailableReason.model-context-window-insufficient",
+  // #3591 (1.1.7): transient — the Workbench re-reads the profile until the probe settles.
+  "model-verification-pending":
+    "codingWorkbench.source.unavailableReason.model-verification-pending",
   // PR #3452 (F73): the coding model's forced tool-call proof is missing or older than 24 h.
   "tool-calling-unverified": "codingWorkbench.source.unavailableReason.tool-calling-unverified",
 };
@@ -286,6 +289,8 @@ function turnFailureDetail(
     return t("codingWorkbench.event.turnFailure.stream-incomplete");
   if (event.failureCode === "turn-rejected")
     return t("codingWorkbench.event.turnFailure.turn-rejected");
+  if (event.failureCode === "output-exhausted")
+    return t("codingWorkbench.event.turnFailure.output-exhausted");
   return "";
 }
 

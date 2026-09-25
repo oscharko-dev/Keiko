@@ -21,6 +21,7 @@ import {
   expectActivityLogProof,
   formatActivityLogProofLine,
 } from "../../../tests/support/activity-log-proof.js";
+import { GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS } from "./resilience.js";
 
 interface Recorder {
   readonly sink: ModelGatewayLogSink;
@@ -240,7 +241,9 @@ describe("scalar embedding — activity log", () => {
     expect(dispatch.extra).toMatchObject({
       modelId: "embed-1",
       inputCount: 1,
-      timeoutMs: 12_000,
+      // #3591: the configured 12_000ms is below the per-call retrieval floor, so the line reports
+      // the EFFECTIVE deadline the request actually ran under, not the raw configured value.
+      timeoutMs: GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS,
       minimalShape: false,
     });
     expect(dispatch.extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
@@ -254,7 +257,7 @@ describe("scalar embedding — activity log", () => {
     expect(persisted).toMatchObject({
       modelId: "embed-1",
       inputCount: 1,
-      timeoutMs: 12_000,
+      timeoutMs: GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS,
       minimalShape: false,
     });
   });
@@ -685,7 +688,9 @@ describe("batch embedding — activity log", () => {
       inputCount: 2,
       minimalShape: false,
       modelId: "embed-1",
-      timeoutMs: 9_000,
+      // #3591: the configured 9_000ms is below the per-call retrieval floor, so the line reports
+      // the EFFECTIVE deadline the request actually ran under.
+      timeoutMs: GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS,
     });
     expect(typeof dispatch.extra?.bodyBytes).toBe("number");
     const persisted = expectActivityLogProof(
@@ -696,7 +701,7 @@ describe("batch embedding — activity log", () => {
       inputCount: 2,
       minimalShape: false,
       modelId: "embed-1",
-      timeoutMs: 9_000,
+      timeoutMs: GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS,
     });
   });
 

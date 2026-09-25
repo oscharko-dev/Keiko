@@ -6,7 +6,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { GitDeliveryCommitPreviewResponse } from "@/lib/api";
+import { ApiError, type GitDeliveryCommitPreviewResponse } from "@/lib/api";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import { CommitComposer, composeCommitMessage } from "./CommitComposer";
 
@@ -451,6 +451,76 @@ describe("CommitComposer — preview and outcomes", () => {
     );
     expect(screen.getByLabelText("Summary")).toHaveValue("");
     expect(screen.getByLabelText("Description")).toHaveValue("");
+  });
+
+  // #3591: a slow LiteLLM-fronted gateway is reported as a typed timeout, not the server's generic
+  // safe message — the Git window gives the operator an actionable, localized next step instead.
+  // The thrown ApiError deliberately carries a DIFFERENT message than the expected UI text: this
+  // proves the displayed text comes from the CODE-based catalog lookup, not merely from relaying
+  // whatever `error.message` says (which would make the assertion pass even without the mapping).
+  it("gives the gateway-timeout draft failure an actionable, localized message", async () => {
+    const user = userEvent.setup();
+    renderComposer({
+      onGenerateDraft: vi.fn(async () => {
+        throw new ApiError(
+          "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT",
+          "server-safe-message-placeholder",
+          504,
+        );
+      }),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Generate with Keiko" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(
+      "The gateway did not answer in time; the draft was not generated. Retry, or write the message yourself.",
+    );
+    expect(alert).not.toHaveTextContent("server-safe-message-placeholder");
+  });
+
+  // A reasoning model that spent its whole output budget on reasoning gets its own text distinct
+  // from a plain "did not pass validation" — the operator otherwise has no idea raising a setting
+  // (or retrying) would help. Same deliberate-mismatch technique as the timeout test above.
+  it("gives the output-exhausted draft failure a distinct, localized message", async () => {
+    const user = userEvent.setup();
+    renderComposer({
+      onGenerateDraft: vi.fn(async () => {
+        throw new ApiError(
+          "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED",
+          "server-safe-message-placeholder",
+          502,
+        );
+      }),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Generate with Keiko" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/output budget/);
+    expect(alert).not.toHaveTextContent("server-safe-message-placeholder");
+    expect(alert).not.toHaveTextContent("did not pass validation");
+  });
+
+  // GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT keeps surfacing the server's own safe message
+  // unchanged — only the two new codes above get bespoke UI text.
+  it("keeps relaying the server's own message for a code without bespoke UI text", async () => {
+    const user = userEvent.setup();
+    renderComposer({
+      onGenerateDraft: vi.fn(async () => {
+        throw new ApiError(
+          "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
+          "Keiko generated a commit draft that did not pass validation.",
+          502,
+        );
+      }),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Generate with Keiko" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Keiko generated a commit draft that did not pass validation.",
+    );
   });
 
   it("renders the commit mutation outcome", () => {

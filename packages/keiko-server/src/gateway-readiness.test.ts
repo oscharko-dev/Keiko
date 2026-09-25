@@ -13,6 +13,7 @@ import { createInMemoryUiStore } from "./store/index.js";
 import {
   EMBEDDING_EVIDENCE_PATTERN,
   TESTED_CONTEXT_TOKENS_PATTERN,
+  WORKBENCH_PROBE_TIMEOUT_FLOOR_MS,
   handleGatewayReadiness,
   longContextTokens,
   runGatewayReadiness,
@@ -266,12 +267,23 @@ describe("gateway readiness route", () => {
     expect(events[0]).toMatchObject({
       op: "gateway.readiness.automatic.started",
       correlationId: "coding-readiness-0001",
-      extra: { modelIdDigest: CODING_CHAT_DIGEST, probeCount: 2 },
+      // #3591: the bound the automatic probes ran under — the Workbench floor, not the 30 s configured.
+      extra: {
+        modelIdDigest: CODING_CHAT_DIGEST,
+        probeCount: 2,
+        chatProbeTimeoutMs: WORKBENCH_PROBE_TIMEOUT_FLOOR_MS,
+      },
     });
+    expect(events[0]?.extra).not.toHaveProperty("longContextProbeTimeoutMs");
     expect(events[1]).toMatchObject({
       op: "gateway.readiness.automatic.completed",
       correlationId: "coding-readiness-0001",
-      extra: { modelIdDigest: CODING_CHAT_DIGEST, overallStatus: "ready", probeCount: 2 },
+      extra: {
+        modelIdDigest: CODING_CHAT_DIGEST,
+        overallStatus: "ready",
+        probeCount: 2,
+        inconclusiveProbeCount: 0,
+      },
     });
     const startedProof = expectActivityLogProof(
       "gateway.readiness.automatic.started.line",
@@ -297,12 +309,14 @@ describe("gateway readiness route", () => {
 
   // #3557: only the automatic run used to leave a line. A settings check now does too, under the
   // request's correlation id, with its outcome, so a later refusal can name what the check found.
+  // The completed line also counts probes that ended without a verdict (a 503 is transient, #3591
+  // review), so the short re-probe cooldown a Workbench run applies is reconstructable.
   it.each([
-    ["passes", chatPayload("OK"), 200, "ready"],
-    ["fails", { error: { message: "upstream unavailable" } }, 503, "failed"],
+    ["passes", chatPayload("OK"), 200, "ready", 0],
+    ["fails", { error: { message: "upstream unavailable" } }, 503, "failed", 1],
   ] as const)(
     "logs a settings check that %s under the request's correlation id",
-    async (_label, payload, status, overallStatus) => {
+    async (_label, payload, status, overallStatus, inconclusiveProbeCount) => {
       const events: ServerLogEvent[] = [];
       const deps: UiHandlerDeps = {
         ...depsWith(
@@ -333,6 +347,8 @@ describe("gateway readiness route", () => {
         modelIdDigest: TEST_CHAT_MODEL_DIGEST,
         trigger: "settings",
         probeCount: 1,
+        // A settings check runs its chat probe on the configured timeout; no floor applies.
+        chatProbeTimeoutMs: 30_000,
       });
       expect(
         expectActivityLogProof(
@@ -344,6 +360,7 @@ describe("gateway readiness route", () => {
         trigger: "settings",
         overallStatus,
         probeCount: 1,
+        inconclusiveProbeCount,
       });
       expect(JSON.stringify(readiness)).not.toContain("upstream unavailable");
       deps.store.close();

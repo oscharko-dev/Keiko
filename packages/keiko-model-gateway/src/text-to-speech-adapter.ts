@@ -17,7 +17,9 @@
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { apiKeyHeaderValue, trimTrailingSlash } from "./config.js";
 import {
   gatewayFetch,
@@ -29,10 +31,13 @@ import {
 import {
   activityLogErrorKind,
   logCorrelationId,
+  logEndpointHost,
+  logModelId,
   resolveLogSink,
   withCorrelationId,
   type ModelGatewayLogSink,
 } from "./observability.js";
+import { GATEWAY_VOICE_TIMEOUT_FLOOR_MS } from "./resilience.js";
 import type { OutboundHttpEgressConfig, ProviderEndpointStyle } from "./types.js";
 
 const SPEECH_TTS_MIME_CORRECTED_OPERATION = defineActivityLogOperation({
@@ -107,6 +112,164 @@ const SPEECH_TTS_STREAM_PEEK_FAILED_OPERATION = defineActivityLogOperation({
   proofIds: ["speech.tts.stream.peek.failed.emitted-line"],
   releaseImpact: "patch",
 });
+
+// THE ATTEMPT LINE for a synthesis call (review finding on PR #3602: the per-call deadline this
+// module floors to `GATEWAY_VOICE_TIMEOUT_FLOOR_MS` had no activity-log line recording the bound
+// actually applied). Body-free: no answer text, no audio, no credential — an endpoint digest, the
+// model id, and the deadline this call ran under. Shared by the buffered and streaming entry
+// points, both of which build their request through the same `buildRequest`.
+const SPEECH_TTS_REQUEST_DISPATCH_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "speech.tts.request.dispatch",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "text-to-speech-adapter.logDispatch",
+  fields: {
+    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    // The floored deadline (#3591) this call actually runs under, so an operator can read the
+    // applied bound instead of inferring it from the caller's configured value.
+    timeoutMs: { type: "number", dataClass: "duration", required: false },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["speech-tts-request"],
+  proofIds: ["speech.tts.request.dispatch.emitted-line"],
+  releaseImpact: "patch",
+});
+
+function logDispatch(request: TextToSpeechRequest, timeoutMs: number): void {
+  const log = withCorrelationId(resolveLogSink(request.log), request.correlationId);
+  const correlationId = logCorrelationId(log);
+  log.write(
+    activityLogEvent(
+      SPEECH_TTS_REQUEST_DISPATCH_OPERATION,
+      { level: "info", ...(correlationId === undefined ? {} : { correlationId }) },
+      {
+        endpointDigest: sha256Hex(logEndpointHost(request.endpoint) ?? "invalid-endpoint"),
+        modelId: logModelId(request.modelId),
+        timeoutMs,
+      },
+    ),
+  );
+}
+
+// THE COMPLETION LINE, paired with the attempt line above (review finding on PR #3602: the
+// dispatch line alone left a timeout, a rate limit, and an invalid response indistinguishable
+// from a still-running call). Emitted exactly once, from `requestTextToSpeech`'s single return
+// path, so every exit of the dispatched buffered call — success and every failure kind — is
+// covered without a call site able to forget it. Body-free like the dispatch line: no answer
+// text, no audio, no credential — the same endpoint digest, model id, and applied deadline.
+const SPEECH_TTS_REQUEST_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "speech.tts.request.completed",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "text-to-speech-adapter.logCompleted",
+  fields: {
+    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["succeeded", "failed"],
+    },
+    // Present on failure only — mirrors `TextToSpeechErrorKind` exactly, so this stays the one
+    // place that vocabulary is registered.
+    failureKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "wrong-header",
+        "rate-limited",
+        "unsupported-model",
+        "payload-too-large",
+        "timeout",
+        "cancelled",
+        "transport",
+        "proxy-unreachable",
+        "proxy-auth-required",
+        "proxy-egress-failed",
+        "proxy-blocked-by-policy",
+        "tls-ca-failure",
+        "invalid-response",
+        "empty-audio",
+      ],
+    },
+    // The floored deadline (#3591) this call ran under — the same applied bound the dispatch
+    // line above carries, so a timeout outcome reads without joining back to the earlier line.
+    timeoutMs: { type: "number", dataClass: "duration", required: false },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["speech-tts-request"],
+  proofIds: ["speech.tts.request.completed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+// Closed map from this adapter's own failure vocabulary to the shared envelope `errorKind`
+// taxonomy (mirrors `embeddingErrorKind` in openai-embedding-adapter.ts and the STT adapter's own
+// `SPEECH_STT_FAILURE_ERROR_KIND`). The raw error object that produced a `kind` is gone by
+// completion time — `classifyDispatchError` classifies and discards it — so the mapping runs on
+// the closed `kind` string rather than re-deriving from an error. A `Record` keeps this
+// exhaustive: a future `TextToSpeechErrorKind` member that is not listed here fails to typecheck
+// instead of silently falling through to a default.
+const SPEECH_TTS_FAILURE_ERROR_KIND: Readonly<Record<TextToSpeechErrorKind, ActivityLogErrorKind>> =
+  {
+    "wrong-header": "permission-denied",
+    "rate-limited": "rate-limited",
+    "unsupported-model": "invalid-request",
+    "payload-too-large": "invalid-request",
+    timeout: "timeout",
+    cancelled: "cancelled",
+    transport: "unavailable",
+    "proxy-unreachable": "unavailable",
+    "proxy-auth-required": "permission-denied",
+    "proxy-egress-failed": "unavailable",
+    "proxy-blocked-by-policy": "permission-denied",
+    "tls-ca-failure": "unavailable",
+    "invalid-response": "validation-failed",
+    "empty-audio": "validation-failed",
+  };
+
+// THE COMPLETION LINE pairs with every dispatch line, whichever delivery shape the call took: the
+// buffered clip and the opened stream both report the same outcome vocabulary (PR #3602 review — the
+// streamed path once wrote a dispatch line and then nothing, so a timed-out or rate-limited stream
+// read like a call still in flight).
+function logCompleted(
+  request: TextToSpeechRequest,
+  timeoutMs: number,
+  outcome: TextToSpeechOutcome | TextToSpeechStreamOutcome,
+): void {
+  const log = withCorrelationId(resolveLogSink(request.log), request.correlationId);
+  const correlationId = logCorrelationId(log);
+  const failureKind = outcome.ok ? undefined : outcome.kind;
+  log.write(
+    activityLogEvent(
+      SPEECH_TTS_REQUEST_COMPLETED_OPERATION,
+      {
+        level: outcome.ok ? "info" : "warn",
+        ...(correlationId === undefined ? {} : { correlationId }),
+        ...(failureKind === undefined
+          ? {}
+          : { errorKind: SPEECH_TTS_FAILURE_ERROR_KIND[failureKind] }),
+      },
+      {
+        endpointDigest: sha256Hex(logEndpointHost(request.endpoint) ?? "invalid-endpoint"),
+        modelId: logModelId(request.modelId),
+        outcome: outcome.ok ? "succeeded" : "failed",
+        ...(failureKind === undefined ? {} : { failureKind }),
+        timeoutMs,
+      },
+    ),
+  );
+}
 
 // Closed set of response formats the OpenAI-compatible `/audio/speech` contract accepts, mapped to
 // the audio container MIME type the provider returns. The adapter requests one of these and labels
@@ -253,6 +416,10 @@ interface BuiltRequest {
   readonly responseFormat: SpeechResponseFormat;
   readonly maxAudioBytes: number;
   readonly log: ModelGatewayLogSink;
+  // The floored deadline (#3591) this call actually runs under — carried alongside the abort
+  // signals so the completion line can report the exact same applied bound as the dispatch line,
+  // rather than recomputing the floor a second time.
+  readonly timeoutMs: number;
 }
 
 type TextToSpeechRequestWithVoice = TextToSpeechRequest & { readonly voice: string };
@@ -274,9 +441,12 @@ function buildRequest(request: TextToSpeechRequestWithVoice): BuiltRequest {
     accept: "audio/*",
     [name]: apiKeyHeaderValue(name, request.apiKey),
   };
-  const timeoutSignal = AbortSignal.timeout(request.timeoutMs ?? 30_000);
+  // #3591: per-call floor — a slow gateway's voice call is not a broken one.
+  const appliedTimeoutMs = Math.max(request.timeoutMs ?? 30_000, GATEWAY_VOICE_TIMEOUT_FLOOR_MS);
+  const timeoutSignal = AbortSignal.timeout(appliedTimeoutMs);
   const signal =
     request.signal !== undefined ? AbortSignal.any([timeoutSignal, request.signal]) : timeoutSignal;
+  logDispatch(request, appliedTimeoutMs);
   return {
     url: joinUrl(request),
     headers,
@@ -287,6 +457,7 @@ function buildRequest(request: TextToSpeechRequestWithVoice): BuiltRequest {
     responseFormat,
     maxAudioBytes: request.maxAudioBytes ?? MAX_SPEECH_AUDIO_BYTES,
     log: withCorrelationId(resolveLogSink(request.log), request.correlationId),
+    timeoutMs: appliedTimeoutMs,
   };
 }
 
@@ -469,18 +640,13 @@ async function decodeSuccess(
   };
 }
 
-// Single round-trip speech synthesis. Provider-neutral, no retry (a spoken response is interactive;
-// the caller decides whether to retry), and every failure is a coded, content-free `kind` so the BFF
-// can map it to a deterministic, secret-free HTTP response (ADR-0095, AC4). On success the audio
-// bytes are returned in memory for the BFF to base64-encode into its JSON envelope; this module never
-// writes them to disk, a log, or any store ("no raw generated audio persistence").
-export async function requestTextToSpeech(
-  request: TextToSpeechRequest,
+// Dispatches the built request and decodes its outcome, without touching the activity log — the
+// single caller below is the one place that pairs this result with THE COMPLETION LINE, so no
+// exit of the dispatched call can be added here without also being logged.
+async function dispatchAndDecode(
+  built: BuiltRequest,
+  request: TextToSpeechRequestWithVoice,
 ): Promise<TextToSpeechOutcome> {
-  if (!hasExplicitVoice(request)) {
-    return { ok: false, kind: "unsupported-model" };
-  }
-  const built = buildRequest(request);
   const dispatched = await dispatch(built, request.fetchImpl, request.egress);
   if (typeof dispatched === "string") {
     return { ok: false, kind: dispatched };
@@ -491,6 +657,27 @@ export async function requestTextToSpeech(
     return { ok: false, kind };
   }
   return decodeSuccess(dispatched, built);
+}
+
+// Single round-trip speech synthesis. Provider-neutral, no retry (a spoken response is interactive;
+// the caller decides whether to retry), and every failure is a coded, content-free `kind` so the BFF
+// can map it to a deterministic, secret-free HTTP response (ADR-0095, AC4). On success the audio
+// bytes are returned in memory for the BFF to base64-encode into its JSON envelope; this module never
+// writes them to disk, a log, or any store ("no raw generated audio persistence").
+//
+// A missing/blank voice fails closed before `buildRequest` ever runs (ADR-0154) — no dispatch line
+// is written for it either, so THE COMPLETION LINE is deliberately not emitted here: it pairs with
+// an attempt that was actually made, never with a call that never left this process.
+export async function requestTextToSpeech(
+  request: TextToSpeechRequest,
+): Promise<TextToSpeechOutcome> {
+  if (!hasExplicitVoice(request)) {
+    return { ok: false, kind: "unsupported-model" };
+  }
+  const built = buildRequest(request);
+  const outcome = await dispatchAndDecode(built, request);
+  logCompleted(request, built.timeoutMs, outcome);
+  return outcome;
 }
 
 export interface TextToSpeechStreamSuccess {
@@ -619,6 +806,20 @@ export async function requestTextToSpeechStream(
     return { ok: false, kind: "unsupported-model" };
   }
   const built = buildRequest(request);
+  const outcome = await dispatchAndOpenStream(built, request);
+  logCompleted(request, built.timeoutMs, outcome);
+  return outcome;
+}
+
+// Dispatches the built request and opens the bounded audio stream, without touching the activity
+// log — mirrors `dispatchAndDecode` for the buffered clip: the single caller above pairs this result
+// with THE COMPLETION LINE, so no exit can be added here without also being logged. "succeeded"
+// means the provider answered and the stream opened with audio in it; what happens to the bytes
+// after that is the consumer's own evidence.
+async function dispatchAndOpenStream(
+  built: BuiltRequest,
+  request: TextToSpeechRequestWithVoice,
+): Promise<TextToSpeechStreamOutcome> {
   const dispatched = await dispatch(built, request.fetchImpl, request.egress);
   if (typeof dispatched === "string") {
     return { ok: false, kind: dispatched };

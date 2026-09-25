@@ -68,6 +68,10 @@ const SERVER_DIAGNOSTIC_FAILURE_OPERATION = defineActivityLogOperation({
     unsupportedModelCount: { type: "integer", dataClass: "count", required: false },
     unverifiedEmbeddingModelCount: { type: "integer", dataClass: "count", required: false },
     droppedEmbeddingModelCount: { type: "integer", dataClass: "count", required: false },
+    unverifiedChatModelCount: { type: "integer", dataClass: "count", required: false },
+    droppedChatModelCount: { type: "integer", dataClass: "count", required: false },
+    skippedChatModelCount: { type: "integer", dataClass: "count", required: false },
+    chatSmokeRoundDeadlineMs: { type: "integer", dataClass: "duration", required: false },
     semanticSkippedCount: { type: "integer", dataClass: "count", required: false },
     semanticCandidateCount: { type: "integer", dataClass: "count", required: false },
     quarantinePruneFailedCount: { type: "integer", dataClass: "count", required: false },
@@ -234,6 +238,14 @@ export interface ServerDiagnosticRecord {
   // explicitly asserted), `dropped` were removed (Keiko had only inferred the role).
   readonly unverifiedEmbeddingModelCount?: number | undefined;
   readonly droppedEmbeddingModelCount?: number | undefined;
+  // Chat candidates the smoke test could not resolve (#3591): `unverified` never got an answer
+  // (timeout, transport/proxy/TLS) and stay configured; `dropped` were answered and rejected.
+  readonly unverifiedChatModelCount?: number | undefined;
+  readonly droppedChatModelCount?: number | undefined;
+  // Of the unverified chat candidates, how many the smoke round's deadline never tried, and that
+  // deadline (PR #3602 review): a skipped model is not one that timed out.
+  readonly skippedChatModelCount?: number | undefined;
+  readonly chatSmokeRoundDeadlineMs?: number | undefined;
   // How many candidate memories the conversation-retrieval semantic reranker skipped for a stored
   // embedding whose identity did not match the query's, and how many candidates were in play when
   // it did. Bounded counts only; never a memory id, model id, or embedding vector.
@@ -379,6 +391,10 @@ function diagnosticActivityLogFields(record: ServerDiagnosticRecord): Record<str
   addBoundedField(fields, "unsupportedModelCount", record.unsupportedModelCount);
   addBoundedField(fields, "unverifiedEmbeddingModelCount", record.unverifiedEmbeddingModelCount);
   addBoundedField(fields, "droppedEmbeddingModelCount", record.droppedEmbeddingModelCount);
+  addBoundedField(fields, "unverifiedChatModelCount", record.unverifiedChatModelCount);
+  addBoundedField(fields, "droppedChatModelCount", record.droppedChatModelCount);
+  addBoundedField(fields, "skippedChatModelCount", record.skippedChatModelCount);
+  addBoundedField(fields, "chatSmokeRoundDeadlineMs", record.chatSmokeRoundDeadlineMs);
   addBoundedField(fields, "semanticSkippedCount", record.semanticSkippedCount);
   addBoundedField(fields, "semanticCandidateCount", record.semanticCandidateCount);
   addBoundedField(fields, "quarantinePruneFailedCount", record.quarantinePruneFailedCount);
@@ -633,6 +649,9 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "Gateway Setup accepted a loopback candidate target.",
   "Stored gateway egress configuration was invalid; setup omitted it from the rewritten file.",
   "Setup skipped models the gateway declared as unsupported modes or that failed the embedding probe.",
+  // #3591: chat counterpart — a candidate the smoke probe never got an answer from is kept
+  // unverified instead of dropped; one the gateway answered and rejected is dropped.
+  "Setup kept chat candidates the smoke test never got an answer from and dropped candidates the gateway answered and rejected.",
   "gateway-setup-audit-validation-failed",
   "entailment-claim-judging-incomplete",
   "entailment stage failed; degraded to WARN",

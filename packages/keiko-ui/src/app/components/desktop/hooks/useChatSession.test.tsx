@@ -51,7 +51,7 @@ import {
   resetConversationMemorySettingsForTests,
   useConversationMemorySettings,
 } from "./memorySettings";
-import { loadMemoryAutonomyMode } from "@/lib/memory-api";
+import { loadMemoryAutonomyMode } from "@/lib/memory-session-api";
 import {
   clearCanonicalVoiceHasherForTests,
   prepareCanonicalVoiceHasher,
@@ -112,7 +112,7 @@ vi.mock("@/lib/api", () => ({
   updateChat: vi.fn(),
 }));
 
-vi.mock("@/lib/memory-api", () => ({
+vi.mock("@/lib/memory-session-api", () => ({
   acceptMemoryProposal: vi.fn(),
   forgetMemory: vi.fn(),
   rejectMemoryProposal: vi.fn(),

@@ -1,4 +1,5 @@
 import type { IncomingMessage } from "node:http";
+import { TimeoutError, TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
   isConversationEligibleModel,
   listConfiguredCapabilities,
@@ -11,6 +12,7 @@ import {
   type ModelProviderConfig,
   type UsageMetadata,
 } from "@oscharko-dev/keiko-model-gateway";
+import { GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import { readJsonCapped, readSseStream } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import type {
   GatewayReadinessOptions,
@@ -45,6 +47,7 @@ import {
   probeUsage,
   reserveGatewayProbeSpend,
   settleGatewayProbeSpend,
+  transientGatewayStatus,
   type GatewayProbeSpendContext,
 } from "./gateway-tool-calling-probe.js";
 import {
@@ -102,6 +105,26 @@ const GATEWAY_READINESS_MODEL_ID_FIELDS = {
   modelIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
 } as const;
 
+// #3591 (1.1.7): the bound each probe of a run actually ran under, so an operator can tell from
+// the start line which deadline governed a probe that timed out or took minutes. The probes
+// against the selected chat provider share one bound, which a floor may raise above the
+// configured timeout (`probeProvider`); the long-context probe carries its own, higher floor; the
+// embedding and reranker probes run against their own providers under the retrieval floor. Each
+// field is present only when its probe is part of the run and its provider is configured.
+const GATEWAY_READINESS_PROBE_TIMEOUT_FIELDS = {
+  chatProbeTimeoutMs: { type: "integer", dataClass: "duration", required: false },
+  longContextProbeTimeoutMs: { type: "integer", dataClass: "duration", required: false },
+  embeddingProbeTimeoutMs: { type: "integer", dataClass: "duration", required: false },
+  rerankerProbeTimeoutMs: { type: "integer", dataClass: "duration", required: false },
+} as const;
+
+export interface ProbeTimeoutEvidence {
+  chatProbeTimeoutMs?: number;
+  longContextProbeTimeoutMs?: number;
+  embeddingProbeTimeoutMs?: number;
+  rerankerProbeTimeoutMs?: number;
+}
+
 const GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -111,6 +134,7 @@ const GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION = defineActivityLogOperation
   emitter: "gateway-readiness.logAutomaticReadinessStarted",
   fields: {
     ...GATEWAY_READINESS_MODEL_ID_FIELDS,
+    ...GATEWAY_READINESS_PROBE_TIMEOUT_FIELDS,
     probeCount: { type: "integer", dataClass: "count", required: true },
   },
   causal: "correlation",
@@ -140,6 +164,9 @@ const GATEWAY_READINESS_AUTOMATIC_COMPLETED_OPERATION = defineActivityLogOperati
     // Tokens the long-context probe proved. Present only when that probe ran and passed; a stored
     // context window below it is raised to it by the same run, so the raise is reconstructable.
     verifiedContextTokens: { type: "integer", dataClass: "count", required: false },
+    // #3591: probes that ended without a verdict (timed out, unreachable, or a transient gateway
+    // status). They decide the short re-probe cooldown, so the decision is reconstructable.
+    inconclusiveProbeCount: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -168,6 +195,7 @@ const GATEWAY_READINESS_STARTED_OPERATION = defineActivityLogOperation({
       required: true,
       values: ["settings"],
     },
+    ...GATEWAY_READINESS_PROBE_TIMEOUT_FIELDS,
     probeCount: { type: "integer", dataClass: "count", required: true },
   },
   causal: "correlation",
@@ -200,6 +228,7 @@ const GATEWAY_READINESS_COMPLETED_OPERATION = defineActivityLogOperation({
       values: ["ready", "partial", "failed"],
     },
     probeCount: { type: "integer", dataClass: "count", required: true },
+    inconclusiveProbeCount: { type: "integer", dataClass: "count", required: false },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -407,14 +436,46 @@ function logAutomaticReadinessStarted(
   correlationId: string,
   modelId: string,
   probeCount: number,
+  timeouts: ProbeTimeoutEvidence,
 ): void {
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       GATEWAY_READINESS_AUTOMATIC_STARTED_OPERATION,
       { correlationId },
-      { ...modelIdEvidence(modelId), probeCount },
+      { ...modelIdEvidence(modelId), ...timeouts, probeCount },
     ),
   );
+}
+
+// The bounds the run's probes are about to run under: `probeProvider` for the chat-provider
+// probes, and the retrieval floor the embedding and rerank adapters apply to the configured
+// timeout of their own providers (`openai-embedding-adapter.ts`, `rerank-adapter.ts`).
+export function probeTimeoutEvidence(
+  config: GatewayConfig,
+  provider: ModelProviderConfig,
+  names: readonly GatewayReadinessProbeName[],
+  options: GatewayReadinessOptions | undefined,
+): ProbeTimeoutEvidence {
+  const evidence: ProbeTimeoutEvidence = {
+    chatProbeTimeoutMs: probeProvider(provider, "chat", options).timeoutMs,
+  };
+  if (names.includes("long_context")) {
+    evidence.longContextProbeTimeoutMs = probeProvider(provider, "long_context", options).timeoutMs;
+  }
+  const embedding = names.includes("embedding") ? chooseEmbeddingProvider(config) : undefined;
+  if (embedding !== undefined) {
+    evidence.embeddingProbeTimeoutMs = Math.max(
+      embedding.timeoutMs,
+      GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS,
+    );
+  }
+  if (names.includes("reranker") && config.reranker !== undefined) {
+    evidence.rerankerProbeTimeoutMs = Math.max(
+      config.reranker.timeoutMs,
+      GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS,
+    );
+  }
+  return evidence;
 }
 
 function logAutomaticReadinessCompleted(
@@ -428,8 +489,13 @@ function logAutomaticReadinessCompleted(
     report.modelId,
     report.overallStatus,
     report.probes.length,
+    inconclusiveProbeCount(report),
     report.verifiedCapabilities.testedContextTokens,
   );
+}
+
+function inconclusiveProbeCount(report: GatewayReadinessReport): number {
+  return report.probes.filter(probeInconclusive).length;
 }
 
 function logAutomaticReadinessJoined(
@@ -464,6 +530,7 @@ function logAutomaticReadinessOutcome(
   modelId: string,
   overallStatus: GatewayReadinessReport["overallStatus"],
   probeCount: number,
+  inconclusiveProbes: number,
   verifiedContextTokens?: number,
 ): void {
   (deps.activityLog ?? processServerLogSink()).write(
@@ -474,6 +541,7 @@ function logAutomaticReadinessOutcome(
         ...modelIdEvidence(modelId),
         overallStatus,
         probeCount,
+        inconclusiveProbeCount: inconclusiveProbes,
         ...(verifiedContextTokens === undefined ? {} : { verifiedContextTokens }),
       },
     ),
@@ -486,12 +554,13 @@ function logReadinessStarted(
   trigger: GatewayReadinessTrigger,
   modelId: string,
   probeCount: number,
+  timeouts: ProbeTimeoutEvidence,
 ): void {
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       GATEWAY_READINESS_STARTED_OPERATION,
       { correlationId },
-      { ...modelIdEvidence(modelId), trigger, probeCount },
+      { ...modelIdEvidence(modelId), ...timeouts, trigger, probeCount },
     ),
   );
 }
@@ -512,6 +581,7 @@ function logReadinessCompleted(
         trigger,
         overallStatus: report.overallStatus,
         probeCount: report.probes.length,
+        inconclusiveProbeCount: inconclusiveProbeCount(report),
       },
     ),
   );
@@ -523,15 +593,42 @@ function logReadinessCompleted(
 function logReadinessRunStarted(
   deps: UiHandlerDeps,
   run: ReadinessRunEvidence,
-  modelId: string,
-  probeCount: number,
+  selection: ProviderSelection,
+  names: readonly GatewayReadinessProbeName[],
+  options: GatewayReadinessOptions | undefined,
 ): void {
+  const modelId = selection.provider.modelId;
+  const timeouts = probeTimeoutEvidence(selection.config, selection.provider, names, options);
   if (run.automatic) {
-    logAutomaticReadinessStarted(deps, run.correlationId, modelId, probeCount);
+    logAutomaticReadinessStarted(deps, run.correlationId, modelId, names.length, timeouts);
     return;
   }
   if (run.trigger === undefined) return;
-  logReadinessStarted(deps, run.correlationId, run.trigger, modelId, probeCount);
+  logReadinessStarted(deps, run.correlationId, run.trigger, modelId, names.length, timeouts);
+}
+
+// The on-demand probe (one chat probe on the configured timeout) records its own start line.
+function logOnDemandProbeStarted(
+  deps: UiHandlerDeps,
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  modelId: string,
+  correlationId: string,
+): void {
+  const selection = chooseProvider(holder.current(), modelId, ON_DEMAND_PROBE_OPTIONS);
+  logAutomaticReadinessStarted(
+    deps,
+    correlationId,
+    modelId,
+    1,
+    "status" in selection
+      ? {}
+      : probeTimeoutEvidence(
+          selection.config,
+          selection.provider,
+          ["chat"],
+          ON_DEMAND_PROBE_OPTIONS,
+        ),
+  );
 }
 
 function logReadinessRunCompleted(
@@ -808,11 +905,57 @@ function skipped(name: GatewayReadinessProbeName, evidence: string): GatewayRead
   return { name, status: "skipped", latencyMs: 0, evidence };
 }
 
-function providerWarning(errorValue: unknown): string {
-  if (errorValue instanceof DOMException && errorValue.name === "TimeoutError") {
-    return "The probe timed out before the provider answered.";
+// #3591 (1.1.7): a probe the gateway never answered (timed out, aborted, unreachable) is
+// INCONCLUSIVE — it proves nothing about the model and must not be held against it the way an
+// answered failure is. The two sentences are this module's own closed vocabulary; the Workbench
+// re-probe policy reads them back through `probeInconclusive`.
+const PROBE_TIMED_OUT_WARNING = "The probe timed out before the provider answered.";
+const PROBE_UNREACHABLE_WARNING = "The provider could not be reached for this probe.";
+// A gateway at peak load answers 429/503 for a while; that is no verdict on the model either
+// (#3591 review). 408 and every other 5xx but 501 (not implemented) count the same way.
+export const PROBE_GATEWAY_BUSY_WARNING =
+  "The gateway answered with a transient overload or timeout status.";
+const INCONCLUSIVE_PROBE_WARNINGS: ReadonlySet<string> = new Set([
+  PROBE_TIMED_OUT_WARNING,
+  PROBE_UNREACHABLE_WARNING,
+  PROBE_GATEWAY_BUSY_WARNING,
+]);
+
+function transientStatusWarning(response: Response): string | undefined {
+  return transientGatewayStatus(response.status) ? PROBE_GATEWAY_BUSY_WARNING : undefined;
+}
+
+function inconclusiveProbeError(errorValue: unknown): string | undefined {
+  if (errorValue instanceof TimeoutError) return PROBE_TIMED_OUT_WARNING;
+  if (errorValue instanceof DOMException) {
+    if (errorValue.name === "TimeoutError") return PROBE_TIMED_OUT_WARNING;
+    if (errorValue.name === "AbortError") return PROBE_UNREACHABLE_WARNING;
   }
-  return "The provider could not complete this probe. Chat configuration was not changed.";
+  if (errorValue instanceof TransportError || isFetchNetworkFailure(errorValue)) {
+    return PROBE_UNREACHABLE_WARNING;
+  }
+  return undefined;
+}
+
+// Node's fetch reports a connection-level failure as `TypeError: fetch failed`; any other
+// TypeError is a programming fault and must keep the ordinary (long) cooldown (#3591 review).
+function isFetchNetworkFailure(errorValue: unknown): boolean {
+  return errorValue instanceof TypeError && errorValue.message === "fetch failed";
+}
+
+export function probeInconclusive(probe: GatewayReadinessProbeResult): boolean {
+  return (
+    probe.status === "failed" &&
+    probe.warning !== undefined &&
+    INCONCLUSIVE_PROBE_WARNINGS.has(probe.warning)
+  );
+}
+
+function providerWarning(errorValue: unknown): string {
+  return (
+    inconclusiveProbeError(errorValue) ??
+    "The provider could not complete this probe. Chat configuration was not changed."
+  );
 }
 
 // Every probe's `catch` used to collapse an actionable cause — an auth rejection, a DNS/TLS failure,
@@ -928,7 +1071,13 @@ async function probeChat(
       ],
     });
     if (!response.ok) {
-      return result("chat", "failed", start, unsuccessfulEvidence("Basic chat", response));
+      return result(
+        "chat",
+        "failed",
+        start,
+        unsuccessfulEvidence("Basic chat", response),
+        transientStatusWarning(response),
+      );
     }
     // Mirror the production floor exactly (openai-adapter assertUsableAssistantResponse +
     // normalize textFromContent): the extracted assistant text must be non-empty, and
@@ -1044,6 +1193,15 @@ async function probeToolCalling(
       "passed",
       start,
       "OpenAI-compatible tool call returned the expected function name.",
+    );
+  }
+  if (status === "transient") {
+    return result(
+      "tool_calling",
+      "failed",
+      start,
+      "Tool calling could not be verified: the gateway answered with a transient status.",
+      PROBE_GATEWAY_BUSY_WARNING,
     );
   }
   return toolCallingResult(status === "unsupported" ? "unsupported" : "failed", start, provider);
@@ -1396,6 +1554,7 @@ async function probeLongContext(
         status,
         start,
         `${tokens.toString()} approximate tokens were not accepted.`,
+        transientStatusWarning(response),
       );
     }
     return longContextPayloadResult(start, tokens, sentinel, await readProviderJson(response));
@@ -1411,6 +1570,40 @@ async function probeLongContext(
   }
 }
 
+// #3591 (1.1.7): the long-context probe carries 21k–32k prompt tokens and the Workbench's
+// automatic probes run while an operator waits; at peak load the field customer's gateway needs
+// minutes for that prefill. The setup default of 30 s is a guess for a chat turn, not a probe
+// budget, and a probe that abandons a slow gateway proves nothing and used to lock the Workbench
+// out for six hours. The floors below are lower bounds on the configured provider timeout.
+export const LONG_CONTEXT_PROBE_TIMEOUT_FLOOR_MS = 300_000;
+export const WORKBENCH_PROBE_TIMEOUT_FLOOR_MS = 120_000;
+
+function probeTimeoutFloorMs(
+  name: GatewayReadinessProbeName,
+  options: GatewayReadinessOptions | undefined,
+): number {
+  if (name === "long_context") return LONG_CONTEXT_PROBE_TIMEOUT_FLOOR_MS;
+  if (options?.purpose === "coding-workbench-auto" || options?.purpose === "on-demand") {
+    return WORKBENCH_PROBE_TIMEOUT_FLOOR_MS;
+  }
+  return 0;
+}
+
+export function probeProvider(
+  provider: ModelProviderConfig,
+  name: GatewayReadinessProbeName,
+  options: GatewayReadinessOptions | undefined,
+): ModelProviderConfig {
+  const floor = probeTimeoutFloorMs(name, options);
+  return provider.timeoutMs >= floor ? provider : { ...provider, timeoutMs: floor };
+}
+
+// The on-demand chat probe gates chat create/send for a model without a current observation. It
+// runs with the same floor as the automatic Workbench probes: a probe that gives up on a slow
+// gateway before it answers proves nothing and would refuse every chat until its cooldown ends
+// (#3591 review). An operator-started settings check keeps the configured timeout.
+const ON_DEMAND_PROBE_OPTIONS: GatewayReadinessOptions = { probes: [], purpose: "on-demand" };
+
 async function runProbe(
   name: GatewayReadinessProbeName,
   deps: UiHandlerDeps,
@@ -1418,7 +1611,8 @@ async function runProbe(
   options: GatewayReadinessOptions | undefined,
   correlationId: string,
 ): Promise<GatewayReadinessProbeResult> {
-  const { config, provider } = selection;
+  const { config } = selection;
+  const provider = probeProvider(selection.provider, name, options);
   if (name === "chat") return probeChat(deps, config, provider, correlationId);
   if (name === "streaming") return probeStreaming(deps, config, provider, correlationId);
   if (name === "tool_calling") return probeToolCalling(deps, config, provider, correlationId);
@@ -1668,7 +1862,7 @@ export async function runGatewayReadiness(
     trigger,
     startedAtMs: Date.now(),
   };
-  logReadinessRunStarted(deps, run, selection.provider.modelId, names.length);
+  logReadinessRunStarted(deps, run, selection, names, request.options);
   const probes: GatewayReadinessProbeResult[] = [];
   const chat = await runProbe("chat", deps, selection, request.options, correlationId);
   probes.push(chat);
@@ -1747,7 +1941,19 @@ function reconcileContextWindowReadiness(
 // that really is short-context, or a gateway that is down, is not probed on every read — and a
 // model that never claimed tool calling is never probed from here at all.
 const WORKBENCH_REPROBE_COOLDOWN_MS = 6 * 60 * 60 * 1_000;
-const workbenchProbes = new Map<string, { readonly promise: Promise<void>; at: number }>();
+// #3591 (1.1.7): a probe the gateway never answered is not a verdict. It used to hold the six-hour
+// cooldown, so one slow answer at peak load locked the Workbench out with no operator remedy but
+// a restart. An inconclusive run is retried on the next Workbench read after this much quiet.
+export const WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS = 60_000;
+type WorkbenchProbeOutcome = "proven" | "refuted" | "inconclusive";
+interface WorkbenchProbeEntry {
+  readonly promise: Promise<void>;
+  at: number;
+  cooldownMs: number;
+  settled: boolean;
+  outcome?: WorkbenchProbeOutcome;
+}
+const workbenchProbes = new Map<string, WorkbenchProbeEntry>();
 // ONE run at a time. Persisting a conclusion bumps the configuration generation, and a readiness
 // run that started under the previous generation has its conclusion discarded as stale: probing
 // six models at once would store the first to finish and silently drop the other five. A queue
@@ -1788,9 +1994,44 @@ function workbenchProbeTargets(config: GatewayConfig): readonly WorkbenchProbeTa
 
 // Keyed by the deployment's identity, not the configuration generation: every conclusion this
 // persists bumps the generation, which would otherwise lift the cooldown of every other model.
+// The configured timeout is part of the key (#3591): an operator who raises it after a timed-out
+// probe has changed what the probe can prove and gets a fresh attempt at once.
 function workbenchProbeKey(config: GatewayConfig, modelId: string): string {
   const provider = config.providers.find((candidate) => candidate.modelId === modelId);
-  return provider === undefined ? modelId : toolCallingConfigurationFingerprint(provider);
+  return provider === undefined
+    ? modelId
+    : `${toolCallingConfigurationFingerprint(provider)}:${String(provider.timeoutMs)}`;
+}
+
+/**
+ * Whether the Workbench's automatic verification of this model is still open: the probe is
+ * running, or it ended without a verdict (the gateway never answered) and runs again after its
+ * short cooldown. Only a verdict — proven or refuted — closes it, so a Workbench that re-reads its
+ * profile while this holds keeps reading until the gateway has actually answered.
+ */
+export function isCodingWorkbenchProbePending(config: GatewayConfig, modelId: string): boolean {
+  const entry = workbenchProbes.get(workbenchProbeKey(config, modelId));
+  return entry !== undefined && (!entry.settled || entry.outcome === "inconclusive");
+}
+
+/** Whether any model the Workbench could still elect has its verification open. */
+export function isAnyCodingWorkbenchProbePending(config: GatewayConfig): boolean {
+  return workbenchProbeTargets(config).some((target) =>
+    isCodingWorkbenchProbePending(config, target.modelId),
+  );
+}
+
+function workbenchProbeOutcome(
+  report: Awaited<ReturnType<typeof runGatewayReadiness>>,
+  target: WorkbenchProbeTarget,
+): WorkbenchProbeOutcome {
+  if ("status" in report) return "inconclusive";
+  const results = target.probes.map((name) => report.probes.find((probe) => probe.name === name));
+  if (results.every((probe) => probe?.status === "passed")) return "proven";
+  // The gating chat probe runs first and a target probe is skipped when it fails: a gateway that
+  // never answered the chat probe has not refuted anything either.
+  if (report.probes.some(probeInconclusive)) return "inconclusive";
+  return results.includes(undefined) ? "inconclusive" : "refuted";
 }
 
 async function runWorkbenchProbe(
@@ -1798,7 +2039,7 @@ async function runWorkbenchProbe(
   target: WorkbenchProbeTarget,
   key: string,
   correlationId: string,
-): Promise<void> {
+): Promise<WorkbenchProbeOutcome> {
   try {
     const report = await runGatewayReadiness(
       {
@@ -1808,11 +2049,7 @@ async function runWorkbenchProbe(
       deps,
       correlationId,
     );
-    const proven =
-      !("status" in report) &&
-      target.probes.every((name) =>
-        report.probes.some((probe) => probe.name === name && probe.status === "passed"),
-      );
+    const outcome = workbenchProbeOutcome(report, target);
     const config = deps.gatewayConfig?.current();
     const stillNeeded =
       config !== undefined &&
@@ -1820,7 +2057,8 @@ async function runWorkbenchProbe(
     // Proven, yet not stored: the configuration changed under the run and the conclusion was
     // discarded as stale. Lift the cooldown so the next read proves it again instead of leaving
     // the model unusable for hours.
-    if (proven && stillNeeded) workbenchProbes.delete(key);
+    if (outcome === "proven" && stillNeeded) workbenchProbes.delete(key);
+    return outcome;
   } catch (error) {
     emitServerDiagnostic(
       deps.diagnostics,
@@ -1833,6 +2071,7 @@ async function runWorkbenchProbe(
         redact: (message): string => String(deps.redactor(message)),
       }),
     );
+    return "inconclusive";
   }
 }
 
@@ -1844,15 +2083,27 @@ function enqueueWorkbenchProbe(
 ): Promise<void> {
   const key = workbenchProbeKey(config, target.modelId);
   const known = workbenchProbes.get(key);
-  if (known !== undefined && Date.now() - known.at < WORKBENCH_REPROBE_COOLDOWN_MS) {
+  if (known !== undefined && Date.now() - known.at < known.cooldownMs) {
     return known.promise;
   }
-  const promise = workbenchProbeQueue.then(() =>
-    runWorkbenchProbe(deps, target, key, correlationId),
-  );
-  workbenchProbeQueue = promise;
-  workbenchProbes.set(key, { promise, at: Date.now() });
-  return promise;
+  const entry: WorkbenchProbeEntry = {
+    promise: workbenchProbeQueue.then(async () => {
+      const outcome = await runWorkbenchProbe(deps, target, key, correlationId);
+      entry.settled = true;
+      entry.outcome = outcome;
+      entry.at = Date.now();
+      entry.cooldownMs =
+        outcome === "inconclusive"
+          ? WORKBENCH_INCONCLUSIVE_REPROBE_COOLDOWN_MS
+          : WORKBENCH_REPROBE_COOLDOWN_MS;
+    }),
+    at: Date.now(),
+    cooldownMs: WORKBENCH_REPROBE_COOLDOWN_MS,
+    settled: false,
+  };
+  workbenchProbeQueue = entry.promise;
+  workbenchProbes.set(key, entry);
+  return entry.promise;
 }
 
 export async function ensureCodingWorkbenchContextWindows(
@@ -1955,26 +2206,33 @@ export async function ensureOnDemandConversationReadiness(
   await probe;
 }
 
-async function runOnDemandReadinessProbe(
+interface OnDemandProbeOutcome {
+  readonly overallStatus: GatewayReadinessReport["overallStatus"];
+  readonly inconclusiveProbes: number;
+}
+
+// Runs the one chat probe and records its completed line whatever happens: a failure lands as a
+// redacted operator diagnostic with the correlation id, never silently, and the route still
+// answers with the honest unready result.
+async function observeOnDemandProbe(
   deps: UiHandlerDeps,
-  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
   modelId: string,
-  correlationId?: string,
+  probeCorrelationId: string,
 ): Promise<void> {
-  const generation = holder.generation();
-  const probeCorrelationId = correlationId ?? newCorrelationId();
-  let overallStatus: GatewayReadinessReport["overallStatus"] = "failed";
-  logAutomaticReadinessStarted(deps, probeCorrelationId, modelId, 1);
+  let outcome: OnDemandProbeOutcome = { overallStatus: "failed", inconclusiveProbes: 0 };
   try {
     const report = await runGatewayReadiness(
-      { modelId, options: { probes: [] } },
+      { modelId, options: ON_DEMAND_PROBE_OPTIONS },
       deps,
       probeCorrelationId,
     );
-    if (!("status" in report)) overallStatus = report.overallStatus;
+    if (!("status" in report)) {
+      outcome = {
+        overallStatus: report.overallStatus,
+        inconclusiveProbes: inconclusiveProbeCount(report),
+      };
+    }
   } catch (error) {
-    // The route still answers with the honest unready result — but never silently: the
-    // underlying failure lands as a redacted operator diagnostic with a correlation id.
     emitServerDiagnostic(
       deps.diagnostics,
       serverDiagnosticFromError({
@@ -1987,8 +2245,27 @@ async function runOnDemandReadinessProbe(
       }),
     );
   } finally {
-    logAutomaticReadinessOutcome(deps, probeCorrelationId, modelId, overallStatus, 1);
+    logAutomaticReadinessOutcome(
+      deps,
+      probeCorrelationId,
+      modelId,
+      outcome.overallStatus,
+      1,
+      outcome.inconclusiveProbes,
+    );
   }
+}
+
+async function runOnDemandReadinessProbe(
+  deps: UiHandlerDeps,
+  holder: NonNullable<UiHandlerDeps["gatewayConfig"]>,
+  modelId: string,
+  correlationId?: string,
+): Promise<void> {
+  const generation = holder.generation();
+  const probeCorrelationId = correlationId ?? newCorrelationId();
+  logOnDemandProbeStarted(deps, holder, modelId, probeCorrelationId);
+  await observeOnDemandProbe(deps, modelId, probeCorrelationId);
   // A failed report CLEARS the capability entry; without a current-generation observation
   // every subsequent chat attempt would probe the provider again. Persist an explicit
   // not-ready so retries hit the guard instead of the wire (the settings probe replaces it).

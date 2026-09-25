@@ -27,12 +27,22 @@ import {
   type ModelGatewayLogContext,
   type ModelGatewayLogSink,
 } from "./observability.js";
+import { GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS } from "./resilience.js";
 import type { OutboundHttpEgressConfig, ProviderEndpointStyle } from "./types.js";
 
 // The wire default for one embedding request, shared by the scalar path, the array path, the
 // per-item fallback and the ladder budget. Named rather than repeated so the attempt line's
 // `timeoutMs` cannot report a deadline the request is not actually running under.
 const DEFAULT_EMBEDDING_TIMEOUT_MS = 30_000;
+
+// #3591: the per-call floor a single outbound embedding HTTP request's deadline may never go
+// below, regardless of a smaller configured value — a slow gateway is not a broken gateway.
+// Deliberately NOT applied inside `ladderDeadlineMs` / `perItemTimeoutMs`: the scalar-fallback
+// ladder's own bookkeeping deadline must stay driven by exactly what the caller configured
+// (including an intentionally exhausted budget of 0), or the ladder could never expire.
+function effectiveEmbeddingTimeoutMs(timeoutMs: number | undefined): number {
+  return Math.max(timeoutMs ?? DEFAULT_EMBEDDING_TIMEOUT_MS, GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS);
+}
 
 const EMBEDDING_OPERATION_BASE = {
   contractKind: "activity-log-operation",
@@ -677,7 +687,7 @@ function buildEmbeddingRequest(
     ...(minimalShape ? {} : { encoding_format: "float" }),
     ...(request.dimensions !== undefined ? { dimensions: request.dimensions } : {}),
   });
-  const timeoutSignal = AbortSignal.timeout(request.timeoutMs ?? DEFAULT_EMBEDDING_TIMEOUT_MS);
+  const timeoutSignal = AbortSignal.timeout(effectiveEmbeddingTimeoutMs(request.timeoutMs));
   const signal =
     request.signal !== undefined ? AbortSignal.any([timeoutSignal, request.signal]) : timeoutSignal;
   return {
@@ -708,7 +718,7 @@ function logScalarDispatch(
     modelId: logModelId(request.modelId),
     inputCount: 1,
     bodyBytes: Buffer.byteLength(built.body, "utf8"),
-    timeoutMs: request.timeoutMs ?? DEFAULT_EMBEDDING_TIMEOUT_MS,
+    timeoutMs: effectiveEmbeddingTimeoutMs(request.timeoutMs),
     minimalShape,
   };
   log.write(
@@ -964,7 +974,7 @@ function logBatchDispatch(
     modelId: logModelId(request.modelId),
     inputCount: request.inputs.length,
     bodyBytes: Buffer.byteLength(built.body, "utf8"),
-    timeoutMs: request.timeoutMs ?? DEFAULT_EMBEDDING_TIMEOUT_MS,
+    timeoutMs: effectiveEmbeddingTimeoutMs(request.timeoutMs),
     minimalShape,
   };
   log.write(

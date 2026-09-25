@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "@/lib/api";
+import {
+  I18N_STORAGE_KEY,
+  loadLocaleMessages,
+  resetLoadedMessageCatalogs,
+  translate,
+} from "@/lib/i18n";
 import { formatUserError, toUserErrorNotice } from "./format-error";
 
 describe("formatUserError", () => {
@@ -15,9 +21,32 @@ describe("formatUserError", () => {
     );
   });
 
-  it("turns bare gateway timeout codes into an actionable chat error", () => {
-    expect(formatUserError(new ApiError("GATEWAY_TIMEOUT", "GATEWAY_TIMEOUT", 503), "Retry")).toBe(
-      "The model gateway timed out before the model returned a response. (GATEWAY_TIMEOUT)",
+  // #3591: the wording applies to EVERY GATEWAY_TIMEOUT, not only a bare/empty raw message — a
+  // slow gateway is not a broken gateway, and the customer-facing text must say so consistently
+  // instead of surfacing whatever the provider's own timeout message happened to be.
+  it("turns gateway timeout codes into an actionable chat error that never blames prompt size", () => {
+    const formatted = formatUserError(
+      new ApiError("GATEWAY_TIMEOUT", "request for 'x' timed out while reading stream", 503),
+      "Retry",
+    );
+    expect(formatted).toBe(
+      "The model gateway did not complete the request within Keiko's wait limit. Keiko keeps waiting for minutes on a slow gateway, so this usually means the gateway or the model stalled — not that the request was too large. (GATEWAY_TIMEOUT)",
+    );
+    expect(formatted.toLowerCase()).not.toContain("prompt");
+  });
+
+  it("maps a provider output-budget exhaustion to its own actionable chat error", () => {
+    expect(
+      formatUserError(
+        new ApiError(
+          "GATEWAY_OUTPUT_EXHAUSTED",
+          "provider exhausted the output budget for 'x' before producing any content",
+          200,
+        ),
+        "Retry",
+      ),
+    ).toBe(
+      "The model used its whole output budget before producing an answer, usually on reasoning. Have the gateway declare a larger max_output_tokens for this model, or choose a model with a smaller reasoning share, then retry. (GATEWAY_OUTPUT_EXHAUSTED)",
     );
   });
 
@@ -65,6 +94,26 @@ describe("formatUserError", () => {
     });
   });
 
+  // PR #3602 review: title, message AND remediation of a gateway notice follow the selected locale
+  // together; a German notice must not carry an English recovery instruction.
+  it("localizes the whole gateway notice for the selected locale", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+    try {
+      for (const code of ["GATEWAY_TIMEOUT", "GATEWAY_OUTPUT_EXHAUSTED"] as const) {
+        const notice = toUserErrorNotice(new ApiError(code, code, 503), "Could not send message.");
+        const key = code === "GATEWAY_TIMEOUT" ? "gatewayTimeout" : "gatewayOutputExhausted";
+        expect(notice.title).toBe(translate("de", `chat.error.${key}.title`));
+        expect(notice.message).toBe(translate("de", `chat.error.${key}.message`));
+        expect(notice.remediation).toBe(translate("de", `chat.error.${key}.remediation`));
+        expect(notice.remediation).not.toBe(translate("en", `chat.error.${key}.remediation`));
+      }
+    } finally {
+      window.localStorage.removeItem(I18N_STORAGE_KEY);
+      resetLoadedMessageCatalogs();
+    }
+  });
+
   it("adds gateway timeout title and remediation for structured notices", () => {
     const notice = toUserErrorNotice(
       new ApiError("GATEWAY_TIMEOUT", "GATEWAY_TIMEOUT", 503),
@@ -72,11 +121,32 @@ describe("formatUserError", () => {
     );
 
     expect(notice).toEqual({
-      title: "Model gateway timed out",
-      message: "The model gateway timed out before the model returned a response.",
+      title: "Model gateway did not answer in time",
+      message:
+        "The model gateway did not complete the request within Keiko's wait limit. Keiko keeps waiting for minutes on a slow gateway, so this usually means the gateway or the model stalled — not that the request was too large.",
       code: "GATEWAY_TIMEOUT",
       remediation:
-        "Retry. If it repeats, use a smaller prompt or another model, then check gateway URL, proxy, and deployment in Settings.",
+        "Retry, or check gateway URL, proxy, and deployment in Settings if it keeps happening.",
+    });
+  });
+
+  it("adds output-exhausted title and remediation for structured notices", () => {
+    const notice = toUserErrorNotice(
+      new ApiError(
+        "GATEWAY_OUTPUT_EXHAUSTED",
+        "provider exhausted the output budget for 'x' before producing any content",
+        200,
+      ),
+      "Could not send message.",
+    );
+
+    expect(notice).toEqual({
+      title: "Model ran out of output budget",
+      message:
+        "The model used its whole output budget before producing an answer, usually on reasoning. Have the gateway declare a larger max_output_tokens for this model, or choose a model with a smaller reasoning share, then retry.",
+      code: "GATEWAY_OUTPUT_EXHAUSTED",
+      remediation:
+        "Raise the model's max output tokens in Settings, or switch to a model with a smaller reasoning share, then retry.",
     });
   });
 

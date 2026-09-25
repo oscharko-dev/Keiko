@@ -295,3 +295,130 @@ list Keiko itself shows after a successful save: exactly 100 there is the cap in
 Enter the intended deployments explicitly in the setup form's deployment-names field — an
 explicit list bypasses discovery and is probed as given. Alternatively, use a virtual key whose
 model allowance is scoped to the models Keiko should use.
+
+---
+
+## Commit draft fails under a slow gateway or a reasoning model
+
+| Field             | Value                                                                                                       |
+| ----------------- | ----------------------------------------------------------------------------------------------------------- |
+| Severity          | Medium                                                                                                      |
+| Surface           | Git window (commit draft)                                                                                   |
+| Stable identifier | `GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT` / `GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED` / `..._INVALID_OUTPUT` |
+
+**Symptom**
+
+Clicking "Generate with Keiko" in the Git window fails. Before 1.1.7 every cause surfaced as the
+same generic "Keiko generated a commit draft that did not pass validation." regardless of whether
+the gateway never answered or answered with something unusable, so the message gave no signal on
+what to try next.
+
+**Root Cause**
+
+A LiteLLM-fronted vLLM gateway (`gemma-*-it`, `gpt-oss-120b`) can take 30-120s or longer to answer
+at peak load, and a reasoning model spends output tokens on its reasoning trace before its first
+answer token. Two distinct upstream behaviors used to collapse into one code:
+
+1. The gateway did not answer within the route's own bound.
+2. The model answered but spent its whole output-token budget reasoning, ending with
+   `finish_reason: "length"` and no usable content (or a partial, truncated fragment).
+
+The route now tells these apart from a THIRD case — a complete answer that failed the commit
+message policy/shape — and reports each with its own code and safe message:
+
+- `GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT` (HTTP 504) — the gateway did not answer in time.
+- `GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED` (HTTP 502) — the model exhausted its output budget
+  on reasoning.
+- `GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT` (HTTP 502) — a complete answer failed validation;
+  unchanged from before.
+
+**Diagnostic Steps**
+
+`keiko support export --correlation-id <id>` (the id shown with the failure) and
+`keiko support analyze <bundle> --correlation-id <id>` reconstruct the `git.commit.draft.completed`
+line for that request: its `failureCode` field names exactly one of the three codes above, and
+`errorKind` is `timeout` for the first, `validation-failed` for the other two. Neither the diff nor
+the model's raw output ever appears in the log or in the export.
+
+**Resolution**
+
+- `GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT`: retry — the route now allows a generous backstop for the
+  whole buffered call instead of a flat 30s cap, and marks the request `latencyProfile:
+"coding-workbench"` so the gateway applies its own coding-workbench provider-timeout floor. If it
+  keeps timing out, the configured provider `timeoutMs` for that model is still too low for the
+  proxy's real latency at peak load; raise it in the gateway configuration.
+- `GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED`: retry, or write the commit message yourself. The
+  route now requests a 4,000-token output budget (up from 700) specifically so a reasoning model has
+  room to both think and answer; a model whose reasoning trace still exceeds that on every attempt
+  needs a lower reasoning-effort setting on the proxy side.
+- `GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT`: unchanged — the drafted message did not meet the
+  repository's commit-message policy; edit and commit manually.
+
+---
+
+## Conversation Center reports "Model gateway did not answer in time" under load, or setup drops a slow model
+
+| Field             | Value                                                              |
+| ----------------- | ------------------------------------------------------------------ |
+| Severity          | Medium                                                             |
+| Surface           | Conversation Center chat stream; first-run Gateway Setup discovery |
+| Stable identifier | `GATEWAY_TIMEOUT`                                                  |
+
+**Symptom**
+
+A chat reply in the Conversation Center fails with "The model gateway did not answer within the
+wait limit..." even though the same model answers fine at low load. During first-run Gateway
+Setup, a model that was slow to answer during discovery is silently missing from the configured
+model list afterward.
+
+**Root Cause**
+
+Before #3591, `Gateway.chatStream()` (the Conversation Center's streaming path) called the
+provider adapter with no read bounds at all, so a real adapter fell back to a flat 60s idle wait
+and the provider's own configured `timeoutMs` (30s by default) for the ENTIRE read — a live
+generation that kept producing tokens past that point was cut off and reported as a timeout, even
+though the provider was still working. Separately, the first-run setup discovery smoke test used a
+15s timeout and dropped any candidate whose probe did not answer in time, with no way to tell "the
+gateway rejected this model" apart from "the gateway was just slow" in the result.
+
+Every interactive gateway surface now floors its effective wait: at least 5 minutes before treating
+silence as a failure on a stream, at least 30 minutes total for a streamed answer and 10 minutes
+for a buffered one, which cannot observe progress and therefore gets the whole budget per attempt
+(`GATEWAY_SILENCE_FLOOR_MS` / `GATEWAY_STREAM_BUDGET_FLOOR_MS` / `GATEWAY_BUFFERED_BUDGET_FLOOR_MS`,
+`resilience.ts`) — a caller's own configuration may only raise these, never lower them. Readiness
+probes the product starts on its own (the Coding Workbench's automatic probes and the on-demand chat
+probe that gates a first chat) run with a 2-minute floor, the long-context probe with 5 minutes; a
+probe the gateway never answered, could not be reached for, or answered with a transient status
+(408, 429, 5xx except 501) is recorded as inconclusive and retried after one minute instead of
+holding the six-hour cooldown. Setup discovery bounds each smoke candidate by its provider timeout,
+never below 120s, and the whole chat round by 10 minutes; a candidate the probe never gets an answer
+from, or that answers with a transient status, is kept in the configuration as unverified instead of
+being dropped; only a candidate the gateway actually rejects (400/404/422/501, or a malformed
+answer) is removed. A timeout still counts toward the model's circuit breaker — with these floors a
+timeout is a multi-minute silence, an outage signal — while an exhausted output budget (an HTTP 200
+answer with `finish_reason: length` and no content) does not.
+
+**Diagnostic Steps**
+
+For a chat failure: `keiko support export --correlation-id <id>` and
+`keiko support analyze <bundle> --correlation-id <id>` reconstruct the `gateway.stream.started` /
+`gateway.stream.failed` (or `gateway.chat.started` / `gateway.chat.failed`) pair for that request.
+`gateway.stream.failed`'s `errorKind` is `timeout` only once the read has actually exceeded the
+floored silence or budget bound reported on the paired `chat.response.streamed` line
+(`silenceMs`, `readBudgetMs`) — never the raw configured `timeoutMs`. Neither line ever carries
+provider content.
+
+For a setup discovery drop: the response body's `unverifiedChatModelIds` names a candidate that was
+kept despite a probe failure, and `droppedChatModelIds` names one the gateway actually rejected;
+setup's `GatewayDiscoveryUnusableModels` diagnostic reports the counts of both, body-free.
+
+**Resolution**
+
+- A chat `GATEWAY_TIMEOUT` after the floored wait is a genuinely slow or unreachable gateway, not a
+  configuration bug in Keiko: check the provider's own health and load, or raise the model's
+  `timeoutMs` in Gateway Setup if it is legitimately slower than the floor.
+- A setup candidate that lands in `unverifiedChatModelIds` is configured but not smoke-verified; it
+  will be verified by the existing on-demand and automatic readiness probes the next time it is
+  used. A candidate in `droppedChatModelIds` was genuinely rejected by the gateway (wrong model id,
+  no chat capability, credential mismatch for that deployment) and must be corrected in the setup
+  form.

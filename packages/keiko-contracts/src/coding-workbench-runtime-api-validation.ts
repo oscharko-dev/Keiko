@@ -138,7 +138,8 @@ function validateSseOptionalEnums(value: Record<string, unknown>, errors: string
       value.eventKind === "failure-redacted" &&
       (value.failureCode === "provider-failed" ||
         value.failureCode === "stream-incomplete" ||
-        value.failureCode === "turn-rejected")
+        value.failureCode === "turn-rejected" ||
+        value.failureCode === "output-exhausted")
     )
   ) {
     errors.push("failureCode is invalid");

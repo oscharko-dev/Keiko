@@ -525,6 +525,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The subscription source is selected; the gateway is not in use.",
   "codingWorkbench.source.unavailableReason.model-context-window-insufficient":
     "The configured model's context window is too small for a coding run (minimum 32,000 tokens). Keiko checked it automatically and could not confirm 32,000 tokens. Choose a larger model, or have the gateway declare this model's max_input_tokens.",
+  "codingWorkbench.source.unavailableReason.model-verification-pending":
+    "Keiko is still verifying this model with the gateway (a context window of at least 32,000 tokens, and tool calling). On a busy gateway this can take a few minutes; the Workbench refreshes by itself when the check settles.",
   "codingWorkbench.source.unavailableReason.tool-calling-unverified":
     "The coding model's automatic tool-calling check did not complete successfully. Review the latest readiness result in Settings → Models.",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
@@ -939,6 +941,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The model response stream stopped before the turn completed. Check provider connectivity and retry.",
   "codingWorkbench.event.turnFailure.turn-rejected":
     "The model or a Workbench guard rejected this turn. Check the run's gateway and authority diagnostics for the cause, then adjust the model, task, or permissions before retrying.",
+  "codingWorkbench.event.turnFailure.output-exhausted":
+    "The model used its whole output budget before producing an answer, usually on reasoning. Have the gateway declare a larger max_output_tokens for this model, or choose a model with a smaller reasoning share, then retry.",
   "codingWorkbench.event.detailOutcome": "Outcome: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Untrusted content: the fetched page was quarantined as data, not instructions.",
