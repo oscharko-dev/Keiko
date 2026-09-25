@@ -253,6 +253,39 @@ describe("parseUnifiedDiff", () => {
     expect(hunk.lines[2]).toMatchObject({ kind: "ctx", text: "unchanged" });
   });
 
+  // #3610 (W20): a model-written changeset carried a hunk with one unchanged context line and no added
+  // or removed line, and change review rendered it as a change. Such a hunk changes nothing.
+  it("drops a hunk that changes nothing and keeps the file's real hunks", () => {
+    const raw = [
+      "--- a/src/stock.js",
+      "+++ b/src/stock.js",
+      "@@ -10,2 +10,2 @@",
+      " keep",
+      "-old",
+      "+new",
+      "@@ -32,1 +32,1 @@",
+      " unchanged",
+      "",
+    ].join("\n");
+
+    const file = assertDefined(parseUnifiedDiff(raw).files[0], "file");
+    expect(file.hunks).toHaveLength(1);
+    expect(assertDefined(file.hunks[0], "hunk").lines.map(({ kind }) => kind)).toEqual([
+      "ctx",
+      "del",
+      "add",
+    ]);
+    expect(file).toMatchObject({ path: "src/stock.js", addedLines: 1, removedLines: 1 });
+  });
+
+  it("keeps a declared file whose only hunk changes nothing, without a hunk", () => {
+    const raw = ["--- a/src/noop.js", "+++ b/src/noop.js", "@@ -5 +5 @@", " same", ""].join("\n");
+
+    const file = assertDefined(parseUnifiedDiff(raw).files[0], "file");
+    expect(file).toMatchObject({ path: "src/noop.js", addedLines: 0, removedLines: 0 });
+    expect(file.hunks).toEqual([]);
+  });
+
   it("parses hunk header without count (default 1)", () => {
     const raw = [
       "diff --git a/x.ts b/x.ts",
@@ -435,10 +468,13 @@ describe("parseUnifiedDiff", () => {
       "diff --git a/e.txt b/e.txt",
       "--- a/e.txt",
       "+++ b/e.txt",
-      "@@ -1,3 +1,3 @@",
+      // #3610: the hunk also adds a line — a hunk of context lines alone changes nothing and is
+      // dropped, which is not what this branch test is about.
+      "@@ -1,3 +1,4 @@",
       " one",
       "",
       " three",
+      "+four",
       "",
     ].join("\n");
     const result = parseUnifiedDiff(raw);

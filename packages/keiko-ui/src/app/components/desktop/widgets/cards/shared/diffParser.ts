@@ -110,8 +110,14 @@ interface ParserState {
   truncated: boolean;
 }
 
+// A hunk with no added or removed line changes nothing. `git diff` never emits one, but a
+// model-written changeset can, and change review rendered it as a change (#3610, W20).
+function changesSomething(hunk: MutableHunk): boolean {
+  return hunk.lines.some(({ kind }) => kind === "add" || kind === "del");
+}
+
 function flushHunk(state: ParserState): void {
-  if (state.current !== null && state.currentHunk !== null) {
+  if (state.current !== null && state.currentHunk !== null && changesSomething(state.currentHunk)) {
     state.current.hunks.push(state.currentHunk);
   }
   state.currentHunk = null;
