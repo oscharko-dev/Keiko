@@ -425,6 +425,101 @@ const CODING_RUNTIME_EDITOR_MUTATION_SETTLED_OPERATION = defineActivityLogOperat
   releaseImpact: "patch",
 });
 
+// #3610: a governed edit the editor route or this port refused is a decision, not a server
+// failure — a stale base (CONTENT_HASH_MISMATCH), a policy denial, an invalid patch, no live
+// Workbench. It rode the failure diagnostic at level error with errorKind internal, which also
+// opened a support incident for every stale edit. The reason is the closed code the model receives;
+// a client error's own code is free text, so it is recorded only as EDIT_CLIENT_ERROR. The first two
+// groups are the editor-agent conflict and failure codes; the op catalog needs them as literals, and
+// a test pins that every contract code is listed.
+const EDIT_REFUSAL_REASONS = [
+  "DIRTY",
+  "VERSION_MISMATCH",
+  "CONTENT_HASH_MISMATCH",
+  "NO_ACTIVE_SESSION",
+  "NO_ACTIVE_BRIDGE",
+  "INVALID_EDITS",
+  "OUT_OF_SCOPE",
+  "DECOMPOSE_PER_ROOT",
+  "PRECONDITION_REQUIRED",
+  "POLICY_DENIED",
+  "APPROVAL_REQUIRED",
+  "TIMED_OUT",
+  "QUEUE_FULL",
+  "CANCELLED",
+  "PROVIDER_UNAVAILABLE",
+  "UNSUPPORTED_OPERATION",
+  "LIMIT_EXCEEDED",
+  "DUPLICATE_ACTION",
+  "MUTATION_IN_FLIGHT",
+  "EDIT_PREPARE_FAILED",
+  "WORKSPACE_ACCESS_LOST",
+  "EDIT_MUTATION_FAILED",
+  "EDIT_CLIENT_ERROR",
+  "UNCLASSIFIED",
+] as const;
+type EditRefusalReason = (typeof EDIT_REFUSAL_REASONS)[number];
+const EDIT_REFUSAL_REASON_SET: ReadonlySet<string> = new Set(EDIT_REFUSAL_REASONS);
+
+const CODING_RUNTIME_EDIT_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.edit.refused",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingToolReadEditPorts.logEditRefused",
+  fields: {
+    reasonCode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [...EDIT_REFUSAL_REASONS],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-editor-mutation"],
+  proofIds: ["coding-runtime.edit.refused.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const EDIT_REFUSAL_ERROR_KINDS: Readonly<Record<EditRefusalReason, ActivityLogErrorKind>> = {
+  DIRTY: "conflict",
+  VERSION_MISMATCH: "conflict",
+  CONTENT_HASH_MISMATCH: "conflict",
+  DUPLICATE_ACTION: "conflict",
+  MUTATION_IN_FLIGHT: "conflict",
+  NO_ACTIVE_SESSION: "unavailable",
+  NO_ACTIVE_BRIDGE: "unavailable",
+  QUEUE_FULL: "unavailable",
+  PROVIDER_UNAVAILABLE: "unavailable",
+  EDIT_CLIENT_ERROR: "unavailable",
+  INVALID_EDITS: "validation-failed",
+  DECOMPOSE_PER_ROOT: "validation-failed",
+  PRECONDITION_REQUIRED: "validation-failed",
+  UNSUPPORTED_OPERATION: "validation-failed",
+  LIMIT_EXCEEDED: "validation-failed",
+  EDIT_PREPARE_FAILED: "validation-failed",
+  OUT_OF_SCOPE: "authority-denied",
+  POLICY_DENIED: "authority-denied",
+  APPROVAL_REQUIRED: "authority-denied",
+  WORKSPACE_ACCESS_LOST: "authority-denied",
+  TIMED_OUT: "timeout",
+  CANCELLED: "cancelled",
+  EDIT_MUTATION_FAILED: "internal",
+  UNCLASSIFIED: "unknown",
+};
+
+function editRefusalReason(reasonCode: string | undefined): EditRefusalReason {
+  if (reasonCode === undefined) return "UNCLASSIFIED";
+  return EDIT_REFUSAL_REASON_SET.has(reasonCode)
+    ? (reasonCode as EditRefusalReason)
+    : "EDIT_CLIENT_ERROR";
+}
+
 const WORKSPACE_READ_ERROR_KINDS: Partial<
   Readonly<Record<WorkspaceReadFailureReason, ActivityLogErrorKind>>
 > = {
@@ -732,9 +827,9 @@ function editRefused(
   reasonCode: string | undefined,
   message?: string,
 ): EditOutcome {
-  // The diagnostic stays reason-code-only (body-free, AGENTS.md §8) — `message` never reaches the
-  // activity log, only the outcome returned to the caller.
-  emitEditRefusedDiagnostic(deps.diagnostics, correlationId, reasonCode);
+  // The refusal line stays reason-code-only (body-free, AGENTS.md §8) — `message` never reaches
+  // the activity log, only the outcome returned to the caller.
+  logEditRefused(deps, correlationId, reasonCode);
   return message === undefined
     ? { status: "failed", reasonCode }
     : { status: "failed", reasonCode, message };
@@ -798,22 +893,22 @@ function emitEditFailureDiagnostic(
 }
 
 // A governed edit the editor route refused (a policy denial, a conflict, a failed apply) is a
-// decision the activity log must be able to reconstruct: before this line the only trace was the
-// in-memory audit feed, and a workbench run that could never edit a file left an empty log
-// (end-to-end run, 2026-09-03). The reason is the closed editor-agent vocabulary, never content.
-function emitEditRefusedDiagnostic(
-  diagnostics: ServerDiagnosticSink | undefined,
+// decision the activity log must be able to reconstruct: before 2026-09-03 the only trace was the
+// in-memory audit feed, and a workbench run that could never edit a file left an empty log. The
+// reason is the closed refusal vocabulary above, never content, at warn level (#3610).
+function logEditRefused(
+  deps: CodingToolReadEditPortDeps,
   correlationId: string,
   reasonCode: string | undefined,
 ): void {
-  emitServerDiagnostic(diagnostics, {
-    correlationId,
-    timestamp: new Date().toISOString(),
-    operation: "coding-runtime.editor-changeset",
-    source: "coding-tool-read-edit-ports.edit",
-    errorClass: reasonCode ?? "unclassified",
-    message: "edit-refused",
-  });
+  const reason = editRefusalReason(reasonCode);
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_EDIT_REFUSED_OPERATION,
+      { level: "warn", correlationId, errorKind: EDIT_REFUSAL_ERROR_KINDS[reason] },
+      { reasonCode: reason, completeness: "complete", loss: "none" },
+    ),
+  );
 }
 
 async function bindLiveEditorSession(

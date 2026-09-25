@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "9a803375888db4dd27cbc59201e7aba768b5c8fbac6ef3e68e41cbca5112473a" as const;
+  "d6fe3752cd34365dfe31448d720123fec2667e901dc0783ebdf419c147b23b01" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -4210,6 +4210,63 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "failure-cluster",
     failureClasses: ["coding-runtime-dev-lane"],
     proofIds: ["coding-runtime.dev-lane.refused.emitted-line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "coding-runtime.edit.refused",
+    category: "security",
+    owner: "keiko-server",
+    emitter: "coding-runtime.codingToolReadEditPorts.logEditRefused",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      reasonCode: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: [
+          "DIRTY",
+          "VERSION_MISMATCH",
+          "CONTENT_HASH_MISMATCH",
+          "NO_ACTIVE_SESSION",
+          "NO_ACTIVE_BRIDGE",
+          "INVALID_EDITS",
+          "OUT_OF_SCOPE",
+          "DECOMPOSE_PER_ROOT",
+          "PRECONDITION_REQUIRED",
+          "POLICY_DENIED",
+          "APPROVAL_REQUIRED",
+          "TIMED_OUT",
+          "QUEUE_FULL",
+          "CANCELLED",
+          "PROVIDER_UNAVAILABLE",
+          "UNSUPPORTED_OPERATION",
+          "LIMIT_EXCEEDED",
+          "DUPLICATE_ACTION",
+          "MUTATION_IN_FLIGHT",
+          "EDIT_PREPARE_FAILED",
+          "WORKSPACE_ACCESS_LOST",
+          "EDIT_MUTATION_FAILED",
+          "EDIT_CLIENT_ERROR",
+          "UNCLASSIFIED",
+        ],
+      },
+    },
+    causal: "correlation",
+    lifecycle: "failure",
+    analyzerProjection: "failure-cluster",
+    failureClasses: ["coding-editor-mutation"],
+    proofIds: ["coding-runtime.edit.refused.emitted-line"],
     releaseImpact: "patch",
   },
   {
@@ -31430,15 +31487,19 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       failureClass: "coding-editor-mutation",
       requirementContract: "coding-editor-mutation",
       productSurfaces: ["keiko-server"],
-      lifecycleTransitions: ["end"],
+      lifecycleTransitions: ["end", "failure"],
       lifecycleOperations: {
         start: [],
         state: [],
         end: ["coding-runtime.editor-mutation.settled"],
-        failure: [],
+        failure: ["coding-runtime.edit.refused"],
         loss: [],
       },
       causalEdges: [
+        {
+          op: "coding-runtime.edit.refused",
+          mode: "correlation",
+        },
         {
           op: "coding-runtime.editor-mutation.settled",
           mode: "correlation",
@@ -31448,6 +31509,30 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       resourceSignals: ["coding-runtime.editor-mutation.settled"],
       replayReferences: [],
       operations: [
+        {
+          op: "coding-runtime.edit.refused",
+          owner: "keiko-server",
+          category: "security",
+          lifecycle: "failure",
+          causal: "correlation",
+          analyzerProjection: "failure-cluster",
+          safeContextFields: [
+            {
+              name: "reasonCode",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["coding-runtime.edit.refused.emitted-line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
         {
           op: "coding-runtime.editor-mutation.settled",
           owner: "keiko-server",
@@ -61215,6 +61300,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "coding-runtime.description-authority": "tools-workflows",
     "coding-runtime.dev-lane.activated": "tools-workflows",
     "coding-runtime.dev-lane.refused": "tools-workflows",
+    "coding-runtime.edit.refused": "tools-workflows",
     "coding-runtime.editor-mutation.settled": "tools-workflows",
     "coding-runtime.event.dropped": "tools-workflows",
     "coding-runtime.follow-up.dispatch-failed": "tools-workflows",

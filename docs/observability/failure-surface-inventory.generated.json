@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "9a803375888db4dd27cbc59201e7aba768b5c8fbac6ef3e68e41cbca5112473a"
+    "catalogDigest": "d6fe3752cd34365dfe31448d720123fec2667e901dc0783ebdf419c147b23b01"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,9 +51,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 455,
-    "proofCount": 463,
-    "resolvedProofCount": 463,
+    "operationCount": 456,
+    "proofCount": 464,
+    "resolvedProofCount": 464,
     "failureClassCount": 319,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
@@ -249,6 +249,7 @@
         "coding-runtime.description-authority",
         "coding-runtime.dev-lane.activated",
         "coding-runtime.dev-lane.refused",
+        "coding-runtime.edit.refused",
         "coding-runtime.editor-mutation.settled",
         "coding-runtime.event.dropped",
         "coding-runtime.follow-up.dispatch-failed",
@@ -652,7 +653,7 @@
     "coding-app-session-sign-out": ["tools-workflows.dependency-failure"],
     "coding-context-linked-issue": ["tools-workflows.dependency-failure"],
     "coding-context-pack": ["tools-workflows.dependency-failure"],
-    "coding-editor-mutation": ["tools-workflows.dependency-failure"],
+    "coding-editor-mutation": ["tools-workflows.rejection"],
     "coding-repository-search": ["tools-workflows.dependency-failure"],
     "coding-runtime-approval-wait": ["tools-workflows.dependency-failure"],
     "coding-runtime-authority-mint": ["tools-workflows.dependency-failure"],
@@ -1136,6 +1137,9 @@
     ],
     "coding-runtime.dev-lane.refused.emitted-line": [
       "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.test.ts"
+    ],
+    "coding-runtime.edit.refused.emitted-line": [
+      "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.test.ts"
     ],
     "coding-runtime.editor-mutation.settled.emitted-line": [
       "packages/keiko-server/src/coding-runtime/codingToolReadEditPorts.test.ts"
