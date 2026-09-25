@@ -239,6 +239,63 @@ describe("bounded coding safe-activity projection", () => {
     },
   );
 
+  // A lab run of 1.1.8: Keiko settled a 10 ms read before OpenCode's earlier running update arrived
+  // over the event stream, and the late update was refused and counted as an omitted update, with an
+  // error-level diagnostic, after every fast tool call.
+  it.each([
+    ["succeeded", "pending"],
+    ["succeeded", "running"],
+    ["failed", "running"],
+    ["denied", "running"],
+    ["cancelled", "pending"],
+  ] as const)(
+    "keeps a settled %s call when OpenCode's earlier %s update arrives late",
+    (settled, late) => {
+      const projection = createCodingSafeActivityProjection({
+        now: () => 1_721_323_200_000,
+        diagnostics: { record: (): void => undefined },
+      });
+      projection.open({
+        runId: RUN_ID,
+        workspaceId: WORKSPACE_ID,
+        authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+        workspaceIsCurrent: () => true,
+      });
+      projection.ingest(RUN_ID, message("msg_user", "user"));
+      projection.ingest(RUN_ID, message("msg_assistant", "assistant", "msg_user"));
+      const signals: readonly CodingSafeActivitySignal[] = [
+        {
+          kind: "tool",
+          messageId: "msg_assistant",
+          callId: "call_fast",
+          tool: "keiko_workspace_read",
+          state: "pending",
+          occurredAt: "2026-07-18T17:00:00.002Z",
+        },
+        {
+          kind: "tool",
+          callId: "call_fast",
+          state: settled,
+          occurredAt: "2026-07-18T17:00:00.003Z",
+        },
+        {
+          kind: "tool",
+          messageId: "msg_assistant",
+          callId: "call_fast",
+          state: late,
+          occurredAt: "2026-07-18T17:00:00.004Z",
+        },
+      ];
+      for (const signal of signals) expect(projection.ingest(RUN_ID, signal)).toBe(true);
+      expect(projection.currentContent()).toMatchObject({
+        feed: {
+          droppedEventCount: 0,
+          turns: [{ tools: [{ callId: "call_fast", state: settled }] }],
+        },
+      });
+    },
+  );
+
   it("still refuses to reopen a failed or succeeded call", () => {
     const projection = createCodingSafeActivityProjection({
       now: () => 1_721_323_200_000,

@@ -800,7 +800,7 @@ function applyTool(
   const existingIndex = located.turn.tools.findIndex(({ callId }) => callId === signal.callId);
   const existing = located.turn.tools[existingIndex];
   if (existing !== undefined) {
-    if (closedVerdictKept(existing.state, signal.state)) return "accepted";
+    if (staleOpenCodeRestatement(existing.state, signal)) return "accepted";
     if (!allowedToolTransition(existing.state, signal.state)) return "tool-transition-refused";
     located.turn.tools[existingIndex] = {
       ...existing,
@@ -992,14 +992,27 @@ function candidateMessageBytes(message: MutableMessage, text: string, truncated:
   return bytes({ ...message, segments: [...message.segments, segment], truncated });
 }
 
-// Only Keiko settles a tool call as denied or cancelled (a human's verdict, a stopped call). OpenCode
-// then reports the refused call as a generic failure; that report restates the closed verdict and is
-// kept as a no-op instead of an omitted update (#3612).
-function closedVerdictKept(
+const TERMINAL_TOOL_STATES: ReadonlySet<CodingSafeActivityToolState> = new Set([
+  "succeeded",
+  "failed",
+  "denied",
+  "cancelled",
+]);
+
+// A late OpenCode part update (it names its message) for a call that has already ended. Keiko settles
+// a call from the facade result, independently of OpenCode's part updates, and can do so before
+// OpenCode's earlier pending or running update arrives over the event stream (a lab run of 1.1.8: a
+// 10 ms read); only Keiko settles a call as denied or cancelled, which OpenCode then reports as a
+// generic failure. Each restates a state the call already passed and is kept as a no-op, not an
+// omitted update (#3612). A settlement never restates pending or running, so one that tries is
+// still a refused regression.
+function staleOpenCodeRestatement(
   from: CodingSafeActivityToolState,
-  to: CodingSafeActivityToolState,
+  signal: Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>,
 ): boolean {
-  return (from === "denied" || from === "cancelled") && to === "failed";
+  if (signal.messageId === undefined || !TERMINAL_TOOL_STATES.has(from)) return false;
+  if (signal.state === "pending" || signal.state === "running") return true;
+  return (from === "denied" || from === "cancelled") && signal.state === "failed";
 }
 
 function allowedToolTransition(
