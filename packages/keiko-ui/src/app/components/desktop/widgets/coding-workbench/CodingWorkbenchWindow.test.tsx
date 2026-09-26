@@ -512,7 +512,9 @@ describe("CodingWorkbenchWindow", () => {
 
     renderWorkbench(createInitialCodingWorkbenchRuntimeState());
 
-    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent("Keiko");
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent(
+      "Keiko",
+    );
   });
 
   function egressApprovalState(
@@ -612,7 +614,9 @@ describe("CodingWorkbenchWindow", () => {
     );
 
     expect(screen.queryByText("e2e-project-task")).not.toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent("e2e-project");
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent(
+      "e2e-project",
+    );
   });
 
   it("clears the composer draft once a crash-recovery retry succeeds", async () => {
@@ -701,7 +705,9 @@ describe("CodingWorkbenchWindow", () => {
       activeWorkspaceWithBinding("/repos/keiko", "/worktrees/keiko-task"),
     );
 
-    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent("keiko");
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent(
+      "keiko",
+    );
     expect(screen.getByRole("combobox", { name: "Choose coding branch" })).toHaveTextContent("dev");
     expect(screen.queryByText("MemoriaViva")).not.toBeInTheDocument();
     expect(onOpenGit).not.toHaveBeenCalled();
@@ -728,7 +734,9 @@ describe("CodingWorkbenchWindow", () => {
     );
 
     expect(screen.getByRole("button", { name: "Start coding run" })).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent("keiko");
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent(
+      "keiko",
+    );
     expect(onOpenGit).not.toHaveBeenCalled();
   });
 
@@ -781,7 +789,9 @@ describe("CodingWorkbenchWindow", () => {
       activeWorkspaceWithBinding("/repos/bound", "/worktrees/prior-task"),
     );
     expect(screen.queryByLabelText("Repository path")).not.toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent("bound");
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent(
+      "bound",
+    );
     expect(screen.getByRole("button", { name: "Start coding run" })).toBeInTheDocument();
   });
 
@@ -3135,7 +3145,9 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     expect(facts).not.toBeNull();
     expect(facts).not.toHaveTextContent(WORKSPACE_B.branch);
 
-    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent(/^a$/u);
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent(
+      /^a$/u,
+    );
     expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toBeDisabled();
     expect(onOpenGit).not.toHaveBeenCalled();
   });
@@ -3224,7 +3236,9 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     expect(
       screen.queryByText(/This run keeps the authority of the workspace it started in/u),
     ).toBeNull();
-    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent(/^a$/u);
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent(
+      /^a$/u,
+    );
     expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toBeDisabled();
   });
 

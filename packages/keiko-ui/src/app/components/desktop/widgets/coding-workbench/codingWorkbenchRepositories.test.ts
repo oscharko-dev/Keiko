@@ -23,7 +23,9 @@ describe("coding workbench Git repository catalog", () => {
   beforeEach(() => {
     fetchProjects.mockReset();
     fetchGitSummary.mockReset();
-    fetchProjects.mockResolvedValue({ projects: [project("/repos/ready"), project("/repos/missing", false)] });
+    fetchProjects.mockResolvedValue({
+      projects: [project("/repos/ready"), project("/repos/missing", false)],
+    });
   });
 
   it("lists every repository shown by Git, including temporarily unavailable entries", async () => {

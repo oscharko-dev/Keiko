@@ -365,7 +365,8 @@ interface SetupActionsInput {
 }
 
 function useSetupActions(params: SetupActionsInput): SetupActions {
-  const { repositoryPath, targetBranch, refreshWorkspace, onBoundRepository, status, setStatus } = params;
+  const { repositoryPath, targetBranch, refreshWorkspace, onBoundRepository, status, setStatus } =
+    params;
   const root = repositoryPath.trim();
   const pending = status.kind === "pending";
   const [collisionSuffix] = useState(() => secureRandomId("task"));

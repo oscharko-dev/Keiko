@@ -313,7 +313,9 @@ describe("CodingWorkbenchSetup", () => {
     renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
 
     expect(setupSection()).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent("selected");
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent(
+      "selected",
+    );
     await bindable();
     expect(setActiveMock).not.toHaveBeenCalled();
   });
@@ -600,7 +602,9 @@ describe("CodingWorkbenchSetup", () => {
 
       await user.click(await bindable());
 
-      const alert = await screen.findByText((_, node) => node?.id === "coding-workbench-setup-alert");
+      const alert = await screen.findByText(
+        (_, node) => node?.id === "coding-workbench-setup-alert",
+      );
       expect(alert).toHaveTextContent(text);
       expect(alert).not.toHaveTextContent("Review the repository path and target branch.");
       expect(alert).not.toHaveTextContent("sensitive detail");
@@ -630,7 +634,9 @@ describe("CodingWorkbenchSetup", () => {
       </ActiveWorkspaceProvider>,
     );
 
-    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent("other");
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent(
+      "other",
+    );
     expect(screen.queryByRole("button", { name: "Repair and bind" })).not.toBeInTheDocument();
     expect(document.getElementById("coding-workbench-setup-alert")).not.toBeInTheDocument();
     expect(repairMock).not.toHaveBeenCalled();
@@ -645,16 +651,24 @@ describe("CodingWorkbenchSetup", () => {
     ]);
     const view = render(
       <ActiveWorkspaceProvider value={api}>
-        <CodingWorkbenchSetup selectedRoot="/repos/selected" selectedBaseBranch="main"
-          refreshWorkspace={api.refresh} runtimePosture="verified" />
+        <CodingWorkbenchSetup
+          selectedRoot="/repos/selected"
+          selectedBaseBranch="main"
+          refreshWorkspace={api.refresh}
+          runtimePosture="verified"
+        />
       </ActiveWorkspaceProvider>,
     );
     await user.click(await bindable());
     expect(await screen.findByRole("button", { name: "Repair and bind" })).toBeInTheDocument();
     view.rerender(
       <ActiveWorkspaceProvider value={api}>
-        <CodingWorkbenchSetup selectedRoot="/repos/selected" selectedBaseBranch="main-next"
-          refreshWorkspace={api.refresh} runtimePosture="verified" />
+        <CodingWorkbenchSetup
+          selectedRoot="/repos/selected"
+          selectedBaseBranch="main-next"
+          refreshWorkspace={api.refresh}
+          runtimePosture="verified"
+        />
       </ActiveWorkspaceProvider>,
     );
     expect(screen.queryByRole("button", { name: "Repair and bind" })).not.toBeInTheDocument();
@@ -689,7 +703,9 @@ describe("CodingWorkbenchSetup", () => {
         <CodingWorkbenchWindow selectedRoot="/repos/other" />
       </ActiveWorkspaceProvider>,
     );
-    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent("other");
+    expect(screen.getByRole("combobox", { name: "Choose coding repository" })).toHaveTextContent(
+      "other",
+    );
 
     refuseProvision(pointerDrift());
     await waitFor(() => {
@@ -907,5 +923,4 @@ describe("CodingWorkbenchSetup", () => {
       expect(onBoundRepository).toHaveBeenCalledWith("/repos/keiko-checkout");
     });
   });
-
 });
