@@ -11,18 +11,23 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { _resetEditorAgentBridgeStateForTests } from "@/app/components/desktop/widgets/cards/editorAgentBridge";
+import {
+  _resetEditorAgentBridgeStateForTests,
+  EDITOR_SNAPSHOT_DEBOUNCE_MS,
+} from "@/app/components/desktop/widgets/cards/editorAgentBridge";
 import { ApiError } from "./api";
+import type { ClientDiagnosticMeta } from "./client-diagnostics";
 import { useCodingWorkbenchEditorBridge } from "./useCodingWorkbenchEditorBridge";
 
 const postSnapshotSpy = vi.fn();
 const postResultSpy = vi.fn();
-const reportDiagnosticSpy = vi.fn();
+const reportDiagnosticSpy = vi.fn<(message: string, meta?: ClientDiagnosticMeta) => void>();
 
 vi.mock("./client-diagnostics", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./client-diagnostics")>()),
-  reportClientDiagnostic: (message: string): void => {
-    reportDiagnosticSpy(message);
+  reportClientDiagnostic: (message: string, meta?: ClientDiagnosticMeta): void => {
+    if (meta === undefined) reportDiagnosticSpy(message);
+    else reportDiagnosticSpy(message, meta);
   },
 }));
 
@@ -738,9 +743,9 @@ describe("useCodingWorkbenchEditorBridge — settled review", () => {
     await flushMicrotasks();
     expect(result.current.pendingReview).toBeNull();
     expect(postResultSpy).not.toHaveBeenCalled();
-    expect(reportDiagnosticSpy).toHaveBeenCalledWith(
-      "[keiko] coding workbench changeset review closed: action failed",
-    );
+    // PR #3625 review: a settled review is routine, never a failure report; the server records how
+    // it settled on the run's timeline.
+    expect(reviewClosureReports()).toEqual([]);
   });
 
   it("keeps the change review when a result names another action", async () => {
@@ -758,11 +763,13 @@ describe("useCodingWorkbenchEditorBridge — settled review", () => {
     await flushMicrotasks();
     expect(result.current.pendingReview).toBeNull();
     expect(postResultSpy).not.toHaveBeenCalled();
-    expect(reportDiagnosticSpy).toHaveBeenCalledWith(
-      "[keiko] coding workbench changeset review closed: run ended",
-    );
+    expect(reviewClosureReports()).toEqual([]);
   });
 });
+
+function reviewClosureReports(): unknown[] {
+  return reportDiagnosticSpy.mock.calls.filter(([message]) => message.includes("review closed"));
+}
 
 // Lab 2026-09-26: a second tab on the same run was refused the run's bridge lease on every attempt
 // and re-registered about four times a second while the run stayed active. Failures in a row now
@@ -774,28 +781,74 @@ describe("useCodingWorkbenchEditorBridge — registration backoff", () => {
 
   it("backs off between failed registrations instead of retrying at a fixed pace", async () => {
     vi.useFakeTimers();
-    postSnapshotSpy.mockRejectedValue(new Error("bridge lease held by another tab"));
+    const attemptTimes: number[] = [];
+    postSnapshotSpy.mockImplementation(() => {
+      attemptTimes.push(Date.now());
+      return Promise.reject(leaseRefusal());
+    });
     renderHook(() =>
       useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: true }),
     );
     // In steps, so React commits each failure's state and runs the retry effect it schedules.
-    for (let elapsedMs = 0; elapsedMs < 30_000; elapsedMs += 50) {
+    for (let elapsedMs = 0; elapsedMs < 110_000; elapsedMs += 50) {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(50);
       });
     }
-    const attempts = postSnapshotSpy.mock.calls.length;
-    expect(attempts).toBeGreaterThanOrEqual(5);
-    expect(attempts).toBeLessThanOrEqual(12);
-    // One line per streak of failures, not one per attempt.
-    expect(
-      reportDiagnosticSpy.mock.calls.filter(
-        ([message]) =>
-          message === "[keiko] coding workbench bridge registration failed; retrying with backoff",
-      ),
-    ).toHaveLength(1);
+    // PR #3625 review: pin the schedule, not an attempt count a fixed pace could also meet. Each
+    // reconnect registers twice, on subscribe and on the snapshot debounce 300 ms later, and every
+    // failure doubles the next wait. The pause before the next pair therefore grows fourfold — 240,
+    // 960, 3 840 and 15 360 ms plus the 120 ms reconnect settle — until the 30-second ceiling holds.
+    const intervals = attemptTimes.slice(1).map((time, index) => time - (attemptTimes[index] ?? 0));
+    const debounced = intervals.filter((_, index) => index % 2 === 0);
+    const pauses = intervals.filter((_, index) => index % 2 === 1);
+    for (const interval of debounced) {
+      expect(Math.abs(interval - EDITOR_SNAPSHOT_DEBOUNCE_MS)).toBeLessThanOrEqual(50);
+    }
+    const expectedPauses = [360, 1_080, 3_960, 15_480, 30_120, 30_120];
+    expect(pauses.length).toBeGreaterThanOrEqual(expectedPauses.length);
+    expectedPauses.forEach((expected, index) => {
+      expect(Math.abs((pauses[index] ?? Number.NaN) - expected)).toBeLessThanOrEqual(50);
+    });
+    // One line per streak of failures, not one per attempt. PR #3625 review: it names the closed
+    // kind of the refusal, the refused request's own id and the run, so a lease held by another tab
+    // reads apart from a lost connection.
+    const failures = reportDiagnosticSpy.mock.calls.filter(
+      ([message]) =>
+        message === "[keiko] coding workbench bridge registration failed; retrying with backoff",
+    );
+    expect(failures).toEqual([
+      [
+        expect.any(String),
+        expect.objectContaining({
+          errorKind: "authority-denied",
+          correlationId: "corr-lease-refused",
+          parentCorrelationId: "run-1",
+          errorEvidence: expect.objectContaining({ errorClass: "ApiError" }) as unknown,
+        }),
+      ],
+    ]);
+  });
+
+  it("classifies a registration that never reached the server as unavailable", async () => {
+    postSnapshotSpy.mockRejectedValue(new TypeError("Failed to fetch"));
+    renderHook(() =>
+      useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: true }),
+    );
+    await waitFor(() => {
+      expect(reportDiagnosticSpy).toHaveBeenCalledWith(
+        "[keiko] coding workbench bridge registration failed; retrying with backoff",
+        expect.objectContaining({ errorKind: "unavailable", parentCorrelationId: "run-1" }),
+      );
+    });
   });
 });
+
+function leaseRefusal(): ApiError {
+  const error = new ApiError("BRIDGE_CAPABILITY_INVALID", "The bridge lease is held.", 403);
+  error.correlationId = "corr-lease-refused";
+  return error;
+}
 
 describe("useCodingWorkbenchEditorBridge — bridgeUnavailable", () => {
   it("reports bridgeUnavailable while the run is active but registration keeps failing, and clears once it succeeds", async () => {

@@ -237,6 +237,16 @@ the editor action is queued, and the editor route refuses a stale base
 list, then Apply on the diff — and the edit ask carried the changeset's base digests so a stale base
 could be refused before the first of them; with the ask gone, that pre-ask check went with it.
 
+Rejecting the change in its review is that human decision's "no" for the one edit. The editor route
+completes the run's mutation lease as `rejected` before anything is claimed or written, so the
+rejection never counts as a failed mutation of the run (a run whose last edit was rejected can still
+succeed); `coding-runtime.editor-mutation.settled` records `rejected` at info level under the run's
+correlation, and the model receives the same declined-step result and guidance as a declined ask,
+so the timeline reads the step as `denied`. Before this, the review's "no" settled as a failed
+mutation (`EDIT_MUTATION_FAILED`, `errorKind` `internal`), the model was told its edit had failed,
+and the run failed with `mutation-failed` when that edit was its last. Closing the review card is
+routine and reports nothing from the browser; the server line above is the review's evidence.
+
 A human's "no" rejects one step, not the run (owner decision, 2026-09-26). The run returns to
 `running`, or to its next queued ask, under a new revision; `Stop` remains the way to end a run. The
 model learns why the step did not happen and goes on without it: a denied or expired plugin ask
@@ -254,12 +264,14 @@ instead of the generic failure OpenCode reports for a refused call.
 The run's own wait on an approval ends at the same instant as the ask's
 (`MAX_APPROVAL_CHALLENGE_TTL_MS` is the human-decision wait): an active approval nobody decided in
 time is retired, the run returns to `running`, or to the next queued ask, under a new revision, so
-the Workbench stops offering a card nothing can decide; an ask that arrives after the expiry takes
-the expired one's place instead of a queue slot behind it, and a queued ask whose wait ran out
-before its turn is retired as well instead of stopping the run. Each retirement writes
-`coding-runtime.approval.retired` (1.1.9 lab: the expired card stayed on screen, approving it failed
-as `invalid-intent`, and the model's next ask expired unseen behind it). An approval that is decided,
-retired, or whose run settles takes its expiry timer with it.
+the Workbench stops offering a card nothing can decide; an ask that arrives after the expiry is never
+queued behind the expired one: the oldest live queued ask takes the card first and the late ask
+queues behind it, and only when no live queued ask waits does the late ask take the expired one's
+place. A queued ask whose wait ran out before its turn is retired as well instead of stopping the
+run. Each retirement writes `coding-runtime.approval.retired`, whose `replaced` is true only when the
+late ask took the expired one's place (1.1.9 lab: the expired card stayed on screen, approving it
+failed as `invalid-intent`, and the model's next ask expired unseen behind it). An approval that is
+decided, retired, or whose run settles takes its expiry timer with it.
 
 ### D7 — Coding evidence is content-free by construction
 

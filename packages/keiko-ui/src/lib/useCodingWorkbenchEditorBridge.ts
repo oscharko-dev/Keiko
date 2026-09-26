@@ -28,7 +28,9 @@ import {
   type DiffParseResult,
 } from "@/app/components/desktop/widgets/cards/shared/diffParser";
 import { ApiError, postEditorAgentSessionSnapshot } from "./api";
-import { reportClientDiagnostic } from "./client-diagnostics";
+import { reportClientDiagnostic, type ClientDiagnosticMeta } from "./client-diagnostics";
+import { clientErrorEvidence } from "./client-error-evidence";
+import { bffRequestErrorKind } from "./http";
 import { useRunLockedRoot } from "./useCodingWorkbenchChanges";
 import type {
   EditorAgentAction,
@@ -160,6 +162,21 @@ const FORCE_RECONNECT_SETTLE_MS = 120;
 // failure now doubles the wait before the next attempt, up to this ceiling, so a refused tab keeps
 // trying (it takes over once the other tab lets go) without hammering the server.
 const MAX_REGISTRATION_RETRY_DELAY_MS = 30_000;
+
+// A refused lease (a second tab on the run: 403) and a lost connection are told apart by the closed
+// kind and class; the refused request's own id joins the server's line with its status and code,
+// and the run is the parent (PR #3625 review).
+function registrationFailureMeta(error: unknown, runId: string | undefined): ClientDiagnosticMeta {
+  return {
+    kind: "other",
+    errorKind: bffRequestErrorKind(error),
+    errorEvidence: clientErrorEvidence(error),
+    ...(error instanceof ApiError && error.correlationId !== undefined
+      ? { correlationId: error.correlationId }
+      : {}),
+    ...(runId === undefined ? {} : { parentCorrelationId: runId }),
+  };
+}
 
 function registrationRetryDelayMs(consecutiveFailures: number): number {
   const exponent = Math.max(0, consecutiveFailures - 1);
@@ -344,20 +361,18 @@ export function useCodingWorkbenchEditorBridge(
 
   // Lab 2026-09-26: a stopped run kept its change review and "Waiting for your approval" on screen.
   // The server cancels the queued action and says so on the bridge, and a run that is no longer
-  // live has nothing left to review either, so neither leaves a card behind.
+  // live has nothing left to review either, so neither leaves a card behind. Closing the card is
+  // routine, not a failure: the server records how the review settled on the run's own timeline
+  // (`coding-runtime.editor-mutation.settled`), so the card reports nothing (PR #3625 review).
   const clearSettledReview = useCallback((result: EditorAgentActionResult): void => {
     if (pendingRef.current?.action.actionId !== result.actionId) return;
     decidingRef.current = false;
     setPending(null);
-    reportClientDiagnostic(
-      `[keiko] coding workbench changeset review closed: action ${result.status}`,
-    );
   }, []);
   useEffect(() => {
     if (active || pendingRef.current === null) return;
     decidingRef.current = false;
     setPending(null);
-    reportClientDiagnostic("[keiko] coding workbench changeset review closed: run ended");
   }, [active]);
 
   const registerSnapshot = useCallback(
@@ -376,6 +391,7 @@ export function useCodingWorkbenchEditorBridge(
         if (consecutiveFailuresRef.current === 1) {
           reportClientDiagnostic(
             "[keiko] coding workbench bridge registration failed; retrying with backoff",
+            registrationFailureMeta(error, runId),
           );
         }
         setRegistrationFailed(true);
@@ -387,7 +403,7 @@ export function useCodingWorkbenchEditorBridge(
         throw error;
       }
     },
-    [root, sessionId],
+    [root, runId, sessionId],
   );
 
   useEditorAgentBridge({

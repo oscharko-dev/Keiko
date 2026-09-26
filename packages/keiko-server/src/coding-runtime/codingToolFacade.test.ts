@@ -1056,6 +1056,23 @@ describe("CodingToolFacade", () => {
     },
   );
 
+  // Owner decision 2026-09-26 (ADR-0124 D6): a change the human rejected in its review, the only
+  // approval an edit asks for, is a declined step. The model was told the edit had failed and could
+  // resend it; it now reads the same decision as a declined ask, and the step reads Denied.
+  it("answers a change rejected in its review as the human's declined step", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "failed", reasonCode: "CHANGE_REJECTED" }),
+    );
+
+    const result = await createCodingToolFacade(ports).execute({
+      body: requestBody({ action: "edit", changeset }),
+      capability,
+    });
+
+    expect(result).toEqual(humanDecisionToolResult("denied"));
+  });
+
   it("never forwards a reasonCode for a non-edit action's failure", async () => {
     const ports = facade();
     ports.delegate.execute = vi.fn(() =>

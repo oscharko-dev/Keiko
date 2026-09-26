@@ -537,7 +537,7 @@ function applyFunctionalChangeset(
   } catch {
     return editorDenied("RUNTIME_EDIT_APPLY_FAILED");
   } finally {
-    if (request !== undefined) broker?.complete(request, succeeded);
+    if (request !== undefined) broker?.complete(request, succeeded ? "succeeded" : "failed");
   }
 }
 

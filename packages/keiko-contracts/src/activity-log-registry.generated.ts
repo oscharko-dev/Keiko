@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "a737ee6e28f5f835655129c8b6011143cf238ad828f30b6237af3ddfc2b6344d" as const;
+  "c5978307e70a2542c1e76ca12cc51244fda79b03a746fe56a7c6bff61c17bbd8" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -4360,6 +4360,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "EDIT_PREPARE_FAILED",
           "WORKSPACE_ACCESS_LOST",
           "EDIT_MUTATION_FAILED",
+          "CHANGE_REJECTED",
           "EDIT_CLIENT_ERROR",
           "UNCLASSIFIED",
         ],
@@ -4408,7 +4409,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "string",
         dataClass: "closed-enum",
         required: true,
-        values: ["succeeded", "failed", "cancelled"],
+        values: ["succeeded", "failed", "cancelled", "rejected"],
       },
       actionKind: {
         type: "string",

@@ -143,7 +143,9 @@ describe("queued editor effects keep their canonical invocation live", () => {
           test.log.events.filter((event) => event.op === "tool-catalog.invocation-settled"),
         ).toHaveLength(0);
         expect(test.coordinator.lease.claim(leaseRequest)).toBe(true);
-        expect(test.coordinator.lease.complete(leaseRequest, succeeded)).toBe(true);
+        expect(
+          test.coordinator.lease.complete(leaseRequest, succeeded ? "succeeded" : "failed"),
+        ).toBe(true);
         expect((await task).status).toBe(succeeded ? "completed" : "failed");
         expect(test.coordinator.lease.claim(leaseRequest)).toBe(false);
         expect(

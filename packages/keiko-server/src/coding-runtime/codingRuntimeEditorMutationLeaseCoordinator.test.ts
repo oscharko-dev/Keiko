@@ -99,14 +99,39 @@ describe("coding-runtime editor mutation lease coordinator (Issue #2332)", () =>
     const firstResult = coordinator.waitForMutation(request(), signal);
     const secondResult = coordinator.waitForMutation(second, signal);
     expect(coordinator.lease.claim(request())).toBe(true);
-    expect(coordinator.lease.complete(request(), false)).toBe(true);
+    expect(coordinator.lease.complete(request(), "failed")).toBe(true);
     expect(coordinator.lease.claim(second)).toBe(true);
-    expect(coordinator.lease.complete(second, true)).toBe(true);
+    expect(coordinator.lease.complete(second, "succeeded")).toBe(true);
     await expect(firstResult).resolves.toBe("failed");
     await expect(secondResult).resolves.toBe("succeeded");
     await expect(coordinator.waitForMutation(request(), signal)).resolves.toBe("failed");
     coordinator.dispose();
   });
+
+  // Owner decision 2026-09-26 (ADR-0124 D6): the change review is the only approval an edit asks
+  // for, and its "no" rejects that one change. Nothing was claimed or applied, so the run's mutation
+  // outcome stays clean; a rejection after the claim still counts as a failed mutation.
+  it.each([
+    [false, "rejected", "idle-succeeded"],
+    [true, "failed", "idle-failed"],
+  ] as const)(
+    "settles a change rejected in its review (claimed: %s) as %s with an %s run",
+    async (claimed, settled, idle) => {
+      const coordinator = createCodingRuntimeEditorMutationLeaseCoordinator({
+        invocationRegistry: createCodingToolInvocationRegistry(),
+        cancelPendingByAuthorityRun: () => 0,
+      });
+      coordinator.register(registration());
+      const signal = new AbortController().signal;
+      const mutation = coordinator.waitForMutation(request(), signal);
+      if (claimed) expect(coordinator.lease.claim(request())).toBe(true);
+      const idleOutcome = coordinator.waitForIdle(signal);
+      expect(coordinator.lease.complete(request(), "rejected")).toBe(true);
+      await expect(mutation).resolves.toBe(settled);
+      await expect(idleOutcome).resolves.toBe(idle);
+      coordinator.dispose();
+    },
+  );
 
   it.each(["abort", "revoke", "dispose"] as const)(
     "cancels the exact unclaimed mutation and wakes idle waiters on %s",
@@ -168,7 +193,7 @@ describe("coding-runtime editor mutation lease coordinator (Issue #2332)", () =>
     // The counter-pin: a claimed effect is already authorised and may still settle successfully.
     // Evicting its queued action here would destroy a write the runtime committed to.
     expect(cancelPendingByAuthorityRun).not.toHaveBeenCalled();
-    expect(coordinator.lease.complete(request(), true)).toBe(true);
+    expect(coordinator.lease.complete(request(), "succeeded")).toBe(true);
     coordinator.dispose();
   });
 
@@ -184,7 +209,7 @@ describe("coding-runtime editor mutation lease coordinator (Issue #2332)", () =>
     controller.abort();
     await expect(result).resolves.toBe("cancelled");
     expect(coordinator.lease.matches(request())).toBe(true);
-    expect(coordinator.lease.complete(request(), true)).toBe(true);
+    expect(coordinator.lease.complete(request(), "succeeded")).toBe(true);
     coordinator.dispose();
   });
 
@@ -247,7 +272,7 @@ describe("coding-runtime editor mutation lease coordinator (Issue #2332)", () =>
     const idle = coordinator.waitForIdle(new AbortController().signal);
     expect(coordinator.lease.claim(request())).toBe(true);
     expect(coordinator.lease.matches(request())).toBe(true);
-    expect(coordinator.lease.complete(request(), true)).toBe(true);
+    expect(coordinator.lease.complete(request(), "succeeded")).toBe(true);
     await expect(idle).resolves.toBe("idle-succeeded");
     expect(mutationGuard).toHaveBeenCalledTimes(1);
     expect(coordinator.lease.claim(request())).toBe(false);
@@ -427,17 +452,17 @@ describe("coding-runtime editor mutation lease broker (Issue #2483)", () => {
     expect(broker.matches(request())).toBe(true);
     expect(broker.requiresReview(request())).toBe(false);
     expect(broker.claim(request())).toBe(true);
-    expect(broker.complete(request(), true)).toBe(true);
+    expect(broker.complete(request(), "succeeded")).toBe(true);
     expect(broker.discard(request())).toBe(true);
     expect(claim).toHaveBeenCalledExactlyOnceWith(request());
-    expect(complete).toHaveBeenCalledExactlyOnceWith(request(), true);
+    expect(complete).toHaveBeenCalledExactlyOnceWith(request(), "succeeded");
     expect(discard).toHaveBeenCalledExactlyOnceWith(request());
 
     detach();
     expect(broker.matches(request())).toBe(false);
     expect(broker.requiresReview(request())).toBeUndefined();
     expect(broker.claim(request())).toBe(false);
-    expect(broker.complete(request(), true)).toBe(false);
+    expect(broker.complete(request(), "succeeded")).toBe(false);
     expect(broker.discard(request())).toBe(false);
     expect(claim).toHaveBeenCalledTimes(1);
   });
@@ -506,7 +531,7 @@ describe("coding-runtime editor mutation lease broker (Issue #2483)", () => {
     expect(broker.matches(request())).toBe(false);
     expect(broker.requiresReview(request())).toBeUndefined();
     expect(broker.claim(request())).toBe(false);
-    expect(broker.complete(request(), true)).toBe(false);
+    expect(broker.complete(request(), "succeeded")).toBe(false);
     expect(broker.discard(request())).toBe(false);
     expect(broker.attach(port)).toBeUndefined();
   });

@@ -4290,7 +4290,7 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
       expect(runtimeMutationLease.claim).toHaveBeenCalledOnce();
       expect(runtimeMutationLease.complete).toHaveBeenCalledExactlyOnceWith(
         expect.any(Object),
-        true,
+        "succeeded",
       );
       expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A1\n");
       expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B1\n");
@@ -4535,7 +4535,7 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
       expect(runtimeMutationLease.claim).toHaveBeenCalledTimes(1);
       expect(runtimeMutationLease.complete).toHaveBeenCalledExactlyOnceWith(
         expect.any(Object),
-        false,
+        "failed",
       );
       const leaseRequest = runtimeMutationLease.claim.mock.calls[0]?.[0];
       if (leaseRequest === undefined) throw new Error("expected runtime mutation lease request");
@@ -4592,8 +4592,8 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
         order.push("claim");
         return true;
       }),
-      complete: vi.fn((_request, succeeded): boolean => {
-        order.push(succeeded ? "complete" : "fail");
+      complete: vi.fn((_request, completion): boolean => {
+        order.push(completion === "succeeded" ? "complete" : "fail");
         return true;
       }),
       discard: vi.fn((): boolean => true),
@@ -4612,7 +4612,10 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     expect(actionResultStatus(committed.body)).toBe("succeeded");
     expect(runtimeMutationLease.matches).toHaveBeenCalledTimes(1);
     expect(runtimeMutationLease.claim).toHaveBeenCalledTimes(1);
-    expect(runtimeMutationLease.complete).toHaveBeenCalledExactlyOnceWith(expect.any(Object), true);
+    expect(runtimeMutationLease.complete).toHaveBeenCalledExactlyOnceWith(
+      expect.any(Object),
+      "succeeded",
+    );
     // Boundary checks at submission and at the posted result add two proofs (2026-09-03).
     expect(resolveWorkspaceRootAccess).toHaveBeenCalledTimes(5);
     expect(accessRead).toHaveBeenCalled();
@@ -4622,6 +4625,41 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     expect(order.lastIndexOf("access")).toBeLessThan(order.indexOf("write"));
     expect(auditRecords().at(-2)).not.toHaveProperty("targetPath");
     expect(auditRecords().at(-1)).not.toHaveProperty("targetPath");
+  });
+
+  // Owner decision 2026-09-26 (ADR-0124 D6): the change review is the only approval an edit asks
+  // for. A browser that rejects the change settles the run's lease as the human's decision, before
+  // anything was claimed or written; it used to settle as a failed mutation, which failed the run
+  // when that edit was its last.
+  it("settles a runtime changeset the browser rejected as the human's decision, unclaimed", async () => {
+    const arranged = arrangeTwoFiles();
+    await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt", "src/b.txt"]);
+    registerTestAuthority(workspaceRoot);
+    const runtimeMutationLease = {
+      matches: vi.fn((): boolean => true),
+      requiresReview: vi.fn((): boolean => true),
+      claim: vi.fn((): boolean => true),
+      complete: vi.fn((): boolean => true),
+      discard: vi.fn((): boolean => true),
+    } satisfies NonNullable<UiHandlerDeps["runtimeMutationLease"]>;
+    const deps = runtimeMutationDeps(runtimeMutationLease);
+
+    expect((await handleEditorAgentActions(context(arranged.action), deps)).status).toBe(202);
+    const rejected = await postActionResult(
+      arranged.action,
+      "failed",
+      arranged.action.sessionId,
+      undefined,
+      deps,
+    );
+
+    expect(actionResultStatus(rejected.body)).toBe("failed");
+    expect(runtimeMutationLease.claim).not.toHaveBeenCalled();
+    expect(runtimeMutationLease.complete).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ actionId: arranged.action.actionId }),
+      "rejected",
+    );
+    expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
   });
 
   it.each(["revoked", "replaced"] as const)(
@@ -4684,7 +4722,7 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
       expect(runtimeMutationLease.claim).toHaveBeenCalledOnce();
       expect(runtimeMutationLease.complete).toHaveBeenCalledExactlyOnceWith(
         expect.any(Object),
-        false,
+        "failed",
       );
       expect(Object.values(writer).every((effect) => effect.mock.calls.length === 0)).toBe(true);
       expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");

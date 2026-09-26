@@ -811,6 +811,9 @@ function projectEditFailure(
 ): CodingToolResult | undefined {
   if (request.action !== "edit" || value.outcome !== "failed") return undefined;
   const reasonCode = value.reasonCode;
+  // The human rejected the change in its review, the only approval an edit asks for: the same
+  // decision as a declined step, so the model reads why and goes on without it (ADR-0124 D6).
+  if (reasonCode === "CHANGE_REJECTED") return humanDecisionToolResult("denied");
   const safeReasonCode =
     typeof reasonCode === "string" && EDIT_FAILURE_REASON_CODES.has(reasonCode)
       ? reasonCode

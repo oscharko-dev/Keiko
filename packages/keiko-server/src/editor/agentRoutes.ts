@@ -126,7 +126,10 @@ import {
   handleEditorWorkspaceSearch,
   handleEditorWorkspaceSymbols,
 } from "./workspaceSearchRoutes.js";
-import type { CodingRuntimeEditorMutationLeaseRequest } from "../coding-runtime/codingRuntimeEditorMutationLeaseCoordinator.js";
+import type {
+  CodingRuntimeEditorMutationLeaseRequest,
+  CodingRuntimeMutationCompletion,
+} from "../coding-runtime/codingRuntimeEditorMutationLeaseCoordinator.js";
 import {
   editorAgentAuthorityRegistry,
   editorAgentWorkspaceRootDigest,
@@ -1994,7 +1997,11 @@ function handleChangesetResult(
       "failed",
       "The browser rejected the changeset.",
     );
-    return finishRuntimeChangeset(action, snapshot, failed, deps, runtimeMutation);
+    // The review's own "no": nothing was claimed or applied, so the run reads the human's decision
+    // instead of a failed mutation (owner decision 2026-09-26, ADR-0124 D6).
+    return finishRuntimeChangeset(action, snapshot, failed, deps, runtimeMutation, undefined, {
+      completion: "rejected",
+    });
   }
   if (snapshot === undefined) {
     const result = changesetConflict(action, [
@@ -2093,8 +2100,14 @@ function finishRuntimeChangeset(
   deps: EditorAgentRouteDeps | undefined,
   runtimeMutation: RuntimeMutationClassification,
   decision = decideActionPolicy(action, snapshot, deps, runtimeMutation),
+  { completion }: { readonly completion?: CodingRuntimeMutationCompletion } = {},
 ): RouteResult {
-  completeRuntimeMutation(action, runtimeMutation, deps, result.status === "succeeded");
+  completeRuntimeMutation(
+    action,
+    runtimeMutation,
+    deps,
+    completion ?? (result.status === "succeeded" ? "succeeded" : "failed"),
+  );
   return finishChangesetResult(
     action,
     snapshot,
@@ -2109,11 +2122,11 @@ function completeRuntimeMutation(
   action: EditorAgentAction,
   classification: RuntimeMutationClassification,
   deps: EditorAgentRouteDeps | undefined,
-  succeeded: boolean,
+  completion: CodingRuntimeMutationCompletion,
 ): void {
   if (classification.kind !== "runtime" || deps?.runtimeMutationLease === undefined) return;
   try {
-    deps.runtimeMutationLease.complete(classification.request, succeeded);
+    deps.runtimeMutationLease.complete(classification.request, completion);
   } catch (error) {
     emitChangesetDiagnostic(
       action,

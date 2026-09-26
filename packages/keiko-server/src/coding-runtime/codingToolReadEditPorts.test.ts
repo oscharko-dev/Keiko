@@ -1177,6 +1177,72 @@ describe("CodingTool read/edit producer adapters (Issue #2332)", () => {
     },
   );
 
+  // Owner decision 2026-09-26 (ADR-0124 D6): the change review is the only approval an edit asks
+  // for. Its "no" read as an internal mutation failure (EDIT_MUTATION_FAILED, errorKind internal),
+  // and the model was told its edit had failed. The rejection is the human's decision now.
+  it("reports a change rejected in its review as the human's decision", async () => {
+    const liveBinding = { ...admittedBinding, expiresAt: "2099-01-01T00:00:00.000Z" };
+    const events: ServerLogEvent[] = [];
+    const ports = createCodingToolReadEditPorts({
+      secureWorkspaceTextRead: { readText: vi.fn() },
+      editorAgentClient: {
+        action: () =>
+          Promise.resolve({
+            ok: true as const,
+            value: {
+              result: {
+                schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+                actionId: "edit-1",
+                sessionId: "session-2332",
+                status: "queued" as const,
+              },
+            },
+          }),
+      },
+      resolveEditorActionContext: () => ({
+        sessionId: "session-2332",
+        authorityRef: { runId: liveBinding.runId, envelopeDigest: liveBinding.envelopeDigest },
+        origin: "agent",
+        workspaceId: liveBinding.workspaceId,
+        workspaceRootDigest: liveBinding.workspaceRootDigest,
+        expiresAt: liveBinding.expiresAt,
+      }),
+      requiresEditorReview: () => true,
+      mutationLeaseCoordinator: {
+        register: vi.fn((): boolean => true),
+        discard: vi.fn((): boolean => true),
+        waitForMutation: () => Promise.resolve("rejected"),
+      },
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+
+    await expect(
+      ports.editorChangeset.execute(
+        { action: "edit", actionId: "edit-1", idempotencyKey: "edit-key", changeset: changeset() },
+        undefined,
+        { check: (): true => true, binding: liveBinding },
+      ),
+    ).resolves.toEqual({ status: "failed", reasonCode: "CHANGE_REJECTED" });
+    expect(events.map((event) => event.op)).toEqual([
+      "coding-runtime.editor-mutation.settled",
+      "coding-runtime.edit.refused",
+    ]);
+    const [settled, refused] = events;
+    expect(settled).not.toHaveProperty("errorKind");
+    expect(settled?.level).not.toBe("warn");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.editor-mutation.settled.emitted-line",
+        formatActivityLogProofLine(settled ?? {}),
+      ),
+    ).toMatchObject({ state: "rejected", actionKind: "edit" });
+    expect(refused).toMatchObject({
+      level: "warn",
+      errorKind: "authority-denied",
+      extra: { reasonCode: "CHANGE_REJECTED" },
+    });
+  });
+
   it("waits boundedly for the live Editor session in the governed workspace", async () => {
     vi.useFakeTimers();
     try {

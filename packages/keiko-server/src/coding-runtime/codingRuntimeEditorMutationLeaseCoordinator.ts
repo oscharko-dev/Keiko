@@ -23,7 +23,7 @@ export interface CodingRuntimeEditorMutationLeasePort {
   readonly claim: (request: CodingRuntimeEditorMutationLeaseRequest) => boolean;
   readonly complete: (
     request: CodingRuntimeEditorMutationLeaseRequest,
-    succeeded: boolean,
+    completion: CodingRuntimeMutationCompletion,
   ) => boolean;
   readonly discard: (request: CodingRuntimeEditorMutationLeaseRequest) => boolean;
 }
@@ -54,7 +54,13 @@ export interface CodingRuntimeEditorMutationLeaseRegistration {
  *    outstanding.
  */
 export type CodingRuntimeMutationIdleOutcome = "idle-succeeded" | "idle-failed" | "not-idle";
-export type CodingRuntimeMutationOutcome = "succeeded" | "failed" | "cancelled";
+export type CodingRuntimeMutationOutcome = "succeeded" | "failed" | "cancelled" | "rejected";
+
+/**
+ * How the editor route ended a mutation: applied, failed, or rejected in its review before the
+ * commit boundary — the human's decision on the change (owner decision 2026-09-26, ADR-0124 D6).
+ */
+export type CodingRuntimeMutationCompletion = "succeeded" | "failed" | "rejected";
 
 export interface CodingRuntimeEditorMutationLeaseCoordinator {
   readonly lease: CodingRuntimeEditorMutationLeasePort;
@@ -95,8 +101,8 @@ export function createCodingRuntimeEditorMutationLeaseBroker(): CodingRuntimeEdi
     matches: (request): boolean => uniqueMatchingPort(ports, request, disposed) !== undefined,
     requiresReview: (request): boolean | undefined => reviewRequirement(ports, request, disposed),
     claim: (request): boolean => claimMatchingPort(ports, request, disposed),
-    complete: (request, succeeded): boolean =>
-      completeMatchingPort(ports, request, succeeded, disposed),
+    complete: (request, completion): boolean =>
+      completeMatchingPort(ports, request, completion, disposed),
     discard: (request): boolean => discardMatchingPort(ports, request, disposed),
     attach: (port): (() => void) | undefined => {
       if (disposed || ports.size >= MAX_ACTIVE_LEASE_PORTS || ports.has(port)) return undefined;
@@ -162,13 +168,13 @@ function claimMatchingPort(
 function completeMatchingPort(
   ports: ReadonlySet<CodingRuntimeEditorMutationLeasePort>,
   request: CodingRuntimeEditorMutationLeaseRequest,
-  succeeded: boolean,
+  completion: CodingRuntimeMutationCompletion,
   disposed: boolean,
 ): boolean {
   const port = uniqueMatchingPort(ports, request, disposed);
   if (port === undefined) return false;
   try {
-    return port.complete(request, succeeded);
+    return port.complete(request, completion);
   } catch {
     return false;
   }
@@ -220,10 +226,10 @@ export function createCodingRuntimeEditorMutationLeaseCoordinator(
     requiresReview: (request): boolean | undefined =>
       findRecord(records, request, disposed)?.requiresReview,
     claim: (request): boolean => claimRecord(records, idleWaiters, outcome, request, disposed),
-    complete: (request, succeeded): boolean =>
-      completeRecord(records, idleWaiters, outcome, request, succeeded, disposed),
+    complete: (request, completion): boolean =>
+      completeRecord(records, idleWaiters, outcome, request, completion, disposed),
     discard: (request): boolean =>
-      completeRecord(records, idleWaiters, outcome, request, false, disposed),
+      completeRecord(records, idleWaiters, outcome, request, "failed", disposed),
   };
   return {
     lease,
@@ -315,15 +321,28 @@ function completeRecord(
   idleWaiters: Set<IdleWaiter>,
   outcome: MutationOutcome,
   request: CodingRuntimeEditorMutationLeaseRequest,
-  succeeded: boolean,
+  completion: CodingRuntimeMutationCompletion,
   disposed: boolean,
 ): boolean {
   const record = findRecord(records, request, disposed);
   if (record === undefined || !records.delete(record.key)) return false;
-  outcome.latestSucceeded = succeeded && record.claimed;
-  settleMutation(record, succeeded && record.claimed ? "succeeded" : "failed");
+  const settled = settledMutationOutcome(completion, record.claimed);
+  // A change the human rejected in its review never reached the tree, so it is no failed mutation
+  // of the run: a run whose last edit was rejected must still be able to succeed.
+  if (settled !== "rejected") outcome.latestSucceeded = settled === "succeeded";
+  settleMutation(record, settled);
   settleIfIdle(records, idleWaiters, outcome);
   return true;
+}
+
+// Only a claimed lease was applied; a rejection counts as the human's decision only while nothing
+// was claimed, i.e. before the commit boundary.
+function settledMutationOutcome(
+  completion: CodingRuntimeMutationCompletion,
+  claimed: boolean,
+): CodingRuntimeMutationOutcome {
+  if (completion === "succeeded") return claimed ? "succeeded" : "failed";
+  return completion === "rejected" && !claimed ? "rejected" : "failed";
 }
 
 // See the `discard` doc comment on `CodingRuntimeEditorMutationLeaseCoordinator`: this is the
