@@ -1561,9 +1561,10 @@ export function generateTypedActivityLogRegistry(
   const operations = [];
   const bySymbol = new Map();
   const violations = typedRegistryDiagnostics(program, repoRoot);
+  const packagesRoot = join(repoRoot, "packages").replaceAll("\\", "/");
   const sourceFiles = program
     .getSourceFiles()
-    .filter((sourceFile) => sourceFile.fileName.startsWith(join(repoRoot, "packages")));
+    .filter((sourceFile) => sourceFile.fileName.replaceAll("\\", "/").startsWith(packagesRoot));
   const context = { repoRoot, checker, operations, bySymbol, violations };
   collectTypedSites(context, sourceFiles, collectTypedRegistration);
   collectTypedSites(context, sourceFiles, collectTypedEmission);
