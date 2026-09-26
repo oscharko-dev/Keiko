@@ -4597,6 +4597,11 @@ describe("coding sidecar gateway turn failure projection", () => {
       [rejection, 400, "refused"],
       [new AuthenticationError("synthetic credential refused"), 400, "refused"],
       [new ProviderError("synthetic unavailable", 503), 503, "allowed"],
+      // PR #3625 review: statuses the runtime retries on its own stay retryable even where Keiko's
+      // gateway does not retry them (409, 408, 504).
+      [new ProviderError("synthetic conflict", 409), 503, "allowed"],
+      [new ProviderError("synthetic request timeout", 408), 503, "allowed"],
+      [new ProviderError("synthetic gateway timeout", 504), 503, "allowed"],
       [new RateLimitError("synthetic rate limit"), 503, "allowed"],
       [new CircuitOpenError("synthetic circuit open"), 503, "allowed"],
     ] as const)(

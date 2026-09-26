@@ -1781,8 +1781,16 @@ function runtimeRetryFor(
     error instanceof GatewayError &&
     !error.retryable &&
     !(error instanceof CircuitOpenError) &&
-    !(error instanceof CancelledError);
+    !(error instanceof CancelledError) &&
+    !(error instanceof ProviderError && runtimeRetriesStatus(error.httpStatus));
   return final ? "refused" : "allowed";
+}
+
+// The provider statuses OpenCode 2.0.10 retries on its own (408, 409, 429, 5xx): a rejection with one
+// of them is no verdict on the turn, whatever Keiko's own retry policy did with it (PR #3625 review:
+// a LiteLLM 409 is not retryable for Keiko's gateway, yet the runtime must still retry it).
+function runtimeRetriesStatus(status: number): boolean {
+  return status === 408 || status === 409 || status === 429 || status >= 500;
 }
 
 // OpenCode 2.0.10 reads an error chunk whose numeric `code` is an HTTP status as that status (its
