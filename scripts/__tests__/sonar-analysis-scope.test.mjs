@@ -251,6 +251,12 @@ describe("Sonar analysis scope", () => {
     );
     expect(coverageDisposition("docs/qa/gate.md", nativeSources)).toBe("static-analysis");
     expect(coverageDisposition("tests/gate.test.ts", nativeSources)).toBeUndefined();
+    const coverageExclusions = propertyPatterns(
+      repositorySonarProperties,
+      "sonar.coverage.exclusions",
+    );
+    expect(coverageExclusions).toContain("**/*.sh");
+    expect(coverageExclusions).toContain("**/*.ps1");
   });
 
   it("rejects invalid source bytes without reading excluded artifacts", () => {
