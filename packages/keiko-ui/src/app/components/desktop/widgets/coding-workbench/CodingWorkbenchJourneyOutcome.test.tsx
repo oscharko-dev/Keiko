@@ -34,6 +34,37 @@ describe("observed issue journey handoff", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
+  // #3633: the first status read failed (or has not answered) while a draft pull request exists. The
+  // card used to vanish with its Refresh, the only way to read the status again.
+  it("keeps the handoff card and its Refresh while a draft pull request's status is unobserved", () => {
+    const onRefresh = vi.fn();
+    render(
+      <CodingWorkbenchJourneyOutcome
+        snapshot={journeyFixture().snapshot}
+        outcome={undefined}
+        onRefresh={onRefresh}
+      />,
+    );
+    const card = screen.getByRole("region", { name: "Issue handoff" });
+    expect(card).toHaveTextContent(
+      translateCodingWorkbench("en", "codingWorkbench.journey.unavailable"),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Refresh observed status" }));
+    expect(onRefresh).toHaveBeenCalledOnce();
+  });
+
+  it("shows nothing while no draft pull request exists", () => {
+    const { snapshot } = journeyFixture();
+    const { container } = render(
+      <CodingWorkbenchJourneyOutcome
+        snapshot={{ ...snapshot, draftDelivery: undefined }}
+        outcome={undefined}
+        onRefresh={vi.fn()}
+      />,
+    );
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it("shows exact bound links, revision and separate description, CI and human requirements", () => {
     const fixture = journeyFixture();
     expect(isJourneyOutcome(fixture.outcome)).toBe(true);

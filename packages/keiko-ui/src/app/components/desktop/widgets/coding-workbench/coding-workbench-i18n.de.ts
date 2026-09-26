@@ -46,6 +46,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.journey.staleHelp":
     "Dies sind datierte Beobachtungen. Aktualisiere den Status, bevor du dich auf aktuelle Bereitschaft oder Issue-Abschluss verlässt.",
   "codingWorkbench.journey.refresh": "Beobachteten Status aktualisieren",
+  "codingWorkbench.journey.unavailable":
+    "Der Übergabestatus dieses Pull Requests wurde noch nicht beobachtet.",
   "codingWorkbench.journey.proposeReady": "Anfrage zur Review-Bereitschaft prüfen",
   "codingWorkbench.journey.readyHelp":
     "Prüfe den Wechsel vom Entwurf zur Review-Bereitschaft, bevor du ihn einmalig freigibst.",

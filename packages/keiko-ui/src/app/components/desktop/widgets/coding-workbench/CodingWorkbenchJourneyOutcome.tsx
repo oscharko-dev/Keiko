@@ -7,6 +7,7 @@ import { isSafeGitRefName } from "@oscharko-dev/keiko-contracts/runtime/git-repo
 import { ApiError, proposePrMarkReady, type GitDeliveryPrMarkReadyInput } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { useCodingWorkbenchTranslate } from "./coding-workbench-i18n";
+import { RetryMessage } from "./CodingWorkbenchChanges";
 import { JourneyDetails } from "./_JourneyDetails";
 import {
   canProposeJourneyReady,
@@ -122,8 +123,36 @@ export function CodingWorkbenchJourneyOutcome(
   useEffect(() => {
     if (present && !valid) reportClientDiagnostic("[keiko] journey unavailable: binding-mismatch");
   }, [valid, present]);
-  if (!valid || props.outcome === undefined) return null;
-  return <JourneyCard key={props.outcome.binding.runId} {...props} outcome={props.outcome} />;
+  if (valid && props.outcome !== undefined) {
+    return <JourneyCard key={props.outcome.binding.runId} {...props} outcome={props.outcome} />;
+  }
+  // #3633: a draft pull request exists but its handoff status is not observed (the first read
+  // failed, has not answered, or read another run). The card and its Refresh — the only way to read
+  // it again — stay, instead of the whole section disappearing.
+  if (props.snapshot?.draftDelivery?.pullRequest === undefined) return null;
+  return <JourneyUnavailable onRefresh={props.onRefresh} />;
+}
+
+function JourneyUnavailable({
+  onRefresh,
+}: {
+  readonly onRefresh: CodingWorkbenchJourneyOutcomeProps["onRefresh"];
+}): ReactNode {
+  const t = useCodingWorkbenchTranslate();
+  return (
+    <section className={common.card} aria-label={t("codingWorkbench.journey.title")}>
+      <h3 className={common.approvalResearchTitle}>{t("codingWorkbench.journey.title")}</h3>
+      <RetryMessage
+        text={t("codingWorkbench.journey.unavailable")}
+        className={undefined}
+        retry={
+          onRefresh === undefined
+            ? undefined
+            : { label: t("codingWorkbench.journey.refresh"), onRetry: () => void onRefresh() }
+        }
+      />
+    </section>
+  );
 }
 function JourneyCard(
   props: CodingWorkbenchJourneyOutcomeProps & { readonly outcome: JourneyOutcome },

@@ -40,6 +40,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.journey.staleHelp":
     "These are dated observations. Refresh the status before relying on current readiness or issue closure.",
   "codingWorkbench.journey.refresh": "Refresh observed status",
+  "codingWorkbench.journey.unavailable":
+    "The handoff status of this pull request has not been observed yet.",
   "codingWorkbench.journey.proposeReady": "Review ready-for-review request",
   "codingWorkbench.journey.readyHelp":
     "Review the change from draft to ready for review before approving it once.",

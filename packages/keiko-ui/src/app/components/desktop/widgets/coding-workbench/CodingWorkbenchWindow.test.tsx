@@ -1,7 +1,7 @@
 import { draftDeliveryReview, draftDeliverySnapshot } from "./_draftDeliveryTestSupport";
 import { descriptionStatusSnapshot } from "./_workbenchDescriptionStatusTestSupport";
 import { journeyFixture } from "./_journeyOutcomeTestSupport";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -3435,9 +3435,16 @@ describe("CodingWorkbenchWindow #3389 mark-ready propose control", () => {
     journeyRefreshMock.mockResolvedValue({ status: "unavailable", reason: "no-observation" });
     renderWithJourney(journeyFixture().snapshot);
 
-    await waitFor(() =>
-      expect(screen.queryByRole("region", { name: "Issue handoff" })).not.toBeInTheDocument(),
-    );
+    // #3633: the card stays with its Refresh (the only way to read the status again), but it offers
+    // no ready-for-review control and calls no mutation endpoint.
+    const card = await screen.findByRole("region", { name: "Issue handoff" });
+    expect(
+      within(card).getByText("The handoff status of this pull request has not been observed yet."),
+    ).toBeVisible();
+    expect(within(card).getByRole("button", { name: "Refresh observed status" })).toBeEnabled();
+    expect(
+      within(card).queryByRole("button", { name: "Review ready-for-review request" }),
+    ).not.toBeInTheDocument();
     expect(markReadyApproveMock).not.toHaveBeenCalled();
     expect(markReadyExecuteMock).not.toHaveBeenCalled();
   });
