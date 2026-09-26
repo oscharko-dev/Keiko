@@ -3060,6 +3060,53 @@ describe("GitClientWindow — empty / loading / error states", () => {
     ]);
   });
 
+  // PR #3625 review: a superseded retry whose request rejects keeps its failure evidence. The newer
+  // read still owns the window; the rejected request reports as a failed retry under the attempt's
+  // own id, with its closed kind and body-free evidence, because it reached no server line.
+  it("reports a superseded retry whose request rejected as a failed retry with its evidence", async () => {
+    const metas: (ClientDiagnosticMeta | undefined)[] = [];
+    setClientDiagnosticWriter((_message, meta) => metas.push(meta));
+    let rejectRetry!: (reason: unknown) => void;
+    let call = 0;
+    const getStatus = vi.fn<GitClientSeam["getStatus"]>(async () => {
+      call += 1;
+      if (call === 1) throw new Error("Status fetch failed");
+      if (call === 2) {
+        return new Promise<GitRepositoryStatusResponse>((_resolve, reject) => {
+          rejectRetry = reject;
+        });
+      }
+      return makeStatus({ clean: true });
+    });
+    render(<GitClientWindow projectId={REPO_A.path} client={makeClient({ getStatus })} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Status fetch failed");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(getStatus).toHaveBeenCalledTimes(2));
+    await act(async () => {
+      notifyGitRepositoryStateInvalidated(REPO_A.path);
+    });
+    expect(await screen.findByText("No changes")).toBeInTheDocument();
+
+    await act(async () => {
+      rejectRetry(new TypeError("Failed to fetch"));
+    });
+
+    const attempt = metas.find((meta) => meta?.gitRetryAttemptReport !== undefined);
+    const settlements = metas.filter((meta) => meta?.gitClientOperation !== undefined);
+    expect(settlements).toEqual([
+      expect.objectContaining({
+        correlationId: attempt?.gitRetryAttemptReport?.correlationId,
+        errorKind: expect.any(String),
+        errorEvidence: expect.objectContaining({ errorClass: expect.any(String) }),
+        gitClientOperation: { operation: "status-read", outcome: "retry-failed" },
+      }),
+    ]);
+    expect(screen.getByText("No changes")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("shows no-changes empty state when status is clean", async () => {
     const client = makeClient({
       getStatus: vi.fn(async () => makeStatus({ clean: true })),

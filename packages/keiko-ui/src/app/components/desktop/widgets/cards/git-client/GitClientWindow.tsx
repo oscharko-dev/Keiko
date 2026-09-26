@@ -1136,7 +1136,12 @@ function settleGitReadResponse<T>(args: GitReadSettleArgs<T>, response: T): void
 function settleGitReadFailure<T>(args: GitReadSettleArgs<T>, error: unknown): void {
   const retryCorrelationId = takeRetryCorrelationId(args.retryAttempts, args.sequence);
   if (args.sequenceRef.current !== args.sequence) {
-    reportIfSuperseded(args.spec.operation, retryCorrelationId);
+    // The newer read keeps owning the window, but a superseded retry whose request itself rejected
+    // is still a failed request: one that failed in the browser reached no server line that could
+    // recover its kind, frames or cause, so it reports as a failed retry (PR #3625 review).
+    if (retryCorrelationId !== undefined) {
+      reportReadRetryRejected(args.spec.operation, error, retryCorrelationId);
+    }
     return;
   }
   args.setState({ response: null, projectKey: null, loading: false, error: formatGitError(error) });
