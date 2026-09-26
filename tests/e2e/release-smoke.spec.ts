@@ -357,13 +357,9 @@ test("app start exposes the workspace shell and health endpoint @smoke", async (
   await expect(
     page.getByRole("navigation", { name: "Primary workspace navigation" }),
   ).toBeVisible();
-  // The workspace selector is intentionally a post-hydration chunk so it stays out of the
-  // first-load budget. Its trigger must still become interactive on the real app path.
-  const workspaceSelector = page.getByRole("button", { name: /workspace context/i });
-  await expect(workspaceSelector).toBeVisible();
-  await workspaceSelector.click();
-  await expect(page.getByRole("dialog")).toBeVisible();
-  await page.keyboard.press("Escape");
+  // Repository context belongs to each window since the per-window repository selector: the header
+  // carries no global workspace context control, so no window inherits another window's context.
+  await expect(page.getByRole("button", { name: /workspace context/i })).toHaveCount(0);
   await expect(page.getByText("Keiko").first()).toBeVisible();
   await expect(page.locator(".header .hd-tool-cta")).toHaveCount(0);
   await expect(page.getByLabel(/Keiko version/u)).toBeVisible();
