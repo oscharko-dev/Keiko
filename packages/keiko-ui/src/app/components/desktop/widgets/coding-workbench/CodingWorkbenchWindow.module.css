@@ -496,6 +496,18 @@
   text-transform: uppercase;
 }
 
+/* #3625: --text-tertiary (--fg-dim) is tuned for >=4.5:1 on the neutral --card/--card-2/--surface
+   tiers (see its definition in globals.css), not on .permission's warning-tinted background. That
+   translucent 12% --warn overlay composites, in dark theme, to a measurably different color
+   (~4.23:1 for this 11px semibold caption — WCAG AA fail). Promote one hierarchy tier to
+   --text-secondary here, matching the codebase's existing pattern of bumping a text tier that
+   fails contrast on its actual surface to the next tier up: clears AA with margin in every color
+   mode (dark 5.69:1, light 6.93:1, dark-high-contrast 10.08:1, light-high-contrast 10.94:1) while
+   keeping the eyebrow visibly quieter than the title below it. */
+.permission .label {
+  color: var(--text-secondary);
+}
+
 .cardTitle {
   margin: var(--space-1) 0 0;
   color: var(--text-primary);
