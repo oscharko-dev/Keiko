@@ -918,7 +918,9 @@ type GitReadOperation = ClientGitRetryOperation;
 // Retry as a rejection (PR #3625 review).
 interface GitReadSpec<T> {
   readonly operation: GitReadOperation;
-  readonly fetch: (client: GitClientSeam, path: string) => Promise<T>;
+  // `correlationId` is a manual retry's minted id, sent with its request so the server's lines for
+  // that read join the retry's attempt and settlement lines; an automatic read passes none.
+  readonly fetch: (client: GitClientSeam, path: string, correlationId?: string) => Promise<T>;
   readonly failureKey: (response: T) => OptionalWidgetMessageKey | null;
   readonly reason: (response: T) => GitWireUnavailableReason | undefined;
 }
@@ -938,7 +940,7 @@ function safeGitWireUnavailableReason(
 // other unavailable reason is still explained by the changes pane itself, never as a failure.
 const STATUS_READ: GitReadSpec<GitRepositoryStatusResponse> = {
   operation: "status-read",
-  fetch: (client, path) => client.getStatus(path),
+  fetch: (client, path, correlationId) => client.getStatus(path, { correlationId }),
   failureKey: (response) =>
     !response.available && isFailedGitRead(response.reason)
       ? "gitClientWindow.status.loadFailed"
@@ -948,14 +950,14 @@ const STATUS_READ: GitReadSpec<GitRepositoryStatusResponse> = {
 
 const BRANCHES_READ: GitReadSpec<GitBranchListResponse> = {
   operation: "branches-read",
-  fetch: (client, path) => client.listBranches(path),
+  fetch: (client, path, correlationId) => client.listBranches(path, { correlationId }),
   failureKey: (response) => (response.available ? null : "gitClientWindow.branch.loadFailed"),
   reason: (response) => safeGitWireUnavailableReason(response.reason),
 };
 
 const SUMMARY_READ: GitReadSpec<GitRepositorySummary> = {
   operation: "summary-read",
-  fetch: (client, path) => client.getSummary(path),
+  fetch: (client, path, correlationId) => client.getSummary(path, { correlationId }),
   failureKey: (response) => (response.available ? null : "gitClientWindow.sync.summaryUnavailable"),
   reason: (response) => safeGitWireUnavailableReason(response.reason),
 };
@@ -1073,12 +1075,13 @@ function reportIfSuperseded(
 // (PR #3625 review).
 // Mints this attempt's own correlation id up front, records it against the load's sequence so its
 // eventual settlement (however it settles) can find and consume it, and reports the attempt line —
-// all BEFORE the request goes out (PR #3625 review).
+// all BEFORE the request goes out. The request itself carries the same id, so the attempt, the
+// server's lines for the read and the settlement join on one timeline (PR #3625 review).
 function mintGitReadRetryAttempt(
   operation: GitReadOperation,
   sequence: number,
   retryAttempts: Map<number, string>,
-): void {
+): string {
   const retryCorrelationId = newClientCorrelationId();
   retryAttempts.set(sequence, retryCorrelationId);
   reportGitClientRetryAttempt(
@@ -1086,6 +1089,7 @@ function mintGitReadRetryAttempt(
     operation,
     retryCorrelationId,
   );
+  return retryCorrelationId;
 }
 
 // Everything one load's settlement needs, carried as one value so the resolve/reject handlers below
@@ -1144,7 +1148,9 @@ function useGitRead<T>(input: GitReadInput<T>): GitRead<T> {
       }
       sequenceRef.current += 1;
       const sequence = sequenceRef.current;
-      if (manualRetry) mintGitReadRetryAttempt(spec.operation, sequence, retryAttemptsRef.current);
+      const retryCorrelationId = manualRetry
+        ? mintGitReadRetryAttempt(spec.operation, sequence, retryAttemptsRef.current)
+        : undefined;
       setState((current) => ({ ...current, loading: true, error: null }));
       const args: GitReadSettleArgs<T> = {
         spec,
@@ -1156,7 +1162,7 @@ function useGitRead<T>(input: GitReadInput<T>): GitRead<T> {
         setState,
         onLoaded,
       };
-      void spec.fetch(client, selectedPath).then(
+      void spec.fetch(client, selectedPath, retryCorrelationId).then(
         (response) => settleGitReadResponse(args, response),
         (error: unknown) => settleGitReadFailure(args, error),
       );

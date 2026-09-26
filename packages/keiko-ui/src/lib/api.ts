@@ -340,10 +340,11 @@ async function fetchJson<T>(
   }
 
   const value = (await res.json()) as unknown;
-  recordResponseCorrelationId(value, res.headers.get(CORRELATION_HEADER));
+  const responseCorrelationId = res.headers.get(CORRELATION_HEADER);
+  recordResponseCorrelationId(value, responseCorrelationId);
   return validator === undefined
     ? (value as T)
-    : validateBffResponse<T>(path, value, validator, res.headers.get(CORRELATION_HEADER));
+    : validateBffResponse<T>(path, value, validator, responseCorrelationId);
 }
 
 // The `ApiError` for a non-2xx BFF response: code and message from the `{ error }` envelope when it
@@ -1836,9 +1837,16 @@ export async function copyFilesEntry(input: {
   return fetchJson("/api/files/copy", { method: "POST", body: JSON.stringify(input) });
 }
 
+// The three Git reads accept the caller's correlation id: a manual Retry sends the id its attempt
+// line already carries, so the server's lines for that request join the retry's attempt and
+// settlement lines on one timeline (PR #3625 review).
+interface GitReadRequestOptions {
+  readonly correlationId?: string | undefined;
+}
+
 export async function fetchGitStatus(
   root: string,
-  options?: { readonly includeIgnored?: boolean },
+  options?: GitReadRequestOptions & { readonly includeIgnored?: boolean },
 ): Promise<GitRepositoryStatusResponse> {
   const params = new URLSearchParams();
   params.set("root", root);
@@ -1847,6 +1855,7 @@ export async function fetchGitStatus(
     `/api/git/status?${params.toString()}`,
     undefined,
     validateGitRepositoryStatusResponse,
+    options?.correlationId,
   );
 }
 
@@ -1921,19 +1930,31 @@ export interface GitBranchListResponse {
   readonly truncated: boolean;
 }
 
-export async function fetchGitBranches(root: string): Promise<GitBranchListResponse> {
+export async function fetchGitBranches(
+  root: string,
+  options?: GitReadRequestOptions,
+): Promise<GitBranchListResponse> {
   const params = new URLSearchParams();
   params.set("root", root);
-  return fetchJson(`/api/git/branches?${params.toString()}`);
+  return fetchJson(
+    `/api/git/branches?${params.toString()}`,
+    undefined,
+    undefined,
+    options?.correlationId,
+  );
 }
 
-export async function fetchGitSummary(root: string): Promise<GitRepositorySummary> {
+export async function fetchGitSummary(
+  root: string,
+  options?: GitReadRequestOptions,
+): Promise<GitRepositorySummary> {
   const params = new URLSearchParams();
   params.set("root", root);
   return fetchJson(
     `/api/git/summary?${params.toString()}`,
     undefined,
     validateGitRepositorySummary,
+    options?.correlationId,
   );
 }
 

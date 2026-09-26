@@ -2223,6 +2223,13 @@ describe("GitClientWindow — branch, history, and sync workflows (Issue #1576)"
         },
       },
     ]);
+    // The retry's request carried the settlement's own id, so the server's lines for that read join
+    // it; the automatic read before it sent none of its own (PR #3625 review).
+    const [settlement] = settlements() as ClientDiagnosticMeta[];
+    expect(getStatus).toHaveBeenLastCalledWith(REPO_A.path, {
+      correlationId: settlement?.correlationId,
+    });
+    expect(getStatus.mock.calls[0]).toEqual([REPO_A.path, { correlationId: undefined }]);
   });
 
   it("offers no read Retry for a folder that is not a Git repository", async () => {
@@ -2998,6 +3005,10 @@ describe("GitClientWindow — empty / loading / error states", () => {
         gitClientOperation: { operation: "branches-read", outcome: "retry-recovered" },
       },
     ]);
+    // The retried request itself carries the attempt's id, joining the server's lines for it.
+    expect(listBranches).toHaveBeenLastCalledWith(REPO_A.path, {
+      correlationId: attempts[0]?.correlationId,
+    });
   });
 
   // PR #3625 review: if a session redemption or a mutation's revision bump starts a NEWER read
