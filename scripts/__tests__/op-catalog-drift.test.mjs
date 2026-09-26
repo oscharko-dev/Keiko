@@ -1037,10 +1037,10 @@ describe("op catalog drift", () => {
     },
     REPOSITORY_SCAN_TEST_TIMEOUT_MS,
   );
-  it("matches the checked-in file exactly, by value, in the same order", () => {
-    const regenerated = generateCurrentOpCatalog();
-    const checkedIn = readCheckedInCatalog();
-    expect(regenerated).toEqual(checkedIn);
+  it("matches the checked-in file byte for byte in generated order", async () => {
+    const regenerated = await formatGeneratedJson(generateCurrentOpCatalog());
+    const checkedIn = readFileSync(CATALOG_PATH, "utf8");
+    expect(regenerated).toBe(checkedIn);
   });
 
   // #3532: the failure-surface inventory is a generated view over the same typed registry, pinned
