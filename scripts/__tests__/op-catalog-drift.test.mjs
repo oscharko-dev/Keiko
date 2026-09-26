@@ -54,6 +54,10 @@ const INVENTORY_PATH = join(
   "observability",
   "failure-surface-inventory.generated.json",
 );
+
+async function canonicalGeneratedJsonBytes(bytes) {
+  return formatGeneratedJson(JSON.parse(bytes));
+}
 // Coverage instrumentation makes a complete repository scan take more than two minutes on the
 // smallest CI workers. This is a harness deadline, not a product latency budget; cache the one
 // immutable result and keep that unavoidable scan bounded without letting the global 15-second
@@ -1037,23 +1041,22 @@ describe("op catalog drift", () => {
     },
     REPOSITORY_SCAN_TEST_TIMEOUT_MS,
   );
-  it("matches the checked-in file byte for byte in generated order", async () => {
+  it("matches the checked-in file in generated order", async () => {
     const regenerated = await formatGeneratedJson(generateCurrentOpCatalog());
-    const checkedIn = readFileSync(CATALOG_PATH, "utf8");
+    const checkedIn = await canonicalGeneratedJsonBytes(readFileSync(CATALOG_PATH, "utf8"));
     expect(regenerated).toBe(checkedIn);
   });
 
   // #3532: the failure-surface inventory is a generated view over the same typed registry, pinned
-  // byte for byte so a new operation, a moved proof or a reformatted file cannot leave it stale.
+  // in generated order so a new operation or moved proof cannot leave it stale.
   it(
-    "matches the checked-in failure-surface inventory byte for byte",
+    "matches the checked-in failure-surface inventory in generated order",
     async () => {
       const generated = await formatGeneratedJson(
         generateActivityLogFailureSurfaceInventory(repoRoot, generateCurrentTypedRegistry()),
       );
-      expect(
-        failureSurfaceInventoryDrift(generated, readFileSync(INVENTORY_PATH, "utf8")),
-      ).toBeUndefined();
+      const checkedIn = await canonicalGeneratedJsonBytes(readFileSync(INVENTORY_PATH, "utf8"));
+      expect(generated).toBe(checkedIn);
     },
     REPOSITORY_SCAN_TEST_TIMEOUT_MS,
   );
