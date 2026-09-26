@@ -177,8 +177,10 @@ export function parentCorrelationKey(parentCorrelationId: string): string {
 export type FilterKeyHashes = readonly [number, number];
 
 export function filterKeyHashes(key: string): FilterKeyHashes {
-  const digest = createHash("sha256").update(key, "utf8").digest();
-  return [digest.readUInt32BE(0), (digest.readUInt32BE(4) | 1) >>> 0];
+  const digest = createHash("sha256").update(key, "utf8").digest("hex");
+  const first = Number.parseInt(digest.slice(0, 8), 16);
+  const second = Number.parseInt(digest.slice(8, 16), 16);
+  return [first, (second | 1) >>> 0];
 }
 
 function filterBitIndex(hashes: FilterKeyHashes, round: number, bits: number): number {

@@ -17,6 +17,28 @@ export const MAX_ACTIVITY_LOG_READ_LINE_BYTES = 1024 * 1024;
 
 const NEWLINE = 0x0a;
 
+// Scanning retained segments is sequential, but allocating one native read buffer per file leaves
+// those buffers for a later GC and needlessly raises peak RSS. Keep at most one default-sized buffer
+// between scans. A concurrently active reader simply allocates its own buffer and offers it back
+// when done; custom chunk sizes are never retained.
+let pooledReadChunk: Buffer | undefined;
+
+function acquireReadChunk(chunkBytes: number | undefined): {
+  readonly chunk: Buffer;
+  readonly reusable: boolean;
+} {
+  if (chunkBytes !== undefined && chunkBytes !== ACTIVITY_LOG_READ_CHUNK_BYTES) {
+    return { chunk: Buffer.allocUnsafe(chunkBytes), reusable: false };
+  }
+  const chunk = pooledReadChunk ?? Buffer.allocUnsafe(ACTIVITY_LOG_READ_CHUNK_BYTES);
+  pooledReadChunk = undefined;
+  return { chunk, reusable: true };
+}
+
+function releaseReadChunk(chunk: Buffer, reusable: boolean): void {
+  if (reusable && pooledReadChunk === undefined) pooledReadChunk = chunk;
+}
+
 export interface ActivityLogReadLine extends ActivityLogTextLine {
   // The line's own bytes, without its newline.
   readonly byteLength: number;
@@ -69,8 +91,14 @@ class PendingLine {
   }
 
   public take(terminated: boolean): ActivityLogReadLine {
+    const text =
+      this.discarded || this.parts.length === 0
+        ? ""
+        : this.parts.length === 1
+          ? (this.parts[0]?.toString("utf8") ?? "")
+          : Buffer.concat(this.parts, this.bytes).toString("utf8");
     const line: ActivityLogReadLine = {
-      text: this.discarded ? "" : Buffer.concat(this.parts, this.bytes).toString("utf8"),
+      text,
       terminated,
       byteLength: this.bytes,
       oversized: this.discarded,
@@ -99,25 +127,29 @@ export function* readDescriptorLines(
   descriptor: number,
   options: ActivityLogReadOptions = {},
 ): Generator<ActivityLogReadLine> {
-  const chunk = Buffer.allocUnsafe(options.chunkBytes ?? ACTIVITY_LOG_READ_CHUNK_BYTES);
+  const { chunk, reusable } = acquireReadChunk(options.chunkBytes);
   const pending = new PendingLine(options.maxLineBytes ?? MAX_ACTIVITY_LOG_READ_LINE_BYTES);
   let position = 0;
-  for (let count = readChunk(descriptor, chunk, position); count > 0;) {
-    position += count;
-    const view = chunk.subarray(0, count);
-    options.onChunk?.(view);
-    let start = 0;
-    for (let newline = view.indexOf(NEWLINE, start); newline >= 0;) {
-      // A line completed inside this chunk is decoded before the chunk is reused: no copy needed.
-      pending.append(view.subarray(start, newline), false);
-      yield pending.take(true);
-      start = newline + 1;
-      newline = view.indexOf(NEWLINE, start);
+  try {
+    for (let count = readChunk(descriptor, chunk, position); count > 0;) {
+      position += count;
+      const view = chunk.subarray(0, count);
+      options.onChunk?.(view);
+      let start = 0;
+      for (let newline = view.indexOf(NEWLINE, start); newline >= 0;) {
+        // A line completed inside this chunk is decoded before the chunk is reused: no copy needed.
+        pending.append(view.subarray(start, newline), false);
+        yield pending.take(true);
+        start = newline + 1;
+        newline = view.indexOf(NEWLINE, start);
+      }
+      pending.append(view.subarray(start), true);
+      count = readChunk(descriptor, chunk, position);
     }
-    pending.append(view.subarray(start), true);
-    count = readChunk(descriptor, chunk, position);
+    if (!pending.empty) yield pending.take(false);
+  } finally {
+    releaseReadChunk(chunk, reusable);
   }
-  if (!pending.empty) yield pending.take(false);
 }
 
 /** Opens with `open` (the caller's trust policy), yields every line, and always closes. */

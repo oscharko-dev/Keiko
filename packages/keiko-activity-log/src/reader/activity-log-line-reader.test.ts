@@ -85,6 +85,22 @@ describe("readActivityLogFileLines (#3531)", () => {
     expect(Buffer.concat(chunks).toString("utf8")).toBe(text);
   });
 
+  it("keeps concurrent default-sized readers isolated when one closes early", () => {
+    const firstPath = writeText("first-a\nfirst-b\n");
+    const secondPath = join(directory, "second.jsonl");
+    writeFileSync(secondPath, "second-a\nsecond-b\n");
+    const first = readActivityLogFileLines(() => openSync(firstPath, "r"));
+    const second = readActivityLogFileLines(() => openSync(secondPath, "r"));
+
+    expect(first.next()).toMatchObject({ done: false, value: { text: "first-a" } });
+    expect(second.next()).toMatchObject({ done: false, value: { text: "second-a" } });
+    expect(first.return(undefined).done).toBe(true);
+    expect([...second].map((line) => line.text)).toEqual(["second-b"]);
+    expect(
+      [...readActivityLogFileLines(() => openSync(firstPath, "r"))].map((line) => line.text),
+    ).toEqual(["first-a", "first-b"]);
+  });
+
   it("wraps open and read failures in a content-free ActivityLogReadError", () => {
     const missing = join(directory, "missing.jsonl");
     const open = (): Generator<ActivityLogReadLine> =>

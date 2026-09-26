@@ -766,15 +766,23 @@ the integrity, coverage, loss and truncation of the selection. The human output 
   commit `5cc94e89a25a2cb98c233732dfba9916ce5b9498` with the #3558 working tree. Each value is one
   child-process measurement of the same 80 MiB, 40-segment history:
 
-  | Build              |              Empty query |               Cold query |               Warm query |
-  | ------------------ | -----------------------: | -----------------------: | -----------------------: |
-  | Pre-move baseline  | 1662 ms / 341.23 MiB RSS | 2676 ms / 342.53 MiB RSS | 1642 ms / 343.67 MiB RSS |
-  | #3558 working tree |   289 ms / 89.69 MiB RSS | 1318 ms / 124.72 MiB RSS |  403 ms / 117.13 MiB RSS |
+  | Build                       |                Empty query |                   Cold query |                  Warm query |
+  | --------------------------- | -------------------------: | ---------------------------: | --------------------------: |
+  | Pre-move baseline           |   1662 ms / 341.23 MiB RSS |     2676 ms / 342.53 MiB RSS |    1642 ms / 343.67 MiB RSS |
+  | #3558 before allocation fix |     289 ms / 89.69 MiB RSS |     1318 ms / 124.72 MiB RSS |     403 ms / 117.13 MiB RSS |
+  | #3558 allocation fix run 1  |  284 ms / 89.90625 MiB RSS |  1312 ms / 119.09375 MiB RSS |  410 ms / 115.96875 MiB RSS |
+  | #3558 allocation fix run 2  | 277 ms / 89.671875 MiB RSS | 1272 ms / 119.265625 MiB RSS | 398 ms / 116.015625 MiB RSS |
+  | #3558 allocation fix run 3  | 261 ms / 89.640625 MiB RSS |  1307 ms / 119.71875 MiB RSS |  399 ms / 115.59375 MiB RSS |
 
-  The extracted command has materially lower absolute RSS and elapsed time. It does **not** make
-  the unchanged cold-query RSS-growth gate green: its cold delta is 35.03 MiB over the empty query,
-  above the 32 MiB limit. That result remains unresolved pending scope clarification; it is not
-  normalized by the improved absolute measurements.
+  The extraction materially lowers absolute RSS and elapsed time, but its first cold measurement
+  still grew by 35.03 MiB over the empty query. Profiling traced that remainder to transient native
+  allocations: each segment created another 64 KiB read buffer pending GC, ordinary lines were
+  copied before decoding, and each correlation-filter hash allocated a digest buffer. Reusing one
+  bounded read buffer, decoding a single line part directly, avoiding discarded scan wrappers, and
+  reading the same SHA-256 words from its hex form preserve the stored manifest and query formats.
+  Three consecutive uninstrumented runs grow by 29.1875, 29.59375, and 30.078125 MiB respectively,
+  all below the unchanged 32 MiB limit. The history, segment count, 112 MiB heap cap, empty-command
+  baseline, and absence of forced garbage collection remain unchanged.
 
 - **Versioned output.** `--json` forms name themselves and their version: `keiko.support.query`,
   `keiko.support.manifest`, the stored `keiko.activity-log.segment-manifest`, and the export

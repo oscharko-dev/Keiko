@@ -20,7 +20,11 @@ import {
   type ActivityLogFileName,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { openSafeArtifactFile } from "@oscharko-dev/keiko-security/fs-hardening";
-import { ActivityLogReadError, readActivityLogFileLines } from "./activity-log-line-reader.js";
+import {
+  ActivityLogReadError,
+  readActivityLogFileLines,
+  type ActivityLogReadLine,
+} from "./activity-log-line-reader.js";
 import { classifyLine, type LineClassification } from "./support-analyze.js";
 import {
   SegmentManifestBuilder,
@@ -97,6 +101,11 @@ export interface ActivityLogScannerDeps {
   readonly openFile?: ((file: ActivityLogStoreFile, stateDir: string) => number) | undefined;
 }
 
+interface ActivityLogScan {
+  readonly builder: SegmentManifestBuilder;
+  readonly lines: Generator<ActivityLogReadLine>;
+}
+
 function openStoreFile(file: ActivityLogStoreFile, stateDir: string): number {
   return openSafeArtifactFile(file.path, {
     artifactClass: "activity-log",
@@ -124,7 +133,7 @@ export class ActivityLogScanner {
     return this.lastManifests.get(file.name);
   }
 
-  public *scan(file: ActivityLogStoreFile): Generator<ScannedLine> {
+  private start(file: ActivityLogStoreFile): ActivityLogScan {
     const open = this.deps.openFile ?? openStoreFile;
     const builder = new SegmentManifestBuilder(file.segmentId ?? "legacy");
     this.opened.add(file.name);
@@ -136,29 +145,62 @@ export class ActivityLogScanner {
         builder.observeChunk(chunk);
       },
     });
+    return { builder, lines };
+  }
+
+  private observe(
+    builder: SegmentManifestBuilder,
+    line: ActivityLogReadLine,
+    index: number,
+  ): LineClassification {
+    const classification = classifyLine(line.text, index, !line.terminated, {});
+    builder.observeLine(line, classification);
+    this.scannedLines += 1;
+    return classification;
+  }
+
+  private finish(file: ActivityLogStoreFile, builder: SegmentManifestBuilder): SegmentManifest {
+    const manifest = builder.finish();
+    this.lastManifests.set(file.name, manifest);
+    return manifest;
+  }
+
+  private readFailed(file: ActivityLogStoreFile, error: unknown): boolean {
+    if (!(error instanceof ActivityLogReadError)) return false;
+    this.unreadable.add(file.name);
+    return true;
+  }
+
+  public *scan(file: ActivityLogStoreFile): Generator<ScannedLine> {
+    const { builder, lines } = this.start(file);
     let index = 0;
     try {
       for (const line of lines) {
-        const classification = classifyLine(line.text, index, !line.terminated, {});
-        builder.observeLine(line, classification);
-        this.scannedLines += 1;
+        const classification = this.observe(builder, line, index);
         yield { file, index, text: line.text, byteLength: line.byteLength, classification };
         index += 1;
       }
     } catch (error) {
-      if (!(error instanceof ActivityLogReadError)) throw error;
-      this.unreadable.add(file.name);
+      if (!this.readFailed(file, error)) throw error;
       return;
     }
-    this.lastManifests.set(file.name, builder.finish());
+    this.finish(file, builder);
   }
 
   /** Streams `file` to its end without retaining anything but its derived manifest. */
   public drain(file: ActivityLogStoreFile): SegmentManifest | undefined {
-    const lines = this.scan(file);
-    let next = lines.next();
-    while (next.done !== true) next = lines.next();
-    return this.manifestOf(file);
+    const { builder, lines } = this.start(file);
+    let index = 0;
+    try {
+      for (const line of lines) {
+        this.observe(builder, line, index);
+        index += 1;
+      }
+    } catch (error) {
+      if (!this.readFailed(file, error)) throw error;
+      return undefined;
+    }
+    return this.finish(file, builder);
   }
 }
 

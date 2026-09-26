@@ -3,6 +3,7 @@ import {
   chmodSync,
   existsSync,
   mkdtempSync,
+  openSync,
   readFileSync,
   readdirSync,
   rmSync,
@@ -157,6 +158,22 @@ describe("segment manifests (#3531)", () => {
     expect(scanner.opened.size).toBe(0);
   });
 
+  it("records a direct drain read failure without retaining a partial manifest", () => {
+    writeHistory();
+    const [file] = listActivityLogStoreFiles(stateDir);
+    if (file === undefined) throw new Error("fixture segment missing");
+    chmodSync(file.path, 0o600);
+    const scanner = new ActivityLogScanner(stateDir, {
+      // A write-only descriptor opens successfully, then deterministically fails on the first read.
+      openFile: (candidate): number => openSync(candidate.path, "a"),
+    });
+
+    expect(scanner.drain(file)).toBeUndefined();
+    expect(scanner.unreadable).toEqual(new Set([file.name]));
+    expect(scanner.manifestOf(file)).toBeUndefined();
+    expect(existsSync(segmentManifestDirectory(stateDir))).toBe(false);
+  });
+
   it("records safe ranges, registered counts, integrity and lifecycle references only", () => {
     writeHistory();
     ensure();
@@ -236,6 +253,15 @@ describe("segment manifests (#3531)", () => {
     }
     expect(manifest.correlations.distinctKeyCount).toBe(4);
     expect(manifestMayContainAnyKey(loaded, [])).toBe(false);
+  });
+
+  it("keeps the manifest Bloom-filter hash vectors stable", () => {
+    expect(filterKeyHashes(correlationKey("corr-first-000001"))).toEqual([
+      3_114_536_999, 504_353_769,
+    ]);
+    expect(filterKeyHashes(parentCorrelationKey("corr-first-000001"))).toEqual([
+      1_591_944_326, 2_948_860_615,
+    ]);
   });
 
   it("rejects a tampered, reordered or foreign-catalog manifest and rebuilds it", () => {
