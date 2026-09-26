@@ -153,6 +153,52 @@ describe("useCodingWorkbenchQuestions", () => {
     }
   });
 
+  // PR #3625 review: an answer event that arrives while a listing is in flight queues a resync.
+  // The older listing may still return the question another view already answered; the queued
+  // listing must run anyway instead of being dropped with that stale, non-empty answer.
+  it("runs a resync queued during a listing even when that listing still finds the question", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveInFlight: ((value: typeof pending) => void) | undefined;
+      vi.mocked(listCodingWorkbenchRuntimeQuestions)
+        .mockResolvedValueOnce(pending)
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              resolveInFlight = resolve;
+            }),
+        )
+        .mockResolvedValue(emptyActive);
+      const view = renderHook((input) => useCodingWorkbenchQuestions(input), {
+        initialProps: activeInput(),
+      });
+      await flush();
+      expect(view.result.current).toMatchObject({ status: "ready", questions: pending.questions });
+
+      view.rerender({ ...activeInput(), runtimeEventSignal: 1 });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      expect(listCodingWorkbenchRuntimeQuestions).toHaveBeenCalledTimes(2);
+      view.rerender({ ...activeInput(), runtimeEventSignal: 2 });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(400);
+      });
+      expect(listCodingWorkbenchRuntimeQuestions).toHaveBeenCalledTimes(2);
+
+      await act(async () => {
+        resolveInFlight?.(pending);
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await flush();
+      expect(listCodingWorkbenchRuntimeQuestions).toHaveBeenCalledTimes(3);
+      expect(view.result.current).toMatchObject({ status: "empty", questions: [] });
+      view.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // #2386 regression: a required question is raised only AFTER the initial listing (the runtime
   // publishes a content-free observation event when it registers). Without the event-driven
   // resync the section stays on "no pending questions" forever and the run hangs on the question.

@@ -268,7 +268,8 @@ function useQuestionListing(input: ListingInput): void {
       controller: new AbortController(),
       environment: { consumedRef, revisionRef, runId, setState },
       inFlight: false,
-      queued: false,
+      requested: 0,
+      covered: 0,
     };
     coordinatorRef.current = coordinator;
     startQuestionListing(coordinator, false);
@@ -300,18 +301,22 @@ interface ListingCoordinator {
   readonly controller: AbortController;
   readonly environment: ListingEnvironment;
   inFlight: boolean;
-  queued: boolean;
+  // Resyncs requested while a listing was in flight, and how many of them an attempt of that
+  // listing started after, and so already reads.
+  requested: number;
+  covered: number;
 }
 
 interface ActiveListingInput extends ListingEnvironment {
   readonly controller: AbortController;
   readonly retryEmpty: boolean;
+  readonly onAttempt: () => void;
 }
 
 function startQuestionListing(coordinator: ListingCoordinator, retryEmpty: boolean): void {
   if (coordinator.controller.signal.aborted) return;
   if (coordinator.inFlight) {
-    coordinator.queued = true;
+    coordinator.requested += 1;
     return;
   }
   coordinator.inFlight = true;
@@ -322,21 +327,26 @@ function startQuestionListing(coordinator: ListingCoordinator, retryEmpty: boole
     ...coordinator.environment,
     controller: coordinator.controller,
     retryEmpty,
-  }).then((empty) => finishQuestionListing(coordinator, empty));
+    onAttempt: () => {
+      coordinator.covered = coordinator.requested;
+    },
+  }).then(() => {
+    finishQuestionListing(coordinator);
+  });
 }
 
-function finishQuestionListing(coordinator: ListingCoordinator, empty: boolean): void {
+// A resync requested while a listing was in flight runs unless an attempt of that listing started
+// after it. An attempt that began earlier may still return a question another paired view answered
+// meanwhile, and that stale, non-empty answer used to drop the resync (PR #3625 review); a later
+// attempt already reads the state the resync asked for.
+function finishQuestionListing(coordinator: ListingCoordinator): void {
   coordinator.inFlight = false;
-  if (coordinator.controller.signal.aborted || !empty) {
-    coordinator.queued = false;
-    return;
-  }
-  const queued = coordinator.queued;
-  coordinator.queued = false;
-  if (queued) startQuestionListing(coordinator, true);
+  const uncovered = coordinator.requested > coordinator.covered;
+  coordinator.covered = coordinator.requested;
+  if (uncovered && !coordinator.controller.signal.aborted) startQuestionListing(coordinator, true);
 }
 
-async function runQuestionListing(input: ActiveListingInput): Promise<boolean> {
+async function runQuestionListing(input: ActiveListingInput): Promise<void> {
   const { controller, setState } = input;
   try {
     // #2478: order every list behind boot pairing so a newly opened window cannot race its own
@@ -345,23 +355,23 @@ async function runQuestionListing(input: ActiveListingInput): Promise<boolean> {
     // One listing per retry delay, plus a final listing that is not followed by a wait.
     const attempts = QUESTION_VISIBILITY_RETRY_DELAYS_MS.length + 1;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
-      if (controller.signal.aborted) return false;
+      if (controller.signal.aborted) return;
+      input.onAttempt();
       const response = await listQuestionAttempt(input);
-      if (controller.signal.aborted) return false;
+      if (controller.signal.aborted) return;
       if (response.session === "unpaired") {
         setState({ ...EMPTY_STATE, status: "unpaired" });
-        return false;
+        return;
       }
       setState(listedState(response.questions, input.consumedRef));
-      if (response.questions.length > 0) return false;
+      if (response.questions.length > 0) return;
       const retryDelay = QUESTION_VISIBILITY_RETRY_DELAYS_MS[attempt];
-      if (!input.retryEmpty || retryDelay === undefined) return true;
+      if (!input.retryEmpty || retryDelay === undefined) return;
       await waitForQuestionVisibility(retryDelay, controller.signal);
     }
   } catch (error) {
     if (!controller.signal.aborted) setState(failureState(error));
   }
-  return false;
 }
 
 function listQuestionAttempt(
