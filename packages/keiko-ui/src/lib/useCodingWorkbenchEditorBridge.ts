@@ -32,6 +32,7 @@ import { reportClientDiagnostic } from "./client-diagnostics";
 import { useRunLockedRoot } from "./useCodingWorkbenchChanges";
 import type {
   EditorAgentAction,
+  EditorAgentActionResult,
   EditorAgentActionResultRequest,
   EditorAgentSessionSnapshot,
   EditorAgentSnapshotResponse,
@@ -153,6 +154,17 @@ async function submitDecisionWithRetry(
 // commit as their own render — two synchronous `setState` calls in one tick would just batch into
 // one render and skip the teardown entirely.
 const FORCE_RECONNECT_SETTLE_MS = 120;
+// Lab 2026-09-26: a second tab on the same run cannot take the run's bridge lease while the first
+// tab's stream holds it, so every registration of the second tab is refused — and the fixed retry
+// re-registered about four times a second, for as long as the run stayed active. Each consecutive
+// failure now doubles the wait before the next attempt, up to this ceiling, so a refused tab keeps
+// trying (it takes over once the other tab lets go) without hammering the server.
+const MAX_REGISTRATION_RETRY_DELAY_MS = 30_000;
+
+function registrationRetryDelayMs(consecutiveFailures: number): number {
+  const exponent = Math.max(0, consecutiveFailures - 1);
+  return Math.min(FORCE_RECONNECT_SETTLE_MS * 2 ** exponent, MAX_REGISTRATION_RETRY_DELAY_MS);
+}
 
 export interface UseCodingWorkbenchEditorBridgeInput {
   /** The task workspace's currently active absolute root, or null when none is bound. This is the
@@ -296,6 +308,8 @@ export function useCodingWorkbenchEditorBridge(
   // retry effect keys off this counter instead, so a persistently failing backend keeps getting
   // retried rather than being retried exactly once.
   const [registrationFailureEpoch, setRegistrationFailureEpoch] = useState(0);
+  // Failures in a row since the last successful registration, for the retry backoff below.
+  const consecutiveFailuresRef = useRef(0);
 
   const handleApplyChangeset = useCallback((action: EditorAgentAction): void => {
     if (action.requiresReview === false) {
@@ -325,7 +339,26 @@ export function useCodingWorkbenchEditorBridge(
   // never bleed into a run this hook has not even tried to register a bridge for yet.
   useEffect(() => {
     setRegistrationFailed(false);
+    consecutiveFailuresRef.current = 0;
   }, [sessionId]);
+
+  // Lab 2026-09-26: a stopped run kept its change review and "Waiting for your approval" on screen.
+  // The server cancels the queued action and says so on the bridge, and a run that is no longer
+  // live has nothing left to review either, so neither leaves a card behind.
+  const clearSettledReview = useCallback((result: EditorAgentActionResult): void => {
+    if (pendingRef.current?.action.actionId !== result.actionId) return;
+    decidingRef.current = false;
+    setPending(null);
+    reportClientDiagnostic(
+      `[keiko] coding workbench changeset review closed: action ${result.status}`,
+    );
+  }, []);
+  useEffect(() => {
+    if (active || pendingRef.current === null) return;
+    decidingRef.current = false;
+    setPending(null);
+    reportClientDiagnostic("[keiko] coding workbench changeset review closed: run ended");
+  }, [active]);
 
   const registerSnapshot = useCallback(
     async (capability: string | undefined): Promise<EditorAgentSnapshotResponse | void> => {
@@ -336,8 +369,15 @@ export function useCodingWorkbenchEditorBridge(
           capability,
         );
         setRegistrationFailed(false);
+        consecutiveFailuresRef.current = 0;
         return response;
       } catch (error) {
+        consecutiveFailuresRef.current += 1;
+        if (consecutiveFailuresRef.current === 1) {
+          reportClientDiagnostic(
+            "[keiko] coding workbench bridge registration failed; retrying with backoff",
+          );
+        }
         setRegistrationFailed(true);
         setRegistrationFailureEpoch((value) => value + 1);
         // The underlying bridge's own registration effect (editorAgentBridge.ts) already treats a
@@ -356,6 +396,7 @@ export function useCodingWorkbenchEditorBridge(
     enabled,
     registerSnapshot,
     onConflict: noopConflictHandler,
+    onTerminalResult: clearSettledReview,
   });
 
   const forceReconnect = useCallback(async (): Promise<void> => {
@@ -384,7 +425,10 @@ export function useCodingWorkbenchEditorBridge(
     if (!enabled || registrationFailureEpoch === 0) return undefined;
     if (retriedEpochRef.current === registrationFailureEpoch) return undefined;
     retriedEpochRef.current = registrationFailureEpoch;
-    const timer = setTimeout(() => void forceReconnect(), FORCE_RECONNECT_SETTLE_MS);
+    const timer = setTimeout(
+      () => void forceReconnect(),
+      registrationRetryDelayMs(consecutiveFailuresRef.current),
+    );
     return (): void => clearTimeout(timer);
   }, [enabled, registrationFailureEpoch, forceReconnect]);
 

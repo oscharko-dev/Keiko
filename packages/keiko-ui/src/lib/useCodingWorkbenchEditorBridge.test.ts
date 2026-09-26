@@ -17,6 +17,14 @@ import { useCodingWorkbenchEditorBridge } from "./useCodingWorkbenchEditorBridge
 
 const postSnapshotSpy = vi.fn();
 const postResultSpy = vi.fn();
+const reportDiagnosticSpy = vi.fn();
+
+vi.mock("./client-diagnostics", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client-diagnostics")>()),
+  reportClientDiagnostic: (message: string): void => {
+    reportDiagnosticSpy(message);
+  },
+}));
 
 // `editorAgentBridge.ts` imports this same file via a different relative specifier
 // (`../../../../../lib/api`); Vitest's mock registry keys by resolved module id, so mocking it
@@ -100,6 +108,7 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ snapshot: null, bridgeDecisionCapability: "A".repeat(43) });
   postResultSpy.mockReset().mockResolvedValue({ result: { status: "succeeded" } });
+  reportDiagnosticSpy.mockReset();
   createSourceSpy.mockClear();
   (globalThis as { EventSource?: unknown }).EventSource = FakeEventSource;
 });
@@ -672,6 +681,119 @@ describe("useCodingWorkbenchEditorBridge — registration retry", () => {
     await waitFor(() => {
       expect(result.current.bridgeUnavailable).toBe(false);
     });
+  });
+});
+
+// Lab 2026-09-26: a stopped run kept its change review card and "Waiting for your approval" footer.
+// The server cancels the queued action and reports it on the bridge; a run that is no longer live
+// has nothing left to review either.
+describe("useCodingWorkbenchEditorBridge — settled review", () => {
+  function emitResult(source: FakeEventSource, sessionId: string, actionId: string): void {
+    source.emit("editor-agent:result", {
+      schemaVersion: "1",
+      eventId: `event-${actionId}-cancelled`,
+      type: "result",
+      result: {
+        schemaVersion: "1",
+        actionId,
+        sessionId,
+        status: "failed",
+        message: "The runtime action was cancelled.",
+      },
+    });
+  }
+
+  async function reviewing(active = true): Promise<{
+    readonly result: { readonly current: ReturnType<typeof useCodingWorkbenchEditorBridge> };
+    readonly rerender: (props: { readonly active: boolean }) => void;
+    readonly source: FakeEventSource;
+    readonly sessionId: string;
+  }> {
+    const hook = renderHook(
+      (props: { readonly active: boolean }) =>
+        useCodingWorkbenchEditorBridge({
+          root: "/repo/task-1",
+          runId: "run-1",
+          active: props.active,
+        }),
+      { initialProps: { active } },
+    );
+    await flushMicrotasks();
+    const source = latestSource();
+    const sessionId =
+      new URL(source.url, "https://example.test").searchParams.get("sessionId") ?? "";
+    act(() => {
+      emitApplyChangeset(source, sessionId);
+    });
+    await flushMicrotasks();
+    expect(hook.result.current.pendingReview).not.toBeNull();
+    return { result: hook.result, rerender: hook.rerender, source, sessionId };
+  }
+
+  it("clears the change review when the server cancels its action", async () => {
+    const { result, source, sessionId } = await reviewing();
+    act(() => {
+      emitResult(source, sessionId, "action-1");
+    });
+    await flushMicrotasks();
+    expect(result.current.pendingReview).toBeNull();
+    expect(postResultSpy).not.toHaveBeenCalled();
+    expect(reportDiagnosticSpy).toHaveBeenCalledWith(
+      "[keiko] coding workbench changeset review closed: action failed",
+    );
+  });
+
+  it("keeps the change review when a result names another action", async () => {
+    const { result, source, sessionId } = await reviewing();
+    act(() => {
+      emitResult(source, sessionId, "action-other");
+    });
+    await flushMicrotasks();
+    expect(result.current.pendingReview).not.toBeNull();
+  });
+
+  it("clears the change review once the run is no longer live", async () => {
+    const { result, rerender } = await reviewing();
+    rerender({ active: false });
+    await flushMicrotasks();
+    expect(result.current.pendingReview).toBeNull();
+    expect(postResultSpy).not.toHaveBeenCalled();
+    expect(reportDiagnosticSpy).toHaveBeenCalledWith(
+      "[keiko] coding workbench changeset review closed: run ended",
+    );
+  });
+});
+
+// Lab 2026-09-26: a second tab on the same run was refused the run's bridge lease on every attempt
+// and re-registered about four times a second while the run stayed active. Failures in a row now
+// double the wait before the next attempt, so a refused tab keeps trying without hammering.
+describe("useCodingWorkbenchEditorBridge — registration backoff", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("backs off between failed registrations instead of retrying at a fixed pace", async () => {
+    vi.useFakeTimers();
+    postSnapshotSpy.mockRejectedValue(new Error("bridge lease held by another tab"));
+    renderHook(() =>
+      useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: true }),
+    );
+    // In steps, so React commits each failure's state and runs the retry effect it schedules.
+    for (let elapsedMs = 0; elapsedMs < 30_000; elapsedMs += 50) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+    }
+    const attempts = postSnapshotSpy.mock.calls.length;
+    expect(attempts).toBeGreaterThanOrEqual(5);
+    expect(attempts).toBeLessThanOrEqual(12);
+    // One line per streak of failures, not one per attempt.
+    expect(
+      reportDiagnosticSpy.mock.calls.filter(
+        ([message]) =>
+          message === "[keiko] coding workbench bridge registration failed; retrying with backoff",
+      ),
+    ).toHaveLength(1);
   });
 });
 
