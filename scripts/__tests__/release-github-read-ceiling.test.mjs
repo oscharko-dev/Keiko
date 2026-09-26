@@ -11,7 +11,7 @@ import { describe, expect, it } from "vitest";
 
 import { spawnResult } from "../check-release-alignment.mjs";
 import { readFound, readGithub } from "../lib/github-api.mjs";
-import { HOST_COMMAND_MAX_BUFFER_BYTES, spawnHostExecutable } from "../lib/host-executable.mjs";
+import { HOST_COMMAND_MAX_BUFFER_BYTES, spawnHostExecutable } from "../lib/host-command.mjs";
 import { readReleaseDispatchRuns } from "../lib/release-candidate.mjs";
 
 const scriptsRoot = join(dirname(fileURLToPath(import.meta.url)), "..");

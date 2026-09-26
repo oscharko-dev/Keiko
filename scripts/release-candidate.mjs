@@ -6,7 +6,7 @@
 import { appendFileSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { spawnHostExecutable } from "./lib/host-executable.mjs";
+import { spawnHostExecutable } from "./lib/host-command.mjs";
 import { releaseCandidateMain } from "./lib/release-candidate.mjs";
 import { portableRehearsalReadiness } from "./portable-rehearsal-readiness.mjs";
 

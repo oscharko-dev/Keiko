@@ -1,7 +1,7 @@
 import { appendFileSync, lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnHostExecutable } from "./lib/host-executable.mjs";
+import { spawnHostExecutable } from "./lib/host-command.mjs";
 
 const bundleRootName = ".portable-release-assets";
 export const PORTABLE_ASSETS_ARTIFACT_NAME = "portable-release-assets";

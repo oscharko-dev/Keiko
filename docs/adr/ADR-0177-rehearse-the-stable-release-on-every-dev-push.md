@@ -211,7 +211,7 @@ publishes; it only has to be verifiable by it.
   event-driven run therefore only decides and dispatches; the publish runs on the tag and binds its
   commit as before.
 - **Reads that fit.** Every `gh` and `npm` child the release chain spawns carries an explicit output
-  ceiling (`HOST_COMMAND_MAX_BUFFER_BYTES` in `scripts/lib/host-executable.mjs`) sized for a full API
+  ceiling (`HOST_COMMAND_MAX_BUFFER_BYTES` in `scripts/lib/host-command.mjs`) sized for a full API
   page. `spawnSync` kills a child past 1 MiB by default, and on 2026-09-26 the release-dispatch
   history crossed that at its 61st run: the 1.1.9 request and every advance run after it failed to
   read it. A failed read still fails closed, and it names its cause: the child's error code

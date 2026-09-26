@@ -1,5 +1,4 @@
 import { Buffer } from "node:buffer";
-import { spawnSync } from "node:child_process";
 import {
   chmodSync,
   closeSync,
@@ -280,21 +279,6 @@ export function resolveHostExecutable(
   );
   if (resolved !== undefined) return resolved;
   throw new Error(`trusted host executable is unavailable: ${command}`);
-}
-
-// spawnSync holds a child's whole output in memory and kills the child past `maxBuffer`, 1 MiB by
-// default. No GitHub API answer respects that: the release-dispatch history crossed it at its 61st
-// run (1.1.9, 2026-09-26), and from then on every release request and every advance run failed to
-// read it. An API page is bounded by its per_page; this ceiling only stops a runaway child.
-export const HOST_COMMAND_MAX_BUFFER_BYTES = 64 * 1024 * 1024;
-
-/** Runs a trusted host executable to completion, with room for a full GitHub API page. */
-export function spawnHostExecutable(command, args, options = {}) {
-  return spawnSync(resolveHostExecutable(command), args, {
-    encoding: "utf8",
-    maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES,
-    ...options,
-  });
 }
 
 function resolveTrustedExecutable(

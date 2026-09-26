@@ -7,7 +7,7 @@
 import { appendFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { spawnHostExecutable } from "./lib/host-executable.mjs";
+import { spawnHostExecutable } from "./lib/host-command.mjs";
 import { releaseAutomationMain, runReleaseAuthorize } from "./lib/release-automation.mjs";
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(import.meta.filename)) {

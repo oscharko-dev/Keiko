@@ -57,7 +57,7 @@ import {
   uploadedDownloadSetFailure,
 } from "./lib/portable-release-verification.mjs";
 import { sha256 } from "./lib/digest.mjs";
-import { HOST_COMMAND_MAX_BUFFER_BYTES } from "./lib/host-executable.mjs";
+import { HOST_COMMAND_MAX_BUFFER_BYTES } from "./lib/host-command.mjs";
 import { readJsonFile } from "./lib/json.mjs";
 import { resolveGithubRepository } from "./lib/github-repository.mjs";
 import { recordNpmPublishDeployment } from "./lib/npm-publish-deployment.mjs";
