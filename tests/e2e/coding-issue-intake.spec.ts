@@ -12,6 +12,7 @@ import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contr
 import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
 import { evidenceArtifactPath, evidenceScreenshotPath } from "./support/evidence.js";
 import { formatViolations, runAxe, seriousOrCritical } from "./support/axe.js";
+import { assertWorkbenchTrustLayout } from "./support/coding-issue-commit-evidence.js";
 import {
   prepareBoundIssueForRun,
   previewAndAcceptIssue,
@@ -264,6 +265,58 @@ async function issueContentChangedBeforeStart(page: Page, prompt: string): Promi
   await noRunOrExtraWorkspace(page);
 }
 
+/**
+ * The retired "Issue URL or #number" field sent a non-github URL to the server unchanged, and the
+ * server refused it exactly like any other malformed reference ("invalid-reference",
+ * issuePreviewRoutes.ts's FAILURE_STATUSES). PR #3625 only retired the field: the server-side
+ * refusal is still a live product invariant, so it is asserted directly against the endpoint the
+ * retired button used to call, the same way the malicious `authority: "full-access"` request below
+ * already is.
+ *
+ * The client-side prompt scanner (useCodingWorkbenchIssueIntake.ts's `issueUrlToken`) only ever
+ * treats a github.com URL as a CANDIDATE reference at all, so this one is never extracted -- Send
+ * goes straight to `submit`'s `if (reference.issueRef === undefined) { await start(undefined); ... }`
+ * branch, a plain, non-issue run start, never the preview call above. A REAL "Start coding run"
+ * click is deliberately never let reach the server for this case: unlike every reference the loop
+ * below tests, one the scanner extracts nothing from would start an ordinary run for real, which
+ * would consume this fixture's scripted turns and permanently break every later
+ * `noRunOrExtraWorkspace` in this test -- a run's id never clears back to `undefined` once one
+ * exists (this test's own final "Stop run" step proves the opposite: the id survives a stop). The
+ * run-start request is captured and refused instead, so the UI-level proof -- Start never carries
+ * this URL as an issue -- is real without ever letting a run begin. The captured body's own
+ * `taskIntent` field is the raw prompt text and so trivially contains the URL regardless of
+ * extraction; the structural fact that matters is `startRequest`'s own
+ * (coding-workbench-runtime-mutations.ts) `issueRef`/`expectedIssueBindingDigest`/`issuePurpose`
+ * trio, added only `if (options.issue !== undefined)` -- so its absence is what "never bound" means
+ * on the wire.
+ */
+async function nonGithubUrlRefusedAndNeverBound(page: Page, url: string): Promise<void> {
+  const direct = await page.request.post(PREVIEW_ENDPOINT, {
+    headers: CSRF,
+    data: { repositoryPath: repositoryRoot, issueRef: url },
+  });
+  expect(direct.status()).toBe(400);
+  expect((await direct.json()) as { readonly failure: string }).toMatchObject({
+    failure: "invalid-reference",
+  });
+  let runStartBody: string | undefined;
+  await page.route(`**${RUNS_ENDPOINT}`, async (route) => {
+    runStartBody = route.request().postData() ?? "";
+    await route.fulfill({ status: 409, contentType: "application/json", body: "{}" });
+  });
+  await page.getByLabel("Task instructions").fill(taskPrompt(url));
+  await page.getByRole("button", { name: "Start coding run", exact: true }).click();
+  await expect.poll(() => runStartBody).not.toBeUndefined();
+  await page.unroute(`**${RUNS_ENDPOINT}`);
+  expect(JSON.parse(runStartBody ?? "{}") as Record<string, unknown>).not.toHaveProperty(
+    "issueRef",
+  );
+  await expect(page.getByRole("button", { name: "Start coding run", exact: true })).toBeEnabled({
+    timeout: 60_000,
+  });
+  await noRunOrExtraWorkspace(page);
+}
+
 interface ColorMode {
   readonly name: string;
   readonly theme: "dark" | "light";
@@ -416,6 +469,33 @@ async function assertInitialModelContext(): Promise<void> {
 }
 
 /**
+ * PR #3625 retired the setup card's own "Use this issue"/"Bind workspace" moment the retired flow
+ * used to assert `assertWorkbenchTrustLayout` at, so its only call site went with it. The invariant
+ * it pins -- the repository-trust affordance's own layout ("coding-workbench-trust-affordance" and
+ * the "Allow package scripts for verification" button, CodingWorkbenchTrustAffordance.tsx) -- is
+ * unrelated to issue intake and still needs a home. The affordance only ever renders while a run is
+ * genuinely paused for `pauseReason: "workspace-script-trust"` (CodingWorkbenchWindow.tsx's
+ * `state.run.value?.pauseReason`), which the retired flow's own pre-run call site could never
+ * actually have satisfied (binding a workspace starts no run). The current, real place this pause
+ * happens is exactly where the server-side comment on `requireVerificationScriptTrust` names it: the
+ * bound-issue run's own scripted `keiko_verification` step, refused WORKSPACE_TRUST_REQUIRED because
+ * this fixture's repository is freshly bound and never granted (ADR-0147 D3). Waits for that real
+ * pause, asserts the layout, then grants the repository so the SAME in-flight verification call
+ * resumes and the run continues with no further interruption (the affordance's own documented
+ * contract) -- called once the run's file edit has already landed, so only verification is left
+ * pending.
+ */
+async function assertAndGrantWorkspaceScriptTrust(page: Page): Promise<void> {
+  const notice = workbench(page).getByTestId("coding-workbench-trust-affordance");
+  await expect(notice).toBeVisible({ timeout: 60_000 });
+  await assertWorkbenchTrustLayout(page, SURFACE);
+  await workbench(page)
+    .getByRole("button", { name: "Allow package scripts for verification", exact: true })
+    .click();
+  await expect(notice).toHaveCount(0, { timeout: 30_000 });
+}
+
+/**
  * A model-qualification change reloads the browser before any run has started (the same real
  * event `ensureWorkflowEligibleModel` reacts to on the live lane). Unlike the retired flow's
  * ephemeral, client-side "accepted issue" -- lost by a reload landing between accepting and
@@ -461,6 +541,10 @@ test("#3385 @coding-issue-intake prompt-resolved issue: refusal, managed workspa
     page,
     taskPrompt("https://github.com/other/repository/issues/42"),
     "repository-mismatch",
+  );
+  await nonGithubUrlRefusedAndNeverBound(
+    page,
+    "https://example.test/fixture/issue-intake/issues/42",
   );
   // PR #3625: the client-side prompt scanner only recognises a github.com URL as a candidate
   // reference at all (useCodingWorkbenchIssueIntake.ts's `issueUrlToken`) -- unlike the retired
@@ -519,6 +603,8 @@ test("#3385 @coding-issue-intake prompt-resolved issue: refusal, managed workspa
       { timeout: 90_000 },
     )
     .toBe(ISSUE_INTAKE_EDITED);
+
+  await assertAndGrantWorkspaceScriptTrust(page);
 
   await page.reload();
   await expect(page.getByLabel("Task instructions")).toBeVisible();
@@ -590,6 +676,7 @@ function recordJourneyProof(): void {
         assertions: [
           "auth-refusal-no-run",
           "mismatch-no-run",
+          "non-github-url-refused-and-never-bound",
           "malicious-input-no-run",
           "stale-content-refused-at-start-no-run",
           "grant-revoked-before-start-no-run",
@@ -598,6 +685,7 @@ function recordJourneyProof(): void {
           "preselected-base-branch-matches-issue-default",
           "initial-model-context-causality",
           "model-edit-in-managed-workspace",
+          "workspace-script-trust-pause-and-grant",
           "run-survives-reload",
           "body-free-correlated-activity-log",
         ],
