@@ -478,9 +478,10 @@ function readinessPorts(failAt?: ReadinessPhase): {
   };
 }
 
-// #3612: the V2 governed ask names its tool call and the changeset's base digests. A stale base is
-// answered 409 with the edit's own refusal result, which the plugin returns to the model in place of
-// the call, so no human is asked and the tool endpoint is never reached.
+// #3612: the V2 governed ask names its tool call, so the server can settle that call with the
+// decision. A refused ask may answer 409 with the call's own refusal result, which the plugin
+// returns to the model in place of the call, so the tool endpoint is never reached. A file edit
+// asks no one (owner decision 2026-09-26, ADR-0124 D6); the verification ask carries the protocol.
 describe("generated V2 governed ask", () => {
   const ASK_ENV = {
     KEIKO_CODING_MODE: "governed-assist",
@@ -488,15 +489,10 @@ describe("generated V2 governed ask", () => {
     KEIKO_TOOL_FACADE_CAPABILITY: "capability-token",
     KEIKO_CODING_RUN_ID: "run-ask",
   };
-  const EDIT_CALL = {
-    id: "call_edit",
-    name: "keiko_changeset_edit",
-    args: {
-      changeset: {
-        patch: "--- a/src/example.ts\n+++ b/src/example.ts\n@@ -1 +1 @@\n-old\n+new\n",
-        files: [{ file: "src/example.ts", expectedContentHash: "a".repeat(64) }],
-      },
-    },
+  const VERIFY_CALL = {
+    id: "call_verify",
+    name: "keiko_verification",
+    args: { verifierId: "typecheck" },
   };
   const REFUSAL = {
     status: "failed",
@@ -504,7 +500,7 @@ describe("generated V2 governed ask", () => {
     guidance: "Re-read the file.",
   };
 
-  function editTool(askResponse: () => Response): {
+  function governedTool(askResponse: () => Response): {
     readonly tools: ScriptedGovernedTools;
     readonly bodies: unknown[];
   } {
@@ -523,19 +519,18 @@ describe("generated V2 governed ask", () => {
     return { tools, bodies };
   }
 
-  it("names the call and its base digests, and returns a stale base's refusal as the result", async () => {
-    const { tools, bodies } = editTool(
+  it("names the call and returns a refusal result in place of the call", async () => {
+    const { tools, bodies } = governedTool(
       () => new Response(JSON.stringify(REFUSAL), { status: 409 }),
     );
-    const output = await tools.execute(EDIT_CALL, new AbortController().signal);
+    const output = await tools.execute(VERIFY_CALL, new AbortController().signal);
     expect(JSON.parse(output)).toEqual(REFUSAL);
-    // Only the ask went out: the edit itself never reached the tool endpoint.
+    // Only the ask went out: the call itself never reached the tool endpoint.
     expect(bodies).toHaveLength(1);
     expect(bodies[0]).toMatchObject({
       action: "permission-request",
       runId: "run-ask",
-      actionId: "ses_ask:call_edit",
-      baseDigests: [{ file: "src/example.ts", expectedContentHash: "a".repeat(64) }],
+      actionId: "ses_ask:call_verify",
     });
   });
 
@@ -551,24 +546,24 @@ describe("generated V2 governed ask", () => {
       "keiko-tool-oversized",
     ],
   ])("refuses %s on a 409", async (_name, body, message) => {
-    const { tools } = editTool(() => new Response(body, { status: 409 }));
-    await expect(tools.execute(EDIT_CALL, new AbortController().signal)).rejects.toThrow(message);
+    const { tools } = governedTool(() => new Response(body, { status: 409 }));
+    await expect(tools.execute(VERIFY_CALL, new AbortController().signal)).rejects.toThrow(message);
   });
 
   it("still fails a refused ask as denied, and proceeds with the call once approved", async () => {
-    const denied = editTool(() => new Response(null, { status: 403 }));
-    await expect(denied.tools.execute(EDIT_CALL, new AbortController().signal)).rejects.toThrow(
+    const denied = governedTool(() => new Response(null, { status: 403 }));
+    await expect(denied.tools.execute(VERIFY_CALL, new AbortController().signal)).rejects.toThrow(
       "keiko-tool-denied",
     );
     const responses = [
       new Response('{"status":"approved"}', { status: 200 }),
       new Response(JSON.stringify({ status: "completed", evidence: [] }), { status: 200 }),
     ];
-    const approved = editTool(() => responses.shift() ?? new Response(null, { status: 500 }));
-    const output = await approved.tools.execute(EDIT_CALL, new AbortController().signal);
+    const approved = governedTool(() => responses.shift() ?? new Response(null, { status: 500 }));
+    const output = await approved.tools.execute(VERIFY_CALL, new AbortController().signal);
     expect(JSON.parse(output)).toEqual({ status: "completed", evidence: [] });
     expect(approved.bodies).toHaveLength(2);
-    expect(approved.bodies[1]).toMatchObject({ action: "edit", actionId: "ses_ask:call_edit" });
+    expect(approved.bodies[1]).toMatchObject({ action: "verification", verifierId: "typecheck" });
   });
 });
 
@@ -780,9 +775,11 @@ describe("OpenCode runtime adapter readiness", () => {
     expect(bundle.toolSources.keiko_changeset_edit).toContain(
       "const mode = process.env.KEIKO_CODING_MODE;",
     );
-    expect(bundle.toolSources.keiko_changeset_edit).toContain(
-      'if (mode === "governed-assist" && action === "edit") request = editPermission(args);',
-    );
+    // Owner decision 2026-09-26 (ADR-0124 D6): a file edit raises no governed ask in any mode. Its
+    // one human approval is the change review the mode policy requires before the write
+    // (`requiresEditorReview`, pinned by the ADR-0138 matrix in coding-workbench.test.ts).
+    expect(bundle.toolSources.keiko_changeset_edit).not.toContain("editPermission");
+    expect(bundle.toolSources.keiko_changeset_edit).not.toContain('action === "edit") request');
     const verificationSource = bundle.toolSources.keiko_verification;
     if (verificationSource === undefined) throw new TypeError("verification source missing");
     expect(verificationSource).toContain('actionClass: "command-execution"');

@@ -24,6 +24,9 @@ import {
   parseUnifiedDiff,
   type DiffParseResult,
 } from "@/app/components/desktop/widgets/cards/shared/diffParser";
+import { reportClientDiagnostic } from "./client-diagnostics";
+import { correlationIdOf } from "./client-error-summary";
+import { bffRequestErrorKind } from "./http";
 
 const CHANGE_SIGNAL_DEBOUNCE_MS = 400;
 
@@ -69,6 +72,10 @@ export interface UseCodingWorkbenchChangesInput {
 export interface UseCodingWorkbenchChangesResult extends CodingWorkbenchChangesState {
   readonly selectPath: (path: string) => void;
   readonly retry: () => void;
+  /** Retries only the selected file's diff (#3635) — a transient diff-read failure does not
+   * disturb the panel's `status`, so the whole-panel {@link retry} above never surfaces a control
+   * for it and reselecting the already-selected file is a no-op ({@link selectPath}). */
+  readonly retryDiff: () => void;
 }
 
 const EMPTY_STATE: CodingWorkbenchChangesState = {
@@ -86,8 +93,11 @@ function unavailable(status: CodingWorkbenchChangesStatus): CodingWorkbenchChang
   return { ...EMPTY_STATE, status };
 }
 
-function headLabel(status: GitRepositoryStatusResponse, history: GitHistoryResponse): string {
-  return history.entries[0]?.shortSha ?? status.branch ?? "HEAD";
+function headLabel(
+  status: GitRepositoryStatusResponse,
+  history: GitHistoryResponse | null,
+): string {
+  return history?.entries[0]?.shortSha ?? status.branch ?? "HEAD";
 }
 
 function nextSelectedPath(
@@ -104,7 +114,7 @@ function nextSelectedPath(
 function readyState(
   current: CodingWorkbenchChangesState,
   status: GitRepositoryStatusResponse,
-  history: GitHistoryResponse,
+  history: GitHistoryResponse | null,
 ): CodingWorkbenchChangesState {
   const selectedPath = nextSelectedPath(current, status.changes);
   const sameSelection = selectedPath !== null && selectedPath === current.selectedPath;
@@ -130,12 +140,33 @@ function diffStatusForMerge(
   return "loading";
 }
 
+// #3648: history names only the revision label (headLabel already falls back to the branch or
+// "HEAD"), so a failed or unavailable history read must never hide the status read's otherwise
+// available changed files. Its failure is caught and reported here, on its own, instead of joining
+// the `Promise.all` and sinking the whole snapshot into the panel-wide error/unavailable state.
+async function loadHistory(
+  client: CodingWorkbenchChangesClient,
+  root: string,
+): Promise<GitHistoryResponse | null> {
+  try {
+    return await client.getHistory(root);
+  } catch (error) {
+    const correlationId = correlationIdOf(error);
+    reportClientDiagnostic("[keiko] coding workbench change history read failed", {
+      kind: "other",
+      errorKind: bffRequestErrorKind(error),
+      ...(correlationId === undefined ? {} : { correlationId }),
+    });
+    return null;
+  }
+}
+
 async function loadChanges(
   client: CodingWorkbenchChangesClient,
   root: string,
-): Promise<readonly [GitRepositoryStatusResponse, GitHistoryResponse]> {
+): Promise<readonly [GitRepositoryStatusResponse, GitHistoryResponse | null]> {
   await codingAppSessionPairingSettled();
-  return Promise.all([client.getStatus(root), client.getHistory(root)]);
+  return Promise.all([client.getStatus(root), loadHistory(client, root)]);
 }
 
 function useChangesSnapshot(input: {
@@ -179,7 +210,7 @@ function useChangesSnapshot(input: {
     void loadChanges(client, root).then(
       ([status, history]) => {
         if (cancelled) return;
-        if (!status.available || !history.available) setState(unavailable("unavailable"));
+        if (!status.available) setState(unavailable("unavailable"));
         else setState((current) => readyState(current, status, history));
       },
       () => {
@@ -208,10 +239,11 @@ function useSelectedDiff(input: {
   readonly client: CodingWorkbenchChangesClient;
   readonly root: string | null;
   readonly epoch: number;
+  readonly diffEpoch: number;
   readonly state: CodingWorkbenchChangesState;
   readonly setState: Dispatch<SetStateAction<CodingWorkbenchChangesState>>;
 }): void {
-  const { client, epoch, root, setState, state } = input;
+  const { client, diffEpoch, epoch, root, setState, state } = input;
   const path = state.selectedPath;
   // A re-pair keeps the snapshot ready and the selection, so the selected diff reads again on the
   // redemption count itself (F65, PR #3452 review).
@@ -243,7 +275,7 @@ function useSelectedDiff(input: {
     return () => {
       cancelled = true;
     };
-  }, [client, epoch, path, redemptions, root, setState, state.status]);
+  }, [client, diffEpoch, epoch, path, redemptions, root, setState, state.status]);
 }
 
 /** The minimal shape the run-root lock needs. Any hook whose input carries these fields —
@@ -333,7 +365,9 @@ export function useCodingWorkbenchChanges(
   const root = useRunBoundRoot(input);
   const [state, setState] = useState<CodingWorkbenchChangesState>(EMPTY_STATE);
   const [epoch, setEpoch] = useState(0);
+  const [diffEpoch, setDiffEpoch] = useState(0);
   const retry = useCallback((): void => setEpoch((value) => value + 1), []);
+  const retryDiff = useCallback((): void => setDiffEpoch((value) => value + 1), []);
   const selectPath = useCallback((path: string): void => {
     setState((current) => {
       if (current.selectedPath === path) return current;
@@ -342,7 +376,7 @@ export function useCodingWorkbenchChanges(
     });
   }, []);
   useChangesSnapshot({ ...input, client, root, epoch, setState });
-  useSelectedDiff({ client, root, epoch, state, setState });
+  useSelectedDiff({ client, root, epoch, diffEpoch, state, setState });
   useChangeSignalRefresh({ ...input, refresh: retry });
-  return { ...state, retry, selectPath };
+  return { ...state, retry, retryDiff, selectPath };
 }

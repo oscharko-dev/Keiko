@@ -187,6 +187,26 @@ describe("CommitComposer — preview and outcomes", () => {
     expect(alert).toHaveTextContent("preview route unavailable");
   });
 
+  // #3647: a transient preview failure previously left Commit disabled indefinitely — nothing
+  // schedules another preview request merely because the error clears, so the user had to
+  // discover a workaround such as editing the message and editing it back.
+  it("does not render a Retry preview action when there is no preview error", () => {
+    renderComposer();
+    expect(screen.queryByRole("button", { name: "Retry preview" })).not.toBeInTheDocument();
+  });
+
+  it("retries with the currently composed message when Retry preview is clicked", async () => {
+    const user = userEvent.setup();
+    const { onPreview } = renderComposer({ previewError: "preview route unavailable" });
+    await user.type(screen.getByLabelText("Summary"), "feat: x");
+    onPreview.mockClear();
+
+    await user.click(screen.getByRole("button", { name: "Retry preview" }));
+
+    expect(onPreview).toHaveBeenCalledOnce();
+    expect(onPreview).toHaveBeenCalledWith("feat: x");
+  });
+
   it("hides stale draft, policy, and preview errors when the staged selection becomes empty", () => {
     const props = {
       projectId: "/repos/alpha",

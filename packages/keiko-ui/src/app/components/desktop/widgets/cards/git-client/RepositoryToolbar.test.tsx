@@ -54,16 +54,20 @@ function baseProps(): Omit<
     selectedPath: REPO.path,
     branches: BRANCHES,
     branchesLoading: false,
+    branchesError: null,
     status: STATUS,
     branchBusy: false,
     syncView: SYNC_VIEW,
     syncBusy: false,
     syncOutcome: null,
     syncError: null,
+    summaryError: null,
     onSelectRepository: vi.fn(),
     onSwitchBranch: vi.fn(),
     onCreateBranch: vi.fn(),
+    onRetryBranches: vi.fn(),
     onRunSync: vi.fn(),
+    onRetrySummary: vi.fn(),
   };
 }
 

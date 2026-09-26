@@ -1523,14 +1523,18 @@ function preparedChangesetForReview(action: EditorAgentAction): AgentPreparedCha
   return files.length === selectedPaths.size && files.length > 0 ? { files } : null;
 }
 
+// A Reject says so explicitly: the server reads a failed result as the human's decision only with
+// `reviewDecision`, never from a failure the editor reports itself (PR #3625 review).
 function agentReviewDecisionRequest(
   action: EditorAgentAction,
-  status: "succeeded" | "failed",
+  decision: "accept" | "reject",
   message?: string,
 ): EditorAgentActionResultRequest {
+  const status = decision === "accept" ? "succeeded" : "failed";
   return {
     schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
     kind: "result",
+    ...(decision === "reject" ? { reviewDecision: "rejected" } : {}),
     result: {
       schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
       actionId: action.actionId,
@@ -5006,7 +5010,7 @@ function EditorRuntimeWidget({
 
   const confirmAutomaticAgentPatch = useCallback(
     (action: EditorAgentAction): void => {
-      void postEditorAgentResultRequest(action, agentReviewDecisionRequest(action, "succeeded"))
+      void postEditorAgentResultRequest(action, agentReviewDecisionRequest(action, "accept"))
         .then((response) => {
           if (
             response.result.status === "queued" ||
@@ -5025,7 +5029,7 @@ function EditorRuntimeWidget({
 
   const confirmAutomaticAgentChangeset = useCallback(
     (action: EditorAgentAction): void => {
-      void postEditorAgentResultRequest(action, agentReviewDecisionRequest(action, "succeeded"))
+      void postEditorAgentResultRequest(action, agentReviewDecisionRequest(action, "accept"))
         .then((response) => {
           if (
             response.result.status === "queued" ||
@@ -5743,11 +5747,10 @@ function EditorRuntimeWidget({
   const submitAgentPatchDecision = useCallback(
     (review: AgentPatchReviewState, decision: "accept" | "reject"): void => {
       if (!beginAgentPatchDecision(review, decision)) return;
-      const status = decision === "accept" ? "succeeded" : "failed";
       const message = decision === "reject" ? t("editor.agentReview.rejected") : undefined;
       void postEditorAgentResultRequest(
         review.action,
-        agentReviewDecisionRequest(review.action, status, message),
+        agentReviewDecisionRequest(review.action, decision, message),
       )
         .then((response) => {
           if (
@@ -5767,11 +5770,10 @@ function EditorRuntimeWidget({
   const submitAgentChangesetDecision = useCallback(
     (review: AgentChangesetReviewState, decision: "accept" | "reject"): void => {
       if (!beginAgentChangesetDecision(review, decision)) return;
-      const status = decision === "accept" ? "succeeded" : "failed";
       const message = decision === "reject" ? t("editor.agentReview.rejected") : undefined;
       void postEditorAgentResultRequest(
         review.action,
-        agentReviewDecisionRequest(review.action, status, message),
+        agentReviewDecisionRequest(review.action, decision, message),
       )
         .then((response) => {
           if (

@@ -51,7 +51,9 @@ interface GitSummaryCacheEntry {
   readonly value: Promise<RouteResult>;
 }
 
-const gitSummaryCache = new WeakMap<UiHandlerDeps, Map<string, GitSummaryCacheEntry>>();
+// Keyed on the request deps object; `object` so a mutation path holding a narrower view of the same
+// deps can drop its entries (invalidateGitSummaryCache).
+const gitSummaryCache = new WeakMap<object, Map<string, GitSummaryCacheEntry>>();
 const gitRunnerCacheIds = new WeakMap<NormalizedGitRouteOptions["runner"], number>();
 let nextGitRunnerCacheId = 1;
 
@@ -105,6 +107,16 @@ function cachedGitSummary(deps: UiHandlerDeps, key: string): GitSummaryCacheEntr
   if (cached.expiresAt > Date.now()) return cached;
   byKey?.delete(key);
   return undefined;
+}
+
+/**
+ * Drops every cached summary of these deps. A finished Git action changes what a summary reports
+ * (ahead/behind, branch, remote state); a summary cached before it would replay the pre-action
+ * state for up to GIT_SUMMARY_CACHE_TTL_MS, and the Git window's refresh right after the action
+ * would show it (#3644).
+ */
+export function invalidateGitSummaryCache(deps: object): void {
+  gitSummaryCache.delete(deps);
 }
 
 function storeGitSummary(deps: UiHandlerDeps, key: string, value: Promise<RouteResult>): void {

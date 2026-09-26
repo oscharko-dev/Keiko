@@ -10,6 +10,17 @@ import {
 } from "./coding-issue-delivery.js";
 import { COMMIT_MESSAGE } from "./coding-issue-commit.js";
 import { readActivityLogText } from "../../../scripts/lib/activity-log-files.mjs";
+// #3625 review: the client diagnostic's raw text is redacted to a digest before it reaches the
+// activity log (ADR-0173 D4, client-diagnostics-routes.ts's `logClientDiagnostic`) -- the same
+// producer function coding-issue-intake.spec.ts's own pin already imports, never restated here.
+import { clientDiagnosticNoteDigest } from "../../../packages/keiko-server/src/client-diagnostics-routes.js";
+
+// `CodingWorkbenchDeliveryReview.tsx` reports this exact text only once its review state is
+// "ready" -- the same moment the journey's own `expectReviewedPullRequest` reads `review.title`
+// off the identical state, so this is the only status the redacted digest can ever be for here.
+const DELIVERY_REVIEW_DISPLAYED_DIGEST = clientDiagnosticNoteDigest(
+  "[keiko] draft delivery review displayed: ready",
+);
 
 function expectProviderEvidence(provider: Readonly<Record<string, unknown>>): void {
   expect(provider).toMatchObject({ pushes: 7, creates: 5, rejections: 5 });
@@ -28,8 +39,7 @@ export function writeDeliveryJourneyReceipt(stateDir: string, cases: readonly st
   expect(deliveries.every((line) => typeof line.correlationId === "string")).toBe(true);
   const diagnostics = lines.filter(
     (line) =>
-      typeof line.clientNote === "string" &&
-      line.clientNote.startsWith("[keiko] draft delivery review"),
+      line.op === "client.diagnostic" && line.clientNoteDigest === DELIVERY_REVIEW_DISPLAYED_DIGEST,
   );
   expect(diagnostics.length).toBeGreaterThan(0);
   expect(diagnostics.every((line) => typeof line.correlationId === "string")).toBe(true);

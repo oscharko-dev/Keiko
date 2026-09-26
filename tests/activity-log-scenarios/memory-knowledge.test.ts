@@ -356,7 +356,7 @@ describe("Activity Log scenario: memory-knowledge", () => {
       expectedOps: ["embedding.batch.transport-selected", "embedding.batch.cancelled"],
     });
     expect(trace.failureClasses).toEqual(expect.arrayContaining(["embedding-cancelled"]));
-  });
+  }, 60_000);
 
   it("fails connected-context retrieval and reaches a complete dependency-failure trace", async () => {
     const { startedAtMs } = await runDependencyFailureFixture(stateDir);

@@ -107,7 +107,7 @@ const JOURNEY_OBSERVATION_FIELDS = {
     type: "string",
     dataClass: "closed-enum",
     required: true,
-    values: ["started", "observed", "unavailable"],
+    values: ["started", "observed", "unavailable", "joined"],
   },
   runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
   reason: {
@@ -151,7 +151,8 @@ const JOURNEY_OBSERVATION_OPERATION = defineActivityLogOperation({
 });
 
 export interface JourneyObservationActivityFields {
-  readonly phase: "started" | "observed" | "unavailable";
+  // `joined`: a refresh that landed while one ran for the same run and took its result (PR #3625).
+  readonly phase: "started" | "observed" | "unavailable" | "joined";
   readonly runId?: string;
   readonly reason?:
     | Extract<JourneyObservationResult, { status: "unavailable" }>["reason"]
@@ -172,17 +173,21 @@ export interface JourneyObservationActivityFields {
   readonly causeChain?: readonly string[];
 }
 
+// `link` names the observation a joined refresh was answered by: its request correlation becomes the
+// joined line's parent, so the joiner's timeline reaches that observation's reads and outcome.
 export function logJourneyObservationActivity(
   log: ServerLogSink,
   correlationId: string,
   fields: JourneyObservationActivityFields,
   failure?: { readonly errorKind: ActivityLogErrorKind },
+  link?: { readonly parentCorrelationId: string },
 ): void {
   log.write(
     activityLogEvent(
       JOURNEY_OBSERVATION_OPERATION,
       {
         correlationId,
+        ...(link === undefined ? {} : { parentCorrelationId: link.parentCorrelationId }),
         ...(failure === undefined ? {} : { level: "warn", errorKind: failure.errorKind }),
       },
       fields,

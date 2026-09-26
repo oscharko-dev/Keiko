@@ -183,9 +183,17 @@ describe("bounded coding safe-activity projection", () => {
 
   // #3612: Keiko settles a refused governed ask with the human's verdict. OpenCode then reports the
   // refused call as a generic failure; that report keeps the verdict and counts as no omitted update.
-  it.each(["denied", "cancelled"] as const)(
-    "keeps a %s verdict when OpenCode later reports the call failed, without an omitted update",
-    (verdict) => {
+  // Since 1.1.10 a declined or expired ask answers with the call's own refusal result, which OpenCode
+  // reports as a completed call (ADR-0124 D6) — lab 2026-09-26: that report was refused as a
+  // regression, dropped, and opened a support incident on every denial.
+  it.each([
+    ["denied", "failed"],
+    ["cancelled", "failed"],
+    ["denied", "succeeded"],
+    ["cancelled", "succeeded"],
+  ] as const)(
+    "keeps a %s verdict when OpenCode later reports the call %s, without an omitted update",
+    (verdict, reported) => {
       const projection = createCodingSafeActivityProjection({
         now: () => 1_721_323_200_000,
         diagnostics: { record: (): void => undefined },
@@ -213,7 +221,7 @@ describe("bounded coding safe-activity projection", () => {
           kind: "tool",
           messageId: "msg_assistant",
           callId: "call_1",
-          state: "failed",
+          state: reported,
           occurredAt: "2026-07-18T17:00:00.004Z",
         },
       ];

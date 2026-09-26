@@ -46,6 +46,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.journey.staleHelp":
     "Dies sind datierte Beobachtungen. Aktualisiere den Status, bevor du dich auf aktuelle Bereitschaft oder Issue-Abschluss verlässt.",
   "codingWorkbench.journey.refresh": "Beobachteten Status aktualisieren",
+  "codingWorkbench.journey.unavailable":
+    "Der Übergabestatus dieses Pull Requests wurde noch nicht beobachtet.",
   "codingWorkbench.journey.proposeReady": "Anfrage zur Review-Bereitschaft prüfen",
   "codingWorkbench.journey.readyHelp":
     "Prüfe den Wechsel vom Entwurf zur Review-Bereitschaft, bevor du ihn einmalig freigibst.",
@@ -371,20 +373,33 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.questions.multipleHint": "Alle zutreffenden auswählen.",
   "codingWorkbench.questions.customLabel": "Eigene Antwort für {header}",
   "codingWorkbench.setup.eyebrow": "Workspace",
+  "codingWorkbench.repository.choose": "Coding-Repository auswählen",
+  "codingWorkbench.repository.chooseBranch": "Coding-Branch auswählen",
+  "codingWorkbench.repository.label": "Repository",
+  "codingWorkbench.repository.branchLabel": "Branch",
+  "codingWorkbench.repository.search": "Repositories suchen",
+  "codingWorkbench.repository.searchBranch": "Branches suchen",
+  "codingWorkbench.repository.noMatches": "Keine passenden Repositories.",
+  "codingWorkbench.repository.noBranchMatches": "Keine passenden Branches.",
+  "codingWorkbench.repository.noBranch": "Kein Branch",
+  "codingWorkbench.repository.loading": "Repositories werden geladen…",
+  "codingWorkbench.repository.none": "Repository auswählen",
+  "codingWorkbench.repository.unavailable": "nicht verfügbar",
+  "codingWorkbench.repository.unavailableHelp":
+    "Dieses Repository ist in Git nicht mehr verfügbar. Wähle ein anderes Repository oder verbinde es in Git erneut.",
+  "codingWorkbench.repository.gitUnavailableHelp":
+    "Der Git-Status dieses Ordners konnte nicht gelesen werden – möglicherweise ist er kein Git-Repository. Öffne Git, um das zu prüfen.",
+  "codingWorkbench.repository.loadError":
+    "Repositories konnten nicht geladen werden. Aktualisiere die Liste und versuche es erneut.",
+  "codingWorkbench.repository.retryLoad": "Erneut versuchen",
+  "codingWorkbench.repository.manage": "Git öffnen",
   "codingWorkbench.setup.title": "Code-Einrichtung",
   "codingWorkbench.setup.help":
-    "Binde einen vorhandenen lokalen Git-Checkout, damit der Coding-Lauf in einem gesteuerten Aufgabenarbeitsbereich startet.",
-  "codingWorkbench.setup.repositoryPath": "Repository-Pfad",
-  "codingWorkbench.setup.repositoryPathPlaceholder": "/absoluter/pfad/zum/repository",
-  "codingWorkbench.setup.browse": "Durchsuchen…",
-  "codingWorkbench.setup.browseError":
-    "Der Ordner-Dialog konnte nicht geöffnet werden. Gib den Pfad manuell ein.",
-  "codingWorkbench.setup.branchesLoading": "Branches werden geladen…",
-  "codingWorkbench.setup.branchesUnavailable": "Branches nicht verfügbar",
-  "codingWorkbench.setup.branchSelect": "Branch auswählen",
-  "codingWorkbench.setup.branchesRetry": "Branches neu laden",
-  "codingWorkbench.setup.targetBranch": "Zielbranch",
-  "codingWorkbench.setup.targetBranchPlaceholder": "main",
+    "Bereite einen gesteuerten Aufgabenarbeitsbereich für das ausgewählte Repository vor.",
+  "codingWorkbench.setup.repositoryNotConnected":
+    "Dieses Repository ist in Git nicht verfügbar. Verbinde es dort erneut und wähle es dann aus.",
+  "codingWorkbench.setup.repositoryCatalogUnavailable":
+    "Keiko konnte dieses Repository in Git nicht prüfen. Versuche es erneut.",
   "codingWorkbench.setup.submit": "Workspace binden",
   "codingWorkbench.setup.binding": "Wird gebunden…",
   "codingWorkbench.setup.verifying": "Wird verifiziert…",
@@ -485,6 +500,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.changes.diff.empty": "Für diese geänderte Datei ist kein Text-Diff verfügbar.",
   "codingWorkbench.changes.diff.error":
     "Das Diff der ausgewählten Datei ist nicht verfügbar. Es wird kein veraltetes Diff angezeigt.",
+  "codingWorkbench.changes.diff.retry": "Diff erneut laden",
   "codingWorkbench.changes.diff.truncated":
     "Dieses begrenzte Datei-Diff ist unvollständig, weil es das Serverlimit erreicht hat.",
   "codingWorkbench.changes.diff.addedLine": "Hinzugefügte Zeile",

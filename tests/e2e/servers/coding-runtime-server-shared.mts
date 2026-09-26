@@ -81,6 +81,10 @@ import { buildWorkspaceInstanceStoreOverDatabase } from "../../../packages/keiko
 import type { GitHubCodeContextApiPort } from "../../../packages/keiko-server/src/coding-context/githubCodeContextConnector.js";
 import { createWorkspaceScriptTrustService } from "../../../packages/keiko-server/src/workspace-script-trust.js";
 import {
+  resolveManagedWorkspaceRootAccess,
+  type WorkspaceRootAccess,
+} from "../../../packages/keiko-server/src/task-workspace/workspace-root-access.js";
+import {
   createRelationshipStorePort,
   type RelationshipHandlerDeps,
 } from "../../../packages/keiko-server/src/relationship-handlers.js";
@@ -153,6 +157,17 @@ export interface CodingRuntimeJourneyServerConfig {
   readonly includeQuestion: boolean;
   /** Hold after the real verification tool completes so the journey can prove cancellation. */
   readonly holdAfterVerification?: boolean;
+  /**
+   * Wires the scripted governed verification tool to the SAME real, persisted
+   * `WorkspaceScriptTrustService` decision the Editor's own trust routes read (ADR-0147 D3),
+   * instead of the fixture's default `() => true` stand-in. A repository starts `restricted`
+   * (fail-closed) until a human grant lands, so the run's own `keiko_verification` call is
+   * genuinely refused `WORKSPACE_TRUST_REQUIRED` and pauses for `workspace-script-trust` exactly
+   * as production does -- letting a journey drive the real pause/grant/resume cycle instead of a
+   * fixture that never refuses. Opt-in and additive: every other scripted journey keeps the
+   * always-trusted stand-in unchanged.
+   */
+  readonly requireVerificationScriptTrust?: boolean;
   /** Actual runtime search result must determine the model boundary's subsequent read. */
   readonly proveRepositorySearch?: boolean;
   /** #3417: the runtime's own skill discovery must determine the skill the model invokes. */
@@ -298,12 +313,48 @@ function createWorkspaceServices(managedRoot: string): JourneyWorkspaceServices 
   };
 }
 
-function verificationRunner(fixtureLabel: string): Pick<VerificationRunnerManager, "runToReport"> {
+/** Only present when the journey opted into `requireVerificationScriptTrust` (see its doc comment). */
+interface VerificationScriptTrustWiring {
+  readonly services: JourneyWorkspaceServices;
+  readonly managedRoot: string;
+}
+
+function verificationRunner(
+  fixtureLabel: string,
+  scriptTrust?: VerificationScriptTrustWiring,
+): Pick<VerificationRunnerManager, "runToReport"> &
+  Partial<Pick<VerificationRunnerManager, "scriptTrustFor">> {
   const store = createInMemoryUiStore();
   const manager = createVerificationRunnerManager({
     store,
     evidenceStore: createInMemoryEvidenceStore(),
-    isWorkspaceTrustedForPackageScripts: () => true,
+    // Default: every OTHER scripted journey keeps package scripts always trusted so its verification
+    // step runs unconditionally. Opting in swaps this stand-in for the SAME persisted
+    // WorkspaceScriptTrustService decision the Editor's own trust routes and `deps.ts`'s production
+    // wiring read (workspace-script-trust.ts), so a fixture repository starts genuinely `restricted`
+    // and the run's own `keiko_verification` call is refused `WORKSPACE_TRUST_REQUIRED` for real.
+    ...(scriptTrust === undefined
+      ? { isWorkspaceTrustedForPackageScripts: (): boolean => true }
+      : {
+          isWorkspaceTrustedForPackageScripts: (projectId, workspace): boolean =>
+            scriptTrust.services.workspaceScriptTrust.isTrusted(projectId, workspace),
+          isWorktreeTrustedByHumanGrant: (canonicalRoot): boolean =>
+            scriptTrust.services.workspaceScriptTrust.holdsHumanGrantForRoot(canonicalRoot),
+          isWorktreeManifestRunAdmitted: (canonicalRoot): boolean =>
+            scriptTrust.services.workspaceScriptTrust.holdsRunAdmissionForRoot(canonicalRoot),
+          // Re-proves the requested root as the run's own managed task worktree and names the
+          // repository it was bound from, exactly as deps.ts's `createWorkspaceRootAccessResolver`
+          // does for production -- the one piece `decideScriptTrust` needs to let the repository's
+          // grant cover its worktree (ADR-0147 D3).
+          resolveWorkspaceRootAccess: (requestedRoot: string): WorkspaceRootAccess | undefined =>
+            resolveManagedWorkspaceRootAccess(
+              {
+                managedTaskWorkspaceRoot: scriptTrust.managedRoot,
+                workspaceProvisioning: scriptTrust.services.provisioning,
+              },
+              requestedRoot,
+            ),
+        }),
   });
   const registered = new Set<string>();
   return {
@@ -314,6 +365,11 @@ function verificationRunner(fixtureLabel: string): Pick<VerificationRunnerManage
       }
       return manager.runToReport(input, signal);
     },
+    // Exposed only when wired for real trust: `settleWorkspaceScriptTrust`
+    // (productionManagedWorktreeTools.ts) polls this while a run waits on the operator's decision,
+    // and it would be meaningless (and never consulted) while every workspace is unconditionally
+    // trusted.
+    ...(scriptTrust === undefined ? {} : { scriptTrustFor: manager.scriptTrustFor }),
   };
 }
 
@@ -455,7 +511,12 @@ function scriptedResolver(
     workspaceLifecycle: services.lifecycle,
     managedTaskWorkspaceRoot: config.managedRoot(stateDir),
     readWorkspaceHead: readProductionWorkspaceHead,
-    verificationRunner: verificationRunner(config.fixtureLabel),
+    verificationRunner: verificationRunner(
+      config.fixtureLabel,
+      config.requireVerificationScriptTrust === true
+        ? { services, managedRoot: config.managedRoot(stateDir) }
+        : undefined,
+    ),
     runtimeEvidence: createCodingRuntimeEvidenceAggregator(createInMemoryEvidenceStore()),
     runtimeMutationLeaseBroker,
     verifiedCommit,

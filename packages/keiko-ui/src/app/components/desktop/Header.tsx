@@ -20,7 +20,6 @@ interface HeaderProps {
   readonly onTileAll: () => void;
   readonly onSplitFront: () => void;
   readonly onCascade: () => void;
-  readonly contextControl?: ReactNode;
 }
 
 function HeaderImpl({
@@ -28,7 +27,6 @@ function HeaderImpl({
   onTileAll,
   onSplitFront,
   onCascade,
-  contextControl,
 }: HeaderProps): ReactNode {
   const t = useTranslate();
 
@@ -42,8 +40,6 @@ function HeaderImpl({
         <img className="hd-logo" src="/keiko-logo.svg" alt="" />
         <span className="hd-wordmark">Keiko</span>
       </div>
-
-      {contextControl !== undefined ? <div className="hd-context">{contextControl}</div> : null}
 
       <span className="spacer" />
 

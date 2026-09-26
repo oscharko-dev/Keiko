@@ -222,6 +222,33 @@ describe("editor agent contracts", () => {
     ).toEqual({ ok: false, errors: ["browser action request is invalid"] });
   });
 
+  // PR #3625 review: only a review's Reject is the human's decision, and it says so explicitly; a
+  // failure the browser reports itself carries no reviewDecision.
+  it("accepts reviewDecision only as rejected on a failed result", () => {
+    const request = (status: "succeeded" | "failed", reviewDecision: unknown): unknown => ({
+      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+      kind: "result",
+      bridgeDecisionCapability: BRIDGE_CAPABILITY,
+      reviewDecision,
+      result: {
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        actionId: "action-1",
+        sessionId: "session-1",
+        status,
+      },
+    });
+    expect(parseEditorAgentActionsPostBody(request("failed", "rejected"))).toMatchObject({
+      ok: true,
+      value: { kind: "result", reviewDecision: "rejected" },
+    });
+    for (const invalid of [request("succeeded", "rejected"), request("failed", "accepted")]) {
+      expect(parseEditorAgentActionsPostBody(invalid)).toEqual({
+        ok: false,
+        errors: ["reviewDecision must be rejected on a failed result"],
+      });
+    }
+  });
+
   it("rejects snapshot and result wrappers with incompatible outer schemas", () => {
     const snapshotRequest = {
       schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,

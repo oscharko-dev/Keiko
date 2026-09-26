@@ -3,6 +3,10 @@ import { Socket } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import {
   clientBindingDigest,
   clientDiagnosticNoteDigest,
   handleClientDiagnosticIngest,
@@ -73,8 +77,26 @@ function clientStageEvents(
   return sink.events.filter((event) => event.op === op);
 }
 
+// PR #3625 review: routine git-client settlements (discarded-succeeded, retry-recovered,
+// retry-superseded) and the manual retry attempt line, each their own operation.
+function gitOperationEvent(
+  sink: BufferedServerLogSink,
+  op: "client.git-operation.settled" | "client.git-operation.attempted",
+): ServerLogEvent {
+  const event = sink.events.find((candidate) => candidate.op === op);
+  expect(event, `expected exactly one ${op} event`).toBeDefined();
+  return event ?? { category: "diagnostic", op };
+}
+
 function clientDiagnosticRejectedEvents(sink: BufferedServerLogSink): readonly ServerLogEvent[] {
   return sink.events.filter((event) => event.op === "client.diagnostic.rejected");
+}
+
+// PR #3625 review (KeikoSelect.tsx finding): a select menu's Escape dismissal, its own operation.
+function selectDismissedEvent(sink: BufferedServerLogSink): ServerLogEvent {
+  const event = sink.events.find((candidate) => candidate.op === "client.select.dismissed");
+  expect(event, "expected exactly one client.select.dismissed event").toBeDefined();
+  return event ?? { category: "diagnostic", op: "client.select.dismissed" };
 }
 
 describe("POST /api/diagnostics/client", () => {
@@ -555,6 +577,298 @@ describe("POST /api/diagnostics/client", () => {
       repositoryId: "repository-a",
       workspaceId: "workspace-a",
     });
+  });
+
+  // PR #3625 review: routine settlements — an add-repository result discarded after it actually
+  // succeeded, a manual retry that recovered or was superseded — are routed to their own
+  // lifecycle-appropriate `client.git-operation.settled` at info with no `errorKind`, never the
+  // failure-shaped `client.diagnostic` (KEIKO-3557's stage fix, applied to this one outcome).
+  it("persists a discarded-succeeded git-client operation as client.git-operation.settled", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "git-client: add-repository discarded: repository-clone succeeded",
+      clientTs: CLIENT_TS,
+      kind: "other",
+      gitClientOperation: { operation: "repository-clone", outcome: "discarded-succeeded" },
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = gitOperationEvent(sink, "client.git-operation.settled");
+    expect(event.level).toBe("info");
+    expect(event.errorKind).toBeUndefined();
+    const record = expectActivityLogProof(
+      "client.git-operation.settled.line",
+      formatActivityLogProofLine(event),
+    );
+    expect(record).toMatchObject({
+      operation: "repository-clone",
+      outcome: "discarded-succeeded",
+      completeness: "complete",
+      loss: "none",
+    });
+  });
+
+  // A manual retry that recovers carries the SAME id its attempt line minted, so the two join on
+  // one timeline (PR #3625 review).
+  it("persists a recovered manual retry as client.git-operation.settled with its correlation id", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "git-client: manual status-read retry-recovered",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_git-retry-0001",
+      kind: "other",
+      gitClientOperation: { operation: "status-read", outcome: "retry-recovered" },
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    const event = gitOperationEvent(sink, "client.git-operation.settled");
+    const record = expectActivityLogProof(
+      "client.git-operation.settled.line",
+      formatActivityLogProofLine(event),
+    );
+    expect(record).toMatchObject({
+      correlationId: "ui_git-retry-0001",
+      operation: "status-read",
+      outcome: "retry-recovered",
+    });
+  });
+
+  // A manual retry superseded by a newer automatic read before it settled is discarded evidence,
+  // never a failure of the read itself — routine, and joinable to its attempt (PR #3625 review).
+  it("persists a superseded manual retry as client.git-operation.settled", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "git-client: manual branches-read retry-superseded",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_git-retry-0002",
+      kind: "other",
+      gitClientOperation: { operation: "branches-read", outcome: "retry-superseded" },
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    const event = gitOperationEvent(sink, "client.git-operation.settled");
+    const record = expectActivityLogProof(
+      "client.git-operation.settled.line",
+      formatActivityLogProofLine(event),
+    );
+    expect(record).toMatchObject({
+      correlationId: "ui_git-retry-0002",
+      operation: "branches-read",
+      outcome: "retry-superseded",
+    });
+  });
+
+  // The attempt line is sent the moment Retry is clicked, minting its own correlation id — before
+  // any settlement exists (PR #3625 review).
+  it("persists a manual retry attempt as client.git-operation.attempted", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      kind: "git-retry-attempt",
+      operation: "summary-read",
+      correlationId: "ui_git-retry-0003",
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    const event = gitOperationEvent(sink, "client.git-operation.attempted");
+    expect(event.level).toBe("info");
+    const record = expectActivityLogProof(
+      "client.git-operation.attempted.line",
+      formatActivityLogProofLine(event),
+    );
+    expect(record).toMatchObject({
+      correlationId: "ui_git-retry-0003",
+      operation: "summary-read",
+      completeness: "complete",
+      loss: "none",
+    });
+  });
+
+  // A resolved (HTTP 200) unavailable response's closed reason travels only alongside retry-failed,
+  // and only reaches `client.diagnostic` — never the routine `client.git-operation.settled` above
+  // (PR #3625 review, GitClientWindow.tsx finding).
+  it("preserves the closed unavailable reason on a resolved retry-failed settlement", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "git-client: manual status-read retry-failed (unavailable)",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_git-retry-0004",
+      errorKind: "unavailable",
+      kind: "other",
+      gitClientOperation: {
+        operation: "status-read",
+        outcome: "retry-failed",
+        reason: "git-error",
+      },
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticLine(sink)).toMatchObject({
+      op: "client.diagnostic",
+      correlationId: "ui_git-retry-0004",
+      errorKind: "unavailable",
+      gitClientOperation: "status-read",
+      gitClientOperationOutcome: "retry-failed",
+      gitClientOperationReason: "git-error",
+    });
+  });
+
+  // The contracts guard already refuses a reason on any other outcome (diagnostics.test.ts); this
+  // pins the same fail-closed behaviour through the real route, never silently dropping the reason.
+  it("rejects a reason attached to a recovered retry, fail-closed", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "git-client: manual status-read retry-recovered",
+      clientTs: CLIENT_TS,
+      gitClientOperation: {
+        operation: "status-read",
+        outcome: "retry-recovered",
+        reason: "git-error",
+      },
+    });
+
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    expect(sink.events.some((event) => event.op.startsWith("client.git-operation."))).toBe(false);
+  });
+
+  // The failed counterpart: before this fix a discarded failure returned silently client-side and
+  // reached the server not at all — this line is the regression pin for that gap.
+  it("preserves a discarded-failed git-client operation settlement with its correlation id and error kind", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "git-client: add-repository discarded: repository-register failed",
+      clientTs: CLIENT_TS,
+      correlationId: "corr-register-discard-1",
+      errorKind: "internal",
+      kind: "other",
+      gitClientOperation: { operation: "repository-register", outcome: "discarded-failed" },
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticLine(sink)).toMatchObject({
+      op: "client.diagnostic",
+      correlationId: "corr-register-discard-1",
+      errorKind: "internal",
+      gitClientOperation: "repository-register",
+      gitClientOperationOutcome: "discarded-failed",
+    });
+  });
+
+  it("rejects a git-client operation whose outcome belongs to the other family, fail-closed", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "git-client: add-repository discarded",
+      clientTs: CLIENT_TS,
+      gitClientOperation: { operation: "repository-clone", outcome: "retry-recovered" },
+    });
+
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+  });
+
+  // A message report is a failure budget by default, except when its `gitClientOperation.outcome`
+  // is not a failure — that spends the routine budget instead, exactly like a binding that resolved
+  // or a session repair that recovered, so a burst of these can never starve a genuine failure
+  // report's own budget (mirrors the session-repair burst test below).
+  it("keeps the failure budget available after a burst of discarded-succeeded settlements", async () => {
+    const sink = captureServerLog();
+    const settled = JSON.stringify({
+      message: "git-client: add-repository discarded: repository-clone succeeded",
+      clientTs: CLIENT_TS,
+      gitClientOperation: { operation: "repository-clone", outcome: "discarded-succeeded" },
+    });
+    for (let index = 1; index <= 61; index += 1) {
+      await handleClientDiagnosticIngest(context(settled));
+    }
+    expect(sink.events.some((event) => event.op === "client.diagnostic.rejected")).toBe(false);
+
+    const failure = JSON.stringify({ message: "boundary", clientTs: CLIENT_TS, kind: "boundary" });
+    expect((await handleClientDiagnosticIngest(context(failure))).status).toBe(204);
+    expect(
+      clientDiagnosticEvents(sink).some((event) => event.extra?.clientKind === "boundary"),
+    ).toBe(true);
+    // The routine burst itself stays bounded: its overflow is one routine rate-limit notice, and
+    // the failure budget was never touched.
+    const notices = sink.events.filter((event) => event.op === "client.diagnostic.rate-limited");
+    expect(notices.map((event) => event.extra?.budget)).toEqual(["routine"]);
+  });
+
+  // PR #3625 review (KeikoSelect.tsx finding): an open menu consumes Escape wherever focus sits —
+  // the trigger, the search box, or an option — instead of leaving it to the workspace's own Escape
+  // shortcut. This is the only line that shows which surface an operator's Escape actually
+  // dismissed, at info with no errorKind, never the failure-shaped client.diagnostic.
+  it("persists a select dismissal as client.select.dismissed, at info, with no errorKind", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "[keiko] select menu dismissed by Escape (focus=trigger)",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_select-dismiss-0001",
+      kind: "other",
+      selectDismissal: { reason: "escape", focus: "trigger" },
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = selectDismissedEvent(sink);
+    expect(event.level).toBe("info");
+    expect(event.errorKind).toBeUndefined();
+    const record = expectActivityLogProof(
+      "client.select.dismissed.line",
+      formatActivityLogProofLine(event),
+    );
+    expect(record).toMatchObject({
+      correlationId: "ui_select-dismiss-0001",
+      reason: "escape",
+      focus: "trigger",
+      completeness: "complete",
+      loss: "none",
+    });
+  });
+
+  it("persists every closed focus location on its own client.select.dismissed line", async () => {
+    for (const focus of ["trigger", "search", "option"] as const) {
+      const sink = captureServerLog();
+      const body = JSON.stringify({
+        message: `[keiko] select menu dismissed by Escape (focus=${focus})`,
+        clientTs: CLIENT_TS,
+        kind: "other",
+        selectDismissal: { reason: "escape", focus },
+      });
+
+      expect(await handleClientDiagnosticIngest(context(body))).toEqual({
+        status: 204,
+        body: null,
+      });
+      expect(selectDismissedEvent(sink).extra).toMatchObject({ reason: "escape", focus });
+    }
+  });
+
+  // A select dismissal has no failure variant at all — Escape either closes an open menu or the
+  // report is never sent — so it always spends the routine budget, exactly like a burst of
+  // discarded-succeeded git-client settlements above, and can never starve a genuine failure report.
+  it("keeps the failure budget available after a burst of select dismissals", async () => {
+    const sink = captureServerLog();
+    const dismissed = JSON.stringify({
+      message: "[keiko] select menu dismissed by Escape (focus=option)",
+      clientTs: CLIENT_TS,
+      kind: "other",
+      selectDismissal: { reason: "escape", focus: "option" },
+    });
+    for (let index = 1; index <= 61; index += 1) {
+      await handleClientDiagnosticIngest(context(dismissed));
+    }
+    expect(sink.events.some((event) => event.op === "client.diagnostic.rejected")).toBe(false);
+
+    const failure = JSON.stringify({ message: "boundary", clientTs: CLIENT_TS, kind: "boundary" });
+    expect((await handleClientDiagnosticIngest(context(failure))).status).toBe(204);
+    expect(
+      clientDiagnosticEvents(sink).some((event) => event.extra?.clientKind === "boundary"),
+    ).toBe(true);
+    // The routine burst itself stays bounded: its overflow is one routine rate-limit notice, and
+    // the failure budget was never touched.
+    const notices = sink.events.filter((event) => event.op === "client.diagnostic.rate-limited");
+    expect(notices.map((event) => event.extra?.budget)).toEqual(["routine"]);
   });
 
   it("rejects an invalid correlationId and retains the validated ingest correlation", async () => {

@@ -22,6 +22,10 @@ import {
   type ActiveWorkspaceApi,
 } from "../../context/ActiveWorkspaceContext";
 import { CodingWorkbenchWindow } from "./CodingWorkbenchWindow";
+vi.mock("./codingWorkbenchRepositories", () => ({
+  repositorySelectable: (): Promise<boolean> => Promise.resolve(true),
+  selectableRepositories: (): Promise<readonly never[]> => Promise.resolve([]),
+}));
 
 const historyTaskMock = vi.hoisted(() => vi.fn());
 const runtimeHookMock = vi.hoisted(() => vi.fn());

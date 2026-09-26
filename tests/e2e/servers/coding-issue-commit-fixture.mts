@@ -71,6 +71,7 @@ interface Control {
   readonly proposalId?: string;
 }
 const CONTROL_KEYS = new Set(["id", "operation", "proposalId"]);
+const CONTROL_IDLE_MS = 180_000;
 function isValidControlRecord(record: Readonly<Record<string, unknown>>): record is Readonly<
   Record<string, unknown>
 > & {
@@ -255,8 +256,12 @@ class CommitFixture implements CodingIssueCommitFixture {
     });
     return false;
   }
+  // The turn stays open while the spec drives it and ends once no control arrived for
+  // CONTROL_IDLE_MS. The window restarts after every control: one fixed budget for the whole turn
+  // closed the CI lane's turn in the middle of its journey (PR #3625), as a commit that took 21 s ran
+  // past it and the spec's next control was never read.
   private async waitForControls(): Promise<void> {
-    const deadline = Date.now() + 180_000;
+    let deadline = Date.now() + CONTROL_IDLE_MS;
     this.write("verified-turn-ready");
     while (Date.now() < deadline) {
       const control = readControl(
@@ -267,6 +272,7 @@ class CommitFixture implements CodingIssueCommitFixture {
       if (control !== undefined && control.id > this.lastControl) {
         this.lastControl = control.id;
         if (await this.startControl(control)) return;
+        deadline = Date.now() + CONTROL_IDLE_MS;
       }
       await setTimeout(25);
     }

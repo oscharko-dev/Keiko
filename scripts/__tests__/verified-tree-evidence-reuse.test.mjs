@@ -115,7 +115,10 @@ describe("verified-tree resolver job", () => {
   });
 });
 
-const COND = (extra) => "${{ always() && " + (extra ? extra + " && " : "") + GUARD + " }}";
+// `!cancelled()`, never `always()` (ADR-0157): both run a job after a failed need, but GitHub keeps
+// a running job whose `if:` is still true when the run is cancelled, so `always()` left superseded
+// pull-request runs alive and holding the concurrency group the new head's run waits on.
+const COND = (extra) => "${{ !cancelled() && " + (extra ? extra + " && " : "") + GUARD + " }}";
 const EDITOR_CLAUSE =
   "(github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor')";
 const DOC_ONLY_CLAUSE = "needs.change-scope.outputs.documentation-only != 'true'";
@@ -125,7 +128,7 @@ const DOC_ONLY_CLAUSE = "needs.change-scope.outputs.documentation-only != 'true'
 // measures the same bytes but never advances `dev`'s branch history. Only a `push` to exactly
 // `refs/heads/dev` qualifies; a pull request, a merge group or another branch keeps the plain guard.
 const DEV_PUSH_CLAUSE = "(github.event_name == 'push' && github.ref == 'refs/heads/dev')";
-const COND_OR_DEV_PUSH = () => "${{ always() && (" + GUARD + " || " + DEV_PUSH_CLAUSE + ") }}";
+const COND_OR_DEV_PUSH = () => "${{ !cancelled() && (" + GUARD + " || " + DEV_PUSH_CLAUSE + ") }}";
 
 /**
  * The EXACT condition each gated job must carry. A substring check would also accept a

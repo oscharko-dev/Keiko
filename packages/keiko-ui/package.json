@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-ui",
-  "version": "1.1.9",
+  "version": "1.1.10",
   "description": "Keiko Wave 1 local UI (static export). Build-time-only; served by the Node BFF in keiko-server.",
   "license": "Apache-2.0",
   "type": "module",
@@ -58,8 +58,8 @@
   "dependencies": {
     "@monaco-editor/react": "4.7.0",
     "@noble/hashes": "2.4.0",
-    "@oscharko-dev/keiko-contracts": "1.1.9",
-    "@oscharko-dev/keiko-editor": "1.1.9",
+    "@oscharko-dev/keiko-contracts": "1.1.10",
+    "@oscharko-dev/keiko-editor": "1.1.10",
     "diff": "9.0.0",
     "monaco-editor": "0.56.0",
     "next": "16.3.5",

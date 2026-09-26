@@ -40,6 +40,9 @@ import {
   type ClientSessionRepairOutcome,
   type ClientSessionRepairStream,
   type ClientDiagnosticGitChangeDescription,
+  type ClientDiagnosticGitClientOperation,
+  type ClientDiagnosticSelectDismissal,
+  type ClientGitRetryOperation,
   type ClientMarkdownLayout,
   type ClientErrorEvidence,
   type ClientDiagnosticKind,
@@ -103,6 +106,15 @@ export interface ClientDiagnosticSessionRepairReport {
   readonly stream?: ClientSessionRepairStream | undefined;
 }
 
+// A manual retry's attempt, minted client-side the moment Retry is clicked (PR #3625 review): the
+// correlation id here is REQUIRED and reused by whatever settlement follows — recovered, failed or
+// superseded — so the pair joins on one timeline exactly like a stage's started/settled report join
+// theirs, even when a newer automatic read supersedes the retry before it settles.
+export interface ClientDiagnosticGitRetryAttemptReport {
+  readonly operation: ClientGitRetryOperation;
+  readonly correlationId: string;
+}
+
 export interface ClientDiagnosticMeta {
   readonly correlationId?: string | undefined;
   readonly parentCorrelationId?: string | undefined;
@@ -117,11 +129,19 @@ export interface ClientDiagnosticMeta {
   readonly errorEvidence?: ClientErrorEvidence | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
+  // A Git-client operation (add-repository dialog discard, or manual retry) settling after the
+  // surface that asked for it is already gone (PR #3625 review): which operation, and how it
+  // settled — never the repository, path or URL involved.
+  readonly gitClientOperation?: ClientDiagnosticGitClientOperation | undefined;
+  // An open `KeikoSelect` menu dismissed by Escape (PR #3625 review): the closed reason and which
+  // focus location — trigger, search or option — Escape acted from, never a label or option text.
+  readonly selectDismissal?: ClientDiagnosticSelectDismissal | undefined;
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly stageReport?: ClientDiagnosticStageReport | undefined;
   readonly bindingReport?: ClientDiagnosticBindingReport | undefined;
   readonly sessionRepairReport?: ClientDiagnosticSessionRepairReport | undefined;
+  readonly gitRetryAttemptReport?: ClientDiagnosticGitRetryAttemptReport | undefined;
 }
 
 export type ClientDiagnosticWriter = (message: string, meta?: ClientDiagnosticMeta) => void;

@@ -33,19 +33,25 @@ export interface CodingWorkbenchInfoFact {
 function useInformationPopover(): {
   readonly open: boolean;
   readonly rootRef: RefObject<HTMLDivElement | null>;
+  readonly triggerRef: RefObject<HTMLButtonElement | null>;
   readonly toggle: () => void;
   readonly close: () => void;
 } {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
   const close = useCallback((): void => setOpen(false), []);
   useEffect(() => {
     if (!open) return undefined;
     const onPointerDown = (event: PointerEvent): void => {
       if (event.target instanceof Node && !rootRef.current?.contains(event.target)) close();
     };
+    // #3634: Escape removes the popover and whatever inside it held focus, so focus returns to
+    // the trigger instead of dropping to the page (the codebase's popover pattern, GEN-UI-FOCUS-011).
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key === "Escape") close();
+      if (event.key !== "Escape") return;
+      close();
+      triggerRef.current?.focus();
     };
     document.addEventListener("pointerdown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
@@ -54,7 +60,7 @@ function useInformationPopover(): {
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [close, open]);
-  return { open, rootRef, toggle: () => setOpen((value) => !value), close };
+  return { open, rootRef, triggerRef, toggle: () => setOpen((value) => !value), close };
 }
 
 function InformationFacts({
@@ -302,6 +308,7 @@ export function CodingWorkbenchInfoPanel(props: InfoPanelProps): ReactNode {
   return (
     <div ref={popover.rootRef} className={styles.cmpInfoBar}>
       <button
+        ref={popover.triggerRef}
         type="button"
         className={styles.cmpInfoTrigger}
         aria-label={t("codingWorkbench.info.open")}

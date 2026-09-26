@@ -309,6 +309,7 @@ describe("ExportBar — local adapter export", () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
+      headers: new Headers(),
       json: async () => ({
         dryRun: false,
         adapter: "csv",

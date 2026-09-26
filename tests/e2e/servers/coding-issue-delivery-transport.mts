@@ -9,6 +9,11 @@ import { buildPrBodyReadArgv } from "@oscharko-dev/keiko-tools";
 import { GIT_PR_IDENTITY_JQ } from "../../../packages/keiko-tools/src/git-pr-gateway.js";
 import { buildGitJourneyReadArgv } from "../../../packages/keiko-tools/src/git-journey-read-argv.js";
 import {
+  buildGitCiReadArgv,
+  GIT_CI_READ_KINDS,
+  type GitCiReadKind,
+} from "../../../packages/keiko-tools/src/git-ci-read-argv.js";
+import {
   DELIVERY_REPOSITORY,
   DELIVERY_URL,
   deliveryProviderState,
@@ -73,8 +78,15 @@ function deny(stateDir: string, reason: string): never {
   process.exit(73);
 }
 
-/** The wrapper executables are outside every repository/managed worktree and contain no token. */
-export function installDeliveryTransport(stateDir: string): {
+/**
+ * The wrapper executables are outside every repository/managed worktree and contain no token.
+ * `ciFacts` answers the journey's CI-facts reads for a lane whose repository has no CI of its own
+ * (`answerCiFactsReadWhenMatched`); the CI lane keeps its own CI scenario and leaves it off.
+ */
+export function installDeliveryTransport(
+  stateDir: string,
+  options: { readonly ciFacts?: boolean } = {},
+): {
   readonly realGit: string;
   readonly bin: string;
 } {
@@ -82,8 +94,9 @@ export function installDeliveryTransport(stateDir: string): {
   const bin = join(stateDir, "provider-bin");
   mkdirSync(bin, { recursive: true });
   mkdirSync(join(stateDir, "provider-home"), { recursive: true });
+  const ciFacts = options.ciFacts === true ? { ciFacts: true } : {};
   for (const tool of ["git", "gh"] as const) {
-    const invocation = `import { runDeliveryTransport } from ${JSON.stringify(import.meta.url)};\nrunDeliveryTransport(${JSON.stringify({ stateDir, realGit, tool })});\n`;
+    const invocation = `import { runDeliveryTransport } from ${JSON.stringify(import.meta.url)};\nrunDeliveryTransport(${JSON.stringify({ stateDir, realGit, tool, ...ciFacts })});\n`;
     writeFileSync(join(bin, tool), `#!${process.execPath}\n${invocation}`, { mode: 0o755 });
   }
   process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ""}`;
@@ -112,6 +125,7 @@ interface Invocation {
   readonly stateDir: string;
   readonly realGit: string;
   readonly tool: "git" | "gh";
+  readonly ciFacts?: boolean;
 }
 const LOCAL_GIT = new Set([
   "init",
@@ -270,6 +284,7 @@ function remoteSha(input: Invocation, ref: string): string | undefined {
   );
   return result.status === 0 ? result.stdout.trim() : undefined;
 }
+const REPOSITORY_DATABASE_ID = 4139;
 function providerOutput(value: unknown): never {
   process.stdout.write(`${JSON.stringify(value)}\n`);
   process.exit(0);
@@ -325,7 +340,7 @@ function answerJourneyQuery(request: {
     data: {
       repository: {
         nameWithOwner: DELIVERY_REPOSITORY,
-        databaseId: 4139,
+        databaseId: REPOSITORY_DATABASE_ID,
         defaultBranchRef: { name: pr.baseRef },
         issue: {
           id: `I_fixture_${String(issueNumber)}`,
@@ -368,9 +383,55 @@ function answerJourneyQueryWhenMatched(
   if (journey !== undefined) answerJourneyQuery(journey);
 }
 
+// The bounded, read-only CI-facts reads (`readGitCiFacts`, git-ci-facts.ts) a confirmed draft PR's
+// journey refresh performs (`createProductionJourneyCiReader`), as does the handoff lane's
+// mark-ready route before its mutation. Only the exact argv the production builder produces for the
+// current pull request is recognised, and it is answered as an unprotected base with no required
+// checks and a clean merge state; every other shape still takes the strict path below. Unanswered,
+// each journey refresh was refused here as a `pull-projection` boundary rejection.
+function ciFactsAnswers(pr: GitPullRequestIdentity): Readonly<Record<GitCiReadKind, () => never>> {
+  return {
+    "pull-request": () =>
+      providerOutput({
+        identity: pr,
+        repositoryId: REPOSITORY_DATABASE_ID,
+        mergeable: true,
+        mergeState: "clean",
+        merged: false,
+      }),
+    branch: () => providerOutput({ name: pr.baseRef, protected: false, sha: pr.baseSha }),
+    "branch-protection": notFound,
+    "branch-rules": () => providerOutput([]),
+    "check-runs": () => providerOutput({ total: 0, values: [] }),
+    "commit-statuses": () => providerOutput([]),
+    "workflow-runs": () => providerOutput({ total: 0, values: [] }),
+    reviews: () => providerOutput([]),
+  };
+}
+
+function answerCiFactsReadWhenMatched(
+  input: Invocation,
+  args: readonly string[],
+  state: DeliveryProviderState,
+): void {
+  const pr = state.pullRequests.find((candidate) => candidate.headRef === state.headRef);
+  if (input.ciFacts !== true || pr === undefined) return;
+  const target = {
+    ownerAndRepo: DELIVERY_REPOSITORY,
+    prExternalId: String(pr.number),
+    baseBranchName: pr.baseRef,
+    headSha: pr.headSha,
+  };
+  const kind = GIT_CI_READ_KINDS.find((candidate) =>
+    sameArgs(args, buildGitCiReadArgv(candidate, target, 1)),
+  );
+  if (kind !== undefined) ciFactsAnswers(pr)[kind]();
+}
+
 function ghInvocation(input: Invocation, args: readonly string[]): void {
   const state = readState(input.stateDir);
   answerJourneyQueryWhenMatched(args, state);
+  answerCiFactsReadWhenMatched(input, args, state);
   const method = args[args.indexOf("--method") + 1];
   const host = args[args.indexOf("--hostname") + 1];
   const endpoint = args.find((arg) => arg.startsWith("/repos/")) ?? "";

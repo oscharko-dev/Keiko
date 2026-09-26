@@ -10,9 +10,14 @@ import {
   CLIENT_BINDING_REFERENCE_SHAPES,
   CLIENT_BINDING_RELATED_CORRELATIONS_MAX,
   CLIENT_BINDING_DECIDING_LOADS_MAX,
+  CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES,
+  CLIENT_GIT_CLIENT_OPERATION_KINDS,
+  CLIENT_GIT_CLIENT_OPERATION_OUTCOMES,
   CLIENT_SESSION_REPAIR_OUTCOMES,
   CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
   CLIENT_SESSION_REPAIR_STREAMS,
+  CLIENT_SELECT_DISMISSAL_FOCUS_LOCATIONS,
+  CLIENT_SELECT_DISMISSAL_REASONS,
   CLIENT_DIAGNOSTIC_KINDS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX,
@@ -28,6 +33,7 @@ import {
   isActivityLogReadinessSnapshot,
   isClientBindingIngestRequest,
   isClientDiagnosticIngestRequest,
+  isClientGitRetryAttemptIngestRequest,
   isClientSessionRepairIngestRequest,
   isClientDiagnosticKind,
   isClientDiagnosticLossCount,
@@ -35,6 +41,7 @@ import {
   isLinuxGatewayDiagnosticKind,
   CLIENT_ERROR_CLASSES,
   clientErrorClass,
+  type ClientGitRetryOperation,
 } from "./diagnostics.js";
 
 function validRequest(): Record<string, unknown> {
@@ -232,6 +239,34 @@ describe("isClientDiagnosticIngestRequest", () => {
     }
   });
 
+  // PR #3625 review: a Git-client operation settling after its own surface (an add-repository
+  // dialog, a manual retry panel) is already gone. The two families — a discarded add-repository
+  // result, a retried read — never mix: an operation from one family can never carry the other
+  // family's outcome.
+  it("accepts only a git-client operation whose outcome matches its operation's family", () => {
+    const discardedClone = { operation: "repository-clone", outcome: "discarded-succeeded" };
+    expect(
+      isClientDiagnosticIngestRequest({ ...validRequest(), gitClientOperation: discardedClone }),
+    ).toBe(true);
+    const recoveredRetry = { operation: "status-read", outcome: "retry-recovered" };
+    expect(
+      isClientDiagnosticIngestRequest({ ...validRequest(), gitClientOperation: recoveredRetry }),
+    ).toBe(true);
+    for (const invalid of [
+      { operation: "write-file", outcome: "discarded-succeeded" },
+      { operation: "repository-clone", outcome: "exploded" },
+      { operation: "repository-register", outcome: "retry-failed" },
+      { operation: "status-read", outcome: "discarded-failed" },
+      { operation: "branches-read", outcome: "discarded-succeeded" },
+      { operation: "repository-clone" },
+      { outcome: "discarded-succeeded" },
+    ]) {
+      expect(
+        isClientDiagnosticIngestRequest({ ...validRequest(), gitClientOperation: invalid }),
+      ).toBe(false);
+    }
+  });
+
   // This guard only asserts wire SHAPE (AGENTS.md: "reuse first" — the leaf must not duplicate
   // `correlation.ts`'s alphabet policy). A shape-conforming but semantically invalid id is the
   // server route's job to reject via `isValidCorrelationId`, never this guard's.
@@ -239,6 +274,61 @@ describe("isClientDiagnosticIngestRequest", () => {
     expect(
       isClientDiagnosticIngestRequest({ ...validRequest(), correlationId: "not valid!!" }),
     ).toBe(true);
+  });
+
+  // PR #3625 review (GitClientWindow.tsx finding): the closed unavailable reason is evidence for a
+  // resolved-unavailable retry failure only — never a discard, and never a recovered or superseded
+  // retry — so a reason on any other outcome must refuse the whole report, fail-closed.
+  it("accepts the closed unavailable reason only alongside retry-failed", () => {
+    const retryFailedWithReason = {
+      operation: "status-read",
+      outcome: "retry-failed",
+      reason: "git-error",
+    };
+    expect(
+      isClientDiagnosticIngestRequest({
+        ...validRequest(),
+        gitClientOperation: retryFailedWithReason,
+      }),
+    ).toBe(true);
+    for (const invalid of [
+      { operation: "status-read", outcome: "retry-recovered", reason: "git-error" },
+      { operation: "status-read", outcome: "retry-superseded", reason: "git-error" },
+      { operation: "repository-clone", outcome: "discarded-failed", reason: "git-error" },
+      { operation: "status-read", outcome: "retry-failed", reason: "not-a-real-reason" },
+      { operation: "status-read", outcome: "retry-failed", reason: 7 },
+    ]) {
+      expect(
+        isClientDiagnosticIngestRequest({ ...validRequest(), gitClientOperation: invalid }),
+      ).toBe(false);
+    }
+  });
+
+  // PR #3625 review (KeikoSelect.tsx finding): an open menu consumes Escape wherever focus sits, and
+  // this closed pair is the only evidence of which surface actually closed — never a label or an
+  // option's text.
+  it("accepts only a closed select dismissal: a known reason paired with a known focus location", () => {
+    for (const reason of CLIENT_SELECT_DISMISSAL_REASONS) {
+      for (const focus of CLIENT_SELECT_DISMISSAL_FOCUS_LOCATIONS) {
+        expect(
+          isClientDiagnosticIngestRequest({
+            ...validRequest(),
+            selectDismissal: { reason, focus },
+          }),
+        ).toBe(true);
+      }
+    }
+    for (const invalid of [
+      { reason: "outside-click", focus: "trigger" },
+      { reason: "escape", focus: "menu" },
+      { reason: "escape" },
+      { focus: "trigger" },
+      { reason: "escape", focus: "trigger", label: "Model only" },
+    ]) {
+      expect(isClientDiagnosticIngestRequest({ ...validRequest(), selectDismissal: invalid })).toBe(
+        false,
+      );
+    }
   });
 });
 
@@ -733,6 +823,98 @@ describe("client report budgets", () => {
         CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES.has(outcome),
       ),
     ).toEqual(["replayed", "stream-repaired", "repair-acknowledged"]);
+  });
+
+  it("classifies exactly the discarded-failed and retry-failed outcomes as git-client failures", () => {
+    expect(
+      CLIENT_GIT_CLIENT_OPERATION_OUTCOMES.filter((outcome) =>
+        CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES.has(outcome),
+      ),
+    ).toEqual(["discarded-failed", "retry-failed"]);
+  });
+
+  // PR #3625 review: a retry superseded by a newer automatic read is discarded evidence, never a
+  // failure of the read itself — it must spend the routine budget alongside a recovery, exactly
+  // like a discarded-succeeded add-repository result.
+  it("classifies retry-superseded as routine, not a git-client failure", () => {
+    expect(CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES.has("retry-superseded")).toBe(false);
+    expect(CLIENT_GIT_CLIENT_OPERATION_OUTCOMES).toContain("retry-superseded");
+  });
+});
+
+describe("git-client operation settlement vocabulary", () => {
+  it("accepts every operation paired with every outcome from its own family", () => {
+    const discardOperations = CLIENT_GIT_CLIENT_OPERATION_KINDS.filter((operation) =>
+      operation.startsWith("repository-"),
+    );
+    const retryOperations = CLIENT_GIT_CLIENT_OPERATION_KINDS.filter(
+      (operation) => !operation.startsWith("repository-"),
+    );
+    const discardOutcomes = CLIENT_GIT_CLIENT_OPERATION_OUTCOMES.filter((outcome) =>
+      outcome.startsWith("discarded-"),
+    );
+    const retryOutcomes = CLIENT_GIT_CLIENT_OPERATION_OUTCOMES.filter((outcome) =>
+      outcome.startsWith("retry-"),
+    );
+    for (const operation of discardOperations) {
+      for (const outcome of discardOutcomes) {
+        expect(
+          isClientDiagnosticIngestRequest({
+            ...validRequest(),
+            gitClientOperation: { operation, outcome },
+          }),
+        ).toBe(true);
+      }
+    }
+    for (const operation of retryOperations) {
+      for (const outcome of retryOutcomes) {
+        expect(
+          isClientDiagnosticIngestRequest({
+            ...validRequest(),
+            gitClientOperation: { operation, outcome },
+          }),
+        ).toBe(true);
+      }
+    }
+  });
+});
+
+// PR #3625 review: a manual retry's attempt line mints its own correlation id up front so a later
+// supersession is still joinable to it, mirroring the stage lifecycle's own correlation contract.
+describe("isClientGitRetryAttemptIngestRequest", () => {
+  function attemptRequest(): Record<string, unknown> {
+    return { kind: "git-retry-attempt", operation: "status-read", correlationId: "ui_retry-0001" };
+  }
+
+  it("accepts a well-formed retry attempt", () => {
+    expect(isClientGitRetryAttemptIngestRequest(attemptRequest())).toBe(true);
+  });
+
+  it("accepts every retriable read operation and refuses a discard operation", () => {
+    // Keyed by the type, so a new retriable read fails to compile here until it is listed, and then
+    // fails this test until the guard's own set accepts it.
+    const retriable: Readonly<Record<ClientGitRetryOperation, true>> = {
+      "status-read": true,
+      "branches-read": true,
+      "summary-read": true,
+    };
+    for (const operation of Object.keys(retriable)) {
+      expect(isClientGitRetryAttemptIngestRequest({ ...attemptRequest(), operation })).toBe(true);
+    }
+    for (const operation of ["repository-clone", "repository-register"]) {
+      expect(isClientGitRetryAttemptIngestRequest({ ...attemptRequest(), operation })).toBe(false);
+    }
+  });
+
+  it.each([
+    ["a missing correlation id", { correlationId: undefined }],
+    ["an oversized correlation id", { correlationId: "c".repeat(129) }],
+    ["a non-string correlation id", { correlationId: 7 }],
+    ["an unknown operation", { operation: "write-file" }],
+    ["a mismatched kind", { kind: "stage" }],
+    ["an undeclared field", { extra: "x" }],
+  ])("refuses %s", (_label, patch) => {
+    expect(isClientGitRetryAttemptIngestRequest({ ...attemptRequest(), ...patch })).toBe(false);
   });
 });
 

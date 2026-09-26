@@ -123,6 +123,14 @@ unrecognized values are ignored fail-closed. Enabling the dev lane never widens 
 readiness projection reports the same ceiling the mint clamp enforces; the previously reported
 autonomous-delivery ceiling was a separate authority knob and could diverge from enforcement.
 
+For a local installation whose operator explicitly elects to make all three Coding Workbench modes
+usable, set `KEIKO_CODING_DEPLOYMENT_CEILING=autonomous-delivery` when launching Keiko. This is an
+installation-level choice, independent of the repository and branch selected in a Workbench window.
+The selected mode then determines each new run's authority inside its validated Authority Envelope;
+changing the repository never silently changes the installation ceiling. The operator must carry
+this explicit configuration forward on subsequent launches. The default remains fail-closed for
+installations without that choice.
+
 ### D6 — Long-lived gateway-only network confinement on macOS (Issue #2951)
 
 The macOS dev-lane backend (`devLaneRuntimeProcessBackend.ts`) never spawns the sidecar directly.

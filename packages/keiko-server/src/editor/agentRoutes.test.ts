@@ -517,6 +517,7 @@ async function postActionResult(
   sessionId = original.sessionId,
   capabilityOverride?: string | null,
   deps?: Parameters<typeof handleEditorAgentActions>[1],
+  reviewDecision?: "rejected",
 ): Promise<Awaited<ReturnType<typeof handleEditorAgentActions>>> {
   const capability =
     capabilityOverride === null ? undefined : (capabilityOverride ?? bridgeDecisionCapability);
@@ -525,6 +526,7 @@ async function postActionResult(
       schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
       kind: "result",
       ...(capability === undefined ? {} : { bridgeDecisionCapability: capability }),
+      ...(reviewDecision === undefined ? {} : { reviewDecision }),
       result: {
         schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
         actionId: original.actionId,
@@ -4263,6 +4265,7 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
         requiresReview: vi.fn((): boolean => requiresReview),
         claim: vi.fn((): boolean => true),
         complete: vi.fn((): boolean => true),
+        reject: vi.fn((): boolean => true),
         discard: vi.fn((): boolean => true),
       } satisfies NonNullable<UiHandlerDeps["runtimeMutationLease"]>;
       const deps = runtimeMutationDeps(runtimeMutationLease);
@@ -4418,6 +4421,7 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
         requiresReview: vi.fn((): boolean => true),
         claim: vi.fn((): boolean => true),
         complete: vi.fn((): boolean => true),
+        reject: vi.fn((): boolean => true),
         discard: vi.fn((): boolean => true),
       } satisfies NonNullable<UiHandlerDeps["runtimeMutationLease"]>;
       const resolveAccess = vi.fn(fixture.resolveAccess);
@@ -4449,6 +4453,7 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
         throw new Error("a local editor action must not claim a runtime lease");
       }),
       complete: vi.fn((): boolean => true),
+      reject: vi.fn((): boolean => true),
       discard: vi.fn((): boolean => true),
     } satisfies NonNullable<UiHandlerDeps["runtimeMutationLease"]>;
 
@@ -4511,6 +4516,7 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
           ): boolean => claim(),
         ),
         complete: vi.fn((): boolean => true),
+        reject: vi.fn((): boolean => true),
         discard: vi.fn((): boolean => true),
       } satisfies NonNullable<UiHandlerDeps["runtimeMutationLease"]>;
 
@@ -4596,6 +4602,7 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
         order.push(succeeded ? "complete" : "fail");
         return true;
       }),
+      reject: vi.fn((): boolean => true),
       discard: vi.fn((): boolean => true),
     } satisfies NonNullable<UiHandlerDeps["runtimeMutationLease"]>;
     const deps = runtimeMutationDeps(runtimeMutationLease, resolveWorkspaceRootAccess);
@@ -4623,6 +4630,54 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     expect(auditRecords().at(-2)).not.toHaveProperty("targetPath");
     expect(auditRecords().at(-1)).not.toHaveProperty("targetPath");
   });
+
+  // Owner decision 2026-09-26 (ADR-0124 D6): the change review is the only approval an edit asks
+  // for. Its Reject settles the run's lease as the human's decision, before anything was claimed or
+  // written; it used to settle as a failed mutation, which failed the run when that edit was its
+  // last. PR #3625 review: only an explicit Reject is that decision; a failure the browser reports
+  // itself (a malformed changeset, a failed load, another review active) stays a failed mutation.
+  it.each([
+    ["an explicit Reject", "rejected", "rejected"],
+    ["a failure the browser reports itself", "failed", undefined],
+  ] as const)(
+    "settles %s of a runtime changeset as %s, unclaimed",
+    async (_label, completion, reviewDecision) => {
+      const arranged = arrangeTwoFiles();
+      await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt", "src/b.txt"]);
+      registerTestAuthority(workspaceRoot);
+      const runtimeMutationLease = {
+        matches: vi.fn((): boolean => true),
+        requiresReview: vi.fn((): boolean => true),
+        claim: vi.fn((): boolean => true),
+        complete: vi.fn((): boolean => true),
+        reject: vi.fn((): boolean => true),
+        discard: vi.fn((): boolean => true),
+      } satisfies NonNullable<UiHandlerDeps["runtimeMutationLease"]>;
+      const deps = runtimeMutationDeps(runtimeMutationLease);
+
+      expect((await handleEditorAgentActions(context(arranged.action), deps)).status).toBe(202);
+      const rejected = await postActionResult(
+        arranged.action,
+        "failed",
+        arranged.action.sessionId,
+        undefined,
+        deps,
+        reviewDecision,
+      );
+
+      expect(actionResultStatus(rejected.body)).toBe("failed");
+      expect(runtimeMutationLease.claim).not.toHaveBeenCalled();
+      const settled = expect.objectContaining({ actionId: arranged.action.actionId }) as unknown;
+      if (completion === "rejected") {
+        expect(runtimeMutationLease.reject).toHaveBeenCalledExactlyOnceWith(settled);
+        expect(runtimeMutationLease.complete).not.toHaveBeenCalled();
+      } else {
+        expect(runtimeMutationLease.complete).toHaveBeenCalledExactlyOnceWith(settled, false);
+        expect(runtimeMutationLease.reject).not.toHaveBeenCalled();
+      }
+      expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
+    },
+  );
 
   it.each(["revoked", "replaced"] as const)(
     "re-proves managed workspace authority and fails closed when it is %s before apply",
@@ -4666,6 +4721,7 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
         requiresReview: vi.fn((): boolean => true),
         claim: vi.fn((): boolean => true),
         complete: vi.fn((): boolean => true),
+        reject: vi.fn((): boolean => true),
         discard: vi.fn((): boolean => true),
       } satisfies NonNullable<UiHandlerDeps["runtimeMutationLease"]>;
       const deps = runtimeMutationDeps(runtimeMutationLease, resolveWorkspaceRootAccess);

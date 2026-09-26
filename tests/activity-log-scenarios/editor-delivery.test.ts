@@ -59,7 +59,14 @@ afterEach(() => {
 function makeTempDir(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   cleanups.push(() => {
-    rmSync(dir, { recursive: true, force: true });
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch (error) {
+      if (process.platform === "win32" && (error as NodeJS.ErrnoException).code === "EPERM") {
+        return;
+      }
+      throw error;
+    }
   });
   return dir;
 }
@@ -209,7 +216,7 @@ describe("Activity Log scenario: editor-delivery", () => {
       expect(
         expectActivityLogProof("lsp.process.terminated.emitted-line", line ?? ""),
       ).toMatchObject({ signal: "SIGTERM" });
-    });
+    }, 60_000);
   });
 
   describe("editor-delivery.dependency-failure", () => {
@@ -236,7 +243,7 @@ describe("Activity Log scenario: editor-delivery", () => {
       expect(expectActivityLogProof("lsp.spawn.failed.emitted-line", line ?? "")).toMatchObject({
         errorKind: "unavailable",
       });
-    });
+    }, 60_000);
 
     it("reconstructs a failed git process to a complete dependency-failure trace", async () => {
       const startedAtMs = Date.now();

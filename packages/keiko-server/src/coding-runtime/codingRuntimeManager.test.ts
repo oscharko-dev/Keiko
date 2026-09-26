@@ -4965,4 +4965,63 @@ describe("immutable draft delivery manager approvals", () => {
       }
     },
   );
+
+  // PR #3625 (ADR-0124 D6): the operator's "no" to a push proposal reaches the proposal's own
+  // server-side wait through the bridge, and only for the active run's own delivery proposals.
+  it("records a denied push proposal's decline for its waiting call", async () => {
+    const delivery = new DraftDeliveryFixture();
+    const managed = createManagedFixture();
+    const harness = createSpawnHarness();
+    const bridge = createCodingToolApprovalBridge(undefined, undefined, delivery.service);
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      codingToolApprovals: bridge,
+      now: () => delivery.now,
+    });
+    try {
+      await delivery.recordVerifiedCommit();
+      const proposal = await delivery.service.proposePush();
+      if (proposal.status !== "recorded") throw new Error("missing proposal");
+      await manager.start({
+        ...launchRequest(managed.workspaceRoot, managed.managedRoot, managed.executablePath),
+        runId: "run-1",
+      });
+      const proposalId = proposal.record.proposalId;
+
+      expect(
+        manager.declineApproval?.({
+          runId: "other-run",
+          requestId: proposalId,
+          actionKind: "push",
+        }),
+      ).toBe(false);
+      expect(
+        manager.declineApproval?.({
+          runId: "run-1",
+          requestId: proposalId,
+          actionKind: "verification-command",
+        }),
+      ).toBe(false);
+      expect(bridge.proposalDeclined?.("run-1", proposalId)).toBe(false);
+
+      expect(
+        manager.declineApproval?.({ runId: "run-1", requestId: proposalId, actionKind: "push" }),
+      ).toBe(true);
+      expect(bridge.proposalDeclined?.("run-1", proposalId)).toBe(true);
+      expect(
+        bridge.matchesDelivery?.("run-1", {
+          action: "delivery",
+          actionId: "a",
+          idempotencyKey: "a",
+          intent: "push",
+          phase: "execute",
+          proposalId,
+        }),
+      ).toBe(false);
+    } finally {
+      await manager.stop("run-1");
+      delivery.close();
+    }
+  });
 });

@@ -1726,6 +1726,22 @@ function subscribeGatewayModelRefresh(
   };
 }
 
+// Whether the latest gateway model catalog refresh has settled with a catalog. The shared catalog
+// reads EMPTY while a refresh is in flight (`clearSessionModelsForPendingRefresh`), so an empty list
+// alone never means "no eligible models"; after a successful refresh it does (PR #3625 review). A
+// failed refresh settles nothing: the catalog is then unknown, not empty.
+export function useGatewayModelCatalogSettled(): boolean {
+  const [settled, setSettled] = useState(false);
+  useEffect(
+    () =>
+      subscribeGatewayModelRefresh((result): void => {
+        setSettled(result.kind === "success");
+      }),
+    [],
+  );
+  return settled;
+}
+
 function cloneSessionPatch(patch: Partial<SessionState>): Partial<SessionState> {
   const cloned: Partial<SessionState> = { ...patch };
   if (patch.projects !== undefined) cloned.projects = [...patch.projects];

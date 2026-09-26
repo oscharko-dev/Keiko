@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 import {
+  cancellationImmuneJobIds,
   carriesExplicitStatusFunction,
   hasIfCondition,
   impliedSuccessTraps,
@@ -135,6 +136,40 @@ describe("impliedSuccessTraps", () => {
   it("returns nothing when no need is skippable", () => {
     const workflow = { jobs: { a: {}, b: { needs: "a" }, c: { needs: "b" } } };
     expect(impliedSuccessTraps(workflow)).toStrictEqual([]);
+  });
+});
+
+describe("cancellationImmuneJobIds", () => {
+  it("names a job whose if: calls always() and not one that uses !cancelled()", () => {
+    const workflow = {
+      jobs: {
+        immune: { if: "${{ always() && needs.a.result == 'success' }}" },
+        cancellable: { if: "${{ !cancelled() && needs.a.result == 'success' }}" },
+        plain: {},
+      },
+    };
+    expect(cancellationImmuneJobIds(workflow)).toStrictEqual(["immune"]);
+  });
+
+  it("returns nothing for a workflow without jobs", () => {
+    expect(cancellationImmuneJobIds({})).toStrictEqual([]);
+    expect(cancellationImmuneJobIds(undefined)).toStrictEqual([]);
+  });
+});
+
+describe("every job stops when its run is cancelled (regression pin)", () => {
+  // ADR-0157: a job-level `always()` kept every superseded pull-request run's long jobs running
+  // after `cancel-in-progress` and `gh run cancel`, so the run held its concurrency group and the
+  // new head's run sat `pending` with zero jobs until the old jobs finished (PR #3625). Only the
+  // required `ci` aggregate keeps `always()`: it must report on a cancelled run too, fails closed
+  // there, and only waits on its needs.
+  const REVIEWED = { "ci.yml": ["ci"] };
+  const workflowFiles = readdirSync(workflowsDir)
+    .filter((name) => name.endsWith(".yml") || name.endsWith(".yaml"))
+    .sort();
+
+  it.each(workflowFiles)("%s has no cancellation-immune job beyond the reviewed ones", (file) => {
+    expect(cancellationImmuneJobIds(loadWorkflow(file))).toStrictEqual(REVIEWED[file] ?? []);
   });
 });
 

@@ -44,6 +44,7 @@ import {
   readStagedPaths,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
+import { invalidateGitSummaryCache } from "../gitRepositoryReads.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import { logWorkspaceLifecycleFailure } from "../task-workspace/activity-log.js";
 import { asRepositoryUnreachable, TaskWorkspaceError } from "../task-workspace/errors.js";
@@ -930,6 +931,9 @@ export function recordGitDeliveryLifecycle(
     : input.result;
   persistGitDeliveryEvidence(input.deps, lifecycle, input.snapshot, input.repoId, input.now);
   logGitDeliveryMutation(input.activityLog, lifecycle, input.correlationId, input.failureDetail);
+  // Every finished governed action (local mutation, merge, PR, push) may have changed what the
+  // repository summary reports, so no summary cached before it may be replayed (#3644).
+  invalidateGitSummaryCache(input.deps);
   return lifecycle;
 }
 

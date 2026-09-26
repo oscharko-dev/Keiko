@@ -8397,12 +8397,6 @@
     },
     {
       "path": "packages/keiko-ui/src/lib/coding-workbench-runtime-hooks.ts",
-      "owner": "useRunRefresh",
-      "kind": "unregistered-catch",
-      "count": 1
-    },
-    {
-      "path": "packages/keiko-ui/src/lib/coding-workbench-runtime-hooks.ts",
       "owner": "useRuntimeRefresh",
       "kind": "unregistered-catch",
       "count": 1

@@ -284,6 +284,49 @@ describe("CodingWorkbenchChanges", () => {
     expect(screen.queryByText("src/file-499.ts")).not.toBeInTheDocument();
   });
 
+  // #3635: the whole-panel retry only ever renders for a whole-panel status/history failure. A
+  // single-file diff failure leaves the panel "ready" (its own files list is fine), so it needs
+  // its OWN retry control — reselecting the already-selected file is a no-op.
+  it("offers a retry control for a failed selected-file diff and recovers on retry", async () => {
+    const getDiff = vi.fn(async (_root: string, path: string) => diff(path));
+    getDiff.mockRejectedValueOnce(new Error("redacted diff transport failure"));
+    const changesClient = client({ getDiff });
+    renderChanges(changesClient);
+    await expandChanges();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("selected file diff is unavailable");
+    const retryButton = screen.getByRole("button", { name: "Retry diff" });
+    // The already-selected file button is still a no-op; only the dedicated control recovers.
+    fireEvent.click(screen.getByRole("button", { name: /src\/file-000\.ts/u }));
+    expect(getDiff).toHaveBeenCalledTimes(1);
+
+    fireEvent.click(retryButton);
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Retry diff" })).not.toBeInTheDocument(),
+    );
+    expect(getDiff).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  // #3648: a failed history read must never hide the successfully read status, changed files or
+  // diffs — history exists only to label the revision, and that label already falls back.
+  it("keeps the changed files and diff visible when only the history read fails", async () => {
+    const changesClient = client({
+      getHistory: vi.fn(() => Promise.reject(new Error("redacted history transport failure"))),
+    });
+    const view = renderChanges(changesClient);
+    await expandChanges();
+
+    expect(await screen.findByText("As of HEAD")).toBeVisible();
+    expect(screen.getByRole("button", { name: /src\/file-000\.ts/u })).toBeVisible();
+    await waitFor(() => {
+      expect(view.container.querySelector(".rv-add .rv-src")).not.toBeNull();
+    });
+    expect(changesClient.getDiff).toHaveBeenCalledWith(ROOT, "src/file-000.ts");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("coalesces a burst of runtime change signals into one refresh", async () => {
     vi.useFakeTimers();
     const changesClient = client();

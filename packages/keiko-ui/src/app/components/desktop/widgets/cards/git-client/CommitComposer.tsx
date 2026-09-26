@@ -774,9 +774,11 @@ function CommitDraftSuggestionSlot({
 
 function PreviewErrorBlock({
   previewError,
+  onRetry,
   t,
 }: {
   readonly previewError: string | null;
+  readonly onRetry: () => void;
   readonly t: OptionalWidgetTranslate;
 }): ReactNode {
   if (previewError === null) return null;
@@ -792,6 +794,13 @@ function PreviewErrorBlock({
         <InfoIcon size={11} /> {t("commitComposer.preview.unavailable")}
       </StatusPill>
       <p style={SUBTLE_TEXT_STYLE}>{previewError}</p>
+      {/* #3647: a transient preview failure otherwise never schedules another preview request —
+          the debounce effect below only reruns on a message/revision change, none of which a
+          plain retry click produces — so Commit could stay disabled indefinitely with no
+          recovery action. */}
+      <button type="button" style={{ ...SECONDARY_BTN, alignSelf: "flex-start" }} onClick={onRetry}>
+        {t("commitComposer.preview.retry")}
+      </button>
     </div>
   );
 }
@@ -992,6 +1001,7 @@ interface CommitFeedbackProps {
   readonly branchName: string | undefined;
   readonly outcome: GitMutationOutcome | null;
   readonly error: string | null;
+  readonly onRetryPreview: () => void;
   readonly t: OptionalWidgetTranslate;
 }
 
@@ -1000,6 +1010,7 @@ function CommitFeedback(props: CommitFeedbackProps): ReactNode {
     <>
       <PreviewErrorBlock
         previewError={props.state.hasStaged ? props.previewError : null}
+        onRetry={props.onRetryPreview}
         t={props.t}
       />
       <CommitPolicyPreviewSlot
@@ -1337,6 +1348,7 @@ function CommitComposerContents({
         branchName={props.branchName}
         outcome={props.outcome}
         error={props.error}
+        onRetryPreview={() => props.onPreview(controller.state.message)}
         t={t}
       />
     </>

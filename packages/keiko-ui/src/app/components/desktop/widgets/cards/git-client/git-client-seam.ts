@@ -60,6 +60,13 @@ export type GitMutationOutcome = GitDeliveryMutationResponse & {
   readonly publishRejectionReason?: string;
   readonly recoveryDisposition?: string;
   readonly recoveryActionHint?: string;
+  // #3645: set on the create-then-switch compose in GitClientWindow's `createBranch` whenever
+  // `branchCreate` itself succeeded, regardless of whether the follow-on `branchSwitch` (or the
+  // editor-buffer reconciliation after it) then failed. A branch-create outcome whose SWITCH step
+  // failed would otherwise report only the switch's own status/reason, losing the fact that the
+  // branch is durably there — leaving the New Branch dialog's "Create branch" as the only visible
+  // action, which fails a second time with an already-exists error.
+  readonly createdBranchName?: string;
 };
 
 // ─── Injected client (DI seam for tests + #1575-1577 reuse home) ─────────────────────────────────
