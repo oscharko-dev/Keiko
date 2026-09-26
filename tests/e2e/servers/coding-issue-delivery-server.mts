@@ -104,5 +104,8 @@ function readDeliveryIssue(stateDir: string, args: readonly string[]): Promise<u
   });
 }
 
+// The delivery lane's repository has no CI of its own, so its journey refresh reads clean CI facts.
 if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href)
-  await runIssueDeliveryServer();
+  await runIssueDeliveryServer({
+    installTransport: (dir) => installDeliveryTransport(dir, { ciFacts: true }),
+  });
