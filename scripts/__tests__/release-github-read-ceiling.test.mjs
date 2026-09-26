@@ -46,7 +46,7 @@ describe("gh output ceiling of the release chain", () => {
     expect(result.error).toBeUndefined();
     expect(result.status).toBe(0);
     expect(result.stdout).toHaveLength(2 * MIB);
-    expect(HOST_COMMAND_MAX_BUFFER_BYTES).toBeGreaterThanOrEqual(32 * MIB);
+    expect(HOST_COMMAND_MAX_BUFFER_BYTES).toBe(64 * MIB);
   });
 
   it("holds a full answer in the release-alignment gate's real seam", () => {
@@ -95,14 +95,37 @@ describe("gh output ceiling of the release chain", () => {
     return calls;
   }
 
+  // The spawnSync calls of `source` that do not set the ceiling. Comments are stripped first, so an
+  // option that is commented out does not count as set.
+  function spawnCallsWithoutCeiling(source) {
+    return spawnSyncCalls(source)
+      .map((call) => call.replaceAll(/\/\*[\s\S]*?\*\//gu, "").replaceAll(/\/\/[^\n]*/gu, ""))
+      .filter((call) => !/\bmaxBuffer:\s*HOST_COMMAND_MAX_BUFFER_BYTES\b/u.test(call));
+  }
+
   it.each(RELEASE_CHAIN_SCRIPTS)("%s spawns every child with the output ceiling", (name) => {
     const source = readFileSync(join(scriptsRoot, name), "utf8");
-    const calls = spawnSyncCalls(source);
 
-    expect(calls.length + source.split("spawnHostExecutable(").length - 1).toBeGreaterThan(0);
-    for (const call of calls) {
-      expect(call).toContain("maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES");
-    }
+    expect(
+      spawnSyncCalls(source).length + source.split("spawnHostExecutable(").length - 1,
+    ).toBeGreaterThan(0);
+    expect(spawnCallsWithoutCeiling(source)).toEqual([]);
+  });
+
+  it("rejects a spawn whose ceiling is missing or only in a comment", () => {
+    const weakened = [
+      'spawnSync(command, args, { encoding: "utf8" });',
+      'spawnSync(command, args, {\n  encoding: "utf8",\n  // maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES,\n});',
+      'spawnSync(command, args, { encoding: "utf8" /* maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES */ });',
+      'spawnSync(command, args, { encoding: "utf8", maxBuffer: 1024 * 1024 });',
+    ];
+
+    for (const source of weakened) expect(spawnCallsWithoutCeiling(source)).toHaveLength(1);
+    expect(
+      spawnCallsWithoutCeiling(
+        "spawnSync(command, args, { maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES });",
+      ),
+    ).toEqual([]);
   });
 });
 
