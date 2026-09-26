@@ -45,7 +45,6 @@ import {
   CORRELATION_HEADER,
   newClientCorrelationId,
   recordResponseCorrelationId,
-  responseCorrelationIdOf,
 } from "./bff-correlation";
 import {
   reportClientDiagnostic,
@@ -53,10 +52,15 @@ import {
 } from "./client-diagnostics";
 import { clientErrorSummary } from "./client-error-summary";
 
-// Re-exported for the existing consumers that import these two from "./http"
-// (SelectionAwareWorkspaceHosts.tsx, coding-app-session-channel-api.ts). The implementation lives in ./bff-correlation so this file
-// and ./api can both depend on it without the module cycle documented above.
-export { CORRELATION_HEADER, newClientCorrelationId, responseCorrelationIdOf };
+// Re-exported for the consumers that import these from "./http" (SelectionAwareWorkspaceHosts.tsx,
+// coding-app-session-channel-api.ts, GitClientWindow.tsx, AddRepositoryDialog.tsx). The
+// implementation lives in ./bff-correlation so this file and ./api can both depend on it without the
+// module cycle documented above.
+export {
+  CORRELATION_HEADER,
+  newClientCorrelationId,
+  responseCorrelationIdOf,
+} from "./bff-correlation";
 
 // The `{ error: { code, message, … } }` envelope every BFF route returns on a non-2xx. Extra
 // fields (e.g. task-workspace `failureClass`) are surfaced to `opts.enrichError`.
