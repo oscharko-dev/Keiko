@@ -1195,7 +1195,14 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
     if (!proof.ok)
       return this.recordLaunchFailure(request, failure("workspace-root-denied", false));
     const launched = this.deps.supervisor.spawnOwnedTree(
-      supervisorLaunchRequest(request, executablePath, env, FIXED_CODEX_ARGS, proof.cwd, egressPolicy),
+      supervisorLaunchRequest(
+        request,
+        executablePath,
+        env,
+        FIXED_CODEX_ARGS,
+        proof.cwd,
+        egressPolicy,
+      ),
     );
     if (!launched.ok) {
       return this.recordLaunchFailure(

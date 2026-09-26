@@ -78,7 +78,7 @@ describe("runBareSpecifierVisibilityProbe", () => {
       }),
     );
 
-    expect(resolveEntrypoint).toHaveBeenCalledWith("/repo");
+    expect(resolveEntrypoint).toHaveBeenCalledWith(REPO_ROOT);
     const [command, args] = runDepcruise.mock.calls[0];
     expect(command).toBe(process.execPath);
     expect(args[0]).toBe("/repo/node_modules/dependency-cruiser/bin/custom.mjs");
