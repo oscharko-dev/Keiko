@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "5df95edea37909ce68ed8adc4eb5280cf5118c2eff9c26574d7dc650b5179554" as const;
+  "d7af1c04a21042c3d5c5a33958cf417b46ce400fd923dc19f225d4233d07a6b0" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -7664,6 +7664,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "sequence-exhausted",
           "capacity-pressure",
         ],
+      },
+      runtimeRetry: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["allowed", "refused"],
       },
       frames: {
         type: "string-array",
@@ -36196,6 +36202,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "runId",
               type: "string",
               dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "runtimeRetry",
+              type: "string",
+              dataClass: "closed-enum",
               required: true,
             },
             {

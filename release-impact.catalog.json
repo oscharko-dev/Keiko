@@ -2809,14 +2809,16 @@
       "releaseNoteCategory": "fixes",
       "releaseNotePriority": "high",
       "userVisibleChange": "behavioral",
-      "userVisibleSummary": "Coding Workbench approvals take fewer steps and never end a run by themselves. Denying a step now rejects only that step: the coding agent is told and continues, where before the whole run stopped. In Ask for approval, a file change needs one decision, Apply or Reject in the change review, instead of an approval followed by the same review. An approval request that is not answered within its five minutes is removed at once and the next request is shown, where before the expired card stayed on screen and blocked the next one. The Workbench window also no longer turns blank after an approval.",
+      "userVisibleSummary": "Coding Workbench approvals take fewer steps and never end a run by themselves. Denying a step now rejects only that step: the coding agent is told and continues, where before the whole run stopped. In Ask for approval, a file change needs one decision, Apply or Reject in the change review, instead of an approval followed by the same review. An approval request that is not answered within its five minutes is removed at once and the next request is shown, where before the expired card stayed on screen and blocked the next one. A turn the model provider rejects outright now ends once instead of being retried without end, a stopped run no longer leaves its change review on screen, and the Workbench window no longer turns blank after an approval.",
       "affectedStateStores": [],
       "stateImpact": [],
       "releaseNoteBullets": [
         "Coding Workbench: denying a step rejects only that step; the coding agent is told and the run continues instead of stopping.",
         "Coding Workbench (Ask for approval): a file change needs one decision, Apply or Reject in the change review; the separate approval before it is gone.",
         "Coding Workbench (Ask for approval): an approval that expires unanswered is removed at once, and the next approval request is shown and can be approved or denied.",
-        "Coding Workbench: the window no longer turns blank after an approval or when a pending decision is opened."
+        "Coding Workbench: the window no longer turns blank after an approval or when a pending decision is opened.",
+        "Coding Workbench: when the model provider rejects a turn outright (for example HTTP 400 or a refused credential), the turn ends once with the failure instead of being retried every few seconds until the run is stopped.",
+        "Coding Workbench: a stopped run no longer leaves its change review on screen, and a second browser tab on the same run no longer re-registers several times a second."
       ],
       "review": {
         "status": "reviewed",
@@ -2824,7 +2826,7 @@
         "reviewedAt": "2026-09-26",
         "humanApproved": true,
         "approvalReference": "https://github.com/oscharko-dev/Keiko/issues/3610",
-        "rationale": "The release owner ordered the lab verification of the published package and the completion of epic #3591 without follow-ups. The published 1.1.9 lab run (issue #3610) found two defects in Ask for approval mode: an expired approval blocked the next one, and the Workbench window could turn blank after an approval. 1.1.10 ships both repairs and the owner's approval decisions of 2026-09-26 (a denial rejects only that step; the change review is a file edit's one approval). It adds two activity-log operations (coding-runtime.approval.retired, coding-runtime.approval.decided), removes coding-runtime.approval.base-checked with the pre-ask base check it recorded, and adds no export, route or configuration key.",
+        "rationale": "The release owner ordered the lab verification of the published package and the completion of epic #3591 without follow-ups. The published 1.1.9 lab run (issue #3610) found two defects in Ask for approval mode: an expired approval blocked the next one, and the Workbench window could turn blank after an approval. 1.1.10 ships both repairs and the owner's approval decisions of 2026-09-26 (a denial rejects only that step; the change review is a file edit's one approval). It adds two activity-log operations (coding-runtime.approval.retired, coding-runtime.approval.decided), removes coding-runtime.approval.base-checked with the pre-ask base check it recorded, adds a runtimeRetry field to coding-sidecar.gateway.turn-failed, and adds no export, route or configuration key.",
         "traceability": null
       },
       "userActionRequired": true,

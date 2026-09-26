@@ -2,8 +2,10 @@ import { gatewaySpendRejectionReason } from "./gateway-spend-budget.js";
 import { CodingRuntimeLaunchRejectedError } from "./coding-runtime/launchFailure.js";
 import {
   AuthenticationError,
+  CancelledError,
   CircuitOpenError,
   ContextOverflowError,
+  GatewayError,
   MalformedToolCallError,
   ModelRefusalError,
   ProviderEmptyAnswerError,
@@ -479,6 +481,14 @@ const CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION = defineActivityLogOperation(
         "sequence-exhausted",
         "capacity-pressure",
       ],
+    },
+    // Whether the answer to the runtime lets it retry the turn: `refused` for a provider rejection
+    // no retry can change, which the runtime reads as final (lab 2026-09-26).
+    runtimeRetry: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["allowed", "refused"],
     },
     // The Keiko-code frames and cause classes of the failure, when the turn failed on an error
     // (PR #3617 review): a model-answer failure writes no error-level diagnostic, so this line is
@@ -1643,7 +1653,8 @@ function reportGatewayTurnFailure(
   if (snapshot?.state !== "running" && snapshot?.state !== "paused") return false;
   const publicationReason = gatewayTurnFailurePublication(deps, runId, snapshot, failureCode);
   const run = { revision: snapshot.revision, state: snapshot.state };
-  logGatewayTurnFailure(ctx, runId, run, failureCode, publicationReason, error);
+  const outcome = { publicationReason, runtimeRetry: runtimeRetryFor(error, failureCode) };
+  logGatewayTurnFailure(ctx, runId, run, failureCode, outcome, error);
   return true;
 }
 
@@ -1677,7 +1688,13 @@ function logGatewayTurnFailure(
   runId: string,
   { revision, state }: { readonly revision: number; readonly state: "running" | "paused" },
   failureCode: CodingWorkbenchTurnFailureCode,
-  publicationReason: GatewayFailurePublicationReason,
+  {
+    publicationReason,
+    runtimeRetry,
+  }: {
+    readonly publicationReason: GatewayFailurePublicationReason;
+    readonly runtimeRetry: RuntimeRetry;
+  },
   error: unknown,
 ): void {
   const { frames, causeChain } = describeError(error);
@@ -1695,6 +1712,7 @@ function logGatewayTurnFailure(
         failureCode,
         published: publicationReason === "published",
         publicationReason,
+        runtimeRetry,
         ...(error === undefined || frames === undefined ? {} : { frames }),
         ...(error === undefined || causeChain === undefined ? {} : { causeChain }),
         completeness: "complete",
@@ -1747,6 +1765,37 @@ function gatewayStreamFailureCode(error: unknown): CodingWorkbenchTurnFailureCod
   )
     return "provider-failed";
   return "stream-incomplete";
+}
+
+type RuntimeRetry = "allowed" | "refused";
+
+// A provider rejection no retry can change — a 4xx other than 408/409/429, a refused credential, an
+// invalid configuration — which the gateway's own retry policy already treats as terminal. A
+// breaker's cooldown and a cancellation are no verdict on the turn, so they stay retryable.
+function runtimeRetryFor(
+  error: unknown,
+  failureCode: CodingWorkbenchTurnFailureCode,
+): RuntimeRetry {
+  const final =
+    failureCode === "provider-failed" &&
+    error instanceof GatewayError &&
+    !error.retryable &&
+    !(error instanceof CircuitOpenError) &&
+    !(error instanceof CancelledError);
+  return final ? "refused" : "allowed";
+}
+
+// OpenCode 2.0.10 reads an error chunk whose numeric `code` is an HTTP status as that status (its
+// OpenAIChat protocol, then its provider-error classifier): a 400 `invalid_request_error` ends the
+// turn at once. `finish_reason: "error"` reads as an unknown provider error, which it retries without
+// end — lab 2026-09-26: ten retries of the same rejected turn until the fault was removed.
+const PROVIDER_REJECTION_MESSAGE = "The model provider rejected this turn.";
+const PROVIDER_REJECTION_CHUNK = {
+  error: { code: 400, type: "invalid_request_error", message: PROVIDER_REJECTION_MESSAGE },
+} as const;
+
+function providerRejectionError(): RouteResult {
+  return { status: 400, body: errorBody("BAD_REQUEST", PROVIDER_REJECTION_MESSAGE) };
 }
 
 /**
@@ -2446,23 +2495,19 @@ function settleFailedGatewayChat(
   const cancelled = cancellation.signal.aborted;
   recordGatewayOutcome(ctx, deps, runId, cancellation, cancelled ? "cancelled" : "failed", 0, 0);
   const spendReason = gatewaySpendRejectionReason(error);
+  const failureCode = spendReason === undefined ? gatewayTurnFailureCode(error) : "turn-rejected";
   const turnFailureRecorded =
-    !cancelled &&
-    reportGatewayTurnFailure(
-      ctx,
-      deps,
-      runId,
-      spendReason === undefined ? gatewayTurnFailureCode(error) : "turn-rejected",
-      error,
-    );
+    !cancelled && reportGatewayTurnFailure(ctx, deps, runId, failureCode, error);
   emitGatewayFailureDiagnostic(ctx, deps, error, runId, turnFailureRecorded);
   settlePromptTokenReservation(deps, delivery.promptTokenReservation);
   if (spendReason !== undefined && bufferedStream === undefined) {
     logGatewayRejection(ctx, runId, 403, spendReason);
     return forbiddenGatewayRequest();
   }
-  return bufferedStream === undefined
-    ? unavailableError()
+  const refused = !cancelled && runtimeRetryFor(error, failureCode) === "refused";
+  if (bufferedStream === undefined) return refused ? providerRejectionError() : unavailableError();
+  return refused
+    ? settleBufferedOpenAiStreamRejection(bufferedStream)
     : settleBufferedOpenAiStreamError(bufferedStream, "error");
 }
 
@@ -2543,16 +2588,13 @@ async function streamGatewayChat(
     )(request)[Symbol.asyncIterator]();
   } catch (error) {
     recordGatewayOutcome(ctx, deps, runId, dispatch.cancellation, "failed", 0, 0);
-    const turnFailureRecorded = reportGatewayTurnFailure(
-      ctx,
-      deps,
-      runId,
-      gatewayTurnFailureCode(error),
-      error,
-    );
+    const failureCode = gatewayTurnFailureCode(error);
+    const turnFailureRecorded = reportGatewayTurnFailure(ctx, deps, runId, failureCode, error);
     emitGatewayFailureDiagnostic(ctx, deps, error, runId, turnFailureRecorded);
     settlePromptTokenReservation(deps, promptTokenReservation);
-    return unavailableError();
+    return runtimeRetryFor(error, failureCode) === "refused"
+      ? providerRejectionError()
+      : unavailableError();
   }
   const session = createGatewayStreamSession(ctx, dispatch, iterator);
   try {
@@ -2585,15 +2627,10 @@ async function pumpGatewayStreamWithCancellation(
   try {
     await pumpGatewayStream(session);
   } catch (error) {
+    const failureCode = gatewayStreamFailureCode(error);
     const turnFailureRecorded =
       !cancellationSignal.aborted &&
-      reportGatewayTurnFailure(
-        session.ctx,
-        deps,
-        session.runId,
-        gatewayStreamFailureCode(error),
-        error,
-      );
+      reportGatewayTurnFailure(session.ctx, deps, session.runId, failureCode, error);
     emitGatewayStreamFailureDiagnostic(
       session.ctx,
       deps,
@@ -2601,7 +2638,7 @@ async function pumpGatewayStreamWithCancellation(
       session.runId,
       turnFailureRecorded,
     );
-    settleGatewayStreamError(session);
+    settleGatewayStreamError(session, runtimeRetryFor(error, failureCode));
   } finally {
     cancellationSignal.removeEventListener("abort", cancelIterator);
   }
@@ -2877,12 +2914,17 @@ function logGatewayCompletionUsage(
   );
 }
 
-function settleGatewayStreamError(session: GatewayStreamSession): void {
-  if (!session.cancellation.signal.aborted) {
-    recordSessionOutcome(session, "failed");
-    writeSessionTerminal(session, "error");
-  } else {
+function settleGatewayStreamError(session: GatewayStreamSession, runtimeRetry: RuntimeRetry): void {
+  if (session.cancellation.signal.aborted) {
     recordSessionOutcome(session, "cancelled");
+    return;
+  }
+  recordSessionOutcome(session, "failed");
+  if (runtimeRetry === "refused") {
+    const { ctx, id, created, modelId, cancellation } = session;
+    writeStreamRejection({ ctx, id, created, modelId, transport: cancellation.transport });
+  } else {
+    writeSessionTerminal(session, "error");
   }
 }
 
@@ -2983,6 +3025,22 @@ function settleBufferedOpenAiStreamError(
   session.stopHeartbeat();
   writeStreamTerminal(session, finishReason, 0, 0);
   return STREAMING;
+}
+
+function settleBufferedOpenAiStreamRejection(
+  session: BufferedOpenAiStreamSession,
+): typeof STREAMING {
+  session.stopHeartbeat();
+  writeStreamRejection(session);
+  return STREAMING;
+}
+
+// The turn's final answer when the provider rejected it for good: an error chunk the runtime reads
+// as HTTP 400, then the stream's end.
+function writeStreamRejection(stream: OpenAiSseStreamIdentity): void {
+  const { ctx, transport } = stream;
+  writeOpenAiSse(ctx, PROVIDER_REJECTION_CHUNK, transport);
+  if (!ctx.res.writableEnded && !ctx.res.destroyed) ctx.res.end("data: [DONE]\n\n");
 }
 
 function bufferedOpenAiStream(

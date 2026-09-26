@@ -1067,8 +1067,14 @@ contain counts, status, closed reasons, and digests only. The Workbench receives
 the event carries no provider response body or customer content. Each gateway turn failure,
 including another failed model request at the same task revision, writes
 `coding-sidecar.gateway.turn-failed` with the closed failure code, request correlation, run parent,
-revision, state, and a closed publication reason (published, unavailable hub, terminal run, invalid
-event, exhausted sequence, or capacity pressure). When the turn failed on an error, the line also
+revision, state, a closed publication reason (published, unavailable hub, terminal run, invalid
+event, exhausted sequence, or capacity pressure), and `runtimeRetry`: `refused` when the provider
+rejected the turn in a way no retry can change (a 4xx other than 408/409/429, a refused credential,
+an invalid configuration — the gateway's own retry policy calls it terminal), `allowed` otherwise.
+A refused turn is answered to the runtime as a final 400 — an HTTP 400 before the stream opened, an
+error chunk with `code: 400` and `type: invalid_request_error` after it — which OpenCode 2.0.10
+reads as final; `finish_reason: "error"` or a 503, which it retries, stays the answer to everything
+else (lab 2026-09-26: a provider 400 was retried without end). When the turn failed on an error, the line also
 carries that error's Keiko-code `frames` and `causeChain`: a model-answer failure (`empty-answer`,
 `output-exhausted`, `invalid-tool-call`) writes no error-level diagnostic while the line is written,
 so this line is where its frames live. A revision is a task-state version, not a turn identifier, so

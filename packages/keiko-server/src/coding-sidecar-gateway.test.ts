@@ -63,6 +63,7 @@ import {
   resetServerLogger,
   setServerLogger,
   type BufferedServerLogSink,
+  type ServerLogEvent,
   type ServerLogThreshold,
 } from "./observability/index.js";
 import { createRunRegistry } from "./runs.js";
@@ -4299,15 +4300,18 @@ describe("coding-sidecar gateway", () => {
       runtimeDeps,
     );
 
+    // A provider 400 is a rejection no retry can change: the runtime reads Keiko's own fixed 400,
+    // never the provider's text (lab 2026-09-26).
     expect(result).toEqual({
-      status: 503,
+      status: 400,
       body: {
         error: {
-          code: "CODING_SIDECAR_UNAVAILABLE",
-          message: "Coding sidecar gateway is unavailable.",
+          code: "BAD_REQUEST",
+          message: "The model provider rejected this turn.",
         },
       },
     });
+    expect(JSON.stringify(result)).not.toContain("secret-tool");
     expect(rootPut).not.toHaveBeenCalled();
     expect(codingPut).not.toHaveBeenCalled();
     expect(record).toHaveBeenCalledWith({
@@ -4574,6 +4578,104 @@ describe("coding sidecar gateway turn failure projection", () => {
     const modelAnswer =
       code === "empty-answer" || code === "output-exhausted" || code === "invalid-tool-call";
     expect(diagnostics.record).toHaveBeenCalledTimes(modelAnswer ? 0 : 1);
+  });
+
+  // Lab 2026-09-26: a provider that answered 400 to a turn was retried by the runtime without end —
+  // `finish_reason: "error"` and a 503 both read as retryable to OpenCode 2.0.10. A rejection no retry
+  // can change is now answered as a 400 the runtime treats as final; a retryable one keeps its answer.
+  describe("a provider rejection no retry can change", () => {
+    const rejection = new ProviderError("synthetic bad request", 400);
+    const runningOrchestrator = {
+      getSnapshot: () => ({ state: "running", revision: 5 }),
+    } as unknown as UiHandlerDeps["codingRuntimeOrchestrator"];
+    const turnFailedLine = (events: readonly ServerLogEvent[]): ServerLogEvent | undefined =>
+      events.find((event) => event.op === "coding-sidecar.gateway.turn-failed");
+    const rejectionChunk =
+      '"error":{"code":400,"type":"invalid_request_error","message":"The model provider rejected this turn."}';
+
+    it.each([
+      [rejection, 400, "refused"],
+      [new AuthenticationError("synthetic credential refused"), 400, "refused"],
+      [new ProviderError("synthetic unavailable", 503), 503, "allowed"],
+      [new RateLimitError("synthetic rate limit"), 503, "allowed"],
+      [new CircuitOpenError("synthetic circuit open"), 503, "allowed"],
+    ] as const)(
+      "answers a non-streamed %s with %i and runtimeRetry %s",
+      async (error, status, runtimeRetry) => {
+        const sink = captureServerLog("warn");
+        const deps: UiHandlerDeps = {
+          ...depsValue(configValue(provider(), capability()), () => () => Promise.reject(error)),
+          codingRuntimeOrchestrator: runningOrchestrator,
+        };
+        const result = await handleCodingSidecarGatewayChatCompletions(
+          routeContext({ messages: [{ role: "user", content: "synthetic" }] }),
+          deps,
+        );
+        expect(result).toMatchObject({ status });
+        const line = turnFailedLine(sink.events);
+        expect(line?.extra).toMatchObject({ failureCode: "provider-failed", runtimeRetry });
+        expectActivityLogProof(
+          "coding-sidecar.gateway.turn-failed.emitted-line",
+          formatActivityLogProofLine(line ?? {}),
+        );
+        expect(JSON.stringify(result)).not.toContain(error.message);
+      },
+    );
+
+    it("ends a buffered stream with the rejection chunk instead of finish_reason error", async () => {
+      const sink = captureServerLog("warn");
+      const response = mockResponse({ captureBody: true });
+      const deps: UiHandlerDeps = {
+        ...depsValue(configValue(provider(), capability()), () => () => Promise.reject(rejection)),
+        codingRuntimeOrchestrator: runningOrchestrator,
+      };
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        {
+          ...routeContext({ stream: true, messages: [{ role: "user", content: "synthetic" }] }),
+          res: response.res,
+        },
+        deps,
+      );
+      expect(result).toBe(STREAMING);
+      expect(response.body()).toContain(rejectionChunk);
+      expect(response.body()).not.toContain('"finish_reason":"error"');
+      expect(response.body()).not.toContain(rejection.message);
+      expect(turnFailedLine(sink.events)?.extra).toMatchObject({ runtimeRetry: "refused" });
+    });
+
+    it("ends a streamed turn with the rejection chunk instead of finish_reason error", async () => {
+      const sink = captureServerLog("warn");
+      const stream = async function* (): AsyncGenerator<GatewayStreamChunk> {
+        await Promise.resolve();
+        yield* [];
+        throw rejection;
+      };
+      const context = authenticatedContext({
+        model: "coding",
+        stream: true,
+        messages: [{ role: "user", content: "synthetic" }],
+        tools: modelVisibleTools(),
+      });
+      const response = mockResponse({ captureBody: true });
+      const deps = {
+        ...runtimeGatewayDeps(
+          () => ({ ok: true, binding: { runId: "run-stream-rejected" } }),
+          undefined,
+          createOpenCodeGatewayReadinessRegistry(),
+          (): (() => AsyncIterable<GatewayStreamChunk>) => (): AsyncIterable<GatewayStreamChunk> =>
+            stream(),
+        ),
+        codingRuntimeOrchestrator: runningOrchestrator,
+      } as UiHandlerDeps;
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        { ...context, res: response.res },
+        deps,
+      );
+      expect(result).toBe(STREAMING);
+      expect(response.body()).toContain(rejectionChunk);
+      expect(response.body()).not.toContain('"finish_reason":"error"');
+      expect(turnFailedLine(sink.events)?.extra).toMatchObject({ runtimeRetry: "refused" });
+    });
   });
 
   // PR #3617 review: a model-answer failure skips its error-level diagnostic only because the warn
