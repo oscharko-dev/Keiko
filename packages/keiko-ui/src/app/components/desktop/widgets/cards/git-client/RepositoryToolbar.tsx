@@ -34,16 +34,23 @@ export interface RepositoryToolbarProps {
   readonly repositorySelectionLocked?: boolean | undefined;
   readonly branches: readonly GitBranchListEntry[];
   readonly branchesLoading: boolean;
+  readonly branchesError: string | null;
   readonly status: GitRepositoryStatusResponse | null;
   readonly branchBusy: boolean;
   readonly syncView: GitSyncView;
   readonly syncBusy: boolean;
   readonly syncOutcome: SyncOutcomeView | null;
   readonly syncError: string | null;
+  // #3653: the raw repository-summary read failure, separate from `syncView` (which folds it into
+  // a generic disabled "blocked" action indistinguishable from a structural block a retry could
+  // never fix).
+  readonly summaryError: string | null;
   readonly onSelectRepository: (path: string) => void;
   readonly onSwitchBranch: (branchName: string, trigger: HTMLButtonElement) => void;
   readonly onCreateBranch: (trigger: HTMLButtonElement) => void;
+  readonly onRetryBranches: () => void;
   readonly onRunSync: () => void;
+  readonly onRetrySummary: () => void;
   readonly onOpenEditor?: ((root: string) => void) | undefined;
   readonly onOpenFiles?: ((root: string) => void) | undefined;
   /** Issue #3400 — opens the "Connect to Chat" dialog for the active repository comparison. */
@@ -254,6 +261,7 @@ interface ConnectedToolbarCellsProps {
   readonly repositorySelectionLocked: boolean;
   readonly branches: readonly GitBranchListEntry[];
   readonly branchesLoading: boolean;
+  readonly branchesError: string | null;
   readonly status: GitRepositoryStatusResponse | null;
   readonly branchBusy: boolean;
   readonly branchValue: string;
@@ -261,11 +269,14 @@ interface ConnectedToolbarCellsProps {
   readonly syncBusy: boolean;
   readonly syncOutcome: SyncOutcomeView | null;
   readonly syncError: string | null;
+  readonly summaryError: string | null;
   readonly onSelectRepository: (path: string) => void;
   readonly addRepository: AddRepositoryEntry | undefined;
   readonly onSwitchBranch: (branchName: string, trigger: HTMLButtonElement) => void;
   readonly onCreateBranch: (trigger: HTMLButtonElement) => void;
+  readonly onRetryBranches: () => void;
   readonly onRunSync: () => void;
+  readonly onRetrySummary: () => void;
   readonly t: ReturnType<typeof useTranslate>;
 }
 
@@ -360,19 +371,23 @@ function LockedAddRepositoryButton({
 function BranchCell({
   branches,
   branchesLoading,
+  branchesError,
   status,
   branchBusy,
   branchValue,
   onSwitchBranch,
   onCreateBranch,
+  onRetryBranches,
 }: {
   readonly branches: readonly GitBranchListEntry[];
   readonly branchesLoading: boolean;
+  readonly branchesError: string | null;
   readonly status: GitRepositoryStatusResponse | null;
   readonly branchBusy: boolean;
   readonly branchValue: string;
   readonly onSwitchBranch: (branchName: string, trigger: HTMLButtonElement) => void;
   readonly onCreateBranch: (trigger: HTMLButtonElement) => void;
+  readonly onRetryBranches: () => void;
 }): ReactNode {
   return (
     <ToolbarCell label="Current branch" minWidth={190}>
@@ -382,8 +397,10 @@ function BranchCell({
         loading={branchesLoading}
         disabled={status?.available === false}
         busy={branchBusy}
+        branchesError={branchesError}
         onSwitchBranch={onSwitchBranch}
         onCreateBranch={onCreateBranch}
+        onRetryBranches={onRetryBranches}
       />
     </ToolbarCell>
   );
@@ -395,14 +412,18 @@ function SyncCell({
   syncBusy,
   syncOutcome,
   syncError,
+  summaryError,
   onRunSync,
+  onRetrySummary,
 }: {
   readonly label: string;
   readonly syncView: GitSyncView;
   readonly syncBusy: boolean;
   readonly syncOutcome: SyncOutcomeView | null;
   readonly syncError: string | null;
+  readonly summaryError: string | null;
   readonly onRunSync: () => void;
+  readonly onRetrySummary: () => void;
 }): ReactNode {
   return (
     <ToolbarCell label={label} minWidth={196} last>
@@ -411,7 +432,9 @@ function SyncCell({
         busy={syncBusy}
         outcome={syncOutcome}
         error={syncError}
+        summaryError={summaryError}
         onRun={onRunSync}
+        onRetrySummary={onRetrySummary}
       />
     </ToolbarCell>
   );
@@ -430,11 +453,13 @@ function ConnectedToolbarCells(props: ConnectedToolbarCellsProps): ReactNode {
       <BranchCell
         branches={props.branches}
         branchesLoading={props.branchesLoading}
+        branchesError={props.branchesError}
         status={props.status}
         branchBusy={props.branchBusy}
         branchValue={props.branchValue}
         onSwitchBranch={props.onSwitchBranch}
         onCreateBranch={props.onCreateBranch}
+        onRetryBranches={props.onRetryBranches}
       />
       <SyncCell
         label={props.t("gitClientWindow.toolbar.sync")}
@@ -442,7 +467,9 @@ function ConnectedToolbarCells(props: ConnectedToolbarCellsProps): ReactNode {
         syncBusy={props.syncBusy}
         syncOutcome={props.syncOutcome}
         syncError={props.syncError}
+        summaryError={props.summaryError}
         onRunSync={props.onRunSync}
+        onRetrySummary={props.onRetrySummary}
       />
     </>
   );
@@ -470,6 +497,7 @@ function connectedToolbarCellsProps(
     repositorySelectionLocked: derived.repositorySelectionLocked,
     branches: props.branches,
     branchesLoading: props.branchesLoading,
+    branchesError: props.branchesError,
     status: props.status,
     branchBusy: props.branchBusy,
     branchValue: derived.branchValue,
@@ -477,11 +505,14 @@ function connectedToolbarCellsProps(
     syncBusy: props.syncBusy,
     syncOutcome: props.syncOutcome,
     syncError: props.syncError,
+    summaryError: props.summaryError,
     onSelectRepository: props.onSelectRepository,
     addRepository: derived.addRepository,
     onSwitchBranch: props.onSwitchBranch,
     onCreateBranch: props.onCreateBranch,
+    onRetryBranches: props.onRetryBranches,
     onRunSync: props.onRunSync,
+    onRetrySummary: props.onRetrySummary,
     t: derived.t,
   };
 }

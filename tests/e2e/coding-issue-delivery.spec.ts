@@ -6,6 +6,7 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readActivityLogText } from "../../scripts/lib/activity-log-files.mjs";
 import type {
   CodingWorkbenchMode,
   CodingWorkbenchRuntimeSnapshot,
@@ -14,6 +15,10 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import { openCodingIssueWorkbench, selectCodingIssueMode } from "./support/coding-issue-browser.js";
+import {
+  issueResolutionTaskInstructions,
+  startStructuredDeliveryRun,
+} from "./support/coding-issue-journey-live.js";
 import {
   commitControlPath,
   commitObservationPath,
@@ -38,6 +43,9 @@ import {
   type DeliveryProviderState,
 } from "./servers/coding-issue-delivery-transport.mjs";
 import type { DeliveryDescriptionModelState } from "./servers/coding-issue-description-model.mjs";
+// ADR-0124 D6: a declined step answers with this exact result; imported from the server source
+// rather than restated (AGENTS.md #7).
+import { humanDecisionToolResult } from "../../packages/keiko-server/src/coding-runtime/codingToolFacade.js";
 
 const stateDir = deliveryStateDir();
 const repository = deliveryRepository(stateDir);
@@ -164,40 +172,97 @@ async function readyProposal(
 function git(root: string, args: readonly string[]): string {
   return execFileSync("git", [...args], { cwd: root, encoding: "utf8", timeout: 30_000 }).trim();
 }
-async function allowIssueReader(page: Page): Promise<void> {
-  const endpoint = "/api/coding-workbench/github-authorization";
-  const current = await page.request.get(
-    `${endpoint}?${new URLSearchParams({ repositoryPath: repository }).toString()}`,
-  );
-  expect(current.ok()).toBe(true);
-  const revision = ((await current.json()) as { readonly revision: number }).revision;
-  const updated = await page.request.put(endpoint, {
-    headers: CSRF,
-    data: { repositoryPath: repository, authorized: true, expectedRevision: revision },
-  });
-  expect(updated.ok(), await updated.text()).toBe(true);
+
+function activityLogLines(): readonly Record<string, unknown>[] {
+  return readActivityLogText(join(stateDir, "bff-state", "state", "logs"))
+    .trim()
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
-async function bindIssue(page: Page, number: number): Promise<string> {
+
+/**
+ * ADR-0124 D6 (owner decision, 2026-09-26): a file edit raises no governed ask in ANY mode any
+ * more, so `approved` below can never observe `"file-edit"` -- the edit's one human approval is now
+ * the change review the mode policy requires before anything is written
+ * (governed-assist/supervised-coding review every edit; autonomous-delivery applies without one),
+ * never the retired pre-write ask. "Closing the review card is routine and reports nothing from the
+ * browser; the server line above is the review's evidence" (ADR-0124 D6): this reads that server
+ * line -- `coding-runtime.editor-mutation.settled` (codingToolReadEditPorts.ts's `completedEdit`) --
+ * to relocate what the retired ask used to prove: an edit was actually gated through the mutation
+ * lease and applied, under this run's own correlation, never silently bypassed. Same helper as
+ * `coding-issue-commit.spec.ts`'s own `editorMutationsSettledFor`, kept local rather than shared:
+ * each reads its own file's `stateDir` constant, and the whole check is three lines.
+ */
+function editorMutationsSettledFor(runId: string): readonly Record<string, unknown>[] {
+  return activityLogLines().filter(
+    (line) => line.op === "coding-runtime.editor-mutation.settled" && line.correlationId === runId,
+  );
+}
+
+/**
+ * ADR-0124 D6 (owner decision, 2026-09-26): "a human's 'no' rejects one step, not the run" -- a
+ * denial no longer settles the run `failed`/`revoked` (codingRuntimeOrchestrator.ts's
+ * `decideApproval` transitions unconditionally to `running` once a decision settles, whichever way
+ * it went). The decision itself is what the activity log records instead
+ * (`coding-runtime.approval.decided`, `recordRuntimeApprovalDecided`), keyed by the exact approval
+ * `requestId` (the same value the pending permission's own `requestId` carries) so this is tied to
+ * the specific denied proposal, never any other decision on the run.
+ */
+function approvalDecisionsFor(
+  requestId: string,
+  decision: "approved" | "denied",
+): readonly Record<string, unknown>[] {
+  return activityLogLines().filter(
+    (line) =>
+      line.op === "coding-runtime.approval.decided" &&
+      line.requestId === requestId &&
+      line.decision === decision,
+  );
+}
+
+/**
+ * PR #3625 retired the setup card's own "Issue URL or #number" field and its "Preview issue" /
+ * "Use this issue" / "Bind workspace" controls: binding a workspace is now unrelated to resolving
+ * any issue (coding-issue-journey-live.ts's `previewAndBindIssue` comment). This provisions the
+ * plain repository/branch task workspace directly through the same real, already-relied-on API the
+ * sibling `coding-issue-commit.spec.ts`'s own `provision` uses for its (issue-less) workspace,
+ * rather than reimplementing the "Code setup" combobox flow `coding-issue-intake.spec.ts`'s
+ * `bindPlainWorkspace` drives for a DIFFERENT fixture -- both are real product affordances for the
+ * same effect; this file already trusted the API one before PR #3625 (via the retired flow's own
+ * `bindIssue`, which cleared and rebound through it too) and every test case here needs its own
+ * fresh workspace (`serial` mode reuses one server across all of them).
+ */
+async function provisionDeliveryWorkspace(page: Page, taskId: string): Promise<string> {
   const cleared = await page.request.delete("/api/task-workspaces/active", {
     headers: CSRF,
     data: {},
   });
   expect(cleared.ok(), await cleared.text()).toBe(true);
+  const response = await page.request.post("/api/task-workspaces", {
+    headers: CSRF,
+    data: { root: repository, taskId, baseBranch: "main", requestedBy: "delivery-browser-fixture" },
+  });
+  expect(response.ok(), await response.text()).toBe(true);
+  const { instance } = (await response.json()) as {
+    readonly instance: { readonly workspaceId: string; readonly managedWorktreePath: string };
+  };
+  const repaired = await page.request.post("/api/task-workspaces/reconciliation", {
+    headers: CSRF,
+    data: { requestedBy: "delivery-browser-fixture" },
+  });
+  expect(repaired.ok()).toBe(true);
+  const activated = await page.request.post("/api/task-workspaces/active", {
+    headers: CSRF,
+    data: {
+      workspaceId: instance.workspaceId,
+      requestedBy: "delivery-browser-fixture",
+      acquireLock: false,
+    },
+  });
+  expect(activated.ok(), await activated.text()).toBe(true);
   await page.reload();
-  await allowIssueReader(page);
-  await page.getByLabel("Issue URL or #number").fill(`#${String(number)}`);
-  await page.getByRole("button", { name: "Preview issue", exact: true }).click();
-  await expect(page.getByRole("region", { name: "Issue preview", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Use this issue", exact: true }).click();
-  await page.getByRole("button", { name: "Bind workspace", exact: true }).click();
-  await expect(page.getByRole("region", { name: "Code setup", exact: true })).toHaveCount(0);
-  const active = await page.request.get("/api/task-workspaces/active");
-  expect(active.ok()).toBe(true);
-  return (
-    (await active.json()) as {
-      readonly active: { readonly binding: { readonly activeRoot: string } };
-    }
-  ).active.binding.activeRoot;
+  return instance.managedWorktreePath;
 }
 async function startVerified(
   page: Page,
@@ -209,20 +274,25 @@ async function startVerified(
     windowId: WINDOW_ID,
     launcherSecret: DELIVERY_LAUNCHER_SECRET,
   });
-  const root = await bindIssue(page, number);
+  const root = await provisionDeliveryWorkspace(page, `delivery-${mode}-${String(number)}`);
   await selectCodingIssueMode(page, mode);
-  await page
-    .getByLabel("Task instructions")
-    .fill("Implement, verify and deliver the accepted issue.");
-  await expect(page.getByRole("button", { name: "Start coding run", exact: true })).toBeEnabled();
-  const responsePromise = page.waitForResponse(
-    (response) =>
-      response.request().method() === "POST" &&
-      response.url().endsWith("/api/coding-workbench/runtime/runs"),
-  );
-  await page.getByRole("button", { name: "Start coding run", exact: true }).click();
-  const started = await responsePromise;
-  expect(started.ok(), await started.text()).toBe(true);
+  // ADR-0137 D3 / #3625 review: a Workbench prompt's issue link is task CONTEXT ONLY --
+  // `previewAndAcceptIssue` always sends `issuePurpose: "context"` by design
+  // (coding-workbench-runtime-mutations.ts), so a run started that way never gets the delivery
+  // binding draft delivery (push/PR proposals) requires. This suite exercises real push/PR
+  // delivery, so it starts through the structured runtime start API with `issuePurpose: "delivery"`
+  // instead (`startStructuredDeliveryRun`, coding-issue-journey-live.ts), which also settles the
+  // per-repository GitHub issue-reader grant this fixture's freshly-provisioned repository needs.
+  await startStructuredDeliveryRun(page, {
+    // The grant is keyed by the canonical registered repository, never a managed worktree's own
+    // path (githubIssueReaderAuthorization.ts's `githubIssueReaderGrantRoot`: a task worktree
+    // inherits ITS repository's grant; a run's own auth check already reads the active workspace's
+    // repository root, which for a managed worktree is this canonical path, not `root` above).
+    repositoryPath: repository,
+    requestedMode: mode,
+    issueRef: `#${String(number)}`,
+    taskIntent: issueResolutionTaskInstructions(`#${String(number)}`),
+  });
   const approved = new Set<string>();
   await expect
     .poll(
@@ -240,10 +310,17 @@ async function startVerified(
       { timeout: 120_000 },
     )
     .toBe("verified-turn-ready");
+  const afterTurn = await snapshot(page);
   expect([...approved].sort()).toEqual(
-    mode === "governed-assist" ? ["file-edit", "git-stage", "verification-command"] : [],
+    mode === "governed-assist" ? ["git-stage", "verification-command"] : [],
   );
-  expect((await snapshot(page)).issueBinding?.issueNumber).toBe(number);
+  if (afterTurn.runId === undefined) throw new Error("Expected an active run id");
+  const settled = editorMutationsSettledFor(afterTurn.runId);
+  expect(settled.length).toBeGreaterThan(0);
+  expect(settled.every((line) => line.state === "succeeded" && line.actionKind === "edit")).toBe(
+    true,
+  );
+  expect(afterTurn.issueBinding?.issueNumber).toBe(number);
   const { proposed, proposalId } = await readyProposal(
     page,
     mode,
@@ -634,18 +711,22 @@ async function pushApproved(
   recordFor(await control("push-execute", proposalId), "pushed");
 }
 
-test("#3387 @coding-issue-delivery explicit push denial revokes all remote effects", async ({
+test("#3387 @coding-issue-delivery explicit push denial rejects only that step", async ({
   page,
 }) => {
   const before = provider();
   await startVerified(page, "governed-assist", 45);
   const pending = await startPendingProposal(page, "push-propose", "push");
   await page.getByRole("button", { name: "Deny", exact: true }).click();
-  await expect.poll(async () => (await snapshot(page)).state).toBe("failed");
-  expect((await waitControl(pending.controlId)).result?.status).toBe("cancelled");
+  // ADR-0124 D6 (owner decision, 2026-09-26): "a human's 'no' rejects one step, not the run" -- the
+  // run returns to `running`, never `failed`/`revoked`.
+  await expect.poll(async () => (await snapshot(page)).state).toBe("running");
+  // The waiting call ends with the human's verdict, not the `cancelled` of an expired ask.
+  expect((await waitControl(pending.controlId)).result).toEqual(humanDecisionToolResult("denied"));
   await expectDenied("push-execute", pending.proposalId);
   expect(provider()).toMatchObject({ pushes: before.pushes, creates: before.creates });
-  await finish(page, true);
+  expect(approvalDecisionsFor(pending.proposalId, "denied").length).toBeGreaterThan(0);
+  await finish(page);
 });
 
 test("#3387 @coding-issue-delivery dirty worktree after approval cannot publish", async ({
@@ -768,9 +849,13 @@ test("#3387 @coding-issue-delivery PR denial keeps the pushed commit but creates
   await pushApproved(page, "supervised-coding");
   const pending = await startPendingProposal(page, "pr-propose", "pull-request");
   await page.getByRole("button", { name: "Deny", exact: true }).click();
-  await expect.poll(async () => (await snapshot(page)).state).toBe("failed");
-  expect((await waitControl(pending.controlId)).result?.status).toBe("cancelled");
+  // ADR-0124 D6 (owner decision, 2026-09-26): "a human's 'no' rejects one step, not the run" -- the
+  // run returns to `running`, never `failed`/`revoked`.
+  await expect.poll(async () => (await snapshot(page)).state).toBe("running");
+  // The waiting call ends with the human's verdict, not the `cancelled` of an expired ask.
+  expect((await waitControl(pending.controlId)).result).toEqual(humanDecisionToolResult("denied"));
   await expectDenied("pr-execute", pending.proposalId);
   expect(provider()).toMatchObject({ pushes: before.pushes + 1, creates: before.creates });
-  await finish(page, true);
+  expect(approvalDecisionsFor(pending.proposalId, "denied").length).toBeGreaterThan(0);
+  await finish(page);
 });

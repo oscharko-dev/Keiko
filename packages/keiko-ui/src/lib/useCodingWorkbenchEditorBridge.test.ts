@@ -11,12 +11,25 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { _resetEditorAgentBridgeStateForTests } from "@/app/components/desktop/widgets/cards/editorAgentBridge";
+import {
+  _resetEditorAgentBridgeStateForTests,
+  EDITOR_SNAPSHOT_DEBOUNCE_MS,
+} from "@/app/components/desktop/widgets/cards/editorAgentBridge";
 import { ApiError } from "./api";
+import type { ClientDiagnosticMeta } from "./client-diagnostics";
 import { useCodingWorkbenchEditorBridge } from "./useCodingWorkbenchEditorBridge";
 
 const postSnapshotSpy = vi.fn();
 const postResultSpy = vi.fn();
+const reportDiagnosticSpy = vi.fn<(message: string, meta?: ClientDiagnosticMeta) => void>();
+
+vi.mock("./client-diagnostics", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client-diagnostics")>()),
+  reportClientDiagnostic: (message: string, meta?: ClientDiagnosticMeta): void => {
+    if (meta === undefined) reportDiagnosticSpy(message);
+    else reportDiagnosticSpy(message, meta);
+  },
+}));
 
 // `editorAgentBridge.ts` imports this same file via a different relative specifier
 // (`../../../../../lib/api`); Vitest's mock registry keys by resolved module id, so mocking it
@@ -100,6 +113,7 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue({ snapshot: null, bridgeDecisionCapability: "A".repeat(43) });
   postResultSpy.mockReset().mockResolvedValue({ result: { status: "succeeded" } });
+  reportDiagnosticSpy.mockReset();
   createSourceSpy.mockClear();
   (globalThis as { EventSource?: unknown }).EventSource = FakeEventSource;
 });
@@ -196,6 +210,7 @@ describe("useCodingWorkbenchEditorBridge — applyChangeset", () => {
     expect(postResultSpy).toHaveBeenCalledWith(
       expect.objectContaining({ result: expect.objectContaining({ status: "succeeded" }) }),
     );
+    expect(postResultSpy.mock.calls[0]?.[0]).not.toHaveProperty("reviewDecision");
   });
 
   it("deny() posts a failed result and clears pendingReview", async () => {
@@ -214,8 +229,12 @@ describe("useCodingWorkbenchEditorBridge — applyChangeset", () => {
     });
     await flushMicrotasks();
     expect(result.current.pendingReview).toBeNull();
+    // PR #3625 review: the Reject says so, so the server reads it as the human's decision.
     expect(postResultSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ result: expect.objectContaining({ status: "failed" }) }),
+      expect.objectContaining({
+        reviewDecision: "rejected",
+        result: expect.objectContaining({ status: "failed" }),
+      }),
     );
   });
 
@@ -674,6 +693,167 @@ describe("useCodingWorkbenchEditorBridge — registration retry", () => {
     });
   });
 });
+
+// Lab 2026-09-26: a stopped run kept its change review card and "Waiting for your approval" footer.
+// The server cancels the queued action and reports it on the bridge; a run that is no longer live
+// has nothing left to review either.
+describe("useCodingWorkbenchEditorBridge — settled review", () => {
+  function emitResult(source: FakeEventSource, sessionId: string, actionId: string): void {
+    source.emit("editor-agent:result", {
+      schemaVersion: "1",
+      eventId: `event-${actionId}-cancelled`,
+      type: "result",
+      result: {
+        schemaVersion: "1",
+        actionId,
+        sessionId,
+        status: "failed",
+        message: "The runtime action was cancelled.",
+      },
+    });
+  }
+
+  async function reviewing(active = true): Promise<{
+    readonly result: { readonly current: ReturnType<typeof useCodingWorkbenchEditorBridge> };
+    readonly rerender: (props: { readonly active: boolean }) => void;
+    readonly source: FakeEventSource;
+    readonly sessionId: string;
+  }> {
+    const hook = renderHook(
+      (props: { readonly active: boolean }) =>
+        useCodingWorkbenchEditorBridge({
+          root: "/repo/task-1",
+          runId: "run-1",
+          active: props.active,
+        }),
+      { initialProps: { active } },
+    );
+    await flushMicrotasks();
+    const source = latestSource();
+    const sessionId =
+      new URL(source.url, "https://example.test").searchParams.get("sessionId") ?? "";
+    act(() => {
+      emitApplyChangeset(source, sessionId);
+    });
+    await flushMicrotasks();
+    expect(hook.result.current.pendingReview).not.toBeNull();
+    return { result: hook.result, rerender: hook.rerender, source, sessionId };
+  }
+
+  it("clears the change review when the server cancels its action", async () => {
+    const { result, source, sessionId } = await reviewing();
+    act(() => {
+      emitResult(source, sessionId, "action-1");
+    });
+    await flushMicrotasks();
+    expect(result.current.pendingReview).toBeNull();
+    expect(postResultSpy).not.toHaveBeenCalled();
+    // PR #3625 review: a settled review is routine, never a failure report; the server records how
+    // it settled on the run's timeline.
+    expect(reviewClosureReports()).toEqual([]);
+  });
+
+  it("keeps the change review when a result names another action", async () => {
+    const { result, source, sessionId } = await reviewing();
+    act(() => {
+      emitResult(source, sessionId, "action-other");
+    });
+    await flushMicrotasks();
+    expect(result.current.pendingReview).not.toBeNull();
+  });
+
+  it("clears the change review once the run is no longer live", async () => {
+    const { result, rerender } = await reviewing();
+    rerender({ active: false });
+    await flushMicrotasks();
+    expect(result.current.pendingReview).toBeNull();
+    expect(postResultSpy).not.toHaveBeenCalled();
+    expect(reviewClosureReports()).toEqual([]);
+  });
+});
+
+function reviewClosureReports(): unknown[] {
+  return reportDiagnosticSpy.mock.calls.filter(([message]) => message.includes("review closed"));
+}
+
+// Lab 2026-09-26: a second tab on the same run was refused the run's bridge lease on every attempt
+// and re-registered about four times a second while the run stayed active. Failures in a row now
+// double the wait before the next attempt, so a refused tab keeps trying without hammering.
+describe("useCodingWorkbenchEditorBridge — registration backoff", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("backs off between failed registrations instead of retrying at a fixed pace", async () => {
+    vi.useFakeTimers();
+    const attemptTimes: number[] = [];
+    postSnapshotSpy.mockImplementation(() => {
+      attemptTimes.push(Date.now());
+      return Promise.reject(leaseRefusal());
+    });
+    renderHook(() =>
+      useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: true }),
+    );
+    // In steps, so React commits each failure's state and runs the retry effect it schedules.
+    for (let elapsedMs = 0; elapsedMs < 110_000; elapsedMs += 50) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(50);
+      });
+    }
+    // PR #3625 review: pin the schedule, not an attempt count a fixed pace could also meet. Each
+    // reconnect registers twice, on subscribe and on the snapshot debounce 300 ms later, and every
+    // failure doubles the next wait. The pause before the next pair therefore grows fourfold — 240,
+    // 960, 3 840 and 15 360 ms plus the 120 ms reconnect settle — until the 30-second ceiling holds.
+    const intervals = attemptTimes.slice(1).map((time, index) => time - (attemptTimes[index] ?? 0));
+    const debounced = intervals.filter((_, index) => index % 2 === 0);
+    const pauses = intervals.filter((_, index) => index % 2 === 1);
+    for (const interval of debounced) {
+      expect(Math.abs(interval - EDITOR_SNAPSHOT_DEBOUNCE_MS)).toBeLessThanOrEqual(50);
+    }
+    const expectedPauses = [360, 1_080, 3_960, 15_480, 30_120, 30_120];
+    expect(pauses.length).toBeGreaterThanOrEqual(expectedPauses.length);
+    expectedPauses.forEach((expected, index) => {
+      expect(Math.abs((pauses[index] ?? Number.NaN) - expected)).toBeLessThanOrEqual(50);
+    });
+    // One line per streak of failures, not one per attempt. PR #3625 review: it names the closed
+    // kind of the refusal, the refused request's own id and the run, so a lease held by another tab
+    // reads apart from a lost connection.
+    const failures = reportDiagnosticSpy.mock.calls.filter(
+      ([message]) =>
+        message === "[keiko] coding workbench bridge registration failed; retrying with backoff",
+    );
+    expect(failures).toEqual([
+      [
+        expect.any(String),
+        expect.objectContaining({
+          errorKind: "authority-denied",
+          correlationId: "corr-lease-refused",
+          parentCorrelationId: "run-1",
+          errorEvidence: expect.objectContaining({ errorClass: "ApiError" }) as unknown,
+        }),
+      ],
+    ]);
+  });
+
+  it("classifies a registration that never reached the server as unavailable", async () => {
+    postSnapshotSpy.mockRejectedValue(new TypeError("Failed to fetch"));
+    renderHook(() =>
+      useCodingWorkbenchEditorBridge({ root: "/repo/task-1", runId: "run-1", active: true }),
+    );
+    await waitFor(() => {
+      expect(reportDiagnosticSpy).toHaveBeenCalledWith(
+        "[keiko] coding workbench bridge registration failed; retrying with backoff",
+        expect.objectContaining({ errorKind: "unavailable", parentCorrelationId: "run-1" }),
+      );
+    });
+  });
+});
+
+function leaseRefusal(): ApiError {
+  const error = new ApiError("BRIDGE_CAPABILITY_INVALID", "The bridge lease is held.", 403);
+  error.correlationId = "corr-lease-refused";
+  return error;
+}
 
 describe("useCodingWorkbenchEditorBridge — bridgeUnavailable", () => {
   it("reports bridgeUnavailable while the run is active but registration keeps failing, and clears once it succeeds", async () => {

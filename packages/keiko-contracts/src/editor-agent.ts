@@ -611,6 +611,12 @@ export interface EditorAgentActionResultRequest {
   readonly kind: "result";
   readonly result: EditorAgentActionResult;
   readonly bridgeDecisionCapability?: string | undefined;
+  /**
+   * Set only by a review's Reject: the browser fails the action because the human declined the
+   * change, not because it could not prepare or show it. Valid only with a `failed` result; the
+   * server settles a runtime edit as the human's decision only when it is present (PR #3625 review).
+   */
+  readonly reviewDecision?: "rejected" | undefined;
 }
 
 /**
@@ -2261,6 +2267,7 @@ const EDITOR_AGENT_ACTION_RESULT_REQUEST_KEYS = new Set([
   "kind",
   "result",
   "bridgeDecisionCapability",
+  "reviewDecision",
 ]);
 
 function parseBridgeActionRequest(
@@ -2285,14 +2292,25 @@ function parseBridgeActionRequest(
   };
 }
 
+// A review's Reject is the only decision a result request names, and only on a failed result.
+function isReviewDecisionFor(
+  result: EditorAgentActionResult,
+  reviewDecision: unknown,
+): reviewDecision is EditorAgentActionResultRequest["reviewDecision"] {
+  return (
+    reviewDecision === undefined || (reviewDecision === "rejected" && result.status === "failed")
+  );
+}
+
 function parseActionResultRequest(
   value: Record<string, unknown>,
 ): EditorAgentParse<EditorAgentActionResultRequest> {
+  const result = value.result;
   if (
     value.schemaVersion !== EDITOR_AGENT_SCHEMA_VERSION ||
     value.kind !== "result" ||
     !Object.keys(value).every((key) => EDITOR_AGENT_ACTION_RESULT_REQUEST_KEYS.has(key)) ||
-    !isEditorAgentActionResult(value.result)
+    !isEditorAgentActionResult(result)
   ) {
     return { ok: false, errors: ["action result request is invalid"] };
   }
@@ -2300,13 +2318,18 @@ function parseActionResultRequest(
   if (capability !== undefined && !isEditorAgentBridgeDecisionCapability(capability)) {
     return { ok: false, errors: ["bridgeDecisionCapability must be a bounded capability"] };
   }
+  const reviewDecision = value.reviewDecision;
+  if (!isReviewDecisionFor(result, reviewDecision)) {
+    return { ok: false, errors: ["reviewDecision must be rejected on a failed result"] };
+  }
   return {
     ok: true,
     value: {
       schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
       kind: "result",
-      result: canonicalActionResult(value.result),
+      result: canonicalActionResult(result),
       ...(capability === undefined ? {} : { bridgeDecisionCapability: capability }),
+      ...(reviewDecision === undefined ? {} : { reviewDecision }),
     },
   };
 }

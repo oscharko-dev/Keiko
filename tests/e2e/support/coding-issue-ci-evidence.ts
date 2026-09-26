@@ -10,6 +10,10 @@ import { evidenceArtifactPath, evidenceScreenshotPath } from "./evidence.js";
 import { runAxe, seriousOrCritical, formatViolations } from "./axe.js";
 import { CI_WINDOW_ID } from "./coding-issue-ci-journey.js";
 import { readActivityLogText } from "../../../scripts/lib/activity-log-files.mjs";
+// #3625 review: the client diagnostic's raw text is redacted to a digest before it reaches the
+// activity log (ADR-0173 D4, client-diagnostics-routes.ts's `logClientDiagnostic`) -- the same
+// producer function coding-issue-intake.spec.ts's own pin already imports, never restated here.
+import { clientDiagnosticNoteDigest } from "../../../packages/keiko-server/src/client-diagnostics-routes.js";
 
 function sourceHashes(): Readonly<Record<string, string>> {
   const paths = [
@@ -75,7 +79,23 @@ export async function captureCiModes(page: Page): Promise<void> {
   );
   await applyCodingWorkbenchEvidenceMode(page, selector, { name: "01-dark", theme: "dark" });
 }
-export function writeCiJourneyReceipt(stateDir: string, cases: readonly string[]): void {
+/**
+ * The exact "technical-ready" render this receipt looks for: `CodingWorkbenchCiReadiness.tsx`
+ * reports `` `[keiko] CI readiness displayed: ${state} head ${head.slice(0, 12)}` `` on every
+ * render, where `state` is the readiness snapshot's own `state` and `head` is the draft delivery's
+ * bound `headSha` -- both already observed by the journey's own `observe(page, "technical-ready")`
+ * call, so this restates nothing the test does not already know first-hand.
+ */
+export interface CiReadinessDisplay {
+  readonly state: "technical-ready";
+  readonly headSha: string;
+}
+
+export function writeCiJourneyReceipt(
+  stateDir: string,
+  cases: readonly string[],
+  display: CiReadinessDisplay,
+): void {
   const log = readActivityLogText(join(stateDir, "bff-state", "state", "logs"));
   expect(log).not.toMatch(/required-build|advisory-analysis|REPAIRED_CI_3388/u);
   const lines = log
@@ -83,15 +103,18 @@ export function writeCiJourneyReceipt(stateDir: string, cases: readonly string[]
     .split("\n")
     .map((line) => JSON.parse(line) as Record<string, unknown>);
   const observations = lines.filter((line) => line.op === "git.ci-observation");
-  const display = lines.filter(
-    (line) =>
-      typeof line.clientNote === "string" &&
-      line.clientNote.startsWith("[keiko] CI readiness displayed:"),
+  // #3625 review: `clientNote` is redacted to `clientNoteDigest` before it ever reaches the log
+  // (ADR-0173 D4) -- the digest of the exact message the component reports is the only trace left.
+  const displayedDigest = clientDiagnosticNoteDigest(
+    `[keiko] CI readiness displayed: ${display.state} head ${display.headSha.slice(0, 12)}`,
+  );
+  const displayed = lines.filter(
+    (line) => line.op === "client.diagnostic" && line.clientNoteDigest === displayedDigest,
   );
   expect(observations.length).toBeGreaterThan(0);
-  expect(display.length).toBeGreaterThan(0);
+  expect(displayed.length).toBeGreaterThan(0);
   expect(
-    [...observations, ...display].every((line) => typeof line.correlationId === "string"),
+    [...observations, ...displayed].every((line) => typeof line.correlationId === "string"),
   ).toBe(true);
   writeFileSync(
     evidenceArtifactPath("docs/design-system/evidence/3388/journey-proof.json"),
@@ -106,7 +129,7 @@ export function writeCiJourneyReceipt(stateDir: string, cases: readonly string[]
         liveAuthenticationQualification: false,
         cases,
         correlatedObservationCount: observations.length,
-        correlatedDisplayCount: display.length,
+        correlatedDisplayCount: displayed.length,
         sourceHashes: sourceHashes(),
         rawContentRecorded: false,
       },

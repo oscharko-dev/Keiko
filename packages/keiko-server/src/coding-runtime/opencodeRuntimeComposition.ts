@@ -46,8 +46,8 @@ import {
   parseCodingToolRequest,
   type CodingToolResult,
 } from "./codingToolIpc.js";
-import type { CodingToolEditBaseRead, CodingToolFacade } from "./codingToolFacadePorts.js";
-import { staleEditBaseToolResult } from "./codingToolFacade.js";
+import type { CodingToolFacade } from "./codingToolFacadePorts.js";
+import { humanDecisionFeedback, humanDecisionToolResult } from "./codingToolFacade.js";
 import type { OpenCodeQuestionRequest } from "./opencodeHttpClient.js";
 import {
   createOpenCodeV2HttpClient,
@@ -289,7 +289,7 @@ export function createOpenCodeRuntimeComposition(
   input: OpenCodeRuntimeCompositionInput,
 ): OpenCodeRuntimeComposition {
   const runs = new Map<string, PreparedRun>();
-  const approvals = createOpenCodeV2ApprovalRequests(input.diagnostics, input.activityLog);
+  const approvals = createOpenCodeV2ApprovalRequests(input.diagnostics);
   const bridge = createToolBridge(
     input.capabilities.toolFacadeCapability,
     input.toolFacade,
@@ -397,7 +397,13 @@ function createReplyPermission(
       );
       const permission = owned[0];
       if (owned.length !== 1 || typeof permission?.id !== "string") return false;
-      await run.client.replyPermission(run.sessionId, permission.id, reply);
+      // A human's denial rejects this one call with its feedback, so the model goes on without it.
+      await run.client.replyPermission(
+        run.sessionId,
+        permission.id,
+        reply,
+        reply === "reject" ? humanDecisionFeedback("denied") : undefined,
+      );
       return run.ready;
     } catch (error) {
       recordOpenCodeTurnFailure(diagnostics, run, "permission", error);
@@ -1434,21 +1440,12 @@ async function handleV2PermissionRequest(
   if (signal?.aborted === true) return refusedApproval("cancelled");
   if (run?.ready !== true || run.sessionId === undefined || run.onPermission === undefined)
     return refusedApproval("unavailable");
-  const { editBaseDigest } = deps.facade;
   const decision = await approvals.request({
     value,
     runId: run.runId,
     sessionId: run.sessionId,
     onPermission: run.onPermission,
     signal: signal ?? new AbortController().signal,
-    ...(editBaseDigest === undefined
-      ? {}
-      : {
-          editBaseDigest: (
-            file: string,
-            readSignal: AbortSignal,
-          ): Promise<CodingToolEditBaseRead> => editBaseDigest(deps.capability, file, readSignal),
-        }),
   });
   settleDecidedTool(deps.settleTool, decision);
   return withApprovalIds(approvalResponse(decision), run.runId, decision);
@@ -1467,17 +1464,13 @@ function withApprovalIds(
 }
 
 // The tool call a refused ask ends is settled with Keiko's own verdict (#3612): OpenCode reports
-// any refused call as a generic failure, which read "Failed" for a human's denial. A stale base is
-// a failed edit, reached without asking anyone.
+// any refused call as a generic failure, which read "Failed" for a human's denial.
 const DECIDED_TOOL_STATES: Readonly<
   Partial<Record<OpenCodeV2ApprovalOutcome, OpenCodeToolSettlementState>>
 > = {
   denied: "denied",
   expired: "cancelled",
   cancelled: "cancelled",
-  stale: "failed",
-  // PR #3617 review: an edit the run's authority no longer admits is denied, not a generic failure.
-  "authority-denied": "denied",
 };
 
 function settleDecidedTool(
@@ -1488,18 +1481,20 @@ function settleDecidedTool(
   if (state !== undefined) settleSafeTool(settleTool, decision.actionId, state);
 }
 
-// A stale base answers with the edit's own refusal result, which the plugin hands to the model in
-// place of the tool call, so the model reads the same re-read guidance as after an approval.
+// A step the human declined, or nobody decided in time, answers 409 with the call's own result,
+// which the plugin hands to the model in place of the call, so the run goes on without it (owner
+// decision 2026-09-26, ADR-0124 D6). A cancelled or unavailable ask stays a bare refusal.
 function approvalResponse(decision: OpenCodeV2ApprovalDecision): OpenCodeToolBridgeResponse {
-  if (decision.outcome === "approved") return { status: 200, body: '{"status":"approved"}' };
-  if (decision.outcome === "stale") {
+  const { outcome } = decision;
+  if (outcome === "approved") return { status: 200, body: '{"status":"approved"}' };
+  if (outcome === "denied" || outcome === "expired") {
     return {
       status: 409,
-      body: JSON.stringify(staleEditBaseToolResult(decision.staleFile)),
-      rejection: "approval-stale",
+      body: JSON.stringify(humanDecisionToolResult(outcome)),
+      rejection: APPROVAL_REJECTIONS[outcome],
     };
   }
-  return refusedApproval(decision.outcome);
+  return refusedApproval(outcome);
 }
 
 const APPROVAL_REJECTIONS: Readonly<
@@ -1509,8 +1504,6 @@ const APPROVAL_REJECTIONS: Readonly<
   expired: "approval-expired",
   cancelled: "approval-cancelled",
   unavailable: "approval-unavailable",
-  stale: "approval-stale",
-  "authority-denied": "approval-authority-denied",
 };
 
 // The plugin only reads `response.ok`, so the status stays 403; the outcome rides beside it.

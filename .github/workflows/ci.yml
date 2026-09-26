@@ -227,7 +227,7 @@ jobs:
   semantic-duplication:
     name: Semantic duplication
     needs: verified-tree
-    if: ${{ always() && needs.verified-tree.outputs.tree-verified != 'true' }}
+    if: ${{ !cancelled() && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -352,7 +352,7 @@ jobs:
   core-quality:
     name: Core quality
     needs: verified-tree
-    if: ${{ always() && needs.verified-tree.outputs.tree-verified != 'true' }}
+    if: ${{ !cancelled() && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-latest
     # Bounded per .coderabbit.yaml's workflow policy. The job has run 11m50s-12m10s across recent
     # dev runs, so 30 minutes is ~2.5x headroom: generous against runner variance, still a bound
@@ -551,7 +551,7 @@ jobs:
     # The coverage chain feeds the SonarCloud analysis, which files under the branch the scanner
     # names: a proven tree's pull-request analysis never advances `dev`'s branch history. So this
     # chain runs on every push to `dev` even when the tree is proven (ADR-0178 D1, 2026-09-25).
-    if: ${{ always() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
+    if: ${{ !cancelled() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -668,7 +668,7 @@ jobs:
     name: Coverage suite (keiko-ui)
     needs: verified-tree
     # Runs on every push to `dev` even for a proven tree: see coverage-packages (ADR-0178 D1).
-    if: ${{ always() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
+    if: ${{ !cancelled() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -739,7 +739,7 @@ jobs:
     name: Coverage suite (scripts)
     needs: verified-tree
     # Runs on every push to `dev` even for a proven tree: see coverage-packages (ADR-0178 D1).
-    if: ${{ always() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
+    if: ${{ !cancelled() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -805,8 +805,10 @@ jobs:
   # the coverage-sonar scope coherent across the job's four gated steps.
   coverage-sonar:
     name: Coverage and SonarCloud
-    # `always()` is load-bearing. Without it a failing shard would leave this job SKIPPED, and a
+    # `!cancelled()` is load-bearing. Without it a failing shard would leave this job SKIPPED, and a
     # skipped context reads like "not applicable" rather than "a coverage suite did not execute".
+    # It is not `always()`: GitHub never cancels a running job whose `if:` still evaluates true, so
+    # `always()` kept superseded runs alive, holding the PR's concurrency group (ADR-0157).
     # The first step below turns every non-success shard result — failure, cancelled AND skipped —
     # into a red context. ADR-0135 D3 is unaffected: this job is not itself a required check; it is
     # the dependency the required `ci` aggregate already observes (Issue #2704).
@@ -815,7 +817,7 @@ jobs:
     # of reused pull-request evidence had left `dev`'s overview, new-code period and version events
     # at the last full run. The `ci` aggregate treats its `success` as an always-on gate that ran
     # and fails closed on any other state, so a red `dev` analysis turns the run red.
-    if: ${{ always() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
+    if: ${{ !cancelled() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
     needs:
       - verified-tree
       - coverage-packages
@@ -1058,6 +1060,8 @@ jobs:
 
   ci:
     name: ci
+    # `always()`, not `!cancelled()`: the required aggregate reports on every run, a cancelled one
+    # included, and fails closed there. It waits on its needs, so it holds a run open only briefly.
     if: ${{ always() }}
     needs:
       - change-scope
@@ -1182,7 +1186,7 @@ jobs:
     name: Build, scan, SBOM, smoke
     # Keep early feature-branch PRs fast. These release/package gates still run on merges to
     # feat/keiko-editor, on dev/release PRs, and on manual workflow_dispatch runs.
-    if: ${{ always() && (github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor') && needs.verified-tree.outputs.tree-verified != 'true' }}
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor') && needs.verified-tree.outputs.tree-verified != 'true' }}
     needs: verified-tree
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -1293,10 +1297,11 @@ jobs:
     # touches no code, manifest, lockfile, workflow or test cannot alter how the product builds and
     # installs on another operating system.
     needs: [change-scope, verified-tree]
-    # `always()` is load-bearing: without it a change-scope job that fails for its own reasons would
-    # skip this matrix. The aggregate still fails closed on the classifier failure; running the matrix
-    # preserves diagnostic evidence instead of hiding a second defect behind the first one.
-    if: ${{ always() && needs.change-scope.outputs.documentation-only != 'true' && needs.verified-tree.outputs.tree-verified != 'true' }}
+    # `!cancelled()` is load-bearing: without it a change-scope job that fails for its own reasons
+    # would skip this matrix. The aggregate still fails closed on the classifier failure; running the
+    # matrix preserves diagnostic evidence instead of hiding a second defect behind the first one.
+    # Unlike `always()`, it lets the cancellation of a superseded run stop the matrix (ADR-0157).
+    if: ${{ !cancelled() && needs.change-scope.outputs.documentation-only != 'true' && needs.verified-tree.outputs.tree-verified != 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -1412,7 +1417,7 @@ jobs:
   node-26-compatibility:
     name: Node 26 compatibility
     needs: [change-scope, verified-tree]
-    if: ${{ always() && needs.change-scope.outputs.documentation-only != 'true' && needs.verified-tree.outputs.tree-verified != 'true' }}
+    if: ${{ !cancelled() && needs.change-scope.outputs.documentation-only != 'true' && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
@@ -1465,7 +1470,7 @@ jobs:
   ui:
     name: ui
     needs: verified-tree
-    if: ${{ always() && needs.verified-tree.outputs.tree-verified != 'true' }}
+    if: ${{ !cancelled() && needs.verified-tree.outputs.tree-verified != 'true' }}
     timeout-minutes: 45
     runs-on: ubuntu-latest
     permissions:

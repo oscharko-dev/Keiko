@@ -180,6 +180,9 @@ interface EmitInput {
   // The managed worktrees this outcome handled: one for a materialised, resumed or activated
   // worktree, none for a pre-write rejection or a refusal.
   readonly worktreeCount?: number | undefined;
+  // The branch a provisioned workspace was cut from, when this call cut it; the line carries only
+  // its digest.
+  readonly baseBranch?: string | undefined;
 }
 
 // ─── pure helpers ────────────────────────────────────────────────────────────────────────────────
@@ -378,6 +381,7 @@ function emit(ctx: ProvisioningCtx, input: EmitInput): void {
     errorCode: input.errorCode,
     error: input.error,
     driftMarker: input.driftMarker,
+    baseBranch: input.baseBranch,
   });
   if (input.errorCode !== undefined) ctx.failureOutcomeRecorded = true;
 }
@@ -555,12 +559,15 @@ async function assertProvisionable(
 
 // ─── worktree materialization ────────────────────────────────────────────────────────────────────
 
+// Resolves to the branch this call cut the worktree from, or undefined when it cut none: a present
+// managed worktree resumes as it is and an existing task branch is checked out as it is, so the
+// request's base branch proves nothing about either (PR #3625 review).
 async function materializeWorktree(
   repo: RepositoryContext,
   request: WorkspaceProvisionRequest,
-): Promise<void> {
+): Promise<string | undefined> {
   if (managedTargetExists(repo.worktreePath)) {
-    return; // our managed worktree already present — resume-complete without re-adding
+    return undefined; // our managed worktree already present — resume-complete without re-adding
   }
   ensureManagedWorktreeParent(repo.worktreePath);
   const branchExists = await repo.adapter.localBranchExists(repo.taskBranch);
@@ -577,6 +584,7 @@ async function materializeWorktree(
   if (!result.ok) {
     throw new TaskWorkspaceError("PROVISIONING_FAILED", "git worktree add failed");
   }
+  return branchExists ? undefined : request.baseBranch;
 }
 
 // Persists the partial-failure state visibly (SC4): the instance moves to `failed`/`recovery-required`
@@ -804,8 +812,9 @@ async function runWorktreeMutation(
   // succeeds, fails halfway, or the proof after it fails (#3376 review).
   const attemptedHere = !managedTargetExists(repo.worktreePath);
   let identity: string;
+  let cutFrom: string | undefined;
   try {
-    await materializeWorktree(repo, request);
+    cutFrom = await materializeWorktree(repo, request);
     identity = requiredGitdirIdentity(
       ctx,
       repo.worktreePath,
@@ -840,6 +849,7 @@ async function runWorktreeMutation(
     fromState: "provisioning",
     toState: "active",
     worktreeCount: 1,
+    baseBranch: cutFrom,
   });
   return { instance: active, binding: buildBinding(active), created: attemptedHere };
 }

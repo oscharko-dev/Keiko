@@ -32,6 +32,7 @@
 // guards (length/secret/personal/prose/path) do the actual content safety work on `clientNote`.
 
 import { isActivityLogErrorKind, type ActivityLogErrorKind } from "./observability.js";
+import { isGitWireUnavailableReason, type GitWireUnavailableReason } from "./git-repository.js";
 
 // EventSource.readyState at the moment the browser observed the failure: CONNECTING (0), OPEN (1)
 // or CLOSED (2). A closed vocabulary, not a raw number, so a future EventSource-shaped value can
@@ -380,6 +381,8 @@ export interface ClientDiagnosticIngestRequest {
   readonly errorEvidence?: ClientErrorEvidence | undefined;
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
+  readonly gitClientOperation?: ClientDiagnosticGitClientOperation | undefined;
+  readonly selectDismissal?: ClientDiagnosticSelectDismissal | undefined;
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly loss?: ClientDiagnosticLossCounts | undefined;
@@ -542,17 +545,25 @@ function hasValidCodingContext(value: Record<string, unknown>): boolean {
   );
 }
 
+// The three Git-related structured fields, grouped only to keep the caller below under the
+// complexity ceiling — each is independently optional and validated on its own (PR #3625 review).
+function hasValidGitContext(value: Record<string, unknown>): boolean {
+  const { gitChangeDescription, workspaceTrustBinding, gitClientOperation } = value;
+  if (!isOptional(gitChangeDescription, isClientDiagnosticGitChangeDescription)) return false;
+  if (!isOptional(workspaceTrustBinding, isClientDiagnosticWorkspaceTrustBinding)) return false;
+  return isOptional(gitClientOperation, isClientDiagnosticGitClientOperation);
+}
+
 function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolean {
-  const { errorKind, gitChangeDescription, workspaceTrustBinding, loss, parentCorrelationId } =
-    value;
+  const { errorKind, loss, parentCorrelationId } = value;
   if (!isOptional(errorKind, isActivityLogErrorKind)) return false;
   if (!isOptional(parentCorrelationId, isCorrelationIdShape)) return false;
   if (!isOptional(value.markdownLayout, isClientMarkdownLayout)) return false;
   if (!isOptional(value.moduleLoadFailure, isClientModuleLoadFailure)) return false;
   if (!isOptional(value.voiceCaptureReason, isClientVoiceCaptureReason)) return false;
   if (!isOptional(value.voiceCaptureError, isClientVoiceCaptureError)) return false;
-  if (!isOptional(gitChangeDescription, isClientDiagnosticGitChangeDescription)) return false;
-  if (!isOptional(workspaceTrustBinding, isClientDiagnosticWorkspaceTrustBinding)) return false;
+  if (!hasValidGitContext(value)) return false;
+  if (!isOptional(value.selectDismissal, isClientDiagnosticSelectDismissal)) return false;
   return hasValidCodingContext(value) && isOptional(loss, isClientDiagnosticLossCounts);
 }
 
@@ -968,6 +979,189 @@ export function isClientSessionRepairIngestRequest(
   if (!hasConsistentRepairStream(value.outcome, value.stream)) return false;
   return (
     isCorrelationIdShape(value.correlationId) && isCorrelationIdShape(value.repairCorrelationId)
+  );
+}
+
+// ─── Git-client operation settlement (PR #3625 review) ──────────────────────────
+//
+// A Git-client dialog or manual retry can settle after the surface that asked for it is already
+// gone: the Add-repository dialog can be closed while its clone/register request is still in
+// flight, and a manual retry of the status/branches/summary reads can recover or fail after its own
+// panel unmounted. Reporting only a generic failure-shaped message collapses every one of these
+// into one indistinguishable warn-level digest — it cannot show that a repository was created but
+// deliberately not activated, tell a discarded clone from a discarded register, or tell a recovered
+// retry from one that failed again. This closed pair of fields, always reported together, makes
+// each case reconstructable without ever naming the repository, path or URL involved.
+
+export const CLIENT_GIT_CLIENT_OPERATION_KINDS = [
+  "repository-clone",
+  "repository-register",
+  "status-read",
+  "branches-read",
+  "summary-read",
+] as const;
+export type ClientGitClientOperationKind = (typeof CLIENT_GIT_CLIENT_OPERATION_KINDS)[number];
+
+export const CLIENT_GIT_CLIENT_OPERATION_OUTCOMES = [
+  "discarded-succeeded",
+  "discarded-failed",
+  "retry-recovered",
+  "retry-failed",
+  // A manual retry whose response arrived after a newer read (a redemption, a mutation's revision
+  // bump) had already superseded it: neither a recovery nor a failure of the read itself, just
+  // discarded evidence (PR #3625 review, GitClientWindow.tsx finding).
+  "retry-superseded",
+] as const;
+export type ClientGitClientOperationOutcome = (typeof CLIENT_GIT_CLIENT_OPERATION_OUTCOMES)[number];
+
+// The two families never mix: a discarded settlement always names the clone/register operation it
+// discarded, a retry settlement always names the status/branches/summary read it retried.
+// `isClientDiagnosticGitClientOperation` enforces the pairing rather than trusting the browser to
+// send a matching pair.
+const GIT_CLIENT_DISCARD_OPERATIONS: ReadonlySet<ClientGitClientOperationKind> = new Set([
+  "repository-clone",
+  "repository-register",
+]);
+const GIT_CLIENT_DISCARD_OUTCOMES: ReadonlySet<ClientGitClientOperationOutcome> = new Set([
+  "discarded-succeeded",
+  "discarded-failed",
+]);
+
+// The outcomes that represent an actual failure, shared by the client-side POST throttle
+// (install-client-diagnostics.ts) and the server's rate-limit budget (client-diagnostics-routes.ts)
+// so the two budgets can never drift — exactly like the binding and session-repair outcome sets
+// above.
+export const CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES: ReadonlySet<ClientGitClientOperationOutcome> =
+  new Set(["discarded-failed", "retry-failed"]);
+
+export interface ClientDiagnosticGitClientOperation {
+  readonly operation: ClientGitClientOperationKind;
+  readonly outcome: ClientGitClientOperationOutcome;
+  // Only ever alongside `retry-failed`: the closed reason a resolved (HTTP 200) unavailable
+  // response gave for the read that failed, so a git-error retry failure is distinguishable from a
+  // thrown/rejected one without the report ever carrying a message (PR #3625 review,
+  // GitClientWindow.tsx finding). Never present on a discard, a recovery, or a superseded retry.
+  readonly reason?: GitWireUnavailableReason | undefined;
+}
+
+/**
+ * True for a closed, body-free git-client operation settlement: a known operation paired with a
+ * known outcome from the SAME family (a discarded add-repository result names a discarded outcome,
+ * a retried read names a retry outcome — never the other family's outcome, and never an unknown
+ * value on either side), and — only for a retry that failed — an optional closed unavailable
+ * reason.
+ */
+export function isClientDiagnosticGitClientOperation(
+  value: unknown,
+): value is ClientDiagnosticGitClientOperation {
+  if (!isRecord(value)) return false;
+  if (!isOneOf(value.operation, CLIENT_GIT_CLIENT_OPERATION_KINDS)) return false;
+  if (!isOneOf(value.outcome, CLIENT_GIT_CLIENT_OPERATION_OUTCOMES)) return false;
+  if (
+    GIT_CLIENT_DISCARD_OPERATIONS.has(value.operation) !==
+    GIT_CLIENT_DISCARD_OUTCOMES.has(value.outcome)
+  ) {
+    return false;
+  }
+  if (!isOptional(value.reason, isGitWireUnavailableReason)) return false;
+  return value.reason === undefined || value.outcome === "retry-failed";
+}
+
+// ─── Git-client manual retry attempt (PR #3625 review) ──────────────────────────
+//
+// A manual Retry can be superseded by an automatic refetch before it settles (a session redemption
+// or a mutation's revision bump starting a newer read first): the settlement callback then simply
+// returned without reporting anything, leaving no trace that the operator ever retried or why its
+// result was discarded. This minimal report is sent the moment Retry starts, carrying a correlation
+// id GitClientWindow.tsx mints before the request goes out; the settlement — `client.git-operation.
+// settled` on a recovery or a supersession, `client.diagnostic` on a genuine failure — carries the
+// SAME id, so the pair joins on one timeline exactly like `client.stage.started`/`.settled`
+// (KEIKO-3557) join theirs.
+
+// Narrower than `ClientGitClientOperationKind`: only the three reads a manual Retry control ever
+// attempts (an add-repository clone/register has no retry concept). Typing the field itself this
+// way — rather than the full 5-value kind and a runtime-only restriction — keeps a consumer that
+// narrows on `isClientGitRetryAttemptIngestRequest` assignable directly into a registration whose
+// own field is declared over just these three values, with no further cast.
+export type ClientGitRetryOperation = Exclude<
+  ClientGitClientOperationKind,
+  "repository-clone" | "repository-register"
+>;
+
+// Listed, not derived with a module-level `.filter()` of the kinds above: a bundler cannot prove that
+// call pure, so it kept the call and the discard set it reads in the browser's first-load chunk,
+// which imports this module for unrelated constants (PR #3625, measured against the first-load
+// ceiling). diagnostics.test.ts pins this set against every `ClientGitRetryOperation`.
+const GIT_RETRY_OPERATIONS: ReadonlySet<string> = new Set<ClientGitRetryOperation>([
+  "status-read",
+  "branches-read",
+  "summary-read",
+]);
+
+export interface ClientGitRetryAttemptIngestRequest {
+  readonly kind: "git-retry-attempt";
+  readonly operation: ClientGitRetryOperation;
+  readonly correlationId: string;
+}
+
+const CLIENT_GIT_RETRY_ATTEMPT_KEYS: ReadonlySet<string> = new Set([
+  "kind",
+  "operation",
+  "correlationId",
+]);
+
+/**
+ * True for a closed, minimal retry-attempt report: one of the three retriable reads, paired with a
+ * well-formed client-minted correlation id, and no undeclared field.
+ */
+export function isClientGitRetryAttemptIngestRequest(
+  value: unknown,
+): value is ClientGitRetryAttemptIngestRequest {
+  if (!isRecord(value) || value.kind !== "git-retry-attempt") return false;
+  if (Object.keys(value).some((key) => !CLIENT_GIT_RETRY_ATTEMPT_KEYS.has(key))) return false;
+  if (!isSetMember(value.operation, GIT_RETRY_OPERATIONS)) return false;
+  return isCorrelationIdShape(value.correlationId);
+}
+
+// ─── Select menu dismissal evidence (PR #3625 review) ───────────────────────────
+//
+// An open `KeikoSelect` menu consumes Escape wherever focus sits — the trigger, the search box, or
+// an option — instead of leaving it to the workspace's own Escape shortcut, which otherwise would
+// have cleared the window selection while the menu stayed open (KeikoSelect.tsx, `consumeEscape`).
+// Which surface an operator's Escape dismisses is a changed product runtime behaviour with no other
+// trace: the log cannot otherwise distinguish "the menu was closed by this Escape" from "the menu
+// was never opened". This closed, body-free pair rides the message shape's `kind: "other"` exactly
+// like `gitClientOperation` above; only a closed reason and the closed location focus sat in are
+// admitted — never a label, a value, or any option text the select showed.
+
+export const CLIENT_SELECT_DISMISSAL_REASONS = ["escape"] as const;
+export type ClientSelectDismissalReason = (typeof CLIENT_SELECT_DISMISSAL_REASONS)[number];
+
+export const CLIENT_SELECT_DISMISSAL_FOCUS_LOCATIONS = ["trigger", "search", "option"] as const;
+export type ClientSelectDismissalFocus = (typeof CLIENT_SELECT_DISMISSAL_FOCUS_LOCATIONS)[number];
+
+export interface ClientDiagnosticSelectDismissal {
+  readonly reason: ClientSelectDismissalReason;
+  readonly focus: ClientSelectDismissalFocus;
+}
+
+const SELECT_DISMISSAL_REASON_SET: ReadonlySet<string> = new Set(CLIENT_SELECT_DISMISSAL_REASONS);
+const SELECT_DISMISSAL_FOCUS_SET: ReadonlySet<string> = new Set(
+  CLIENT_SELECT_DISMISSAL_FOCUS_LOCATIONS,
+);
+
+/**
+ * True for a closed, body-free select dismissal: a known reason paired with a known focus location,
+ * never an unknown value on either side and never an undeclared field.
+ */
+export function isClientDiagnosticSelectDismissal(
+  value: unknown,
+): value is ClientDiagnosticSelectDismissal {
+  if (!isRecord(value)) return false;
+  if (Object.keys(value).some((key) => key !== "reason" && key !== "focus")) return false;
+  return (
+    isSetMember(value.reason, SELECT_DISMISSAL_REASON_SET) &&
+    isSetMember(value.focus, SELECT_DISMISSAL_FOCUS_SET)
   );
 }
 

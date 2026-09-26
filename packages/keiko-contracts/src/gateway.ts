@@ -29,13 +29,12 @@ export type CostClass = "low" | "medium" | "high";
 
 export type ModelReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
 
-export const MODEL_REASONING_EFFORTS: readonly ModelReasoningEffort[] = Object.freeze([
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-] as const);
+// `#__PURE__` lets a bundler drop the freeze call where nothing reads the list: without it the
+// browser's first-load chunk, which reaches this module for other exports, kept the dead call
+// (PR #3625, measured against the first-load ceiling).
+export const MODEL_REASONING_EFFORTS: readonly ModelReasoningEffort[] = /*#__PURE__*/ Object.freeze(
+  ["minimal", "low", "medium", "high", "xhigh"] as const,
+);
 
 export const MODEL_COST_RANK: Readonly<Record<CostClass, number>> = Object.freeze({
   low: 0,

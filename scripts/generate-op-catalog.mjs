@@ -757,9 +757,13 @@ function typedRegistryProgram(repoRoot) {
         "@oscharko-dev/keiko-contracts/runtime/observability": [
           "packages/keiko-contracts/src/observability.ts",
         ],
+        "@oscharko-dev/keiko-contracts/runtime/diagnostics": [
+          "packages/keiko-contracts/src/diagnostics.ts",
+        ],
         "@oscharko-dev/keiko-contracts/runtime/pr-description": [
           "packages/keiko-contracts/src/pr-description.ts",
         ],
+        "@oscharko-dev/keiko-model-gateway": ["packages/keiko-model-gateway/src/index.ts"],
       },
       target: ts.ScriptTarget.ES2022,
       module: ts.ModuleKind.NodeNext,

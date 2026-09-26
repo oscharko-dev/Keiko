@@ -30,9 +30,8 @@ import {
 import KeikoSelect from "../../KeikoSelect";
 import { VoiceDictationButton, VoiceDictationPreviewFromController } from "../../VoiceDictation";
 import { OrganicWorkspaceBubble } from "../../EmptyWorkspaceBlob";
-// KeikoSelect is retained above for the model/source/authority controls; the composer's own
-// repository chooser was removed with #3563 (single source of truth is the header-wide workspace
-// switcher).
+// KeikoSelect serves the composer controls; repository and branch selection live directly above
+// the composer in the Coding Workbench window.
 import { useDictation } from "../../hooks/useDictation";
 import { supportsDictation, useVoiceCapability } from "../../hooks/useVoiceCapability";
 import { dictationCaptureSupported } from "../../hooks/dictation-recorder";
@@ -240,9 +239,8 @@ export function TaskStartSection(input: TaskStartSectionProps): ReactNode {
   );
 }
 
-// #3563 owner directive: the composer no longer renders its own repository chip, branch chip, or
-// MemoriaViva toggle. The header-wide RepositoryFolderSwitcher is the single source of
-// workspace-context truth, exactly like every other window (Editor, Git, Local Knowledge).
+// The composer keeps its input controls separate from the window's repository and branch selectors.
+// The MemoriaViva toggle remains hidden.
 // `ProjectMemoryToggle` is kept below (unused) so re-enabling MemoriaViva is a one-line change: add
 // a wrapper that renders `<ProjectMemoryToggle input={input} t={t} />` above `TaskComposerBox`.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- retained for MemoriaViva re-enable
@@ -391,6 +389,9 @@ function CodingModelControl({ input, t }: ControlProps): ReactNode {
         ariaLabel={t("codingWorkbench.composer.model.label")}
         menuTitle={t("codingWorkbench.composer.model.menu")}
         menuMinWidth={280}
+        menuPopoverMinWidth={280}
+        menuPlacement="up"
+        attached={false}
         disabled={input.configurationLocked}
         mono
         leadingVisual={<CubeIcon size={14} />}
@@ -414,6 +415,9 @@ function SourceControl({ input, t }: ControlProps): ReactNode {
         ariaLabel={t("codingWorkbench.composer.source.label")}
         menuTitle={t("codingWorkbench.composer.source.menu")}
         menuMinWidth={220}
+        menuPopoverMinWidth={220}
+        menuPlacement="up"
+        attached={false}
         disabled={input.configurationLocked}
         mono
         sections={[{ options }]}
@@ -443,6 +447,9 @@ function ReasoningControl({ input, efforts, t }: ReasoningControlProps): ReactNo
         ariaLabel={t("codingWorkbench.composer.effort.label")}
         menuTitle={t("codingWorkbench.composer.effort.menu")}
         menuMinWidth={180}
+        menuPopoverMinWidth={180}
+        menuPlacement="up"
+        attached={false}
         disabled={input.configurationLocked}
         mono
         leadingVisual={<BrainIcon size={14} />}
@@ -472,6 +479,9 @@ function AuthorityControl({ input, t }: ControlProps): ReactNode {
         ariaDescribedBy={confirmed ? confirmedModeId : undefined}
         menuTitle={t("codingWorkbench.composer.authority.menu")}
         menuMinWidth={180}
+        menuPopoverMinWidth={224}
+        menuPlacement="up"
+        attached={false}
         showMenuHeader={false}
         disabled={input.configurationLocked}
         leadingVisual={<CodingWorkbenchIcon size={14} />}

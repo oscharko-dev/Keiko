@@ -13,6 +13,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type {
+  CSSProperties,
   Dispatch,
   KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
@@ -20,10 +21,18 @@ import type {
   RefObject,
   SetStateAction,
 } from "react";
-import type { GitBranchListEntry } from "@/lib/api";
+import type { GitBranchListEntry, GitBranchListResponse } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { clientErrorEvidence } from "@/lib/client-error-evidence";
+import { bffRequestErrorKind, newClientCorrelationId } from "@/lib/http";
 import { useCodingAppSessionRedemptions } from "@/lib/coding-app-session-client";
+import type { ClientGitRetryOperation } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import {
+  isGitWireUnavailableReason,
+  type GitWireUnavailableReason,
+} from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import type { OptionalWidgetMessageKey } from "@/lib/i18n-messages.optional.en";
 import {
   useOptionalWidgetTranslate,
   type OptionalWidgetTranslate,
@@ -43,6 +52,10 @@ import type { OpenEditorFileRequest } from "../../../hooks/useWorkspace.types";
 import { DEFAULT_GIT_CLIENT, formatGitError, useGitActions } from "./git-client-seam";
 import type { GitClientSeam, GitMutationOutcome } from "./git-client-seam";
 import { MutationOutcome } from "./git-client-ui";
+import {
+  reportGitClientOperationDiagnostic,
+  reportGitClientRetryAttempt,
+} from "./git-client-operation-diagnostics";
 import { GovernedMergeCard } from "../GovernedMergeCard";
 import { GovernedPullRequestCard } from "../GovernedPullRequestCard";
 import { Icons } from "../../../Icons";
@@ -724,6 +737,30 @@ function syncViewForDisplay(
   };
 }
 
+// The one unavailable reason a resolved (HTTP 200) read answers that is a FAILED read rather than a
+// structural explanation: `git status`/`for-each-ref` erroring or timing out (the server folds a
+// timeout into this same wire reason — gitRoutes.ts `classifyFailure` — since "timeout" itself is
+// not part of the wire vocabulary). Every other reason (not-a-repository, git-missing,
+// repository-root-outside-root, unsafe-repository, unknown — the last is an unpaired-session
+// authority refusal, gitRoutes.ts `resolveRepository`) is a structural state the changes pane already
+// explains; retrying it would hit the identical refusal (PR #3625 review).
+function isFailedGitRead(reason: GitWireUnavailableReason | undefined): boolean {
+  return reason === "git-error";
+}
+
+// A failed branch or summary read shows its own Retry, except while the repository itself is
+// unavailable for a STRUCTURAL reason: the changes pane already says why, and a Retry there would
+// misstate a folder that is not a Git repository as a failed read. A genuinely FAILED status read
+// (STATUS_READ.failureKey below) must not hide the branch/summary Retry the same way — it has its
+// own Retry now, so it no longer needs branches/summary to defer to it (PR #3625 review).
+function readErrorForDisplay(
+  error: string | null,
+  status: GitRepositoryStatusResponse | null,
+): string | null {
+  if (status === null || status.available) return error;
+  return isFailedGitRead(status.reason) ? error : null;
+}
+
 function sidebarMaxWidth(bodyWidth: number): number {
   return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, bodyWidth - RIGHT_PANE_MIN_WIDTH));
 }
@@ -870,6 +907,326 @@ function repositoryToolbarList(
   return [locked, ...repositories];
 }
 
+// Exactly `ClientGitRetryOperation` (keiko-contracts): the three reads a manual Retry control ever
+// attempts. Aliased under this file's own name since every read-spec/retry symbol here already reads
+// "GitRead…", but kept as one type so the wire vocabulary and this file's own can never drift apart.
+type GitReadOperation = ClientGitRetryOperation;
+
+// One repository read of the window: how it is fetched, when an answer that resolved is still a
+// failed read, and — only then — the closed reason it gave. `for-each-ref` or a transient
+// `git status` failing answers HTTP 200 with `available: false`, and that gets the same message and
+// Retry as a rejection (PR #3625 review).
+// A manual retry's read carries its minted id; an automatic read is sent exactly as before.
+function retryReadOptions(
+  correlationId: string | undefined,
+): [] | [{ readonly correlationId: string }] {
+  return correlationId === undefined ? [] : [{ correlationId }];
+}
+
+interface GitReadSpec<T> {
+  readonly operation: GitReadOperation;
+  // `correlationId` is a manual retry's minted id, sent with its request so the server's lines for
+  // that read join the retry's attempt and settlement lines; an automatic read passes none.
+  readonly fetch: (client: GitClientSeam, path: string, correlationId?: string) => Promise<T>;
+  readonly failureKey: (response: T) => OptionalWidgetMessageKey | null;
+  readonly reason: (response: T) => GitWireUnavailableReason | undefined;
+}
+
+// A closed, validated reason from a response field this file's own local types leave as a bare
+// `string` (`GitBranchListResponse.reason`, api.ts) — never trusted onto the wire unchecked; an
+// unrecognized value is silently dropped rather than sent and rejected by the server's own guard.
+function safeGitWireUnavailableReason(
+  reason: string | undefined,
+): GitWireUnavailableReason | undefined {
+  return reason !== undefined && isGitWireUnavailableReason(reason) ? reason : undefined;
+}
+
+// A status read used to treat every RESOLVED response as success — `for-each-ref`/`git status`
+// erroring or timing out answers HTTP 200 with `available: false`, and that failed read had no
+// reachable Retry at all (PR #3625 review). Only `isFailedGitRead`'s one reason is a failure; every
+// other unavailable reason is still explained by the changes pane itself, never as a failure.
+const STATUS_READ: GitReadSpec<GitRepositoryStatusResponse> = {
+  operation: "status-read",
+  fetch: (client, path, correlationId) =>
+    client.getStatus(path, ...retryReadOptions(correlationId)),
+  failureKey: (response) =>
+    !response.available && isFailedGitRead(response.reason)
+      ? "gitClientWindow.status.loadFailed"
+      : null,
+  reason: (response) => safeGitWireUnavailableReason(response.reason),
+};
+
+const BRANCHES_READ: GitReadSpec<GitBranchListResponse> = {
+  operation: "branches-read",
+  fetch: (client, path, correlationId) =>
+    client.listBranches(path, ...retryReadOptions(correlationId)),
+  failureKey: (response) => (response.available ? null : "gitClientWindow.branch.loadFailed"),
+  reason: (response) => safeGitWireUnavailableReason(response.reason),
+};
+
+const SUMMARY_READ: GitReadSpec<GitRepositorySummary> = {
+  operation: "summary-read",
+  fetch: (client, path, correlationId) =>
+    client.getSummary(path, ...retryReadOptions(correlationId)),
+  failureKey: (response) => (response.available ? null : "gitClientWindow.sync.summaryUnavailable"),
+  reason: (response) => safeGitWireUnavailableReason(response.reason),
+};
+
+interface GitReadState<T> {
+  readonly response: T | null;
+  readonly projectKey: string | null;
+  readonly loading: boolean;
+  readonly error: string | null;
+}
+
+interface GitRead<T> extends GitReadState<T> {
+  // The operator's Retry: the same load, recorded with how it settled.
+  readonly retry: () => void;
+}
+
+interface GitReadInput<T> {
+  readonly client: GitClientSeam;
+  readonly selectedPath: string | null;
+  readonly spec: GitReadSpec<T>;
+  readonly optionalT: OptionalWidgetTranslate;
+  // A session redemption or a mutation's revision bump re-reads.
+  readonly redemptions: number;
+  readonly statusRevision: number;
+  readonly onLoaded?: ((response: T) => void) | undefined;
+}
+
+const IDLE_READ: GitReadState<never> = {
+  response: null,
+  projectKey: null,
+  loading: false,
+  error: null,
+};
+
+// A recovered manual retry is routine evidence — no error kind, just the id its attempt line
+// already minted, so the two join on one timeline (PR #3625 review).
+function reportReadRetryRecovered(operation: GitReadOperation, correlationId: string): void {
+  reportGitClientOperationDiagnostic(
+    `git-client: manual ${operation} retry-recovered`,
+    { operation, outcome: "retry-recovered" },
+    { correlationId },
+  );
+}
+
+// A retry answered with a RESOLVED unavailable response (HTTP 200, `available: false`) carries the
+// response's own closed reason — never a message — alongside the fixed `unavailable` error kind a
+// resolved-but-failed read always is; `reason` is a body-free field, never sent when the response
+// carried none the guard recognizes (PR #3625 review).
+function reportReadRetryUnavailable(
+  operation: GitReadOperation,
+  reason: GitWireUnavailableReason | undefined,
+  correlationId: string,
+): void {
+  reportGitClientOperationDiagnostic(
+    `git-client: manual ${operation} retry-failed (unavailable)`,
+    { operation, outcome: "retry-failed", ...(reason === undefined ? {} : { reason }) },
+    { correlationId, errorKind: "unavailable" },
+  );
+}
+
+// A retry whose request itself rejected carries the thrown error's closed kind and body-free
+// evidence (class, dist-anchored frames, cause chain — never its message), same as a discarded
+// add-repository failure (PR #3625 review).
+function reportReadRetryRejected(
+  operation: GitReadOperation,
+  error: unknown,
+  correlationId: string,
+): void {
+  reportGitClientOperationDiagnostic(
+    `git-client: manual ${operation} retry-failed`,
+    { operation, outcome: "retry-failed" },
+    {
+      correlationId,
+      errorKind: bffRequestErrorKind(error),
+      errorEvidence: clientErrorEvidence(error),
+    },
+  );
+}
+
+// A manual retry's response (or rejection) arrived after a newer read — a redemption, a mutation's
+// revision bump — already superseded it: neither a recovery nor a failure of the read itself, just
+// discarded evidence, reported under the SAME id its attempt line minted (PR #3625 review). Before
+// this fix the settlement returned silently here, leaving no trace the operator ever retried.
+function reportReadRetrySuperseded(operation: GitReadOperation, correlationId: string): void {
+  reportGitClientOperationDiagnostic(
+    `git-client: manual ${operation} retry-superseded`,
+    { operation, outcome: "retry-superseded" },
+    { correlationId },
+  );
+}
+
+// Removes and returns this sequence's minted retry id, if any — present only when `manualRetry`
+// requested this load. Consuming it here (rather than merely reading it) means a duplicate settle
+// of the same sequence can never report twice.
+function takeRetryCorrelationId(
+  retryAttempts: Map<number, string>,
+  sequence: number,
+): string | undefined {
+  const id = retryAttempts.get(sequence);
+  retryAttempts.delete(sequence);
+  return id;
+}
+
+function reportIfSuperseded(
+  operation: GitReadOperation,
+  retryCorrelationId: string | undefined,
+): void {
+  if (retryCorrelationId !== undefined) reportReadRetrySuperseded(operation, retryCorrelationId);
+}
+
+// The stale guard keeps an older answer from landing over a newer one, whether the newer load came
+// from a revision bump or a manual Retry (#3651, #3653). A manual retry additionally mints its own
+// correlation id up front (`retryAttemptsRef`) and reports an attempt line before the request even
+// starts, so a settlement that arrives after this same load was superseded is still reportable
+// (PR #3625 review).
+// Mints this attempt's own correlation id up front, records it against the load's sequence so its
+// eventual settlement (however it settles) can find and consume it, and reports the attempt line —
+// all BEFORE the request goes out. The request itself carries the same id, so the attempt, the
+// server's lines for the read and the settlement join on one timeline (PR #3625 review).
+function mintGitReadRetryAttempt(
+  operation: GitReadOperation,
+  sequence: number,
+  retryAttempts: Map<number, string>,
+): string {
+  const retryCorrelationId = newClientCorrelationId();
+  retryAttempts.set(sequence, retryCorrelationId);
+  reportGitClientRetryAttempt(
+    `git-client: manual ${operation} attempted`,
+    operation,
+    retryCorrelationId,
+  );
+  return retryCorrelationId;
+}
+
+// Everything one load's settlement needs, carried as one value so the resolve/reject handlers below
+// stay small extracted functions rather than closures re-capturing `useGitRead`'s own locals — kept
+// under the repo's max-lines-per-function ceiling as its own concern, not a behavioral seam.
+interface GitReadSettleArgs<T> {
+  readonly spec: GitReadSpec<T>;
+  readonly selectedPath: string;
+  readonly sequence: number;
+  readonly sequenceRef: RefObject<number>;
+  readonly retryAttempts: Map<number, string>;
+  readonly optionalT: OptionalWidgetTranslate;
+  readonly setState: Dispatch<SetStateAction<GitReadState<T>>>;
+  readonly onLoaded: ((response: T) => void) | undefined;
+}
+
+function settleGitReadResponse<T>(args: GitReadSettleArgs<T>, response: T): void {
+  const retryCorrelationId = takeRetryCorrelationId(args.retryAttempts, args.sequence);
+  if (args.sequenceRef.current !== args.sequence) {
+    reportIfSuperseded(args.spec.operation, retryCorrelationId);
+    return;
+  }
+  const failureKey = args.spec.failureKey(response);
+  const error = failureKey === null ? null : args.optionalT(failureKey);
+  args.setState({ response, projectKey: args.selectedPath, loading: false, error });
+  args.onLoaded?.(response);
+  if (retryCorrelationId === undefined) return;
+  if (error === null) reportReadRetryRecovered(args.spec.operation, retryCorrelationId);
+  else {
+    reportReadRetryUnavailable(args.spec.operation, args.spec.reason(response), retryCorrelationId);
+  }
+}
+
+function settleGitReadFailure<T>(args: GitReadSettleArgs<T>, error: unknown): void {
+  const retryCorrelationId = takeRetryCorrelationId(args.retryAttempts, args.sequence);
+  if (args.sequenceRef.current !== args.sequence) {
+    // The newer read keeps owning the window, but a superseded retry whose request itself rejected
+    // is still a failed request: one that failed in the browser reached no server line that could
+    // recover its kind, frames or cause, so it reports as a failed retry (PR #3625 review).
+    if (retryCorrelationId !== undefined) {
+      reportReadRetryRejected(args.spec.operation, error, retryCorrelationId);
+    }
+    return;
+  }
+  args.setState({ response: null, projectKey: null, loading: false, error: formatGitError(error) });
+  if (retryCorrelationId !== undefined) {
+    reportReadRetryRejected(args.spec.operation, error, retryCorrelationId);
+  }
+}
+
+function useGitRead<T>(input: GitReadInput<T>): GitRead<T> {
+  const { client, selectedPath, spec, optionalT, redemptions, statusRevision, onLoaded } = input;
+  const [state, setState] = useState<GitReadState<T>>(IDLE_READ);
+  const sequenceRef = useRef(0);
+  const retryAttemptsRef = useRef(new Map<number, string>());
+  const load = useCallback(
+    (manualRetry: boolean): void => {
+      if (selectedPath === null) {
+        setState(IDLE_READ);
+        return;
+      }
+      sequenceRef.current += 1;
+      const sequence = sequenceRef.current;
+      const retryCorrelationId = manualRetry
+        ? mintGitReadRetryAttempt(spec.operation, sequence, retryAttemptsRef.current)
+        : undefined;
+      setState((current) => ({ ...current, loading: true, error: null }));
+      const args: GitReadSettleArgs<T> = {
+        spec,
+        selectedPath,
+        sequence,
+        sequenceRef,
+        retryAttempts: retryAttemptsRef.current,
+        optionalT,
+        setState,
+        onLoaded,
+      };
+      void spec.fetch(client, selectedPath, retryCorrelationId).then(
+        (response) => settleGitReadResponse(args, response),
+        (error: unknown) => settleGitReadFailure(args, error),
+      );
+    },
+    [client, onLoaded, optionalT, selectedPath, spec],
+  );
+  useEffect(() => {
+    load(false);
+  }, [load, redemptions, statusRevision]);
+  const retry = useCallback((): void => {
+    load(true);
+  }, [load]);
+  return { ...state, retry };
+}
+
+const CREATED_BRANCH_NOTICE_STYLE: CSSProperties = {
+  display: "block",
+  margin: "0 0 8px",
+  font: "500 12.5px var(--font-ui)",
+  color: "var(--fg)",
+};
+
+// A branch action's outcome, and the branch a failed follow-up switch left created (#3645).
+function BranchOutcomeBanner({
+  outcome,
+  error,
+  optionalT,
+}: {
+  readonly outcome: GitMutationOutcome | null;
+  readonly error: string | null;
+  readonly optionalT: OptionalWidgetTranslate;
+}): ReactNode {
+  const createdBranchName = outcome?.createdBranchName;
+  return (
+    <div style={{ padding: "10px 18px" }}>
+      {createdBranchName === undefined ? null : (
+        <output data-testid="git-branch-created-notice" style={CREATED_BRANCH_NOTICE_STYLE}>
+          {optionalT("gitClientWindow.branch.createdPendingSwitch", { branch: createdBranchName })}
+        </output>
+      )}
+      <MutationOutcome outcome={outcome} error={error} testid="git-branch-outcome" />
+    </div>
+  );
+}
+
+function branchListOf(response: GitBranchListResponse | null): readonly GitBranchListEntry[] {
+  return response?.available === true ? response.branches : EMPTY_BRANCHES;
+}
+
 export function GitClientWindow({
   projectId,
   lockedToActiveRoot = false,
@@ -893,13 +1250,6 @@ export function GitClientWindow({
   // A persisted project path is only a reconnect candidate. Do not dispatch Git operations until
   // the current project projection proves that it still has live workspace-manifest membership.
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
-  const [branches, setBranches] = useState<readonly GitBranchListEntry[]>([]);
-  const [branchesProjectKey, setBranchesProjectKey] = useState<string | null>(null);
-  const [branchesLoading, setBranchesLoading] = useState(false);
-  const [summary, setSummary] = useState<GitRepositorySummary | null>(null);
-  const [summaryProjectKey, setSummaryProjectKey] = useState<string | null>(null);
-  const [summaryLoading, setSummaryLoading] = useState(false);
-  const [summaryError, setSummaryError] = useState<string | null>(null);
   const [remotes, setRemotes] = useState<readonly GitRemoteSummary[]>([]);
   const [remotesProjectKey, setRemotesProjectKey] = useState<string | null>(null);
   const [history, setHistory] = useState<GitHistoryResponse | null>(null);
@@ -909,11 +1259,11 @@ export function GitClientWindow({
   const [historyNextSkip, setHistoryNextSkip] = useState(0);
   const [historyLoadingMore, setHistoryLoadingMore] = useState(false);
   const [historyLoadMoreError, setHistoryLoadMoreError] = useState<string | null>(null);
+  // #3650: set once a Load-more request comes back clamped to the server's bounded skip ceiling
+  // (gitRepositoryReads.ts HISTORY_SKIP_MAX) — the same final page would otherwise repeat forever
+  // with `truncated` legitimately still `true` (a full page always is, further down or not).
+  const [historyLimitReached, setHistoryLimitReached] = useState(false);
   const [selectedCommitSha, setSelectedCommitSha] = useState<string | null>(null);
-  const [status, setStatus] = useState<GitRepositoryStatusResponse | null>(null);
-  const [statusProjectKey, setStatusProjectKey] = useState<string | null>(null);
-  const [statusLoading, setStatusLoading] = useState(false);
-  const [statusError, setStatusError] = useState<string | null>(null);
   const [statusRevision, setStatusRevision] = useState(0);
   const [tab, setTab] = useState<ChangesTab>("changes");
   const [selectedChangePath, setSelectedChangePath] = useState<string | null>(null);
@@ -967,8 +1317,25 @@ export function GitClientWindow({
 
   // Two independent governed-mutation flows: one for staging, one for the commit composer. Each
   // carries its own stale-guard so concurrent stage clicks and a later commit do not cross results.
+  const redemptions = useCodingAppSessionRedemptions();
+  // A status read prunes a selected change that no longer exists (e.g. after a commit), so the diff
+  // pane returns to its empty state.
+  const pruneSelectedChange = useCallback((response: GitRepositoryStatusResponse): void => {
+    setSelectedChangePath(selectedChangeResolver(response.changes, setDiffScope));
+  }, []);
+  const readInput = { client, selectedPath, optionalT, redemptions, statusRevision };
+  const statusRead = useGitRead({ ...readInput, spec: STATUS_READ, onLoaded: pruneSelectedChange });
+  // #3651: a failed branch read must not be silently mapped to "no branches" — that disabled both
+  // switching and New branch with no explanation and no retry.
+  const branchesRead = useGitRead({ ...readInput, spec: BRANCHES_READ });
+  // The repository summary carries upstream/ahead/behind/remotes for the #1576 sync control.
+  const summaryRead = useGitRead({ ...readInput, spec: SUMMARY_READ });
   const projectKey = selectedPath ?? "";
-  const mutationRepositoryRoot = repositoryRootForMutation(status, statusProjectKey, selectedPath);
+  const mutationRepositoryRoot = repositoryRootForMutation(
+    statusRead.response,
+    statusRead.projectKey,
+    selectedPath,
+  );
   const branchActions = useGitActions(client, projectKey, mutationRepositoryRoot);
   const staging = useGitActions(client, projectKey, mutationRepositoryRoot);
   const commit = useGitActions(client, projectKey, mutationRepositoryRoot);
@@ -991,7 +1358,6 @@ export function GitClientWindow({
 
   // A re-pair without a page load reads every Git view again (F65): the reads of a managed task
   // workspace are answered only for a paired browser (PR #3452 review).
-  const redemptions = useCodingAppSessionRedemptions();
 
   const loadRepositories = useCallback((): void => {
     reposRequestSequenceRef.current += 1;
@@ -1041,67 +1407,10 @@ export function GitClientWindow({
     setHistoryNextSkip(0);
     setHistoryLoadingMore(false);
     setHistoryLoadMoreError(null);
+    setHistoryLimitReached(false);
     setSelectedCommitSha(null);
     setWorktreeConfirmation(null);
   }, [selectedPath, resetStaging, resetCommit, resetBranchActions]);
-
-  useEffect(() => {
-    if (selectedPath === null) {
-      setBranches([]);
-      setBranchesProjectKey(null);
-      return;
-    }
-    let cancelled = false;
-    setBranchesLoading(true);
-    void client.listBranches(selectedPath).then(
-      (res) => {
-        if (cancelled) return;
-        setBranches(res.available ? res.branches : []);
-        setBranchesProjectKey(selectedPath);
-        setBranchesLoading(false);
-      },
-      () => {
-        if (cancelled) return;
-        setBranches([]);
-        setBranchesProjectKey(selectedPath);
-        setBranchesLoading(false);
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [client, redemptions, selectedPath, statusRevision]);
-
-  // Repository summary carries upstream/ahead/behind/remotes for the #1576 sync control.
-  useEffect(() => {
-    if (selectedPath === null) {
-      setSummary(null);
-      setSummaryProjectKey(null);
-      setSummaryError(null);
-      return;
-    }
-    let cancelled = false;
-    setSummaryLoading(true);
-    setSummaryError(null);
-    void client.getSummary(selectedPath).then(
-      (res) => {
-        if (cancelled) return;
-        setSummary(res);
-        setSummaryProjectKey(selectedPath);
-        setSummaryLoading(false);
-      },
-      (err: unknown) => {
-        if (cancelled) return;
-        setSummary(null);
-        setSummaryProjectKey(null);
-        setSummaryLoading(false);
-        setSummaryError(formatGitError(err));
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [client, redemptions, selectedPath, statusRevision]);
 
   // Dedicated remotes data may contain provider URLs for safe owner/repo inference. The compact
   // summary remains alias-only so sync state never needs URL metadata.
@@ -1142,6 +1451,7 @@ export function GitClientWindow({
       setHistoryNextSkip(0);
       setHistoryLoadingMore(false);
       setHistoryLoadMoreError(null);
+      setHistoryLimitReached(false);
       return;
     }
     if (tab !== "history") {
@@ -1158,6 +1468,7 @@ export function GitClientWindow({
     setHistoryNextSkip(0);
     setHistoryLoadingMore(false);
     setHistoryLoadMoreError(null);
+    setHistoryLimitReached(false);
     void client.getHistory({ root: selectedPath, limit: HISTORY_PAGE_SIZE, skip: 0 }).then(
       (res) => {
         if (cancelled || historyRequestSequenceRef.current !== requestSequence) return;
@@ -1199,7 +1510,13 @@ export function GitClientWindow({
   }, [client, initialCommit, optionalT, redemptions, selectedPath, statusRevision, tab]);
 
   const loadMoreHistory = useCallback((): void => {
-    if (selectedPath === null || history === null || !history.truncated || historyLoadingMore) {
+    if (
+      selectedPath === null ||
+      history === null ||
+      !history.truncated ||
+      historyLoadingMore ||
+      historyLimitReached
+    ) {
       return;
     }
     const requestSequence = historyRequestSequenceRef.current;
@@ -1214,6 +1531,16 @@ export function GitClientWindow({
           setHistoryLoadMoreError(optionalT("gitClientWindow.history.loadMoreFailed"));
           return;
         }
+        // #3650: the server clamps `skip` to its bounded ceiling (gitRepositoryReads.ts
+        // HISTORY_SKIP_MAX) and echoes the skip it actually used in `page.skip`. A clamp means
+        // this is the same final page as the previous request — appending it is a costly no-op
+        // (dedup drops every entry) and `truncated` legitimately stays `true` forever, so stop
+        // paging instead of leaving Load more to repeat the identical request indefinitely.
+        if (page.skip < skip) {
+          setHistoryLoadingMore(false);
+          setHistoryLimitReached(true);
+          return;
+        }
         setHistory((current) => (current === null ? null : appendHistoryPage(current, page)));
         setHistoryNextSkip(skip + page.entries.length);
         setHistoryLoadingMore(false);
@@ -1224,40 +1551,15 @@ export function GitClientWindow({
         setHistoryLoadMoreError(optionalT("gitClientWindow.history.loadMoreFailed"));
       },
     );
-  }, [client, history, historyLoadingMore, historyNextSkip, optionalT, selectedPath]);
-
-  // Status load, re-run on every mutation (statusRevision bump). Prunes a selected change that no
-  // longer exists (e.g. after a commit) so the diff pane returns to its empty state.
-  useEffect(() => {
-    if (selectedPath === null) {
-      setStatus(null);
-      setStatusProjectKey(null);
-      setStatusError(null);
-      return;
-    }
-    let cancelled = false;
-    setStatusLoading(true);
-    setStatusError(null);
-    void client.getStatus(selectedPath).then(
-      (res) => {
-        if (cancelled) return;
-        setStatus(res);
-        setStatusProjectKey(selectedPath);
-        setStatusLoading(false);
-        setSelectedChangePath(selectedChangeResolver(res.changes, setDiffScope));
-      },
-      (err: unknown) => {
-        if (cancelled) return;
-        setStatus(null);
-        setStatusProjectKey(null);
-        setStatusLoading(false);
-        setStatusError(formatGitError(err));
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [client, redemptions, selectedPath, statusRevision]);
+  }, [
+    client,
+    history,
+    historyLimitReached,
+    historyLoadingMore,
+    historyNextSkip,
+    optionalT,
+    selectedPath,
+  ]);
 
   useEffect((): (() => void) => {
     const onRepositoryStateInvalidated = (event: Event): void => {
@@ -1311,7 +1613,12 @@ export function GitClientWindow({
 
   const branchOutcome = branchActions.flow.outcome;
   useEffect(() => {
-    if (branchOutcome?.status === "succeeded") {
+    // #3645: the New Branch dialog's job is branch CREATION. Once that succeeded — even if the
+    // follow-on switch (or its editor-buffer reconciliation) then failed — close it instead of
+    // leaving "Create branch" as the only visible action, which would only fail a second time with
+    // an already-exists error. The residual switch problem surfaces through the ordinary
+    // branch-outcome banner below, exactly like any other switch failure.
+    if (branchOutcome?.status === "succeeded" || branchOutcome?.createdBranchName !== undefined) {
       closeNewBranchDialog();
     }
   }, [branchOutcome, closeNewBranchDialog]);
@@ -1425,12 +1732,12 @@ export function GitClientWindow({
 
   const active = activeGitClientState({
     selectedPath,
-    statusProjectKey,
-    status,
-    branchesProjectKey,
-    branches,
-    summaryProjectKey,
-    summary,
+    statusProjectKey: statusRead.projectKey,
+    status: statusRead.response,
+    branchesProjectKey: branchesRead.projectKey,
+    branches: branchListOf(branchesRead.response),
+    summaryProjectKey: summaryRead.projectKey,
+    summary: summaryRead.response,
     remotesProjectKey,
     remotes,
     historyProjectKey,
@@ -1590,8 +1897,21 @@ export function GitClientWindow({
           startPointRefHash: baseBranch.headRefHash,
         });
         if (created.status !== "succeeded") return created;
+        // #3645: the branch is durably created from this point on regardless of what the
+        // follow-on switch does below. Announce it immediately rather than only when the
+        // composed outcome's OWN final status happens to be one that triggers an invalidation
+        // (useMutationFlow invalidates on succeeded/failed/recovery-required, but not on a
+        // "blocked" switch — e.g. a dirty worktree) — otherwise the branch list could stay stale
+        // with no event left to ever refresh it.
+        notifyGitRepositoryStateInvalidated(selectedPath, mutationRepositoryRoot);
         const switched = await client.branchSwitch({ projectId: selectedPath, branchName });
-        if (switched.status !== "succeeded") return switched;
+        if (switched.status !== "succeeded") {
+          // The switch's own diagnostic (status/blockReason/executionErrorCode/…) is preserved
+          // as-is; `createdBranchName` only ADDS the fact that creation itself already succeeded,
+          // so the New Branch dialog closes instead of leaving "Create branch" as the only
+          // action — retrying it would just fail again with an already-exists error.
+          return { ...switched, actionKind: "branch-create", createdBranchName: branchName };
+        }
         try {
           await reconcileEditorBuffers(selectedPath);
           return { ...switched, actionKind: "branch-create" };
@@ -1601,14 +1921,22 @@ export function GitClientWindow({
             status: "recovery-required",
             actionKind: "branch-create",
             executionErrorCode: "editor-buffer-reconciliation-failed",
+            createdBranchName: branchName,
           };
         }
       });
     },
-    [activeBranches, branchActions, client, reconcileEditorBuffers, selectedPath],
+    [
+      activeBranches,
+      branchActions,
+      client,
+      mutationRepositoryRoot,
+      reconcileEditorBuffers,
+      selectedPath,
+    ],
   );
 
-  const syncView = deriveSyncView(activeSummary, summaryLoading);
+  const syncView = deriveSyncView(activeSummary, summaryRead.loading);
   const toolbarRepositories = repositoryToolbarList(
     repositories,
     selectedPath,
@@ -1759,6 +2087,7 @@ export function GitClientWindow({
     />
   );
 
+  const visibleSummaryError = readErrorForDisplay(summaryRead.error, activeStatus);
   return (
     <div style={WORKSPACE_STYLE} aria-label="Git">
       <h2 className="rv-sr-only">Git</h2>
@@ -1780,17 +2109,21 @@ export function GitClientWindow({
         selectedPath={selectedPath}
         repositorySelectionLocked={lockedToActiveRoot}
         branches={activeBranches}
-        branchesLoading={branchesLoading}
+        branchesLoading={branchesRead.loading}
+        branchesError={readErrorForDisplay(branchesRead.error, activeStatus)}
         status={activeStatus}
         branchBusy={branchActions.flow.busy}
-        syncView={syncViewForDisplay(syncView, summaryError, t)}
+        syncView={syncViewForDisplay(syncView, visibleSummaryError, t)}
         syncBusy={syncBusy}
         syncOutcome={syncOutcome}
         syncError={syncError}
+        summaryError={visibleSummaryError}
         onSelectRepository={reconnectRepository}
         onSwitchBranch={switchBranch}
         onCreateBranch={openNewBranchDialog}
+        onRetryBranches={branchesRead.retry}
         onRunSync={requestSync}
+        onRetrySummary={summaryRead.retry}
         onOpenEditor={onOpenEditor}
         onOpenFiles={onOpenFiles}
         onConnectToChat={() => setConnectToChatOpen(true)}
@@ -1801,13 +2134,11 @@ export function GitClientWindow({
           under the same flow), so this banner is suppressed then to avoid showing the same
           rejection twice. */}
       {showBranchOutcome ? (
-        <div style={{ padding: "10px 18px" }}>
-          <MutationOutcome
-            outcome={branchOutcome}
-            error={branchActions.flow.error}
-            testid="git-branch-outcome"
-          />
-        </div>
+        <BranchOutcomeBanner
+          outcome={branchOutcome}
+          error={branchActions.flow.error}
+          optionalT={optionalT}
+        />
       ) : null}
       <div ref={bodyRef} style={BODY_STYLE}>
         {selectedPath === null ? (
@@ -1818,6 +2149,7 @@ export function GitClientWindow({
             onSelect={reconnectRepository}
             onConnect={() => openRepositoryDialog("open")}
             onClone={() => openRepositoryDialog("clone")}
+            onRetry={loadRepositories}
           />
         ) : (
           <>
@@ -1826,8 +2158,9 @@ export function GitClientWindow({
                 tab={tab}
                 onTabChange={setTab}
                 status={activeStatus}
-                statusLoading={statusLoading}
-                statusError={statusError}
+                statusLoading={statusRead.loading}
+                statusError={statusRead.error}
+                onRetryStatus={statusRead.retry}
                 selectedChangePath={selectedChangePath}
                 onSelectChange={selectChange}
                 onStageFile={stageFile}
@@ -1842,6 +2175,7 @@ export function GitClientWindow({
                 historyError={historyError}
                 historyLoadingMore={historyLoadingMore}
                 historyLoadMoreError={historyLoadMoreError}
+                historyLimitReached={historyLimitReached}
                 onLoadMoreHistory={loadMoreHistory}
                 selectedCommitSha={selectedCommitSha}
                 onSelectCommit={(entry) => setSelectedCommitSha(entry.sha)}

@@ -47,6 +47,8 @@ import {
   type ProductionManagedWorktreeToolInput,
 } from "./productionManagedWorktreeTools.js";
 import { dependencyBootstrapFailureSummary } from "./codingToolIpc.js";
+import { createCodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
+import { humanDecisionToolResult } from "./codingToolFacade.js";
 import { MAX_APPROVAL_CHALLENGE_TTL_MS } from "./codingRuntimeOrchestrator.js";
 import {
   DEFAULT_VERIFICATION_LIMITS,
@@ -168,6 +170,86 @@ describe("production managed worktree tools", () => {
     expect(probe.matchesApproval).not.toHaveBeenCalled();
   });
 
+  // Owner decision 2026-09-26 (ADR-0124 D6): a declined proposal stays reviewable, so its wait reads
+  // the decline first and never asks the review or the approval store again.
+  it("settles a proposal wait as denied once the proposal was declined", async () => {
+    const probe = {
+      review: vi.fn(() => ({})),
+      matchesApproval: vi.fn(() => false),
+      declined: vi.fn(() => true),
+    };
+
+    await expect(waitForRuntimeProposalApproval(probe, "commit-declined")).resolves.toBe("denied");
+    expect(probe.declined).toHaveBeenCalledWith("commit-declined");
+    expect(probe.review).not.toHaveBeenCalled();
+    expect(probe.matchesApproval).not.toHaveBeenCalled();
+  });
+
+  // PR #3625: a commit proposal's ask is raised by the server itself, so a denial had nothing to
+  // reply to. Before ADR-0124 D6 the denial ended the whole run and its abort released the wait; with
+  // the run going on, the call held until the approval ceiling. The run's decline now settles it at
+  // once, and the model reads the human's decision.
+  it("answers a declined commit proposal at once with the human's decision", async () => {
+    vi.useFakeTimers();
+    try {
+      const proposalId = "commit-3625-declined";
+      const binding = { proposalId, runId: GOVERNED_RUN_ID, status: "approval-required" as const };
+      const service = {
+        ...verificationService(),
+        propose: vi.fn(() => Promise.resolve({ ...binding, reason: "approval-required" as const })),
+        review: vi.fn(() => ({ binding }) as unknown as VerifiedCommitProposal),
+        matchesApproval: vi.fn(() => false),
+      } as unknown as VerifiedCommitService;
+      const approvals = createCodingToolApprovalBridge(service);
+      const requestCommitApproval = vi.fn();
+      const activityLog: ServerLogEvent[] = [];
+      const facade = governedCommitFacade({
+        service,
+        approvals,
+        requestCommitApproval,
+        activityLog,
+      });
+
+      const pending = facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "delivery",
+          actionId: "delivery-1",
+          idempotencyKey: "delivery-key",
+          intent: "commit",
+          phase: "propose",
+          message: "feat: declined",
+        }),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(requestCommitApproval).toHaveBeenCalledExactlyOnceWith(proposalId);
+      let settled = false;
+      void pending.then((): void => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(settled).toBe(false);
+
+      approvals.declineProposal?.(GOVERNED_RUN_ID, proposalId);
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(pending).resolves.toEqual(humanDecisionToolResult("denied"));
+      const waitLine = activityLog.find(
+        (event) =>
+          event.op === "coding-runtime.tool-result" &&
+          event.extra?.state === "approval-wait-settled",
+      );
+      expect(waitLine).toMatchObject({
+        correlationId: GOVERNED_RUN_ID,
+        extra: { actionKind: "commit", proposalId, reason: "denied" },
+      });
+      expect(waitLine?.errorKind).toBeUndefined();
+      expect(waitLine?.level).not.toBe("warn");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("holds an approval-required stage proposal until its exact approval is issued", async () => {
     vi.useFakeTimers();
     try {
@@ -232,6 +314,65 @@ describe("production managed worktree tools", () => {
             reason: "approved",
             waitCeilingMs: MAX_APPROVAL_CHALLENGE_TTL_MS,
           },
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("answers a declined stage proposal at once with the human's decision", async () => {
+    vi.useFakeTimers();
+    try {
+      const proposal = {
+        kind: "stage" as const,
+        proposalId: "stage-3625-declined",
+        status: "approval-required" as const,
+        reason: "approval-required" as const,
+        pathCount: 1,
+      };
+      const service = {
+        execute: vi.fn(() => Promise.resolve(proposal)),
+        review: vi.fn(() => proposal),
+        matchesApproval: vi.fn(() => false),
+      } as unknown as RuntimeGitService;
+      const approvals = createCodingToolApprovalBridge(undefined, service);
+      const log: ServerLogEvent[] = [];
+      const facade = verificationFacade({
+        runToReport: vi.fn(),
+        records: [],
+        runtimeGitService: service,
+        requestStageApproval: vi.fn(),
+        approvalProofVerifier: approvals,
+        log,
+      });
+
+      const pending = facade.execute({
+        capability: "runtime-capability",
+        body: JSON.stringify({
+          action: "git",
+          operation: "stage",
+          phase: "propose",
+          paths: ["src/index.ts"],
+          actionId: "stage-1",
+          idempotencyKey: "stage-1",
+        }),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      approvals.declineProposal?.("run-verification-3", proposal.proposalId);
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(pending).resolves.toEqual(humanDecisionToolResult("denied"));
+      expect(log).toContainEqual(
+        expect.objectContaining({
+          op: "coding-runtime.tool-result",
+          correlationId: "run-verification-3",
+          extra: expect.objectContaining({
+            actionKind: "git-stage",
+            proposalId: proposal.proposalId,
+            state: "approval-wait-settled",
+            reason: "denied",
+          }) as unknown,
         }),
       );
     } finally {
@@ -438,98 +579,10 @@ describe("production managed worktree tools", () => {
   // #3612: the governed ask checks a changeset's base digests before the human sees it. The check
   // reads through the same secure read as keiko_workspace_read and answers with the very digest that
   // read reports, never a second formula.
-  it("answers a changeset base check with the governed read's own digest", async () => {
-    let access: WorkspaceRootAccess | undefined = resolveWorkspaceRootAccess();
-    let authorityLive = true;
-    let revokeDuringRead = false;
-    const readText = vi.fn((request: { readonly relativePath: string }) => {
-      if (revokeDuringRead) authorityLive = false;
-      return Promise.resolve(
-        request.relativePath === "src/missing.ts"
-          ? { ok: false as const, reason: "not-found" as const }
-          : { ok: true as const, text: "export const value = 1;\n" },
-      );
-    });
-    const facade = createProductionManagedWorktreeToolFacade({
-      authority: {
-        revalidateCapabilityForMutation: () =>
-          authorityLive
-            ? { ok: true as const, envelope: authorizedEnvelope() }
-            : { ok: false as const, reason: "authority-expired" },
-        resolveCapabilityForDelegation: () => ({
-          ok: true as const,
-          envelope: authorizedEnvelope(),
-        }),
-      },
-      authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
-      workspaceRoot: "/managed/worktree",
-      resolveWorkspaceRootAccess: () => access,
-      authorityExpiresAt: "2099-01-01T00:00:00.000Z",
-      effectiveMode: "governed-assist",
-      deploymentCeiling: "governed-assist",
-      liveFacts: () => FACTS,
-      secureWorkspaceTextRead: { readText },
-      editorAgentClient: {
-        action: () =>
-          Promise.resolve({
-            ok: false as const,
-            error: { kind: "route" as const, code: "denied", message: "denied" },
-          }),
-      },
-      invocationRegistry: createCodingToolInvocationRegistry(),
-      verificationRunner: { runToReport: vi.fn() },
-      onRuntimeEvent: vi.fn(),
-    });
-    const read = await facade.execute({
-      body: JSON.stringify({
-        action: "read",
-        actionId: "action-base",
-        idempotencyKey: "key-base",
-        relativePath: "src/example.ts",
-      }),
-      capability: "opaque-capability",
-    });
-    if (read.status !== "completed" || !("read" in read)) throw new Error("governed read failed");
-    const baseCheck = facade.editBaseDigest;
-    if (baseCheck === undefined) throw new Error("the production facade has no base check");
-    const signal = new AbortController().signal;
-    const editBaseDigest = (path: string): Promise<unknown> =>
-      baseCheck("opaque-capability", path, signal);
-    const unreadable = { kind: "unreadable" };
-    const denied = { kind: "authority-denied" };
-
-    await expect(editBaseDigest("src/example.ts")).resolves.toEqual({
-      kind: "digest",
-      digest: read.read.digest,
-    });
-    // A file the read cannot return (a new file) leaves the check to the editor route.
-    await expect(editBaseDigest("src/missing.ts")).resolves.toEqual(unreadable);
-    // A denied path is never read, so the check is no digest oracle for a file the model may not read.
-    readText.mockClear();
-    await expect(editBaseDigest(".env")).resolves.toEqual(unreadable);
-    await expect(editBaseDigest("../outside.ts")).resolves.toEqual(unreadable);
-    expect(readText).not.toHaveBeenCalled();
-    // PR #3617 review: the run's live authority admits the read first, like keiko_workspace_read,
-    // so an expired or revoked run, or a missing capability, reads nothing and says it was denied.
-    await expect(baseCheck(undefined, "src/example.ts", signal)).resolves.toEqual(denied);
-    authorityLive = false;
-    await expect(editBaseDigest("src/example.ts")).resolves.toEqual(denied);
-    expect(readText).not.toHaveBeenCalled();
-    // Authority that ends during the read is a denial too.
-    authorityLive = true;
-    revokeDuringRead = true;
-    await expect(editBaseDigest("src/example.ts")).resolves.toEqual(denied);
-    expect(readText).toHaveBeenCalledOnce();
-    revokeDuringRead = false;
-    authorityLive = true;
-    readText.mockClear();
-    // Only while this run's exact managed workspace is the active one: a run that lost it reads
-    // nothing and says it was denied, so its ask never reaches the human (PR #3617 review).
-    access = undefined;
-    await expect(editBaseDigest("src/example.ts")).resolves.toEqual(denied);
-    expect(readText).not.toHaveBeenCalled();
-  });
-
+  // Owner decision 2026-09-26 (ADR-0124 D6): a file edit raises no ask of its own, so this change
+  // review is its one human approval. The mode policy (ADR-0138) decides at registration, before the
+  // editor action is queued, that the review is required: nothing is written until the human
+  // applies it.
   it.each([
     ["governed-assist", true],
     ["supervised-coding", true],
@@ -537,7 +590,11 @@ describe("production managed worktree tools", () => {
   ] as const)(
     "derives editor review policy for %s (requiresReview=%s)",
     async (effectiveMode: CodingWorkbenchMode, requiresReview: boolean) => {
-      const register = vi.fn((): boolean => true);
+      const order: string[] = [];
+      const register = vi.fn((): boolean => {
+        order.push("register");
+        return true;
+      });
       const facade = createProductionManagedWorktreeToolFacade({
         authority: {
           revalidateCapabilityForMutation: () => ({
@@ -560,8 +617,9 @@ describe("production managed worktree tools", () => {
           readText: () => Promise.resolve({ ok: false, reason: "denied" }),
         },
         editorAgentClient: {
-          action: (action) =>
-            Promise.resolve({
+          action: (action) => {
+            order.push("action");
+            return Promise.resolve({
               ok: true as const,
               value: {
                 result: {
@@ -571,7 +629,8 @@ describe("production managed worktree tools", () => {
                   status: "queued" as const,
                 },
               },
-            }),
+            });
+          },
         },
         mutationLeaseCoordinator: {
           register,
@@ -598,6 +657,7 @@ describe("production managed worktree tools", () => {
         }),
       ).resolves.toMatchObject({ status: "completed" });
       expect(register).toHaveBeenCalledWith(expect.objectContaining({ requiresReview }));
+      expect(order).toEqual(["register", "action"]);
     },
   );
 
@@ -3518,6 +3578,7 @@ function verificationRunnerOptions(options: {
 
 function verificationFacade(options: {
   readonly ciRepairBudget?: CiRepairExecutionBudget;
+  readonly approvalProofVerifier?: ReturnType<typeof createCodingToolApprovalBridge>;
   readonly verifiedCommitService?: VerifiedCommitService;
   readonly runtimeGitService?: RuntimeGitService;
   readonly requestStageApproval?: (proposalId: string) => void;
@@ -3536,6 +3597,9 @@ function verificationFacade(options: {
 }): ReturnType<typeof createProductionManagedWorktreeToolFacade> {
   return createProductionManagedWorktreeToolFacade({
     ...(options.ciRepairBudget === undefined ? {} : { ciRepairBudget: options.ciRepairBudget }),
+    ...(options.approvalProofVerifier === undefined
+      ? {}
+      : { approvalProofVerifier: options.approvalProofVerifier }),
     ...(options.verifiedCommitService === undefined
       ? {}
       : { verifiedCommitService: options.verifiedCommitService }),
@@ -3672,6 +3736,67 @@ async function registeredVerificationTool(plugin: unknown): Promise<GeneratedVer
   )
     throw new TypeError("generated verification tool invalid");
   return registered as GeneratedVerificationTool;
+}
+
+const GOVERNED_RUN_ID = "run-governed-3625";
+
+// A commit facade in Ask for approval: a commit proposal waits for the operator instead of being
+// released by full-access policy.
+function governedCommitFacade(options: {
+  readonly service: VerifiedCommitService;
+  readonly approvals: ReturnType<typeof createCodingToolApprovalBridge>;
+  readonly requestCommitApproval: (proposalId: string) => void;
+  readonly activityLog: ServerLogEvent[];
+}): ReturnType<typeof createProductionManagedWorktreeToolFacade> {
+  const envelope = governedEnvelope();
+  return createProductionManagedWorktreeToolFacade({
+    verifiedCommitService: options.service,
+    requestCommitApproval: options.requestCommitApproval,
+    approvalProofVerifier: options.approvals,
+    authority: {
+      revalidateCapabilityForMutation: () => ({ ok: true as const, envelope }),
+      resolveCapabilityForDelegation: () => ({ ok: true as const, envelope }),
+    },
+    authorityRef: { runId: GOVERNED_RUN_ID, envelopeDigest: DIGEST },
+    workspaceRoot: "/managed/worktree",
+    resolveWorkspaceRootAccess,
+    authorityExpiresAt: "2099-01-01T00:00:00.000Z",
+    effectiveMode: "governed-assist",
+    deploymentCeiling: "autonomous-delivery",
+    liveFacts: () => ({
+      ...FACTS,
+      actionClasses: [
+        "workspace-read",
+        "workspace-write",
+        "verification",
+        "delivery-substrate",
+        "connector-access",
+      ],
+      connectorScopes: ["source-control.read", "source-control.write"],
+    }),
+    secureWorkspaceTextRead: { readText: () => Promise.resolve({ ok: false, reason: "denied" }) },
+    editorAgentClient: {
+      action: () =>
+        Promise.resolve({
+          ok: false as const,
+          error: { kind: "route" as const, code: "denied", message: "denied" },
+        }),
+    },
+    invocationRegistry: createCodingToolInvocationRegistry(),
+    verificationRunner: { runToReport: vi.fn() },
+    activityLog: { write: (event): void => void options.activityLog.push(event) },
+    onRuntimeEvent: vi.fn(),
+  });
+}
+
+function governedEnvelope(): never {
+  const authorized = authorizedEnvelope() as unknown as {
+    readonly authority: Record<string, unknown>;
+  };
+  return {
+    ...authorized,
+    authority: { ...authorized.authority, effectiveMode: "governed-assist" },
+  } as never;
 }
 
 function verificationService(): VerifiedCommitService {

@@ -809,6 +809,45 @@ export function trimTrailingSlash(value: string): string {
   return value.endsWith("/") ? value.slice(0, -1) : value;
 }
 
+function withoutTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
+// A real base URL never repeats the segment; this only stops a pathologically hand-crafted
+// repeat from looping unboundedly (#3643).
+const MAX_TRAILING_AZURE_OPENAI_SEGMENTS = 8;
+const AZURE_OPENAI_PATH_SEGMENT = "/openai";
+
+/**
+ * Strips a trailing "/openai" path segment — and any trailing slashes around or between repeats
+ * of it — from an Azure deployment-path base URL, so `chatCompletionsUrl` (openai-adapter.ts) and
+ * `readinessChatCompletionsUrl` (readiness-probe.ts) never double it when they append the ONE
+ * "/openai/deployments/..." segment Microsoft's shape requires (#3643). Gateway Setup accepts and
+ * persists a base URL that already ends in "/openai" — gateway-setup.test.ts's
+ * "https://example.openai.azure.com/openai" case is exactly this shape — so appending the literal
+ * segment again built "/openai/openai/deployments/...", a route no real Azure deployment answers.
+ * Matched exactly, like the hardcoded "/openai/deployments/" segment it complements: Azure paths
+ * are not case-folded, so a differently-cased trailing segment is left alone rather than guessed
+ * at. A value that does not end in the segment at all — including one carrying a query string,
+ * which `validateBaseUrl` already refuses at config-parse time — is returned with only its own
+ * trailing slashes trimmed.
+ */
+export function trimTrailingAzureOpenAiSegment(value: string): string {
+  let result = withoutTrailingSlashes(value);
+  for (
+    let attempt = 0;
+    attempt < MAX_TRAILING_AZURE_OPENAI_SEGMENTS && result.endsWith(AZURE_OPENAI_PATH_SEGMENT);
+    attempt += 1
+  ) {
+    result = withoutTrailingSlashes(result.slice(0, -AZURE_OPENAI_PATH_SEGMENT.length));
+  }
+  return result;
+}
+
 // eslint-disable-next-line complexity -- URL policy validation intentionally enumerates each reject reason for operator clarity.
 export function validateBaseUrl(
   baseUrl: string,

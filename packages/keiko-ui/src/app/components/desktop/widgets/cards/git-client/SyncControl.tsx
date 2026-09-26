@@ -2,9 +2,10 @@
 
 import { useId } from "react";
 import type { ReactNode } from "react";
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import type { GitRepositorySummary, GitRepositorySummaryRemote } from "@/lib/types";
 import { Icons } from "../../../Icons";
-import { PRIMARY_BTN, SUBTLE_TEXT_STYLE, disabledStyle } from "./git-client-styles";
+import { PRIMARY_BTN, SECONDARY_BTN, SUBTLE_TEXT_STYLE, disabledStyle } from "./git-client-styles";
 import type { SyncOutcomeView } from "./sync-outcome";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
@@ -147,14 +148,24 @@ export function SyncControl({
   busy,
   outcome,
   error,
+  // #3653: a transient failure of the repository-summary read is folded into `view` as a
+  // disabled "blocked" action with no way back — the read is never retried merely because the
+  // connection recovers, and `view` alone cannot distinguish that from a structural reason (no
+  // remote, detached HEAD, …) that a retry could never fix. Passing the raw read failure alongside
+  // `view` lets this control offer Retry only for the actually-retryable case.
+  summaryError,
   onRun,
+  onRetrySummary,
 }: {
   readonly view: GitSyncView;
   readonly busy: boolean;
   readonly outcome: SyncOutcomeView | null;
   readonly error: string | null;
+  readonly summaryError: string | null;
   readonly onRun: () => void;
+  readonly onRetrySummary: () => void;
 }): ReactNode {
+  const t = useOptionalWidgetTranslate();
   const disabled = view.disabled || busy;
   const descriptionId = useId();
   const syncLabelId = useId();
@@ -207,6 +218,11 @@ export function SyncControl({
       >
         {error ?? outcome?.message ?? view.description}
       </span>
+      {summaryError !== null ? (
+        <button type="button" style={SECONDARY_BTN} onClick={onRetrySummary}>
+          {t("gitDelivery.action.retry")}
+        </button>
+      ) : null}
       {view.action === "fetch" && view.description.startsWith("Diverged") ? (
         <span style={{ ...SUBTLE_TEXT_STYLE, maxWidth: 320 }}>
           Use the Merge entry point after fetching to reconcile diverged branches.

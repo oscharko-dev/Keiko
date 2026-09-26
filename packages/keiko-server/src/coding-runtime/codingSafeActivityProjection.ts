@@ -1101,16 +1101,20 @@ const TERMINAL_TOOL_STATES: ReadonlySet<CodingSafeActivityToolState> = new Set([
 // a call from the facade result, independently of OpenCode's part updates, and can do so before
 // OpenCode's earlier pending or running update arrives over the event stream (a lab run of 1.1.8: a
 // 10 ms read); only Keiko settles a call as denied or cancelled, which OpenCode then reports as a
-// generic failure. Each restates a state the call already passed and is kept as a no-op, not an
-// omitted update (#3612). A settlement never restates pending or running, so one that tries is
-// still a refused regression.
+// generic failure — or, since a declined or expired ask answers with the call's own refusal result
+// (ADR-0124 D6), as a completed call. Each restates a state the call already passed and is kept as a
+// no-op, not an omitted update (#3612). A settlement never restates pending or running, so one that
+// tries is still a refused regression.
 function staleOpenCodeRestatement(
   from: CodingSafeActivityToolState,
   signal: Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>,
 ): boolean {
   if (signal.messageId === undefined || !TERMINAL_TOOL_STATES.has(from)) return false;
   if (signal.state === "pending" || signal.state === "running") return true;
-  return (from === "denied" || from === "cancelled") && signal.state === "failed";
+  return (
+    (from === "denied" || from === "cancelled") &&
+    (signal.state === "failed" || signal.state === "succeeded")
+  );
 }
 
 function allowedToolTransition(

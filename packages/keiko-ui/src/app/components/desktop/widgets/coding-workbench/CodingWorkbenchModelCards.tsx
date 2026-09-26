@@ -20,12 +20,28 @@ import styles from "./CodingWorkbenchWindow.module.css";
 // An operator with a missing, expired, revoked or failed login used to see Start stay disabled with
 // no explanation and no way to authenticate (audit finding, 2026-09-03). The card renders nothing
 // for the managed gateway and once connected.
+// #3636: refreshing the sign-in status must also refresh the runtime SOURCE. Refreshing only the
+// profile can flip it to "connected" (hiding this card) while `source.value.available` stays
+// whatever it was before sign-in, so `canStart` (coding-workbench-live-state.ts `projectReadiness`)
+// never lifts and Start stays disabled with no card left to explain why.
+function refreshCodexSignIn(
+  actions: Pick<CodingWorkbenchRuntimeActions, "refreshProfile" | "refreshSource">,
+): () => Promise<void> {
+  return async (): Promise<void> => {
+    await actions.refreshProfile();
+    await actions.refreshSource();
+  };
+}
+
 export function CodexSubscriptionAuthCard({
   state,
   actions,
 }: {
   readonly state: CodingWorkbenchRuntimeState;
-  readonly actions: Pick<CodingWorkbenchRuntimeActions, "prepareCodexSetup" | "refreshProfile">;
+  readonly actions: Pick<
+    CodingWorkbenchRuntimeActions,
+    "prepareCodexSetup" | "refreshProfile" | "refreshSource"
+  >;
 }): ReactNode {
   const t = useTranslate();
   if (state.runtimePreference !== "codex-subscription") return null;
@@ -45,7 +61,7 @@ export function CodexSubscriptionAuthCard({
       <p className={styles.helpText}>{t("codingWorkbench.auth.cardHelp")}</p>
       <AuthTruth
         state={state}
-        onRetry={actions.refreshProfile}
+        onRetry={refreshCodexSignIn(actions)}
         onPrepare={actions.prepareCodexSetup}
       />
     </section>
