@@ -561,6 +561,110 @@
   background: transparent;
 }
 
+.repositorySelector {
+  display: flex;
+  width: fit-content;
+  max-width: calc(100% - 2 * var(--space-5));
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-inline-start: var(--space-5);
+  margin-bottom: var(--space-3);
+  justify-content: flex-start;
+}
+
+.repositorySelectorChip {
+  display: flex;
+  min-width: 0;
+}
+
+.setupSelector {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+  gap: var(--space-3);
+  margin: var(--space-4) 0;
+}
+
+.setupSelectorField {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-1);
+}
+
+.setupSelectorField > span {
+  color: var(--text-tertiary);
+  font: var(--weight-medium) var(--text-caption) var(--font-ui);
+}
+
+.setupSelectorTrigger {
+  min-width: 0;
+  min-height: 2.25rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-control);
+  padding: 0 var(--space-2);
+  color: var(--text-primary);
+  background: var(--button-secondary-surface);
+  font: var(--weight-medium) var(--text-label) var(--font-ui);
+  cursor: pointer;
+}
+
+.setupSelectorTrigger:hover,
+.setupSelectorTrigger:focus-visible {
+  border-color: var(--border-strong);
+}
+
+.setupSelector > .repositorySelectorGit,
+.setupSelector > .repositorySelectorNotice {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+.repositorySelectorTrigger {
+  flex: 0 1 auto;
+  max-width: min(100%, 19rem);
+  min-width: 0;
+  min-height: 1.75rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  padding: 0 var(--space-1);
+  color: var(--text-secondary);
+  background: transparent;
+  font: var(--weight-medium) var(--text-label) var(--font-ui);
+  cursor: pointer;
+}
+
+.repositorySelectorTrigger:hover,
+.repositorySelectorTrigger:focus-visible {
+  border-color: var(--border-subtle);
+  background: var(--button-secondary-surface);
+}
+
+.repositorySelectorGit {
+  border: 0;
+  padding: var(--space-1);
+  color: var(--text-secondary);
+  background: transparent;
+  font: var(--text-caption) var(--font-ui);
+  cursor: pointer;
+}
+
+.repositorySelectorTrigger:disabled {
+  cursor: default;
+}
+
+.repositorySelectorGit:hover {
+  color: var(--text-primary);
+  text-decoration: underline;
+}
+
+.repositorySelectorNotice {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--feedback-warning);
+  font-size: var(--text-caption);
+}
+
 .composerContext {
   display: flex;
   width: min(100%, 760px);
@@ -698,7 +802,6 @@
 
 .authorityControl[data-full-access="true"] :global(.ksel-trigger) {
   color: var(--text-accent);
-  box-shadow: inset 0 0 0 1px var(--accent-line);
 }
 
 .inlineActions,

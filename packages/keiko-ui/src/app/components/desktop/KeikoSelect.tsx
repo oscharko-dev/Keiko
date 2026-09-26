@@ -53,6 +53,11 @@ export interface KeikoSelectProps {
   readonly mono?: boolean;
   readonly showChevron?: boolean;
   readonly menuMinWidth?: number;
+  /** Minimum width for a detached menu when its compact trigger is narrower than the options. */
+  readonly menuPopoverMinWidth?: number;
+  readonly menuPopoverMaxHeight?: number;
+  readonly menuPlacement?: "auto" | "up";
+  readonly searchPlaceholder?: string;
   readonly attached?: boolean;
   readonly triggerStyle?: CSSProperties | undefined;
   readonly autoFocus?: boolean;
@@ -82,6 +87,7 @@ type OverflowTooltipPosition = {
 const OVERFLOW_TOOLTIP_DELAY_MS = 1500;
 const OVERFLOW_TOOLTIP_EDGE_OFFSET_PX = 8;
 const OVERFLOW_TOOLTIP_VERTICAL_OFFSET_PX = 6;
+const SELECT_OPEN_EVENT = "keiko:select-open";
 
 function isTextEntryTarget(target: EventTarget | null): boolean {
   return (
@@ -147,6 +153,12 @@ function findTypeaheadIndex(options: readonly FlatOption[], start: number, query
     }
   }
   return -1;
+}
+
+function searchRank(label: string, query: string): number {
+  const candidate = label.toLocaleLowerCase();
+  if (candidate === query) return 0;
+  return candidate.startsWith(query) ? 1 : 2;
 }
 
 function buildTriggerClasses(params: {
@@ -359,6 +371,12 @@ function KeikoSelectMenu({
   position,
   selectedIndex,
   sections,
+  searchPlaceholder,
+  searchQuery,
+  onSearchChange,
+  onSearchKeyDown,
+  searchRef,
+  searchEmptyLabel,
   setOptionRef,
   showMenuHeader,
 }: {
@@ -377,6 +395,12 @@ function KeikoSelectMenu({
   readonly position: MenuPosition;
   readonly selectedIndex: number;
   readonly sections: readonly KeikoSelectSection[];
+  readonly searchPlaceholder: string | undefined;
+  readonly searchQuery: string;
+  readonly onSearchChange: (value: string) => void;
+  readonly onSearchKeyDown: (event: ReactKeyboardEvent<HTMLInputElement>) => void;
+  readonly searchRef: RefObject<HTMLInputElement | null>;
+  readonly searchEmptyLabel: string;
   readonly setOptionRef: (index: number, element: HTMLButtonElement | null) => void;
   readonly showMenuHeader: boolean;
 }): ReactNode {
@@ -411,6 +435,19 @@ function KeikoSelectMenu({
           </div>
         </div>
       ) : null}
+      {searchPlaceholder !== undefined ? (
+        <div className="ksel-menu-search">
+          <input
+            ref={searchRef}
+            type="search"
+            aria-label={searchPlaceholder}
+            placeholder={searchPlaceholder}
+            value={searchQuery}
+            onChange={(event) => onSearchChange(event.currentTarget.value)}
+            onKeyDown={onSearchKeyDown}
+          />
+        </div>
+      ) : null}
       <div
         className="ksel-menu-scroll"
         role="listbox"
@@ -432,6 +469,7 @@ function KeikoSelectMenu({
             setOptionRef={setOptionRef}
           />
         ))}
+        {flatOptions.length === 0 ? <p className="ksel-menu-empty">{searchEmptyLabel}</p> : null}
       </div>
     </div>,
     document.body,
@@ -457,6 +495,10 @@ export default function KeikoSelect({
   mono = false,
   showChevron = true,
   menuMinWidth,
+  menuPopoverMinWidth,
+  menuPopoverMaxHeight,
+  menuPlacement = "auto",
+  searchPlaceholder,
   attached = true,
   triggerStyle,
   autoFocus = false,
@@ -464,27 +506,42 @@ export default function KeikoSelect({
   const t = useTranslate();
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
+  const searchRef = useRef<HTMLInputElement | null>(null);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const menuId = useId();
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
   const [position, setPosition] = useState<MenuPosition | null>(null);
   const [openUp, setOpenUp] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const visibleSections = useMemo<readonly KeikoSelectSection[]>(() => {
+    const query = searchQuery.trim().toLocaleLowerCase();
+    if (query === "") return sections;
+    return sections.map((section) => ({
+      ...section,
+      options: section.options
+        .filter((option) => option.label.toLocaleLowerCase().includes(query))
+        .sort((a, b) => searchRank(a.label, query) - searchRank(b.label, query)),
+    }));
+  }, [searchQuery, sections]);
 
   const flatOptions = useMemo<readonly FlatOption[]>(
     () =>
-      sections.flatMap((section, sectionIndex) =>
+      visibleSections.flatMap((section, sectionIndex) =>
         section.options.map((option, optionIndex) => ({
           ...option,
           key: `${section.label ?? "section"}-${sectionIndex.toString()}-${option.value}-${optionIndex.toString()}`,
           sectionLabel: section.label,
         })),
       ),
-    [sections],
+    [visibleSections],
   );
 
   const selectedIndex = flatOptions.findIndex((option) => option.value === value);
-  const selectedOption = selectedIndex === -1 ? null : flatOptions[selectedIndex]!;
+  const selectedOption = sections
+    .flatMap((section) => section.options)
+    .find((option) => option.value === value);
   const resolvedPlaceholder = placeholder ?? t("select.placeholder");
   const visibleLabel = selectedOption?.label ?? resolvedPlaceholder;
   const visibleDescription = selectedOption?.description ?? null;
@@ -493,15 +550,28 @@ export default function KeikoSelect({
   const closeMenu = (): void => {
     setOpen(false);
     setActiveIndex(-1);
+    setSearchQuery("");
   };
 
   const openMenu = (preferredIndex?: number): void => {
     if (disabled || flatOptions.length === 0) return;
     const fallbackIndex = resolveOpenMenuIndex(flatOptions, preferredIndex, selectedIndex);
+    window.dispatchEvent(new Event(SELECT_OPEN_EVENT));
     setOpen(true);
     setActiveIndex(fallbackIndex);
+    setSearchQuery("");
     onOpen?.();
   };
+
+  useEffect(() => {
+    const onOtherSelectOpen = (): void => {
+      setOpen(false);
+      setActiveIndex(-1);
+      setSearchQuery("");
+    };
+    window.addEventListener(SELECT_OPEN_EVENT, onOtherSelectOpen);
+    return () => window.removeEventListener(SELECT_OPEN_EVENT, onOtherSelectOpen);
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -536,19 +606,27 @@ export default function KeikoSelect({
         menuMinWidth !== undefined && rect.width < Math.min(menuMinWidth, 96)
           ? menuMinWidth
           : rect.width;
-      const width = Math.min(compactReadableWidth, window.innerWidth - viewportPadding * 2);
+      const width = Math.min(
+        Math.max(compactReadableWidth, menuPopoverMinWidth ?? 0),
+        window.innerWidth - viewportPadding * 2,
+      );
       const menuAttached = attached && Math.abs(width - rect.width) < 1;
       const menuGap = menuAttached ? -1 : 6;
       const spaceBelow = window.innerHeight - rect.bottom - viewportPadding;
       const spaceAbove = rect.top - viewportPadding;
       const minUsableHeight = Math.max(96, rect.height * 2);
-      const openUp = spaceBelow < minUsableHeight && spaceAbove > spaceBelow;
+      const openUp =
+        menuPlacement === "up" || (spaceBelow < minUsableHeight && spaceAbove > spaceBelow);
       setOpenUp(openUp);
       const availableHeight = openUp ? spaceAbove : spaceBelow;
-      const menuChromeReserve = (showMenuHeader ? 50 : 0) + 2;
+      const menuChromeReserve = (showMenuHeader ? 50 : 0) +
+        (searchPlaceholder === undefined ? 0 : 46) + 2;
       const maxHeight = Math.max(
         rect.height,
-        Math.min(Math.max(rect.height, availableHeight - menuChromeReserve), 380),
+        Math.min(
+          Math.max(rect.height, availableHeight - menuChromeReserve),
+          menuPopoverMaxHeight ?? 380,
+        ),
       );
       const totalMenuHeight = maxHeight + menuChromeReserve;
       const computed = window.getComputedStyle(triggerRef.current!);
@@ -580,7 +658,16 @@ export default function KeikoSelect({
       window.removeEventListener("resize", updatePosition);
       window.removeEventListener("scroll", updatePosition, true);
     };
-  }, [open, attached, menuMinWidth, showMenuHeader]);
+  }, [
+    open,
+    attached,
+    menuMinWidth,
+    menuPopoverMinWidth,
+    menuPopoverMaxHeight,
+    menuPlacement,
+    searchPlaceholder,
+    showMenuHeader,
+  ]);
 
   useLayoutEffect(() => {
     if (
@@ -603,10 +690,17 @@ export default function KeikoSelect({
   }, [open, position]);
 
   useEffect(() => {
-    if (!open || activeIndex < 0) return;
+    if (!open) return;
+    if (searchPlaceholder !== undefined) searchRef.current?.focus();
+  }, [open, searchPlaceholder]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (activeIndex < 0) return;
+    if (searchPlaceholder !== undefined && document.activeElement === searchRef.current) return;
     optionRefs.current[activeIndex]?.focus();
     optionRefs.current[activeIndex]?.scrollIntoView({ block: "nearest" });
-  }, [open, activeIndex]);
+  }, [open, activeIndex, searchPlaceholder]);
 
   function commit(next: FlatOption): void {
     if (next.disabled) return;
@@ -678,6 +772,21 @@ export default function KeikoSelect({
     }
   }
 
+  function onSearchKeyDown(event: ReactKeyboardEvent<HTMLInputElement>): void {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeMenu();
+      triggerRef.current?.focus();
+    } else if (event.key === "ArrowDown") {
+      event.preventDefault();
+      optionRefs.current[firstEnabledIndex(flatOptions)]?.focus();
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      const first = flatOptions[firstEnabledIndex(flatOptions)];
+      if (first !== undefined) commit(first);
+    }
+  }
+
   useEffect(() => {
     if (!open) return;
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -724,7 +833,16 @@ export default function KeikoSelect({
         placeholder={placeholder}
         position={position}
         selectedIndex={selectedIndex}
-        sections={sections}
+        sections={visibleSections}
+        searchPlaceholder={searchPlaceholder}
+        searchQuery={searchQuery}
+        onSearchChange={(next): void => {
+          setSearchQuery(next);
+          setActiveIndex(0);
+        }}
+        onSearchKeyDown={onSearchKeyDown}
+        searchRef={searchRef}
+        searchEmptyLabel={t("select.noMatches")}
         setOptionRef={(optionIndex, element) => {
           optionRefs.current[optionIndex] = element;
         }}

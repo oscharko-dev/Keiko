@@ -19,6 +19,22 @@ const autonomyHookMock = vi.hoisted(() => vi.fn());
 const editorBridgeHookMock = vi.hoisted(() => vi.fn());
 const activeWorkspaceHookMock = vi.hoisted(() => vi.fn());
 
+// The Workbench reads the Git repository catalog for its repository selector. This suite is about
+// the rejected start, so the catalog lists the bound repository as available, and the selector adds
+// no alert of its own.
+vi.mock("./codingWorkbenchRepositories", () => ({
+  repositorySelectable: (): Promise<boolean> => Promise.resolve(true),
+  selectableRepositories: (): Promise<readonly unknown[]> =>
+    Promise.resolve([
+      {
+        id: "repo-1",
+        name: "repo",
+        path: "/repo/.keiko-task-workspaces/ws-1",
+        available: true,
+        workspaceAvailable: true,
+      },
+    ]),
+}));
 vi.mock("@/lib/useCodingWorkbenchQuestions", () => ({
   useCodingWorkbenchQuestions: questionsHookMock,
 }));

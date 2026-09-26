@@ -111,11 +111,8 @@ describe("Coding Workbench composer", () => {
     expect(authority.querySelector('path[d*="M13.5 5.5"]')).not.toBeInTheDocument();
   });
 
-  // #3563 owner directive: the composer no longer renders its own repository chooser, branch chip
-  // or MemoriaViva toggle. The header-wide RepositoryFolderSwitcher is the single source of
-  // workspace-context truth. This pin makes sure the context row does NOT reappear: no combobox
-  // labelled "Choose repository", no "Manage branch" button, no MemoriaViva toggle, no aria-label
-  // "Coding context" region. When MemoriaViva returns, replace this pin with the toggle's own tests.
+  // Repository and branch selection belong to the window above the composer. This pin keeps the
+  // composer itself free of duplicate context controls and the hidden MemoriaViva toggle.
   it("does not render the repository, branch or MemoriaViva chips in the composer", () => {
     renderComposer("idle", composerActions());
     expect(screen.queryByLabelText("Coding context")).toBeNull();

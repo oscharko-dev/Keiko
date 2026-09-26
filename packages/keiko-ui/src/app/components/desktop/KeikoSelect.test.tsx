@@ -296,6 +296,61 @@ describe("KeikoSelect menu geometry", () => {
   });
 });
 
+describe("KeikoSelect searchable menus", () => {
+  it("keeps exact matches ahead of partial branch matches", async () => {
+    const user = userEvent.setup();
+    render(
+      <KeikoSelect
+        ariaLabel="Branch"
+        onValueChange={vi.fn()}
+        searchPlaceholder="Search branches"
+        sections={[
+          {
+            options: [
+              { value: "task", label: "keiko/task/master-work" },
+              { value: "master", label: "master" },
+              { value: "dev", label: "dev" },
+            ],
+          },
+        ]}
+        value="master"
+      />,
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Branch" }));
+    await user.type(screen.getByRole("searchbox", { name: "Search branches" }), "master");
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "master",
+      "keiko/task/master-work",
+    ]);
+  });
+
+  it("closes the previous menu when another select opens", async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <KeikoSelect
+          ariaLabel="Repository"
+          onValueChange={vi.fn()}
+          sections={[{ options: [{ value: "repo", label: "Repository" }] }]}
+          value="repo"
+        />
+        <KeikoSelect
+          ariaLabel="Branch"
+          onValueChange={vi.fn()}
+          sections={[{ options: [{ value: "dev", label: "dev" }] }]}
+          value="dev"
+        />
+      </>,
+    );
+
+    await user.click(screen.getByRole("combobox", { name: "Repository" }));
+    await user.click(screen.getByRole("combobox", { name: "Branch" }));
+    expect(screen.queryByRole("listbox", { name: "Repository" })).toBeNull();
+    expect(screen.getByRole("listbox", { name: "Branch" })).toBeInTheDocument();
+  });
+});
+
 describe("KeikoSelect interactions", () => {
   const sections = [
     {

@@ -1356,6 +1356,7 @@ export const EN_MESSAGES = {
   "updates.phase.failed": "Update failed",
   "updates.phase.cancelled": "Update cancelled",
   "select.placeholder": "Select an option",
+  "select.noMatches": "No matching options.",
   "workspace.empty.openWindow": "Open a new window",
   "workspace.notice.dismiss": "Dismiss workspace notice",
   "workspace.windowLimitReached":
