@@ -1,0 +1,43 @@
+.cmp-issue-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+}
+.cmp-issue-alert {
+  display: block;
+  margin: 0;
+  border-inline-start: 3px solid var(--feedback-danger);
+  border-radius: var(--radius-control);
+  padding: var(--space-3) var(--space-4);
+  color: var(--text-primary);
+  background: var(--feedback-danger-surface);
+  font-size: var(--text-caption);
+  line-height: var(--leading-normal);
+}
+.cmp-issue-alert:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.cmp-issue-support {
+  display: block;
+  margin-top: var(--space-2);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono, monospace);
+}
+.cmp-issue-grant-id {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.cmp-issue-feedback {
+  display: grid;
+  gap: var(--space-2);
+}
+@media (forced-colors: active) {
+  .cmp-issue-alert {
+    border-color: CanvasText;
+    color: CanvasText;
+    background: Canvas;
+  }
+}

@@ -17,25 +17,43 @@ import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { qualificationReceiptFor as linuxQualificationReceiptFor } from "../qualify-linux-runtime-release.mjs";
+import { qualificationReceiptFor as macosQualificationReceiptFor } from "../qualify-macos-runtime-release.mjs";
+
 import {
   hashDirectoryTree,
+  PORTABLE_MANIFEST_VALIDATION_CONTEXTS,
+  LEGACY_PORTABLE_TARGETS,
+  PORTABLE_RELEASE_IMPACT_CONTRACT,
   PORTABLE_TARGETS,
+  portableRuntimeContractMatches,
+  reviewedPortableTargetSet,
+  reviewedStagingEntryMatches,
+  PORTABLE_VERIFICATION_POLICIES,
+  PORTABLE_VERIFICATION_STATUSES,
+  WINDOWS_PORTABLE_SETUP_ASSET_NAME,
+  createPortableVerificationChecks,
   findPortableMetadataRedactionFailures,
   isSafePortableRelativePath,
   portableVerificationSummaryForManifest,
   safeArchiveEntryPath,
   sha256File,
+  portableManifestValidationFailuresForDeclaredLane,
   validatePortableCandidateManifest,
+  validatePortableEvaluationManifest,
   validatePortableManifest,
   validatePortablePublishedManifest,
+  validatePortableReleaseTrustCandidateManifest,
   validatePortableStagingManifest,
   verifySha256File,
 } from "../portable-runtime.mjs";
 import {
   appSurfaceFailures,
   assemblePortableStage,
+  buildWindowsGenerationLauncher,
   isCrossDeviceError,
   moveStagedDirectory,
+  stageWindowsPortableRootFiles,
 } from "../stage-portable-runtime.mjs";
 import {
   assemblePortableReleaseAssets,
@@ -44,9 +62,11 @@ import {
 import { writeZipArchiveFromDirectory } from "../lib/zip-archive.mjs";
 import {
   USEARCH_RUNTIME_MANIFEST,
+  usearchRuntimeApproval,
   usearchRuntimeTargetKey,
 } from "../../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
 import { runtimeActivationManifest } from "../runtime-activation-manifest.mjs";
+import { validatePortableTargetRoot } from "../portable-launch-setup-stage.mjs";
 
 const DIGEST_A = "a".repeat(64);
 const DIGEST_B = "b".repeat(64);
@@ -60,29 +80,51 @@ const NODE_VERSION = "24.14.0";
 const STAGE_COMMAND_TIMEOUT_MS = 300_000;
 const VERIFY_SIGNING_SCRIPT = "scripts/verify-portable-runtime-signing.mjs";
 const ROOT_MANIFEST = JSON.parse(readFileSync("package.json", "utf8"));
+const APPROVED_SIDECAR = JSON.parse(readFileSync("portable-runtime-approvals.json", "utf8"))
+  .sidecarRuntimes[0];
 const ROOT_PACKAGE_VERSION = ROOT_MANIFEST.version;
 const ROOT_RELEASE_TAG = `v${ROOT_PACKAGE_VERSION}`;
-const LIFECYCLE_CONTEXTS = ["staging", "candidate", "published", "published-contract"];
-const VERIFICATION_POLICIES = ["staging", "development", "pull-request", "production"];
-const VERIFICATION_STATUSES = [
-  "unverified-staging",
-  "unsigned-non-production",
-  "verified-non-production",
-  "verified-production",
-  "verification-failed",
-];
+// DERIVED FROM THE PRODUCER, NOT RESTATED (AGENTS.md §7). The three vocabularies below are the
+// frozen arrays `portable-runtime.mjs` itself validates against, and the per-context expectation is
+// a single map the matrix reads. Restating them locally let a new lane join the producer while this
+// matrix silently kept covering strictly less. "non-production" is excluded because its rule is a
+// policy SET rather than one exact pair, and it carries its own dedicated assertions.
+const LIFECYCLE_EXPECTATIONS = new Map([
+  ["staging", ["staging", "unverified-staging"]],
+  ["evaluation", ["evaluation", "evaluation-unqualified"]],
+  ["published-release-trust", ["evaluation", "evaluation-unqualified"]],
+  ["candidate", ["production", "verified-production"]],
+  ["published", ["production", "verified-production"]],
+  ["published-contract", ["production", "verified-production"]],
+]);
+const LIFECYCLE_CONTEXTS = PORTABLE_MANIFEST_VALIDATION_CONTEXTS.filter((context) =>
+  LIFECYCLE_EXPECTATIONS.has(context),
+);
+const VERIFICATION_POLICIES = PORTABLE_VERIFICATION_POLICIES;
+const VERIFICATION_STATUSES = PORTABLE_VERIFICATION_STATUSES;
 const INVALID_LIFECYCLE_STATES = LIFECYCLE_CONTEXTS.flatMap((context) => {
-  const expected =
-    context === "staging"
-      ? ["staging", "unverified-staging"]
-      : ["production", "verified-production"];
+  const expected = LIFECYCLE_EXPECTATIONS.get(context);
   return VERIFICATION_POLICIES.flatMap((policy) =>
     VERIFICATION_STATUSES.filter((status) => policy !== expected[0] || status !== expected[1]).map(
       (status) => [context, policy, status],
     ),
   );
 });
-const PORTABLE_RELEASE_IMPACT_ENTRY_ID = `2026-07-06-keiko-${ROOT_PACKAGE_VERSION}-portable-runtime-staging-contract`;
+// Derived from the catalog with the producer's own predicate rather than rebuilt from a date
+// prefix: the id's date is the day the entry was written, which nothing constrains to match any
+// earlier release's date. A restated formula here passes only until the next release adds its
+// entry on a different day (AGENTS.md §7).
+const PORTABLE_RELEASE_IMPACT_ENTRY_ID = JSON.parse(
+  readFileSync("release-impact.catalog.json", "utf8"),
+).entries.find(
+  (entry) =>
+    entry.packageName === ROOT_MANIFEST.name &&
+    entry.packageVersion === ROOT_PACKAGE_VERSION &&
+    entry.releaseTag === ROOT_RELEASE_TAG &&
+    entry.review?.status === "reviewed" &&
+    entry.review?.humanApproved === true &&
+    entry.portableRuntimeArtifactContract !== undefined,
+)?.id;
 let packageSurfacePreparedForTest = false;
 
 describe("findPortableMetadataRedactionFailures", () => {
@@ -452,6 +494,15 @@ function digestBuffer(buffer) {
   return createHash("sha256").update(buffer).digest("hex");
 }
 
+function portableExecutable(marker = 0) {
+  const bytes = Buffer.alloc(128, marker);
+  bytes[0] = 0x4d;
+  bytes[1] = 0x5a;
+  bytes.writeUInt32LE(64, 0x3c);
+  bytes.set([0x50, 0x45, 0x00, 0x00], 64);
+  return bytes;
+}
+
 function tempDir() {
   const dir = mkdtempSync(join(tmpdir(), "keiko-portable-runtime-test-"));
   tempDirs.push(dir);
@@ -540,7 +591,20 @@ function macVerificationChecks(overrides = {}) {
 }
 
 function defaultVerificationChecks(target) {
-  return target.nodePlatform === "win32" ? windowsVerificationChecks() : macVerificationChecks();
+  if (target.nodePlatform === "win32") return windowsVerificationChecks();
+  if (target.nodePlatform === "linux") return { provenanceVerified: true };
+  return macVerificationChecks();
+}
+
+function macSignatureLocallyVerified(candidate, checks) {
+  return (
+    candidate.security.signatureVerified === true &&
+    candidate.security.notarizationVerified === true &&
+    checks.developerIdVerified === true &&
+    checks.notarizationVerified === true &&
+    checks.stapleVerified === true &&
+    checks.assessmentVerified === true
+  );
 }
 
 function platformSignatureLocallyVerified(candidate) {
@@ -553,14 +617,10 @@ function platformSignatureLocallyVerified(candidate) {
       checks.timestampVerified === true
     );
   }
-  return (
-    candidate.security.signatureVerified === true &&
-    candidate.security.notarizationVerified === true &&
-    checks.developerIdVerified === true &&
-    checks.notarizationVerified === true &&
-    checks.stapleVerified === true &&
-    checks.assessmentVerified === true
-  );
+  if (target.nodePlatform === "linux") {
+    return candidate.security.signatureVerified === true && checks.provenanceVerified === true;
+  }
+  return macSignatureLocallyVerified(candidate, checks);
 }
 
 function syncReviewedBinding(candidate) {
@@ -599,6 +659,13 @@ function syncReviewedBinding(candidate) {
       JSON.stringify(candidate.nativeHelpers),
     );
   }
+  // The contract binds nativeAddons the same way it binds nativeHelpers; mirroring only the
+  // helpers left a production candidate carrying an addon it had never reviewed.
+  if (Array.isArray(candidate.nativeAddons)) {
+    candidate.releaseImpact.reviewedBinding.nativeAddons = JSON.parse(
+      JSON.stringify(candidate.nativeAddons),
+    );
+  }
   if (candidate.runtimeAttestation === undefined) {
     delete candidate.releaseImpact.reviewedBinding.runtimeAttestation;
   } else {
@@ -613,6 +680,15 @@ function syncReviewedBinding(candidate) {
       JSON.stringify(candidate.runtimeQualification),
     );
   }
+  if (candidate.windowsGeneration === undefined) {
+    delete candidate.provenance.windowsGeneration;
+    delete candidate.releaseImpact.reviewedBinding.windowsGeneration;
+  } else {
+    candidate.provenance.windowsGeneration = structuredClone(candidate.windowsGeneration);
+    candidate.releaseImpact.reviewedBinding.windowsGeneration = structuredClone(
+      candidate.windowsGeneration,
+    );
+  }
   candidate.updateEligibility.requiredPredicates.platformSignatureLocallyVerified =
     platformSignatureLocallyVerified(candidate);
 }
@@ -624,7 +700,11 @@ function setManifestTarget(candidate, platformTarget) {
   candidate.runtime.nodePlatform = target.nodePlatform;
   candidate.runtime.nodeArchitecture = target.nodeArchitecture;
   candidate.runtimeActivation.trustAnchor =
-    target.nodePlatform === "win32" ? "authenticode-attestor" : "developer-id-app-resource-seal";
+    target.nodePlatform === "win32"
+      ? "authenticode-attestor"
+      : target.nodePlatform === "linux"
+        ? "sigstore-qualification-receipt"
+        : "developer-id-app-resource-seal";
   for (const helper of candidate.nativeHelpers) {
     const suffix = target.nodePlatform === "win32" ? ".exe" : "";
     helper.platformTarget = target.platformTarget;
@@ -635,7 +715,14 @@ function setManifestTarget(candidate, platformTarget) {
     helper.signing.notarizationRequired = target.nodePlatform === "darwin";
     helper.signing.notarizationVerified = target.nodePlatform === "darwin";
     if (helper.name === "keiko-runtime-supervisor") {
-      helper.source.path = `native/runtime-supervisor/${target.nodePlatform === "win32" ? "windows" : "macos"}`;
+      if (target.nodePlatform === "linux") {
+        helper.executablePath = "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
+        helper.protocol = { schemaVersion: 1, requestMagic: "none", responseMagic: "none" };
+        helper.source.path = "packages/keiko-sandbox/src";
+      } else {
+        helper.protocol = { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" };
+        helper.source.path = `native/runtime-supervisor/${target.nodePlatform === "win32" ? "windows" : "macos"}`;
+      }
     }
   }
   candidate.entrypoints.primaryLauncher = target.primaryLauncher;
@@ -657,24 +744,36 @@ function setVerificationState(candidate, options = {}) {
   syncReviewedBinding(candidate);
 }
 
+function signatureVerified(target, checks) {
+  if (target.nodePlatform === "win32") {
+    return checks.publisherChainVerified === true && checks.timestampVerified === true;
+  }
+  return target.nodePlatform === "linux"
+    ? checks.provenanceVerified === true
+    : checks.developerIdVerified === true;
+}
+
+function activationTrustAnchor(target, policy) {
+  if (policy === "staging") return "unverified-staging";
+  if (target.nodePlatform === "win32") return "authenticode-attestor";
+  return target.nodePlatform === "linux"
+    ? "sigstore-qualification-receipt"
+    : "developer-id-app-resource-seal";
+}
+
 function setRootVerificationState(candidate, target, checks, options) {
   candidate.security.verificationPolicy = options.verificationPolicy ?? "production";
   candidate.security.verificationStatus = options.verificationStatus ?? "verified-production";
   candidate.security.verificationReasonCodes = options.verificationReasonCodes ?? [];
   candidate.security.verificationChecks = checks;
-  candidate.security.signatureVerified =
-    target.nodePlatform === "win32"
-      ? checks.publisherChainVerified === true && checks.timestampVerified === true
-      : checks.developerIdVerified === true;
+  candidate.security.signatureVerified = signatureVerified(target, checks);
   candidate.security.notarizationRequired = target.nodePlatform === "darwin";
   candidate.security.notarizationVerified =
     target.nodePlatform === "darwin" ? checks.notarizationVerified === true : false;
-  candidate.runtimeActivation.trustAnchor =
-    candidate.security.verificationPolicy === "staging"
-      ? "unverified-staging"
-      : target.nodePlatform === "win32"
-        ? "authenticode-attestor"
-        : "developer-id-app-resource-seal";
+  candidate.runtimeActivation.trustAnchor = activationTrustAnchor(
+    target,
+    candidate.security.verificationPolicy,
+  );
 }
 
 function setTargetRuntimeEvidence(candidate, target) {
@@ -685,6 +784,14 @@ function setTargetRuntimeEvidence(candidate, target) {
       path: ".portable/runtime-qualification.json",
       sha256: DIGEST_1,
       backend: "macos-endpoint-security",
+    };
+  } else if (target.nodePlatform === "linux") {
+    delete candidate.runtimeAttestation;
+    candidate.runtimeQualification = {
+      schemaVersion: 1,
+      path: ".portable/runtime-qualification.json",
+      sha256: DIGEST_1,
+      backend: "linux-namespace-gateway",
     };
   } else {
     delete candidate.runtimeQualification;
@@ -773,8 +880,9 @@ function writeAssemblerAttestationFixture(candidate, target, resourceRoot) {
   candidate.runtimeAttestation.sizeBytes = statSync(attestationPath).size;
 }
 
-function writeAssemblerSidecarFixture(candidate, target, resourceRoot, fixtureKind) {
-  addSidecarRuntime(candidate, target.platformTarget);
+function writeAssemblerSidecarFixture(candidate, target, resourceRoot, fixtureKind, evaluation) {
+  const overrides = evaluation ? { signing: evaluationSidecarSigning(target) } : {};
+  addSidecarRuntime(candidate, target.platformTarget, overrides);
   const sidecar = candidate.sidecarRuntimes[0];
   const sidecarRoot = join(resourceRoot, sidecar.payloadRootPath);
   const executablePath = join(resourceRoot, sidecar.executablePath);
@@ -812,46 +920,136 @@ function rebindAssemblerSidecar(sidecar, sidecarRoot, executablePath) {
     statSync(join(sidecarRoot, "evidence", "sbom.cdx.json")).size;
 }
 
+// Derived from the producer that writes the receipt, never restated. The old copy pinned
+// schemaVersion 1 without runtimeComponents while the Linux producer moved to schemaVersion 2 in
+// #3455, so it kept the assembler tests green over a consumer that rejected every stable Linux
+// bundle. Deriving makes the next shape change fail here instead of in a release.
 function writeAssemblerQualificationFixture(candidate, target, resourceRoot) {
-  if (target.nodePlatform !== "darwin") return;
-  const helpers = new Map(candidate.nativeHelpers.map((helper) => [helper.name, helper]));
-  const qualificationBytes = `${JSON.stringify(
-    {
-      schemaVersion: 1,
-      suiteVersion: "runtime-tree-qualification-v1",
-      platformTarget: target.platformTarget,
-      sourceCommitSha: candidate.release.commitSha,
-      activationManifestSha256: candidate.runtimeActivation.sha256,
-      supervisorSha256: helpers.get("keiko-runtime-supervisor").shippedSha256,
-      secureReadSha256: helpers.get("keiko-secure-workspace-read").shippedSha256,
-      sidecars: candidate.sidecarRuntimes.map((sidecar) => ({
-        name: sidecar.name,
-        sha256: sidecar.payloadSha256,
-      })),
-      backend: "macos-endpoint-security",
-      result: "passed",
-    },
-    null,
-    2,
-  )}\n`;
+  if (target.nodePlatform !== "darwin" && target.nodePlatform !== "linux") return;
+  // Mirrors the consumer: assemble reads this receipt only for a production-lane artifact, and
+  // the producers refuse an activation manifest that is not verified-production.
+  if (candidate.security.verificationPolicy !== "production") return;
+  writeQualificationRuntimeComponents(candidate, target, resourceRoot);
+  const input = {
+    activationPath: join(resourceRoot, ".portable", "runtime-activation.json"),
+    resourceRoot,
+    sourceCommitSha: candidate.release.commitSha,
+  };
+  const receipt =
+    target.nodePlatform === "linux"
+      ? linuxQualificationReceiptFor(input)
+      : macosQualificationReceiptFor({ ...input, target: target.platformTarget });
+  const qualificationBytes = `${JSON.stringify(receipt, null, 2)}\n`;
   writeFileSync(join(resourceRoot, ".portable", "runtime-qualification.json"), qualificationBytes);
   candidate.runtimeQualification.sha256 = digestFor(qualificationBytes);
 }
 
-function writeAssemblerFixture(bundleRoot, largeArchive = false, unsafeSidecarKind) {
+// The Linux receipt digests the primary launcher, the Node runtime and the USearch addon straight
+// off the tree (RUNTIME_COMPONENTS + usearchComponent), so the fixture has to ship them as real
+// files. fileDigest refuses a symlink, a hard link or an empty file.
+function writeQualificationRuntimeComponents(candidate, target, resourceRoot) {
+  if (target.nodePlatform !== "linux") return;
+  for (const relativePath of ["Keiko", "runtime/node/bin/node"]) {
+    const path = join(resourceRoot, ...relativePath.split("/"));
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `fixture ${relativePath} for ${target.platformTarget}\n`);
+  }
+  const [addon] = writeUsearchAddonFixture(target, resourceRoot);
+  // writeUsearchAddonFixture records the APPROVED upstream digest, which is what the staging
+  // provenance tests need. The qualification receipt digests the bytes actually on disk, so the
+  // shipped digest has to describe the fixture file. source.binarySha256 keeps the approval.
+  const addonPath = join(resourceRoot, ...addon.executablePath.split("/"));
+  addon.shippedSha256 = digestFor(readFileSync(addonPath));
+  addon.unsignedSha256 = addon.shippedSha256;
+  addon.sizeBytes = statSync(addonPath).size;
+  // The addon joins a production-lane candidate, so its signing state follows the candidate the
+  // way syncNativeHelperVerification does it for the native helpers, and the reviewed binding is
+  // re-synced before the activation manifest is regenerated from it.
+  addon.signing.signatureKind = target.signatureKind;
+  addon.signing.verificationStatus = candidate.security.verificationStatus;
+  addon.signing.signatureVerified = candidate.security.signatureVerified;
+  addon.signing.notarizationRequired = candidate.security.notarizationRequired;
+  addon.signing.notarizationVerified = candidate.security.notarizationVerified;
+  candidate.nativeAddons = [addon];
+  syncReviewedBinding(candidate);
+  candidate.runtimeActivation.sha256 = refreshAssemblerActivationFixture(candidate, resourceRoot);
+}
+
+// nativeAddons is part of the activation manifest, so adding the addon moves the activation bytes
+// and their digest with it.
+function refreshAssemblerActivationFixture(candidate, resourceRoot) {
+  const activationPath = join(resourceRoot, ".portable", "runtime-activation.json");
+  const activationBytes = `${JSON.stringify(runtimeActivationManifest(candidate), null, 2)}\n`;
+  writeFileSync(activationPath, activationBytes);
+  return digestFor(activationBytes);
+}
+
+// A stable-tag build stages every target as a release-trust candidate; markProduction then signs Linux
+// into the production lane and flips only the platform-signature predicate, so Linux keeps the
+// release-build update eligibility the other targets carry.
+function applyReleaseBuildEligibility(candidate) {
+  candidate.updateEligibility.requiredPredicates.releaseTrustRequired = true;
+  candidate.updateEligibility.manualOnlyWhen = candidate.updateEligibility.manualOnlyWhen.map(
+    (reason) =>
+      reason === "signature-or-notarization-cannot-be-verified"
+        ? "release-trust-cannot-be-verified"
+        : reason,
+  );
+}
+
+function stableLaneCandidate(target) {
+  if (target.nodePlatform !== "linux") return assemblerCandidate(target, true);
+  const candidate = assemblerCandidate(target, false);
+  applyReleaseBuildEligibility(candidate);
+  return candidate;
+}
+
+function assemblerCandidate(target, evaluation) {
+  if (evaluation) {
+    const candidate = evaluationManifest(target.platformTarget);
+    candidate.updateEligibility.requiredPredicates.platformSignatureLocallyVerified = false;
+    candidate.updateEligibility.requiredPredicates.releaseTrustRequired = true;
+    candidate.updateEligibility.manualOnlyWhen = candidate.updateEligibility.manualOnlyWhen.map(
+      (reason) =>
+        reason === "signature-or-notarization-cannot-be-verified"
+          ? "release-trust-cannot-be-verified"
+          : reason,
+    );
+    return candidate;
+  }
+  const candidate = manifest();
+  setManifestTarget(candidate, target.platformTarget);
+  setVerificationState(candidate);
+  return candidate;
+}
+
+function assemblerArchiveSize(index, largeArchive) {
+  return largeArchive && index === 0 ? 17 * 1024 * 1024 : 1;
+}
+
+function assemblerFixtureCandidate(target, evaluation, stableLanes) {
+  return stableLanes ? stableLaneCandidate(target) : assemblerCandidate(target, evaluation);
+}
+
+function writeAssemblerFixture(
+  bundleRoot,
+  largeArchive = false,
+  unsafeSidecarKind,
+  evaluation = false,
+  stableLanes = false,
+) {
   const artifactsRoot = join(bundleRoot, "artifacts");
   for (const [index, target] of PORTABLE_TARGETS.entries()) {
     const stageRoot = join(artifactsRoot, `portable-stage-${target.platformTarget}`);
     mkdirSync(join(stageRoot, "manifest"), { recursive: true });
     mkdirSync(join(stageRoot, "evidence"), { recursive: true });
     const archivePath = join(stageRoot, target.assetName);
-    writeFileSync(
-      archivePath,
-      storedZipFixture(largeArchive && index === 0 ? 17 * 1024 * 1024 : 1),
-    );
-    const candidate = manifest();
-    setManifestTarget(candidate, target.platformTarget);
-    setVerificationState(candidate);
+    writeFileSync(archivePath, storedZipFixture(assemblerArchiveSize(index, largeArchive)));
+    if (target.platformTarget === "windows-x64") {
+      writeFileSync(join(stageRoot, WINDOWS_PORTABLE_SETUP_ASSET_NAME), portableExecutable(42));
+    }
+    const candidate = assemblerFixtureCandidate(target, evaluation, stableLanes);
+    const targetEvaluation = candidate.security.verificationPolicy === "evaluation";
     candidate.release.releaseId = 0;
     candidate.artifact.assetId = 0;
     candidate.artifact.sizeBytes = statSync(archivePath).size;
@@ -869,7 +1067,7 @@ function writeAssemblerFixture(bundleRoot, largeArchive = false, unsafeSidecarKi
     }
     writeAssemblerAttestationFixture(candidate, target, resourceRoot);
     const fixtureKind = index === 0 ? unsafeSidecarKind : undefined;
-    writeAssemblerSidecarFixture(candidate, target, resourceRoot, fixtureKind);
+    writeAssemblerSidecarFixture(candidate, target, resourceRoot, fixtureKind, targetEvaluation);
     const activationPath = join(resourceRoot, ...candidate.runtimeActivation.path.split("/"));
     mkdirSync(dirname(activationPath), { recursive: true });
     const activationBytes = `${JSON.stringify(runtimeActivationManifest(candidate), null, 2)}\n`;
@@ -958,12 +1156,23 @@ function preparePackageSurfaceForTest() {
   packageSurfacePreparedForTest = true;
 }
 
-async function assembleStageForTest(target, nodeArchive, outDir, dir, sidecarRuntimeSpecs = []) {
+async function assembleStageForTest(
+  target,
+  nodeArchive,
+  outDir,
+  dir,
+  sidecarRuntimeSpecs = [],
+  evaluation = false,
+  windowsGenerationProduction = false,
+  release = false,
+) {
   return assemblePortableStage(
     {
       commitSha: COMMIT_SHA,
       dryRun: false,
-      appleTeamId: target === "windows-x64" ? undefined : "AB12CD34EF",
+      evaluation,
+      release,
+      appleTeamId: target.startsWith("macos-") ? "AB12CD34EF" : undefined,
       nodeArchive: nodeArchive.path,
       nodeArchiveUrl: undefined,
       nodeCacheDir: join(dir, "cache"),
@@ -976,15 +1185,33 @@ async function assembleStageForTest(target, nodeArchive, outDir, dir, sidecarRun
       target,
       workflowRunAttempt: 1,
       workflowRunId: 123456789,
+      windowsGenerationProduction,
     },
     {
       buildPrimaryLauncher: writePrimaryLauncherFixture,
       buildRuntimeSupervisor: writeRuntimeSupervisorFixture,
       buildSecureReadHelper: writeSecureReadHelperFixture,
       preparePackageSurface: preparePackageSurfaceForTest,
+      sealMacosAppBundle: writeMacosSealFixture,
       stageUsearchAddon: writeUsearchAddonFixture,
+      verifyMacosAppBundleSeal: verifyMacosSealFixture,
     },
   );
+}
+
+// The fixture mirrors what the real ad-hoc seal leaves behind: a `_CodeSignature/CodeResources`
+// inside the bundle. Its verify counterpart fails exactly like `codesign --verify` would when the
+// seal is missing, so a staging reorder that drops or skips the seal fails these tests too.
+function writeMacosSealFixture(appRoot) {
+  const sealDir = join(appRoot, "Contents", "_CodeSignature");
+  mkdirSync(sealDir, { recursive: true });
+  writeFileSync(join(sealDir, "CodeResources"), "fixture ad-hoc seal\n");
+}
+
+function verifyMacosSealFixture(appRoot) {
+  if (!existsSync(join(appRoot, "Contents", "_CodeSignature", "CodeResources"))) {
+    throw new Error("fixture seal verification failed: bundle carries no seal");
+  }
 }
 
 function writePrimaryLauncherFixture(target, destination) {
@@ -995,10 +1222,13 @@ function writeSecureReadHelperFixture(target, destination) {
   writeFileSync(destination, `fixture secure read helper for ${target.platformTarget}\n`);
 }
 
-function writeUsearchAddonFixture(target, resourceRoot) {
+// The hook mirrors the real `stageUsearchAddon` signature so the lane it is handed is the lane it
+// writes; a hard-coded staging status here would make the producer double-run pin below vacuous.
+function writeUsearchAddonFixture(target, resourceRoot, { evaluation = false } = {}) {
   const targetKey = usearchRuntimeTargetKey(target.nodePlatform, target.nodeArchitecture);
   if (targetKey === undefined) throw new Error("missing USearch fixture target");
-  const approved = USEARCH_RUNTIME_MANIFEST.targets[targetKey];
+  const approved = usearchRuntimeApproval(targetKey);
+  if (approved === undefined) throw new Error("missing USearch fixture approval");
   const executablePath = "runtime/native/usearch.node";
   const licensePath = "runtime/licenses/usearch/LICENSE";
   const destination = join(resourceRoot, ...executablePath.split("/"));
@@ -1011,25 +1241,25 @@ function writeUsearchAddonFixture(target, resourceRoot) {
     {
       name: "usearch",
       kind: "node-native-addon",
-      version: USEARCH_RUNTIME_MANIFEST.version,
+      version: approved.version,
       platformTarget: target.platformTarget,
       architecture: target.nodeArchitecture,
       executablePath,
       licensePath,
       source: {
-        commitSha: USEARCH_RUNTIME_MANIFEST.sourceCommit,
-        tarballUrl: USEARCH_RUNTIME_MANIFEST.tarballUrl,
-        tarballSha256: USEARCH_RUNTIME_MANIFEST.tarballSha256,
+        commitSha: approved.sourceCommit,
+        tarballUrl: approved.tarballUrl,
+        tarballSha256: approved.tarballSha256,
         binarySha256: approved.binarySha256,
-        licenseSha256: USEARCH_RUNTIME_MANIFEST.licenseSha256,
+        licenseSha256: approved.licenseSha256,
       },
       unsignedSha256: approved.binarySha256,
       shippedSha256: approved.binarySha256,
       sizeBytes: statSync(destination).size,
-      sbomBomRef: `pkg:npm/usearch@${USEARCH_RUNTIME_MANIFEST.version}?platform=${target.platformTarget}`,
+      sbomBomRef: `pkg:npm/usearch@${approved.version}?platform=${target.platformTarget}`,
       signing: {
         signatureKind: target.signatureKind,
-        verificationStatus: "unverified-staging",
+        verificationStatus: evaluation ? "evaluation-unqualified" : "unverified-staging",
         signatureVerified: false,
         notarizationRequired: target.nodePlatform === "darwin",
         notarizationVerified: false,
@@ -1148,28 +1378,9 @@ function sidecarRuntimeFor(platformTarget, overrides = {}) {
     approvalSchemaVersion: 2,
     name,
     kind: "coding-runtime",
-    upstream: {
-      owner: "anomalyco",
-      repository: "opencode",
-      name: "opencode",
-      version: "1.17.17",
-      tag: "v1.17.17",
-      commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
-    },
-    adapterCompatibility: {
-      adapterName: "keiko-coding-sidecar",
-      adapterVersion: "1",
-      transport: "http-sse",
-    },
-    protocolSchema: {
-      path: "packages/sdk/openapi.json",
-      url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/sdk/openapi.json",
-      sha256: DIGEST_A,
-      hashAlgorithm: "sha256",
-      hashEncoding: "lowercase-hex",
-      digestInput: "upstream-raw-bytes",
-      transport: "http-sse",
-    },
+    upstream: { ...APPROVED_SIDECAR.upstream },
+    adapterCompatibility: { ...APPROVED_SIDECAR.adapterCompatibility },
+    protocolSchema: { ...APPROVED_SIDECAR.protocolSchema, sha256: DIGEST_A },
     releaseApproval: {
       redistribution: {
         status: "approved",
@@ -1182,12 +1393,12 @@ function sidecarRuntimeFor(platformTarget, overrides = {}) {
     },
     license: {
       spdxId: "MIT",
-      url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/LICENSE",
+      url: APPROVED_SIDECAR.license.url,
       sha256: DIGEST_F,
     },
     archive: {
       platformTarget,
-      url: "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode.zip",
+      url: APPROVED_SIDECAR.archives[platformTarget].url,
       sizeBytes: 123456,
       sha256: DIGEST_B,
     },
@@ -1213,8 +1424,7 @@ function sidecarExecutablePath(payloadRootPath, target) {
 }
 
 function verifiedSidecarSigning(target) {
-  const verificationChecks =
-    target.nodePlatform === "win32" ? windowsVerificationChecks() : macVerificationChecks();
+  const verificationChecks = defaultVerificationChecks(target);
   return {
     verificationPolicy: "production",
     verificationStatus: "verified-production",
@@ -1230,6 +1440,39 @@ function verifiedSidecarSigning(target) {
   };
 }
 
+/**
+ * The evaluation sibling of `stagingSidecarSigning`. It differs ONLY in the declared lane: every
+ * shipped-executable digest field is present and identical, which is what the schema pins below
+ * assert stays mandatory.
+ */
+function evaluationSidecarSigning(target) {
+  return {
+    ...stagingSidecarSigning(target),
+    verificationPolicy: "evaluation",
+    verificationStatus: "evaluation-unqualified",
+    verificationReasonCodes: ["evaluation-artifact", "evaluation-unsigned-allowed"],
+  };
+}
+
+function evaluationManifest(platformTarget = "windows-x64") {
+  const candidate = manifest();
+  setManifestTarget(candidate, platformTarget);
+  setVerificationState(candidate, {
+    verificationChecks: createPortableVerificationChecks(platformTarget, false),
+    verificationPolicy: "evaluation",
+    verificationReasonCodes: ["evaluation-artifact", "evaluation-unsigned-allowed"],
+    verificationStatus: "evaluation-unqualified",
+  });
+  candidate.runtimeActivation.trustAnchor = "evaluation-unqualified";
+  candidate.release.releaseId = 0;
+  candidate.artifact.assetId = 0;
+  addSidecarRuntime(candidate, platformTarget, {
+    signing: evaluationSidecarSigning(portableTarget(platformTarget)),
+  });
+  candidate.releaseImpact.reviewedBinding.releaseId = 0;
+  return candidate;
+}
+
 function stagingSidecarSigning(target) {
   return {
     verificationPolicy: "staging",
@@ -1242,12 +1485,14 @@ function stagingSidecarSigning(target) {
     verificationChecks:
       target.nodePlatform === "win32"
         ? windowsVerificationChecks({ publisherChainVerified: false, timestampVerified: false })
-        : macVerificationChecks({
-            assessmentVerified: false,
-            developerIdVerified: false,
-            notarizationVerified: false,
-            stapleVerified: false,
-          }),
+        : target.nodePlatform === "linux"
+          ? { provenanceVerified: false }
+          : macVerificationChecks({
+              assessmentVerified: false,
+              developerIdVerified: false,
+              notarizationVerified: false,
+              stapleVerified: false,
+            }),
     shippedExecutableSha256: DIGEST_D,
     shippedExecutableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
     shippedExecutableTreeSha256: DIGEST_C,
@@ -1276,7 +1521,7 @@ function sidecarFixtureSpec(platformTarget, sourceRoot, executablePath, override
   const licenseSha256 = digestBuffer(readFileSync(join(sourceRoot, "LICENSE.txt")));
   const archive = {
     platformTarget,
-    url: "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode-fixture.zip",
+    url: APPROVED_SIDECAR.archives[platformTarget].url,
     sizeBytes: 123456,
     sha256: DIGEST_B,
   };
@@ -1285,14 +1530,18 @@ function sidecarFixtureSpec(platformTarget, sourceRoot, executablePath, override
     `${JSON.stringify({
       bomFormat: "CycloneDX",
       metadata: {
-        component: { type: "application", name: "opencode-compatible", version: "1.17.17" },
+        component: {
+          type: "application",
+          name: "opencode-compatible",
+          version: APPROVED_SIDECAR.upstream.version,
+        },
       },
       components: [
         {
           type: "application",
           name: "opencode",
-          version: "1.17.17",
-          purl: "pkg:github/anomalyco/opencode@v1.17.17",
+          version: APPROVED_SIDECAR.upstream.version,
+          purl: `pkg:github/anomalyco/opencode@${APPROVED_SIDECAR.upstream.tag}`,
           licenses: [{ license: { id: "MIT" } }],
           hashes: [{ alg: "SHA-256", content: executableSha256 }],
           externalReferences: [
@@ -1310,28 +1559,9 @@ function sidecarFixtureSpec(platformTarget, sourceRoot, executablePath, override
     approvalSchemaVersion: 2,
     name: "opencode-compatible",
     kind: "coding-runtime",
-    upstream: {
-      owner: "anomalyco",
-      repository: "opencode",
-      name: "opencode",
-      version: "1.17.17",
-      tag: "v1.17.17",
-      commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
-    },
-    adapterCompatibility: {
-      adapterName: "keiko-coding-sidecar",
-      adapterVersion: "1",
-      transport: "http-sse",
-    },
-    protocolSchema: {
-      path: "packages/sdk/openapi.json",
-      url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/sdk/openapi.json",
-      sha256: DIGEST_A,
-      hashAlgorithm: "sha256",
-      hashEncoding: "lowercase-hex",
-      digestInput: "upstream-raw-bytes",
-      transport: "http-sse",
-    },
+    upstream: { ...APPROVED_SIDECAR.upstream },
+    adapterCompatibility: { ...APPROVED_SIDECAR.adapterCompatibility },
+    protocolSchema: { ...APPROVED_SIDECAR.protocolSchema, sha256: DIGEST_A },
     releaseApproval: {
       redistribution: {
         status: "approved",
@@ -1344,7 +1574,7 @@ function sidecarFixtureSpec(platformTarget, sourceRoot, executablePath, override
     },
     license: {
       spdxId: "MIT",
-      url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/LICENSE",
+      url: APPROVED_SIDECAR.license.url,
       sha256: licenseSha256,
     },
     archive,
@@ -1394,6 +1624,7 @@ describe("portable runtime target contract", () => {
         platformTarget: target.platformTarget,
       })),
     ).toEqual([
+      { assetName: "keiko-linux-x64.zip", platformTarget: "linux-x64" },
       { assetName: "keiko-windows-x64.zip", platformTarget: "windows-x64" },
       { assetName: "keiko-macos-arm64.zip", platformTarget: "macos-arm64" },
       { assetName: "keiko-macos-x64.zip", platformTarget: "macos-x64" },
@@ -1429,6 +1660,128 @@ describe("verifySha256File", () => {
 });
 
 describe("validatePortableManifest", () => {
+  it("accepts only the closed Windows generation binding in schema 2", () => {
+    const candidate = manifest();
+    const fixture = JSON.parse(
+      readFileSync("scripts/__tests__/fixtures/windows-generation-v2.json", "utf8"),
+    );
+    candidate.schemaVersion = fixture.schemaVersion;
+    candidate.windowsGeneration = fixture.windowsGeneration;
+    syncReviewedBinding(candidate);
+
+    expect(candidate.provenance.windowsGeneration).toEqual(fixture.provenance.windowsGeneration);
+    expect(candidate.releaseImpact.reviewedBinding.windowsGeneration).toEqual(
+      fixture.releaseImpact.reviewedBinding.windowsGeneration,
+    );
+    expect(fixture.setupManifest.windowsGeneration).toEqual(candidate.windowsGeneration);
+
+    expect(validatePortableManifest(candidate)).toEqual([]);
+
+    for (const mutate of [
+      (value) => {
+        value.windowsGeneration.resourceRoot = `.portable/generations/${DIGEST_C}`;
+      },
+      (value) => {
+        value.windowsGeneration.treeHashSchema = "KHA1";
+      },
+      (value) => {
+        value.windowsGeneration.launcherPath = "launcher.exe";
+      },
+      (value) => {
+        value.provenance.windowsGeneration.launcherSha256 = DIGEST_C;
+      },
+      (value) => {
+        value.releaseImpact.reviewedBinding.windowsGeneration.extra = true;
+      },
+    ]) {
+      const malformed = structuredClone(candidate);
+      mutate(malformed);
+      expect(validatePortableManifest(malformed).length).toBeGreaterThan(0);
+    }
+
+    const macos = structuredClone(candidate);
+    setManifestTarget(macos, "macos-arm64");
+    expect(validatePortableManifest(macos)).toContain("schemaVersion: must be 1");
+    const legacy = manifest();
+    expect(validatePortableManifest(legacy)).toEqual([]);
+  });
+
+  it("requires a complete setup-asset binding for published Windows manifests", () => {
+    const candidate = manifest();
+    addSidecarRuntime(candidate, "windows-x64");
+    const setupAsset = {
+      assetId: 789,
+      assetName: WINDOWS_PORTABLE_SETUP_ASSET_NAME,
+      sha256: DIGEST_A,
+      sizeBytes: 12_345,
+    };
+    const apiIdentity = { assetId: 456, releaseId: 123, setupAsset };
+    candidate.release.releaseId = apiIdentity.releaseId;
+    candidate.artifact.assetId = apiIdentity.assetId;
+    syncReviewedBinding(candidate);
+    candidate.releaseImpact.reviewedBinding.releaseId = apiIdentity.releaseId;
+
+    expect(validatePortablePublishedManifest(candidate, apiIdentity)).toContain(
+      "releaseImpact.reviewedBinding.setupAsset: is required",
+    );
+
+    candidate.releaseImpact.reviewedBinding.setupAsset = setupAsset;
+    expect(validatePortablePublishedManifest(candidate, apiIdentity)).toEqual([]);
+    expect(
+      validatePortablePublishedManifest(candidate, {
+        assetId: apiIdentity.assetId,
+        releaseId: apiIdentity.releaseId,
+      }),
+    ).toContain(
+      "validation.apiIdentity.setupAsset: must be a verified GitHub setup asset snapshot",
+    );
+
+    const nonObject = structuredClone(candidate);
+    nonObject.releaseImpact.reviewedBinding.setupAsset = [];
+    expect(validatePortablePublishedManifest(nonObject, apiIdentity)).toContain(
+      "releaseImpact.reviewedBinding.setupAsset: must be an object",
+    );
+
+    const extraField = structuredClone(candidate);
+    extraField.releaseImpact.reviewedBinding.setupAsset.downloadUrl = "https://example.invalid";
+    expect(validatePortablePublishedManifest(extraField, apiIdentity)).toContain(
+      "releaseImpact.reviewedBinding.setupAsset.downloadUrl: is not allowed",
+    );
+
+    for (const [field, value, expected] of [
+      ["assetId", 0, "assetId: must be greater than 0"],
+      ["assetName", "wrong.exe", `assetName: must be ${WINDOWS_PORTABLE_SETUP_ASSET_NAME}`],
+      ["sha256", "not-a-digest", "sha256: must be a SHA-256 digest"],
+      ["sizeBytes", 0, "sizeBytes: must be greater than 0"],
+    ]) {
+      const malformed = structuredClone(candidate);
+      malformed.releaseImpact.reviewedBinding.setupAsset[field] = value;
+      expect(validatePortablePublishedManifest(malformed, apiIdentity).join("\n")).toContain(
+        expected,
+      );
+    }
+
+    const substituted = structuredClone(candidate);
+    substituted.releaseImpact.reviewedBinding.setupAsset.assetId += 1;
+    expect(validatePortablePublishedManifest(substituted, apiIdentity)).toContain(
+      "releaseImpact.reviewedBinding.setupAsset: does not match the verified GitHub setup asset snapshot",
+    );
+
+    const macos = structuredClone(candidate);
+    setManifestTarget(macos, "macos-arm64");
+    setVerificationState(macos);
+    macos.releaseImpact.reviewedBinding.setupAsset = setupAsset;
+    expect(
+      validatePortablePublishedManifest(macos, {
+        assetId: apiIdentity.assetId,
+        releaseId: apiIdentity.releaseId,
+      }),
+    ).toContain("releaseImpact.reviewedBinding.setupAsset: is supported only for Windows x64");
+    expect(validatePortablePublishedManifest(macos, apiIdentity)).toContain(
+      "validation.apiIdentity.setupAsset: is supported only for Windows x64",
+    );
+  });
+
   it("separates staging, unpublished candidate, and API-bound published identities", () => {
     const candidate = manifest();
     addSidecarRuntime(candidate, "windows-x64");
@@ -1449,12 +1802,22 @@ describe("validatePortableManifest", () => {
     candidate.artifact.assetId = 456;
     syncReviewedBinding(candidate);
     candidate.releaseImpact.reviewedBinding.releaseId = 123;
+    candidate.releaseImpact.reviewedBinding.setupAsset = {
+      assetId: 789,
+      assetName: WINDOWS_PORTABLE_SETUP_ASSET_NAME,
+      sha256: DIGEST_A,
+      sizeBytes: 12_345,
+    };
     expect(validatePortableCandidateManifest(candidate).join("\n")).toContain(
       "artifact.assetId: must be 0 before GitHub Release upload",
     );
-    expect(validatePortablePublishedManifest(candidate, { assetId: 456, releaseId: 123 })).toEqual(
-      [],
-    );
+    expect(
+      validatePortablePublishedManifest(candidate, {
+        assetId: 456,
+        releaseId: 123,
+        setupAsset: candidate.releaseImpact.reviewedBinding.setupAsset,
+      }),
+    ).toEqual([]);
     expect(validatePortablePublishedManifest(candidate, undefined)).toContain(
       "validation.apiIdentity: must be a positive GitHub API snapshot",
     );
@@ -1578,7 +1941,7 @@ describe("validatePortableManifest", () => {
   });
 
   it("accepts generic sidecar runtime metadata for every portable target", () => {
-    for (const platformTarget of ["windows-x64", "macos-arm64", "macos-x64"]) {
+    for (const platformTarget of ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]) {
       const candidate = manifest();
       setManifestTarget(candidate, platformTarget);
       setVerificationState(candidate);
@@ -1649,6 +2012,57 @@ describe("validatePortableManifest", () => {
 
     const failures = validatePortableManifest(candidate).join("\n");
     expect(failures).toContain("sidecarRuntimes[0].signing: is required");
+  });
+
+  it.each([
+    [
+      "adapter-v1",
+      (runtime) => {
+        runtime.adapterCompatibility = { ...runtime.adapterCompatibility, adapterVersion: "1" };
+      },
+    ],
+    [
+      "foreign-host",
+      (runtime) => {
+        runtime.archive.url = runtime.archive.url.replace("opencode.ai", "example.com");
+      },
+    ],
+    [
+      "wrong-target",
+      (runtime) => {
+        runtime.archive.url = APPROVED_SIDECAR.archives["linux-x64"].url;
+      },
+    ],
+    [
+      "query",
+      (runtime) => {
+        runtime.archive.url += "?download=1";
+      },
+    ],
+    [
+      "path-traversal",
+      (runtime) => {
+        runtime.upstream = { ...runtime.upstream, version: "../2.0.10", tag: "v../2.0.10" };
+        runtime.archive.url = "https://opencode.ai/files/bin/../2.0.10/opencode-windows-x64.zip";
+      },
+    ],
+    [
+      "tag-drift",
+      (runtime) => {
+        runtime.upstream = { ...runtime.upstream, tag: "v2.0.0" };
+      },
+    ],
+  ])("rejects an invalid OpenCode V2 manifest identity: %s", (_name, mutate) => {
+    const candidate = manifest();
+    addSidecarRuntime(candidate, "windows-x64");
+    expect(validatePortableManifest(candidate)).toEqual([]);
+    mutate(candidate.sidecarRuntimes[0]);
+    syncReviewedBinding(candidate);
+    expect(
+      validatePortableManifest(candidate).some((failure) =>
+        failure.startsWith("sidecarRuntimes[0]."),
+      ),
+    ).toBe(true);
   });
 
   it("rejects sidecar path traversal and release-impact binding drift", () => {
@@ -1773,6 +2187,179 @@ describe("validatePortableManifest", () => {
     expect(validatePortableStagingManifest(candidate)).toEqual([]);
   });
 
+  // SIBLINGS, NOT EDITS: the two pins above keep their assertions verbatim; the evaluation lane
+  // gets its own copies so a future change cannot satisfy one lane by loosening the other.
+  it("accepts unsigned manifests in the explicitly declared evaluation lane", () => {
+    const candidate = evaluationManifest();
+
+    expect(validatePortableManifest(candidate).join("\n")).toContain(
+      "security.signatureVerified: must be true",
+    );
+    expect(validatePortableEvaluationManifest(candidate)).toEqual([]);
+  });
+
+  it("reserves missing release asset ids for the evaluation lane too", () => {
+    const candidate = evaluationManifest();
+
+    expect(validatePortableManifest(candidate).join("\n")).toContain(
+      "artifact.assetId: must be greater than 0",
+    );
+    expect(validatePortableEvaluationManifest(candidate)).toEqual([]);
+  });
+
+  /**
+   * THE PIN THAT PREVENTS THE "REUSE THE NON-PRODUCTION LANE" MISTAKE. Before this change,
+   * `validateShippedExecutableEvidence` returned early for every policy that is not production, so
+   * a new lane would have written those three fields and never checked them while the server still
+   * demanded them — a lane that validates in CI and fails at activation.
+   */
+  it.each([
+    ["shippedExecutableSha256", (signing) => delete signing.shippedExecutableSha256],
+    ["shippedExecutableTreeSha256", (signing) => delete signing.shippedExecutableTreeSha256],
+    ["shippedExecutableTreeAlgorithm", (signing) => delete signing.shippedExecutableTreeAlgorithm],
+  ])("requires sidecar %s in the evaluation lane", (field, mutate) => {
+    const candidate = evaluationManifest();
+    mutate(candidate.sidecarRuntimes[0].signing);
+    syncReviewedBinding(candidate);
+
+    expect(validatePortableEvaluationManifest(candidate).join("\n")).toContain(
+      `sidecarRuntimes[0].signing.${field}`,
+    );
+  });
+
+  it.each([
+    ["shippedExecutableSha256", "not-a-digest"],
+    ["shippedExecutableTreeSha256", "0".repeat(63)],
+  ])("rejects a non-digest sidecar %s in the evaluation lane", (field, value) => {
+    const candidate = evaluationManifest();
+    candidate.sidecarRuntimes[0].signing[field] = value;
+    syncReviewedBinding(candidate);
+
+    expect(validatePortableEvaluationManifest(candidate).join("\n")).toContain(
+      `sidecarRuntimes[0].signing.${field}`,
+    );
+  });
+
+  // `verified === false` is ASSERTED on the evaluation lane, never merely skipped. The SCHEMA
+  // answers "does this manifest claim a verified platform signature?"; a Windows manifest with one
+  // of its two checks asserted and signatureVerified false is schema-consistent and is refused one
+  // layer up, by the RUNTIME lane predicate that requires every platform boolean present AND false
+  // (pinned in packages/keiko-server/src/coding-runtime/portableRuntimeLane.test.ts).
+  it.each([
+    [
+      "root security claims a verified platform signature",
+      (candidate) => {
+        candidate.security.signatureVerified = true;
+        candidate.security.verificationChecks = windowsVerificationChecks();
+      },
+    ],
+    [
+      "root security declares both asserted Windows platform checks",
+      (candidate) => {
+        candidate.security.verificationChecks = windowsVerificationChecks();
+      },
+    ],
+    [
+      "the sidecar signing block claims a verified signature",
+      (candidate) => {
+        candidate.sidecarRuntimes[0].signing.signatureVerified = true;
+      },
+    ],
+    [
+      "a native helper claims a verified signature",
+      (candidate) => {
+        candidate.nativeHelpers[0].signing.signatureVerified = true;
+      },
+    ],
+    [
+      "a native helper claims the production status",
+      (candidate) => {
+        candidate.nativeHelpers[0].signing.verificationStatus = "verified-production";
+      },
+    ],
+    [
+      "the sidecar omits an evaluation reason code",
+      (candidate) => {
+        candidate.sidecarRuntimes[0].signing.verificationReasonCodes = ["evaluation-artifact"];
+      },
+    ],
+  ])("rejects an evaluation manifest where %s", (_name, mutate) => {
+    const candidate = evaluationManifest();
+    mutate(candidate);
+    syncReviewedBinding(candidate);
+
+    expect(validatePortableEvaluationManifest(candidate)).not.toEqual([]);
+  });
+
+  it.each(["developer-id-app-resource-seal", "authenticode-attestor", "unverified-staging"])(
+    "rejects the %s trust anchor on an evaluation manifest",
+    (trustAnchor) => {
+      const candidate = evaluationManifest();
+      candidate.runtimeActivation.trustAnchor = trustAnchor;
+
+      expect(validatePortableEvaluationManifest(candidate).join("\n")).toContain(
+        "runtimeActivation.trustAnchor: must be evaluation-unqualified",
+      );
+    },
+  );
+
+  it("keeps the evaluation lane isolated from every other lifecycle validator", () => {
+    const candidate = evaluationManifest();
+
+    expect(validatePortableStagingManifest(candidate)).not.toEqual([]);
+    expect(validatePortableCandidateManifest(candidate)).not.toEqual([]);
+    expect(
+      validatePortablePublishedManifest(candidate, { assetId: 456, releaseId: 123 }),
+    ).not.toEqual([]);
+    // ...and the staging lane is equally isolated from the evaluation validator.
+    const staging = manifest();
+    setVerificationState(staging, {
+      verificationChecks: windowsVerificationChecks({
+        publisherChainVerified: false,
+        timestampVerified: false,
+      }),
+      verificationPolicy: "staging",
+      verificationReasonCodes: ["staging-unverified"],
+      verificationStatus: "unverified-staging",
+    });
+    expect(validatePortableEvaluationManifest(staging)).not.toEqual([]);
+  });
+
+  it("routes a staged manifest to the validator for the lane it declares", () => {
+    const evaluation = evaluationManifest();
+    expect(portableManifestValidationFailuresForDeclaredLane(evaluation)).toEqual([]);
+    expect(portableManifestValidationFailuresForDeclaredLane(evaluation)).toEqual(
+      validatePortableEvaluationManifest(evaluation),
+    );
+    // A production declaration keeps routing to the candidate validator, verbatim.
+    const production = manifest();
+    expect(portableManifestValidationFailuresForDeclaredLane(production)).toEqual(
+      validatePortableCandidateManifest(production),
+    );
+    const staging = manifest();
+    setVerificationState(staging, {
+      verificationChecks: windowsVerificationChecks({
+        publisherChainVerified: false,
+        timestampVerified: false,
+      }),
+      verificationPolicy: "staging",
+      verificationReasonCodes: ["staging-unverified"],
+      verificationStatus: "unverified-staging",
+    });
+    expect(portableManifestValidationFailuresForDeclaredLane(staging)).toEqual(
+      validatePortableStagingManifest(staging),
+    );
+    // An undeclared or unsupported lane fails closed with a named failure instead of defaulting.
+    expect(portableManifestValidationFailuresForDeclaredLane({}).join("\n")).toContain(
+      "declares no stageable lifecycle lane",
+    );
+    const nonProduction = manifest();
+    nonProduction.security.verificationPolicy = "pull-request";
+    expect(portableManifestValidationFailuresForDeclaredLane(nonProduction).join("\n")).toContain(
+      "declares no stageable lifecycle lane",
+    );
+  });
+
   it("requires explicit verification policy metadata for production manifests", () => {
     const candidate = manifest();
     delete candidate.security.verificationPolicy;
@@ -1834,8 +2421,79 @@ describe("validatePortableReleaseSet", () => {
     version: ROOT_PACKAGE_VERSION,
   };
 
-  it("accepts exactly the three canonical verified candidates", () => {
+  it("accepts exactly the four canonical verified candidates", () => {
     expect(validatePortableReleaseSet(candidateSet(), expected)).toEqual([]);
+  });
+
+  function stableLaneSet() {
+    return candidateSet().map((candidate, index) => {
+      const target = PORTABLE_TARGETS[index];
+      if (target.nodePlatform !== "linux") return assemblerCandidate(target, true);
+      applyReleaseBuildEligibility(candidate);
+      syncReviewedBinding(candidate);
+      return candidate;
+    });
+  }
+
+  it("assembles targets whose root package tarballs were packed on their own runners", () => {
+    // Each native runner builds and packs the root package itself, so the tarball digest is
+    // per-target provenance. These are the four digests of the v1.0.0 tag run 34813644666
+    // (2026-09-14); assembling its real artifacts failed on them with "portable targets do not
+    // share one release identity", while the fixture above gave every target the same digest.
+    const packedOnItsRunner = {
+      "linux-x64": "c72d75879208c5b2a67357e531acbfa93aceb6c5df94bd54c858b3ae85b0f43c",
+      "macos-arm64": "3b55da3334c9425f1ca44be01fde6bc32c674db288acfa8f379bc5ed15c00056",
+      "macos-x64": "5e4ffd2b27db2f7a91875a3924136f40dba0a436b69ace05f86127255444e89a",
+      "windows-x64": "ca9282ba40667a7a194a5463aacea60d6bb3f4af323e688924a9377dbcce8c1e",
+    };
+    const set = stableLaneSet();
+    for (const candidate of set) {
+      candidate.provenance.rootPackageTarballSha256 =
+        packedOnItsRunner[candidate.artifact.platformTarget];
+    }
+
+    expect(validatePortableReleaseSet(set, expected)).toEqual([]);
+  });
+
+  it("accepts the stable lanes: a production Linux target beside release-trust candidates", () => {
+    // Before, the release identity demanded one shared security state, so this set - the only
+    // shape a stable-tag run produces - could never assemble.
+    expect(validatePortableReleaseSet(stableLaneSet(), expected)).toEqual([]);
+  });
+
+  it.each([
+    [
+      "the release-impact entry",
+      (candidate) => {
+        candidate.releaseImpact.entryId = "2026-01-01-another-release";
+      },
+    ],
+    [
+      "a lane-independent update predicate",
+      (candidate) => {
+        candidate.updateEligibility.stableOnly = false;
+      },
+    ],
+  ])("still binds every stable lane to one release identity through %s", (_label, mutate) => {
+    const set = stableLaneSet();
+    mutate(set[1]);
+
+    expect(validatePortableReleaseSet(set, expected).join("\n")).toContain(
+      "portable targets do not share one release identity",
+    );
+  });
+
+  it("holds every non-Linux target to the production or release-trust lane", () => {
+    const set = candidateSet();
+    setVerificationState(set[1], {
+      verificationPolicy: "pull-request",
+      verificationReasonCodes: ["non-production-artifact"],
+      verificationStatus: "verified-non-production",
+    });
+
+    expect(validatePortableReleaseSet(set, expected).join("\n")).toContain(
+      "windows-x64.security.verificationPolicy must be production or evaluation in a stable release (pull-request)",
+    );
   });
 
   it("rejects a verified non-production target during assembly qualification", () => {
@@ -1852,8 +2510,8 @@ describe("validatePortableReleaseSet", () => {
   });
 
   it.each([
-    ["missing", (set) => set.slice(1), "exactly three"],
-    ["extra", (set) => [...set, manifest()], "exactly three"],
+    ["missing", (set) => set.slice(1), "exactly four"],
+    ["extra", (set) => [...set, manifest()], "exactly four"],
     ["duplicate", (set) => [...set.slice(0, 2), set[0]], "duplicate portable target"],
     [
       "case collision",
@@ -1866,7 +2524,7 @@ describe("validatePortableReleaseSet", () => {
     [
       "relabelled",
       (set) => {
-        set[0].artifact.platformTarget = "linux-x64";
+        set[0].artifact.platformTarget = "solaris-x64";
         return set;
       },
       "unsupported or relabelled",
@@ -1874,7 +2532,7 @@ describe("validatePortableReleaseSet", () => {
     [
       "architecture drift",
       (set) => {
-        set[2].runtime.nodeArchitecture = "arm64";
+        set[3].runtime.nodeArchitecture = "arm64";
         return set;
       },
       "runtime.nodeArchitecture",
@@ -1926,6 +2584,31 @@ describe("validatePortableReleaseSet", () => {
   });
 });
 
+describe("portable qualification producers", () => {
+  it("keeps the macOS producer able to read the activation manifest it is handed", () => {
+    // runtimeActivationManifest always emits nativeAddons (#3455). The macOS producer's exactKeys
+    // list predates it, so it refused every real activation manifest.
+    const macos = readFileSync("scripts/qualify-macos-runtime-release.mjs", "utf8");
+    const emitted = Object.keys(
+      runtimeActivationManifest(setManifestTargetCopy("macos-arm64")),
+    ).sort();
+    const declared = macos
+      .slice(macos.indexOf("function activationIdentityIsValid"))
+      .match(/exactKeys\(activation, \[([\s\S]*?)\]\)/u)[1]
+      .match(/"([a-zA-Z]+)"/gu)
+      .map((key) => key.replaceAll('"', ""))
+      .sort();
+    expect(declared).toEqual(emitted);
+  });
+});
+
+function setManifestTargetCopy(platformTarget) {
+  const candidate = manifest();
+  setManifestTarget(candidate, platformTarget);
+  setVerificationState(candidate);
+  return candidate;
+}
+
 describe("assemblePortableReleaseAssets bounds", () => {
   const args = (bundleRoot) => [
     "--bundle-root",
@@ -1949,6 +2632,175 @@ describe("assemblePortableReleaseAssets bounds", () => {
     await expect(assemblePortableReleaseAssets(args(bundleRoot))).resolves.toMatchObject({
       schemaVersion: 1,
     });
+    const bundle = JSON.parse(readFileSync(join(bundleRoot, "portable-assets.json"), "utf8"));
+    const copiedSetup = readFileSync(
+      join(bundleRoot, "artifacts", "windows-x64", WINDOWS_PORTABLE_SETUP_ASSET_NAME),
+    );
+    const windows = bundle.artifacts.find((artifact) => artifact.platformTarget === "windows-x64");
+    expect(windows).toMatchObject({
+      platformTarget: "windows-x64",
+      setupPath: `artifacts/windows-x64/${WINDOWS_PORTABLE_SETUP_ASSET_NAME}`,
+      setupSha256: createHash("sha256").update(copiedSetup).digest("hex"),
+      setupSizeBytes: copiedSetup.length,
+    });
+  });
+
+  it("emits a compact publisher bundle without the staged runtime payloads", async () => {
+    const stagingContainer = tempDir();
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(stagingContainer, false, undefined, false, true);
+    const stagesRoot = join(stagingContainer, "artifacts");
+
+    await assemblePortableReleaseAssets([...args(bundleRoot), "--stages-root", stagesRoot]);
+
+    for (const target of PORTABLE_TARGETS) {
+      const finalRoot = join(bundleRoot, "artifacts", target.platformTarget);
+      expect(existsSync(join(finalRoot, target.assetName))).toBe(true);
+      expect(existsSync(join(finalRoot, "manifest", "portable-manifest.json"))).toBe(true);
+      const resourceRoot =
+        target.nodePlatform === "darwin"
+          ? join(finalRoot, "payload", "Keiko", "Keiko.app", "Contents", "Resources")
+          : join(finalRoot, "payload", "Keiko");
+      expect(existsSync(join(resourceRoot, "runtime", "sidecars", "opencode-compatible"))).toBe(
+        true,
+      );
+      expect(existsSync(join(resourceRoot, "runtime", "native"))).toBe(false);
+      expect(
+        existsSync(join(stagesRoot, `portable-stage-${target.platformTarget}`, "payload")),
+      ).toBe(true);
+    }
+    expect(existsSync(join(bundleRoot, "artifacts", "portable-stage-linux-x64"))).toBe(false);
+  });
+
+  it("assembles evaluation helpers under the manifest-level trust policy", async () => {
+    // The stable lanes as a stable-tag run produces them: the three release-trust candidates carry
+    // the evaluation helpers this pins, and Linux is the production-signed target. An all-evaluation
+    // set is no longer a stable release - see the Linux lane test below.
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot, false, undefined, false, true);
+
+    await expect(assemblePortableReleaseAssets(args(bundleRoot))).resolves.toMatchObject({
+      schemaVersion: 1,
+    });
+  });
+
+  const linuxStage = (bundleRoot) => join(bundleRoot, "artifacts", "portable-stage-linux-x64");
+  const readStagedManifest = (stageRoot) =>
+    JSON.parse(readFileSync(join(stageRoot, "manifest", "portable-manifest.json"), "utf8"));
+  const writeStagedManifest = (stageRoot, value) =>
+    writeFileSync(
+      join(stageRoot, "manifest", "portable-manifest.json"),
+      `${JSON.stringify(value, null, 2)}\n`,
+    );
+
+  it("refuses a stable release whose Linux target is only a release-trust candidate", async () => {
+    // The runtime qualification evidence is asserted for non-evaluation artifacts only, so a Linux
+    // release-trust candidate would ship without it. It passed before, as an all-evaluation set.
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot, false, undefined, true);
+
+    await expect(assemblePortableReleaseAssets(args(bundleRoot))).rejects.toThrow(
+      "linux-x64.security.verificationPolicy must be production in a stable release (evaluation)",
+    );
+  });
+
+  it("fails closed when a production Linux target carries no qualification binding", async () => {
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot, false, undefined, false, true);
+    const stageRoot = linuxStage(bundleRoot);
+    const staged = readStagedManifest(stageRoot);
+    delete staged.runtimeQualification;
+    writeStagedManifest(stageRoot, staged);
+
+    await expect(assemblePortableReleaseAssets(args(bundleRoot))).rejects.toThrow(
+      "linux-x64 production artifact carries no runtime qualification binding",
+    );
+  });
+
+  it("rejects a production Linux receipt that restates an older receipt shape", async () => {
+    // The consumer used to hold a schemaVersion 1 copy of this receipt while the producer emitted
+    // schemaVersion 2 with runtimeComponents. Rebind the digest so only the shape is wrong.
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot, false, undefined, false, true);
+    const stageRoot = linuxStage(bundleRoot);
+    const receiptPath = join(
+      stageRoot,
+      "payload",
+      "Keiko",
+      ".portable",
+      "runtime-qualification.json",
+    );
+    const { runtimeComponents, ...stale } = JSON.parse(readFileSync(receiptPath, "utf8"));
+    expect(runtimeComponents.length).toBeGreaterThan(0);
+    const staleBytes = `${JSON.stringify({ ...stale, schemaVersion: 1 }, null, 2)}\n`;
+    writeFileSync(receiptPath, staleBytes);
+    const staged = readStagedManifest(stageRoot);
+    staged.runtimeQualification.sha256 = digestFor(staleBytes);
+    staged.releaseImpact.reviewedBinding.runtimeQualification.sha256 = digestFor(staleBytes);
+    writeStagedManifest(stageRoot, staged);
+
+    await expect(assemblePortableReleaseAssets(args(bundleRoot))).rejects.toThrow(
+      "linux-x64 runtime qualification binding is invalid",
+    );
+  });
+
+  it("fails closed when a production Windows target carries no attestation binding", async () => {
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot);
+    const stageRoot = join(bundleRoot, "artifacts", "portable-stage-windows-x64");
+    const staged = readStagedManifest(stageRoot);
+    delete staged.runtimeAttestation;
+    writeStagedManifest(stageRoot, staged);
+
+    await expect(assemblePortableReleaseAssets(args(bundleRoot))).rejects.toThrow(
+      "windows-x64 production artifact carries no runtime attestation binding",
+    );
+  });
+
+  it("records setup metadata from the copied companion bytes", async () => {
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot);
+    const stagedSetup = join(
+      bundleRoot,
+      "artifacts",
+      "portable-stage-windows-x64",
+      WINDOWS_PORTABLE_SETUP_ASSET_NAME,
+    );
+    const copiedBytes = portableExecutable(42);
+    const mutatedSourceBytes = portableExecutable(43);
+
+    const bundle = await assemblePortableReleaseAssets(args(bundleRoot), {
+      afterTargetCopy: ({ sourceRoot, target }) => {
+        if (target.platformTarget === "windows-x64") {
+          writeFileSync(join(sourceRoot, WINDOWS_PORTABLE_SETUP_ASSET_NAME), mutatedSourceBytes);
+        }
+      },
+    });
+
+    expect(readFileSync(stagedSetup)).toEqual(mutatedSourceBytes);
+    const windows = bundle.artifacts.find((artifact) => artifact.platformTarget === "windows-x64");
+    expect(windows).toMatchObject({
+      setupSha256: createHash("sha256").update(copiedBytes).digest("hex"),
+      setupSizeBytes: copiedBytes.length,
+    });
+  });
+
+  it("rejects a Windows setup companion whose bytes are not a PE file", async () => {
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot);
+    writeFileSync(
+      join(
+        bundleRoot,
+        "artifacts",
+        "portable-stage-windows-x64",
+        WINDOWS_PORTABLE_SETUP_ASSET_NAME,
+      ),
+      "not a PE file",
+    );
+
+    await expect(assemblePortableReleaseAssets(args(bundleRoot))).rejects.toThrow(
+      "windows-x64 setup companion must be a PE file",
+    );
   });
 
   it("rejects evidence larger than 16 MiB", async () => {
@@ -2011,6 +2863,54 @@ describe("portable runtime package scripts", () => {
     expect(source).not.toContain('["install"');
   });
 
+  it("seals the macOS bundle after the activation manifest and verifies it after the final write", () => {
+    // Ordering is the whole guarantee: a seal created before the activation write ships a bundle
+    // whose seal does not cover the manifest, and a shipped ZIP created before the seal ships the
+    // beta.0 "damaged" bundle again. The final platform verification must stay the last
+    // payload-affecting step so any later mutation fails staging instead of the customer journey.
+    const source = readFileSync("scripts/stage-portable-runtime.mjs", "utf8");
+    const firstActivationWrite = source.indexOf(
+      "const firstActivation = writeRuntimeActivationManifest(",
+    );
+    const seal = source.indexOf("sealMacosAppBundle(target, paths.payloadRoot, hooks);");
+    const shippedArchive = source.indexOf(
+      "const manifestInput = await manifestInputFor(options, target, paths, tarball, staged);",
+    );
+    const finalActivationWrite = source.indexOf(
+      "const finalActivation = writeRuntimeActivationManifest(",
+    );
+    const sealVerification = source.indexOf(
+      "verifyMacosAppBundleSeal(target, paths.payloadRoot, hooks);",
+    );
+
+    expect(firstActivationWrite).toBeGreaterThan(-1);
+    expect(firstActivationWrite).toBeLessThan(seal);
+    expect(seal).toBeLessThan(shippedArchive);
+    expect(shippedArchive).toBeLessThan(finalActivationWrite);
+    expect(finalActivationWrite).toBeLessThan(sealVerification);
+    expect(source).toContain(
+      'fail("runtime activation manifest changed after the app bundle was sealed");',
+    );
+    expect(source).toContain('run("/usr/bin/codesign", ["--force", "--sign", "-", appRoot]);');
+    expect(source).toContain(
+      'run("/usr/bin/codesign", ["--verify", "--deep", "--strict", appRoot]);',
+    );
+    // Nested code signs before the outer seal (inside-out): x86_64 Mach-Os are NOT linker-signed,
+    // and codesign refuses to seal a bundle over unsigned subcomponents (measured on
+    // macos-15-intel). The order below is what makes the seal possible on Intel at all.
+    const systemExtensionSign = source.indexOf(
+      "SystemExtensions",
+      source.indexOf("function sealMacosAppBundle"),
+    );
+    const managerSign = source.indexOf('"KeikoSystemExtensionManager"', systemExtensionSign);
+    const outerSeal = source.indexOf(
+      'run("/usr/bin/codesign", ["--force", "--sign", "-", appRoot]);',
+    );
+    expect(systemExtensionSign).toBeGreaterThan(-1);
+    expect(systemExtensionSign).toBeLessThan(managerSign);
+    expect(managerSign).toBeLessThan(outerSeal);
+  });
+
   it("validates the staged app package surface before archive assembly", () => {
     const dir = tempDir();
     const appRoot = join(dir, "app");
@@ -2033,8 +2933,19 @@ describe("portable runtime package scripts", () => {
     expect(source).toContain(
       "Keiko uses its runtime monitor to contain Coding Workbench processes",
     );
-    expect(source).toContain('run("rc"');
+    // The resource compiler is resolved to an absolute path from the imported vcvars PATH and
+    // spawned directly — never looked up implicitly by a bare `run("rc", ...)` (#3075).
+    expect(source).toContain('windowsToolFromPath(env.PATH, "rc.exe")');
     expect(source).toContain("windowsLauncherResourceSource()");
+  });
+
+  it("dispatches validated native update plans through the finite coordinator engine", () => {
+    const source = readFileSync("native/portable-launcher/keiko-portable-launcher.c", "utf8");
+
+    expect(source).toContain(
+      "int result = keiko_coordinator_execute_windows(coordinator) ? 0 : 74;",
+    );
+    expect(source).toContain("result = keiko_coordinator_execute_posix(&coordinator) ? 0 : 74;");
   });
 });
 
@@ -2430,6 +3341,31 @@ describe("verify-portable-runtime-signing", () => {
 const REPO_VERSION_IS_PRERELEASE = ROOT_PACKAGE_VERSION.includes("-");
 
 describe("stage-portable-runtime prerelease guard", () => {
+  it("builds and publishes only the closed Windows root contract", () => {
+    const dir = tempDir();
+    const fixture = JSON.parse(
+      readFileSync("scripts/__tests__/fixtures/windows-generation-v2.json", "utf8"),
+    );
+    const launcher = join(dir, "Keiko.exe");
+    let compiledGeneration;
+    buildWindowsGenerationLauncher(launcher, fixture.windowsGeneration.treeSha256, {
+      compile: (_target, destination, generationId) => {
+        compiledGeneration = generationId;
+        writeFileSync(destination, portableExecutable(7));
+      },
+    });
+    stageWindowsPortableRootFiles(dir, fixture.windowsGeneration);
+
+    expect(compiledGeneration).toBe(fixture.windowsGeneration.treeSha256);
+    expect(readFileSync(launcher)).toEqual(portableExecutable(7));
+    expect(
+      JSON.parse(readFileSync(join(dir, ".portable", "setup-manifest.json"), "utf8")),
+    ).toMatchObject(fixture.setupManifest);
+    expect(readFileSync(join(dir, "support", "keiko-support.cmd"), "utf8")).toContain(
+      '"%SCRIPT_DIR%..\\Keiko.exe" %*',
+    );
+  });
+
   it("fails closed when the release tag does not match a stable root package version", () => {
     const result = runStage([
       "--target",
@@ -2467,6 +3403,13 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
     const assetPath = join(root, "keiko-macos-arm64.zip");
     const manifestPath = join(root, "manifest", "portable-manifest.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    // v0.3.0-beta.0 regression: an app bundle without a resource seal is what Gatekeeper reports
+    // as "damaged" — with no "Open Anyway" path at all. The staged bundle must carry its seal.
+    expect(
+      existsSync(
+        join(root, "payload", "Keiko", "Keiko.app", "Contents", "_CodeSignature", "CodeResources"),
+      ),
+    ).toBe(true);
     expect(manifest.nativeAddons).toMatchObject([
       {
         name: "usearch",
@@ -2534,8 +3477,8 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
       upstream: {
         owner: "anomalyco",
         repository: "opencode",
-        version: "1.17.17",
-        commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
+        version: APPROVED_SIDECAR.upstream.version,
+        commit: APPROVED_SIDECAR.upstream.commit,
       },
       protocolSchema: {
         hashAlgorithm: "sha256",
@@ -2625,12 +3568,26 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
     const releaseImpactEntry = catalog.entries.find(
       (entry) => entry.id === manifest.releaseImpact.entryId,
     );
-    expect(releaseImpactEntry?.portableRuntimeArtifactContract).toEqual({
+    const reviewedContract = releaseImpactEntry?.portableRuntimeArtifactContract;
+    // The reviewed staging contract is derived from the producer, never restated here. ADR-0121,
+    // amended for the production-qualified Linux x64 archive (Issue #3451, 2026-09-10), makes the
+    // four platform targets release-blocking as a set; a hand-copied triple let linux-x64 fall out
+    // of the contract while PORTABLE_TARGETS already carried it, and stage-portable-runtime.mjs
+    // refused the stable Linux staging run for tag v1.0.0 with "release-impact catalog must
+    // contain exactly one reviewed portable runtime staging entry". Deriving means the next
+    // platform cannot repeat that. Targets are compared as a sorted set so the catalog is not
+    // chained to the producer's array order, while toEqual still rejects any extra key.
+    expect({
+      ...reviewedContract,
+      targets: [...(reviewedContract?.targets ?? [])].toSorted(),
+    }).toEqual({
       programEpic: 1944,
       parentEpic: 1942,
       issue: 1948,
       stagingOnly: true,
-      targets: ["windows-x64", "macos-arm64", "macos-x64"],
+      // The explicit signing scope the portable-assets release-scope gate reads (ADR-0121).
+      signingScope: "evaluation",
+      targets: PORTABLE_TARGETS.map((entry) => entry.platformTarget).toSorted(),
     });
     expect(
       existsSync(join(root, "payload", "Keiko", "Keiko.app", "Contents", "Resources", "runtime")),
@@ -2730,20 +3687,163 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
     expect(existsSync(join(root, "payload", "Keiko", "app"))).toBe(false);
   }, 360_000);
 
+  /**
+   * THE "ONLY SIGNATURES ARE WAIVED" PIN. The same fixture is staged twice by the SAME producer —
+   * once plain, once with the evaluation opt-in — and every integrity fact is compared field by
+   * field. Both sides are derived from the production entry point, so this is the one test that can
+   * detect a future edit quietly widening the waiver past the platform-signature lane.
+   */
+  it("waives only the declared verification lane between a plain and an evaluation stage", async () => {
+    const dir = tempDir();
+    const nodeArchive = createNodeArchiveFixture(dir, "windows-x64");
+    const sidecarSpec = createSidecarFixture(dir, "windows-x64");
+
+    const plain = await assembleStageForTest(
+      "windows-x64",
+      nodeArchive,
+      join(dir, "out-plain"),
+      dir,
+      [sidecarSpec],
+    );
+    const evaluation = await assembleStageForTest(
+      "windows-x64",
+      nodeArchive,
+      join(dir, "out-evaluation"),
+      dir,
+      [sidecarSpec],
+      true,
+    );
+    const release = await assembleStageForTest(
+      "windows-x64",
+      nodeArchive,
+      join(dir, "out-release"),
+      dir,
+      [sidecarSpec],
+      true,
+      false,
+      true,
+    );
+
+    const plainSidecar = plain.manifest.sidecarRuntimes[0];
+    const evaluationSidecar = evaluation.manifest.sidecarRuntimes[0];
+    for (const field of [
+      "payloadSha256",
+      "sizeBytes",
+      "payloadRootPath",
+      "executablePath",
+      "executableTreeSha256",
+      "executableTreeAlgorithm",
+    ]) {
+      expect(evaluationSidecar[field]).toEqual(plainSidecar[field]);
+    }
+    for (const field of [
+      "shippedExecutableSha256",
+      "shippedExecutableTreeAlgorithm",
+      "shippedExecutableTreeSha256",
+    ]) {
+      expect(evaluationSidecar.signing[field]).toEqual(plainSidecar.signing[field]);
+    }
+    expect(evaluationSidecar.licenseEvidence).toEqual(plainSidecar.licenseEvidence);
+    expect(evaluationSidecar.sbomEvidence).toEqual(plainSidecar.sbomEvidence);
+    // `artifact.sha256` is deliberately NOT compared: the archive contains
+    // `.portable/runtime-activation.json`, which carries the declared lane, so the two archives are
+    // genuinely different bytes. The claim under test is that every SHIPPED PAYLOAD digest — the
+    // sidecar tree, the sidecar executable, both native helpers, the license and SBOM evidence —
+    // is identical, which is what the comparisons here and above assert.
+    expect(evaluation.manifest.nativeHelpers.map((helper) => helper.shippedSha256)).toEqual(
+      plain.manifest.nativeHelpers.map((helper) => helper.shippedSha256),
+    );
+    expect(evaluation.manifest.nativeHelpers.map((helper) => helper.sizeBytes)).toEqual(
+      plain.manifest.nativeHelpers.map((helper) => helper.sizeBytes),
+    );
+
+    // The ONLY differences are the declared lane and the trust anchor derived from it. Neither run
+    // may ever assert a platform proof.
+    for (const source of [plain.manifest, evaluation.manifest]) {
+      expect(source.security.signatureVerified).toBe(false);
+      expect(source.security.notarizationVerified).toBe(false);
+      expect(Object.values(source.security.verificationChecks)).not.toContain(true);
+      expect(source.sidecarRuntimes[0].signing.signatureVerified).toBe(false);
+    }
+    expect(plain.manifest.security.verificationPolicy).toBe("staging");
+    expect(plain.manifest.security.verificationStatus).toBe("unverified-staging");
+    expect(plain.manifest.runtimeActivation.trustAnchor).toBe("unverified-staging");
+    expect(evaluation.manifest.security.verificationPolicy).toBe("evaluation");
+    expect(evaluation.manifest.security.verificationStatus).toBe("evaluation-unqualified");
+    expect(evaluation.manifest.security.verificationReasonCodes).toEqual([
+      "evaluation-artifact",
+      "evaluation-unsigned-allowed",
+    ]);
+    expect(evaluation.manifest.runtimeActivation.trustAnchor).toBe("evaluation-unqualified");
+    expect(release.manifest.security).toEqual(evaluation.manifest.security);
+    expect(release.manifest.updateEligibility.requiredPredicates.releaseTrustRequired).toBe(true);
+    expect(release.manifest.updateEligibility.manualOnlyWhen).toContain(
+      "release-trust-cannot-be-verified",
+    );
+    expect(release.manifest.updateEligibility.manualOnlyWhen).not.toContain(
+      "signature-or-notarization-cannot-be-verified",
+    );
+
+    // All FOUR writers move together, and the staging vocabulary appears nowhere in the evaluation
+    // manifest or in the activation document the runtime reads at discovery.
+    for (const helper of evaluation.manifest.nativeHelpers) {
+      expect(helper.signing.verificationStatus).toBe("evaluation-unqualified");
+    }
+    expect(evaluation.manifest.nativeAddons[0].signing.verificationStatus).toBe(
+      "evaluation-unqualified",
+    );
+    expect(JSON.stringify(evaluation.manifest)).not.toContain("unverified-staging");
+    const evaluationRoot = join(dir, "out-evaluation", "windows-x64", "payload", "Keiko");
+    const activation = readFileSync(
+      join(evaluationRoot, ".portable", "runtime-activation.json"),
+      "utf8",
+    );
+    expect(activation).not.toContain("unverified-staging");
+    expect(JSON.parse(activation).security.verificationStatus).toBe("evaluation-unqualified");
+
+    // The lane the producer emits is the lane the manifest validates against, and only that one.
+    expect(validatePortableEvaluationManifest(evaluation.manifest)).toEqual([]);
+    expect(validatePortableEvaluationManifest(release.manifest)).toEqual([]);
+    expect(validatePortableReleaseTrustCandidateManifest(release.manifest)).toEqual([]);
+    expect(validatePortableReleaseTrustCandidateManifest(evaluation.manifest)).toContain(
+      "updateEligibility.requiredPredicates.releaseTrustRequired: must be true for a stable release-trust candidate",
+    );
+    expect(validatePortableStagingManifest(evaluation.manifest)).not.toEqual([]);
+    expect(validatePortableStagingManifest(plain.manifest)).toEqual([]);
+    expect(validatePortableEvaluationManifest(plain.manifest)).not.toEqual([]);
+    expect(existsSync(join(evaluationRoot, "Keiko.exe"))).toBe(true);
+    expect(existsSync(join(evaluationRoot, ".portable", "setup-manifest.json"))).toBe(true);
+    expect(existsSync(join(evaluationRoot, "support", "keiko-support.cmd"))).toBe(true);
+    expect(existsSync(join(evaluationRoot, ".portable", "generation-staging"))).toBe(false);
+    expect(
+      validatePortableTargetRoot(join(dir, "out-evaluation", "windows-x64"), "windows-x64", {
+        context: "staging",
+      }),
+    ).toMatchObject({
+      primaryLauncher: "Keiko.exe",
+      signatureStatus: "evaluation-unqualified",
+      bundledRuntimePresent: true,
+    });
+  }, 720_000);
+
   it("stages Windows resources with an extracted bundled Node runtime", async () => {
     const dir = tempDir();
     const nodeArchive = createNodeArchiveFixture(dir, "windows-x64");
     const sidecarSpec = createSidecarFixture(dir, "windows-x64");
     const outDir = join(dir, "out");
 
-    await assembleStageForTest("windows-x64", nodeArchive, outDir, dir, [sidecarSpec]);
+    await assembleStageForTest("windows-x64", nodeArchive, outDir, dir, [sidecarSpec], false, true);
 
-    const runtimeRoot = join(outDir, "windows-x64", "payload", "Keiko", "runtime", "node");
+    const payloadRoot = join(outDir, "windows-x64", "payload", "Keiko");
+    const generationRoot = join(payloadRoot, ".portable", "generation-staging");
+    const runtimeRoot = join(generationRoot, "runtime", "node");
     const sidecarRoot = join(
       outDir,
       "windows-x64",
       "payload",
       "Keiko",
+      ".portable",
+      "generation-staging",
       "runtime",
       "sidecars",
       "opencode-compatible",
@@ -2752,24 +3852,12 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
     expect(existsSync(join(runtimeRoot, "LICENSE"))).toBe(true);
     expect(existsSync(join(runtimeRoot, "NOTICE"))).toBe(true);
     expect(existsSync(join(sidecarRoot, "opencode.cmd"))).toBe(true);
-    expect(
-      JSON.parse(
-        readFileSync(
-          join(outDir, "windows-x64", "payload", "Keiko", ".portable", "setup-manifest.json"),
-          "utf8",
-        ),
-      ),
-    ).toMatchObject({
-      platformTarget: "windows-x64",
-      primaryLauncher: "Keiko.exe",
-      runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
-    });
-    const supportScript = readFileSync(
-      join(outDir, "windows-x64", "payload", "Keiko", "support", "keiko-support.cmd"),
-      "utf8",
-    );
-    expect(supportScript).toContain('set "SCRIPT_DIR=%~dp0"');
-    expect(supportScript).toContain('"%SCRIPT_DIR%..\\Keiko.exe" %*');
+    // The macOS bundle seal must never touch a Windows stage: a seal hook invoked here would
+    // conjure a phantom Keiko.app into the payload.
+    expect(existsSync(join(outDir, "windows-x64", "payload", "Keiko", "Keiko.app"))).toBe(false);
+    expect(existsSync(join(payloadRoot, "Keiko.exe"))).toBe(false);
+    expect(existsSync(join(payloadRoot, ".portable", "setup-manifest.json"))).toBe(false);
+    expect(existsSync(join(payloadRoot, "support"))).toBe(false);
     const manifestPath = join(outDir, "windows-x64", "manifest", "portable-manifest.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     expect(manifest.security.verificationChecks).toEqual({
@@ -2801,11 +3889,13 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
     const manifest = JSON.parse(
       readFileSync(join(outDir, "macos-x64", "manifest", "portable-manifest.json"), "utf8"),
     );
+    const approval = usearchRuntimeApproval("darwin-x64");
+    if (approval === undefined) throw new Error("missing macOS x64 USearch approval");
     expect(manifest.nativeAddons).toMatchObject([
       {
         name: "usearch",
         kind: "node-native-addon",
-        version: USEARCH_RUNTIME_MANIFEST.version,
+        version: approval.version,
         platformTarget: "macos-x64",
         executablePath: "runtime/native/usearch.node",
       },
@@ -3150,5 +4240,74 @@ describe("moveStagedDirectory (cross-device promote)", () => {
       throw Object.assign(new Error("EACCES"), { code: "EACCES" });
     };
     expect(() => moveStagedDirectory(source, join(root, "final"), renameDenied)).toThrow("EACCES");
+  });
+});
+
+describe("reviewed portable staging contract", () => {
+  const names = PORTABLE_TARGETS.map((target) => target.platformTarget);
+
+  it("accepts the complete target list for every target it stages", () => {
+    for (const target of names) expect(reviewedPortableTargetSet([...names], target)).toBe(true);
+  });
+
+  it.each([
+    ["not a list", "linux-x64", () => "linux-x64"],
+    ["a duplicate entry", "linux-x64", () => [...names, "linux-x64"]],
+    ["an unknown target", "linux-x64", () => [...names, "solaris-x64"]],
+    ["a missing legacy target", "linux-x64", () => names.filter((name) => name !== "macos-x64")],
+    ["the requested target missing", "linux-x64", () => [...LEGACY_PORTABLE_TARGETS]],
+  ])("refuses a target list with %s", (_label, requested, list) => {
+    expect(reviewedPortableTargetSet(list(), requested)).toBe(false);
+  });
+
+  it("matches only the reviewed staging contract", () => {
+    const contract = { ...PORTABLE_RELEASE_IMPACT_CONTRACT, targets: [...names] };
+    expect(portableRuntimeContractMatches(contract, "linux-x64")).toBe(true);
+    expect(portableRuntimeContractMatches(null, "linux-x64")).toBe(false);
+    expect(portableRuntimeContractMatches("contract", "linux-x64")).toBe(false);
+    for (const key of ["issue", "parentEpic", "programEpic"]) {
+      expect(
+        portableRuntimeContractMatches({ ...contract, [key]: contract[key] + 1 }, "linux-x64"),
+      ).toBe(false);
+    }
+    expect(portableRuntimeContractMatches({ ...contract, stagingOnly: false }, "linux-x64")).toBe(
+      false,
+    );
+  });
+});
+
+describe("reviewed staging entry", () => {
+  const rootPackage = { name: "@oscharko-dev/keiko", version: "2.3.4" };
+  const entry = (overrides = {}) => ({
+    packageName: rootPackage.name,
+    packageVersion: rootPackage.version,
+    releaseTag: "v2.3.4",
+    review: { status: "reviewed", humanApproved: true },
+    portableRuntimeArtifactContract: {
+      ...PORTABLE_RELEASE_IMPACT_CONTRACT,
+      targets: PORTABLE_TARGETS.map((target) => target.platformTarget),
+    },
+    ...overrides,
+  });
+
+  it("matches the approved entry of the current package at its stable tag", () => {
+    expect(reviewedStagingEntryMatches(entry(), rootPackage, "v2.3.4", "linux-x64")).toBe(true);
+  });
+
+  it.each([
+    ["another package", { packageName: "@oscharko-dev/other" }],
+    ["another version", { packageVersion: "2.3.3" }],
+    ["another release tag", { releaseTag: "v2.3.3" }],
+    ["a pending review", { review: { status: "pending", humanApproved: true } }],
+    ["no human approval", { review: { status: "reviewed", humanApproved: false } }],
+    ["no staging contract", { portableRuntimeArtifactContract: undefined }],
+  ])("refuses an entry with %s", (_label, overrides) => {
+    expect(reviewedStagingEntryMatches(entry(overrides), rootPackage, "v2.3.4", "linux-x64")).toBe(
+      false,
+    );
+  });
+
+  it("refuses a missing entry", () => {
+    expect(reviewedStagingEntryMatches(undefined, rootPackage, "v2.3.4", "linux-x64")).toBe(false);
   });
 });

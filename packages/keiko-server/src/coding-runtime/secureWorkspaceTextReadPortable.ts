@@ -8,6 +8,11 @@ import {
   type SecureWorkspaceTextReadArtifactVerifier,
 } from "./secureWorkspaceTextReadArtifact.js";
 import type { SecureWorkspaceReadPlatform } from "./secureWorkspaceTextReadProcess.js";
+import {
+  declaredPortableRuntimeLane,
+  evaluationAttestationDeclaredNegative,
+  type PortableRuntimeLane,
+} from "./portableRuntimeLane.js";
 
 const DIGEST = /^[a-f0-9]{64}$/u;
 const COMMIT = /^[a-f0-9]{40}$/u;
@@ -27,14 +32,18 @@ export interface PortableSecureWorkspaceReadBindingInput {
   readonly manifest: unknown;
   readonly platform: SecureWorkspaceReadPlatform;
   readonly resourceRoot: string;
+  /** The lane the packaged artifact declares; the caller derives it, never this module. */
+  readonly lane: PortableRuntimeLane;
 }
 
 interface TargetContract {
-  readonly artifactTarget: "win32-x64" | "darwin-arm64" | "darwin-x64";
-  readonly manifestTarget: "windows-x64" | "macos-arm64" | "macos-x64";
+  readonly artifactTarget: "linux-x64" | "win32-x64" | "darwin-arm64" | "darwin-x64";
+  readonly manifestTarget: "linux-x64" | "windows-x64" | "macos-arm64" | "macos-x64";
   readonly architecture: "x64" | "arm64";
   readonly executablePath: string;
+  readonly nodePlatform: "linux" | "win32" | "darwin";
   readonly notarized: boolean;
+  readonly signatureKind: "github-oidc-attested" | "authenticode" | "developer-id-notarized";
 }
 
 export interface PortableSecureWorkspaceReadMetadata {
@@ -96,8 +105,11 @@ function parsePortableBinding(
     manifest,
     target,
     typeof version === "string" ? version : undefined,
+    input.lane,
   );
-  if (helper === undefined || !verifiedManifestBinding(manifest, helper, target)) return undefined;
+  if (helper === undefined || !verifiedManifestBinding(manifest, helper, target, input.lane)) {
+    return undefined;
+  }
   const executable = containedExecutable(root, target);
   if (executable === undefined) return undefined;
   const source = record(helper.source) ?? {};
@@ -109,6 +121,12 @@ function parsePortableBinding(
       protocol: "KSR1/KSS1",
       sourceCommit: String(source.commitSha),
       sourceTreeSha256: String(source.treeSha256),
+      // STRUCTURAL ARTIFACT-SHAPE LITERAL, NOT A PLATFORM-SIGNATURE CLAIM. It means "this record
+      // is the verified artifact identity". `isValidSecureWorkspaceTextReadArtifact` hard-requires
+      // it to be truthy before the point-of-use verifier ever runs, and the node process compares
+      // it, so flipping it to false "for honesty" on the evaluation lane would silently disable
+      // every workspace read with no diagnostic. It stays true on every lane — the dev lane sets
+      // it true on an ad-hoc-signed helper for exactly this reason (ADR-0140, ADR-0163 D9).
       signed: true,
     }),
     executable,
@@ -119,13 +137,25 @@ function parsePortableBinding(
 
 function contractFor(platform: SecureWorkspaceReadPlatform): TargetContract | undefined {
   const artifactTarget = secureWorkspaceReadTargetFor(platform);
+  if (artifactTarget === "linux-x64")
+    return {
+      artifactTarget,
+      manifestTarget: "linux-x64",
+      architecture: "x64",
+      executablePath: "runtime/native/keiko-secure-workspace-read",
+      nodePlatform: "linux",
+      notarized: false,
+      signatureKind: "github-oidc-attested",
+    };
   if (artifactTarget === "win32-x64")
     return {
       artifactTarget,
       manifestTarget: "windows-x64",
       architecture: "x64",
       executablePath: "runtime/native/keiko-secure-workspace-read.exe",
+      nodePlatform: "win32",
       notarized: false,
+      signatureKind: "authenticode",
     };
   if (artifactTarget === "darwin-arm64" || artifactTarget === "darwin-x64")
     return {
@@ -133,7 +163,9 @@ function contractFor(platform: SecureWorkspaceReadPlatform): TargetContract | un
       manifestTarget: artifactTarget === "darwin-arm64" ? "macos-arm64" : "macos-x64",
       architecture: artifactTarget === "darwin-arm64" ? "arm64" : "x64",
       executablePath: "runtime/native/keiko-secure-workspace-read",
+      nodePlatform: "darwin",
       notarized: true,
+      signatureKind: "developer-id-notarized",
     };
   return undefined;
 }
@@ -142,6 +174,7 @@ function manifestHelper(
   manifest: Record<string, unknown> | undefined,
   target: TargetContract,
   version: string | undefined,
+  lane: PortableRuntimeLane,
 ): Record<string, unknown> | undefined {
   const helpers = manifest?.nativeHelpers;
   if (!closedHelperSet(helpers, target)) return undefined;
@@ -149,7 +182,7 @@ function manifestHelper(
     .map((candidate) => record(candidate))
     .find((candidate) => candidate?.name === "keiko-secure-workspace-read");
   if (helper === undefined || !exactKeys(helper, HELPER_KEYS)) return undefined;
-  return validHelperIdentity(helper, target, version) ? helper : undefined;
+  return validHelperIdentity(helper, target, version, lane) ? helper : undefined;
 }
 
 function closedHelperSet(
@@ -176,7 +209,7 @@ function validSupervisorIdentity(
   const source = record(helper.source);
   return (
     supervisorIdentityMatches(helper, target) &&
-    supervisorProtocolMatches(protocol) &&
+    supervisorProtocolMatches(protocol, target) &&
     supervisorSourceMatches(source, target)
   );
 }
@@ -185,16 +218,34 @@ function supervisorIdentityMatches(
   helper: Record<string, unknown>,
   target: TargetContract,
 ): boolean {
-  const suffix = target.artifactTarget === "win32-x64" ? ".exe" : "";
+  const executablePath = supervisorExecutablePath(target);
   return (
     helper.kind === "runtime-process-supervisor" &&
     helper.platformTarget === target.manifestTarget &&
     helper.architecture === target.architecture &&
-    helper.executablePath === `runtime/native/keiko-runtime-supervisor${suffix}`
+    helper.executablePath === executablePath
   );
 }
 
-function supervisorProtocolMatches(protocol: Record<string, unknown> | undefined): boolean {
+function supervisorExecutablePath(target: TargetContract): string {
+  if (target.artifactTarget === "linux-x64") {
+    return "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
+  }
+  const suffix = target.artifactTarget === "win32-x64" ? ".exe" : "";
+  return `runtime/native/keiko-runtime-supervisor${suffix}`;
+}
+
+function supervisorProtocolMatches(
+  protocol: Record<string, unknown> | undefined,
+  target: TargetContract,
+): boolean {
+  if (target.artifactTarget === "linux-x64") {
+    return (
+      protocol?.schemaVersion === 1 &&
+      protocol.requestMagic === "none" &&
+      protocol.responseMagic === "none"
+    );
+  }
   return (
     protocol?.schemaVersion === 1 &&
     protocol.requestMagic === "KRP1" &&
@@ -206,6 +257,9 @@ function supervisorSourceMatches(
   source: Record<string, unknown> | undefined,
   target: TargetContract,
 ): boolean {
+  if (target.artifactTarget === "linux-x64") {
+    return source?.path === "packages/keiko-sandbox/src";
+  }
   const platform = target.artifactTarget === "win32-x64" ? "windows" : "macos";
   return source?.path === `native/runtime-supervisor/${platform}`;
 }
@@ -214,6 +268,7 @@ function validHelperIdentity(
   helper: Record<string, unknown>,
   target: TargetContract,
   version: string | undefined,
+  lane: PortableRuntimeLane,
 ): boolean {
   const protocol = record(helper.protocol);
   const source = record(helper.source);
@@ -224,7 +279,7 @@ function validHelperIdentity(
     helper.executablePath === target.executablePath,
     validProtocol(protocol),
     validSource(source),
-    validSigning(signing, target),
+    validSigning(signing, target, lane),
     typeof helper.unsignedSha256 === "string" && DIGEST.test(helper.unsignedSha256),
     typeof helper.shippedSha256 === "string" && DIGEST.test(helper.shippedSha256),
     Number.isSafeInteger(helper.sizeBytes) &&
@@ -258,20 +313,41 @@ function validSource(value: Record<string, unknown> | undefined): boolean {
   );
 }
 
-function validSigning(value: Record<string, unknown> | undefined, target: TargetContract): boolean {
-  return (
-    value !== undefined &&
-    exactKeys(value, [
+/**
+ * The closed 5-key helper signing shape and the target-bound signature kind and notarization
+ * requirement are lane-independent. Only the platform PROOF differs: release-qualified requires it
+ * true, evaluation requires it declared present-and-false. The helper block carries no
+ * `verificationPolicy`, reason codes or `verificationChecks`, so the negative assertion covers the
+ * two booleans it does carry plus its status.
+ */
+function validSigning(
+  value: Record<string, unknown> | undefined,
+  target: TargetContract,
+  lane: PortableRuntimeLane,
+): boolean {
+  if (
+    value === undefined ||
+    !exactKeys(value, [
       "signatureKind",
       "verificationStatus",
       "signatureVerified",
       "notarizationRequired",
       "notarizationVerified",
-    ]) &&
-    value.signatureKind === (target.notarized ? "developer-id-notarized" : "authenticode") &&
+    ]) ||
+    value.signatureKind !== target.signatureKind ||
+    value.notarizationRequired !== target.notarized
+  ) {
+    return false;
+  }
+  if (lane === "evaluation-unqualified") {
+    return evaluationAttestationDeclaredNegative(value, target.manifestTarget, {
+      requireReasonCodes: false,
+      requirePolicy: false,
+    });
+  }
+  return (
     value.verificationStatus === "verified-production" &&
     value.signatureVerified === true &&
-    value.notarizationRequired === target.notarized &&
     value.notarizationVerified === target.notarized
   );
 }
@@ -280,6 +356,7 @@ function verifiedManifestBinding(
   manifest: Record<string, unknown> | undefined,
   helper: Record<string, unknown>,
   target: TargetContract,
+  lane: PortableRuntimeLane,
 ): boolean {
   const artifact = record(manifest?.artifact);
   const runtime = record(manifest?.runtime);
@@ -287,8 +364,8 @@ function verifiedManifestBinding(
   const reviewed = record(record(manifest?.releaseImpact)?.reviewedBinding);
   return [
     matchingManifestTarget(artifact, runtime, target),
-    validSecurity(security, target, false),
-    validSecurity(reviewed, target, true),
+    validSecurity(security, target, false, lane),
+    validSecurity(reviewed, target, true, lane),
     reviewedHelperMatches(reviewed, manifest?.nativeHelpers, helper),
   ].every(Boolean);
 }
@@ -300,7 +377,7 @@ function matchingManifestTarget(
 ): boolean {
   return [
     artifact?.platformTarget === target.manifestTarget,
-    runtime?.nodePlatform === (target.notarized ? "darwin" : "win32"),
+    runtime?.nodePlatform === target.nodePlatform,
     runtime?.nodeArchitecture === target.architecture,
   ].every(Boolean);
 }
@@ -323,32 +400,82 @@ function validSecurity(
   value: Record<string, unknown> | undefined,
   target: TargetContract,
   reviewed: boolean,
+  lane: PortableRuntimeLane,
 ): boolean {
   if (value === undefined) return false;
-  const checks = record(value.verificationChecks);
+  if (
+    value.signatureKind !== target.signatureKind ||
+    value.notarizationRequired !== target.notarized ||
+    !validVerificationChecksShape(record(value.verificationChecks), target)
+  ) {
+    return false;
+  }
+  return lane === "evaluation-unqualified"
+    ? validEvaluationSecurity(value, target, reviewed)
+    : validProductionSecurity(value, target, reviewed);
+}
+
+function validProductionSecurity(
+  value: Record<string, unknown>,
+  target: TargetContract,
+  reviewed: boolean,
+): boolean {
   return [
     value.verificationPolicy === "production",
     value.verificationStatus === "verified-production",
     Array.isArray(value.verificationReasonCodes) && value.verificationReasonCodes.length === 0,
-    value.signatureKind === (target.notarized ? "developer-id-notarized" : "authenticode") &&
-      value.signatureVerified === true,
-    value.notarizationRequired === target.notarized,
+    value.signatureVerified === true,
     value.notarizationVerified === target.notarized,
     !reviewed || value.platformSignatureLocallyVerified === true,
-    validVerificationChecks(checks, target),
+    platformChecksAll(record(value.verificationChecks), target, true),
   ].every(Boolean);
 }
 
-function validVerificationChecks(
+/**
+ * The evaluation mirror: every platform boolean must be present and FALSE, both evaluation reason
+ * codes must be declared, and the reviewed copy must additionally state that no platform signature
+ * was locally verified. Nothing is skipped — a block that merely omits the platform facts is not
+ * this lane.
+ */
+function validEvaluationSecurity(
+  value: Record<string, unknown>,
+  target: TargetContract,
+  reviewed: boolean,
+): boolean {
+  return [
+    declaredPortableRuntimeLane(value) === "evaluation-unqualified",
+    evaluationAttestationDeclaredNegative(value, target.manifestTarget, {
+      requireReasonCodes: true,
+      requirePolicy: true,
+    }),
+    !reviewed || value.platformSignatureLocallyVerified === false,
+    platformChecksAll(record(value.verificationChecks), target, false),
+  ].every(Boolean);
+}
+
+/** The exact key set is lane-independent; only the required VALUE flips. */
+function validVerificationChecksShape(
   checks: Record<string, unknown> | undefined,
   target: TargetContract,
 ): boolean {
-  const keys = target.notarized
+  return checks !== undefined && exactKeys(checks, verificationCheckKeys(target));
+}
+
+function platformChecksAll(
+  checks: Record<string, unknown> | undefined,
+  target: TargetContract,
+  expected: boolean,
+): boolean {
+  return (
+    checks !== undefined && verificationCheckKeys(target).every((key) => checks[key] === expected)
+  );
+}
+
+function verificationCheckKeys(target: TargetContract): readonly string[] {
+  if (target.artifactTarget === "linux-x64") return ["provenanceVerified"];
+  return target.notarized
     ? ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"]
     : ["publisherChainVerified", "timestampVerified"];
-  return (
-    checks !== undefined && exactKeys(checks, keys) && keys.every((key) => checks[key] === true)
-  );
 }
 
 function absoluteResourceRoot(root: string, target: TargetContract): string | undefined {

@@ -11,7 +11,7 @@
 // (epic §Architecture Invariants 1+2). The workflow remains fully backward-compatible when
 // the port is absent: the field is optional and every callback is optional.
 
-import type { MemoryId, MemoryScope } from "./memory.js";
+import type { MemoryId, MemoryScope } from "./memory-contracts.js";
 
 // The assembled memory context for a single workflow run. The `text` is plain prompt-ready
 // prose the workflow may prepend to its user message; consumers MUST still redact/byte-cap

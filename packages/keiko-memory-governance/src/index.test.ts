@@ -8,6 +8,8 @@
 
 import { describe, expect, it } from "vitest";
 
+import { createRequire } from "node:module";
+
 import * as Barrel from "./index.js";
 import type {
   BuildCorrectionInput,
@@ -43,13 +45,19 @@ import {
   selectMemoriesForForget,
 } from "./index.js";
 
+// The packaged manifest owns the version; a literal here re-states it and goes
+// stale on every release cut (KfQ findings on #3055).
+const { version: packageVersion } = createRequire(import.meta.url)("../package.json") as {
+  version: string;
+};
+
 function pin<T>(_value?: T): T | undefined {
   return undefined;
 }
 
 describe("public barrel", () => {
   it("exports the version constant", () => {
-    expect(KEIKO_MEMORY_GOVERNANCE_VERSION).toBe("0.2.15");
+    expect(KEIKO_MEMORY_GOVERNANCE_VERSION).toBe(packageVersion);
   });
 
   it("exports every envelope builder as a function", () => {
@@ -106,6 +114,7 @@ describe("public barrel", () => {
         "findStaleNotArchived",
         "isMemorySuppressedFromRetrieval",
         "jaccardSimilarity",
+        "planAcknowledgedArchivedForgets",
         "planMemoryMaintenance",
         "scanMemoryHealth",
         "scopeCoordinateKey",

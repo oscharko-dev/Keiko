@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildCspHeader } from "../csp.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "../deps.js";
+import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import { UI_HOST } from "../server.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { startUiTestServer } from "../ui-test-server/_support.js";
@@ -52,14 +53,19 @@ export function createFakeSessionPairingPort(
   };
 }
 
-/** A well-formed pairing request body the fake port accepts. The claim is a dummy the fake ignores. */
+// KEIKO-0742: isValidPairingClaim now requires a 64-character lowercase hex HMAC-SHA256 digest
+// (the shape the launcher actually emits). Bumping the fixture from "fake-claim" so it satisfies
+// the structural gate the well-formed-attestation guard applies before the port even sees it.
+const FAKE_PAIRING_CLAIM = "0123456789abcdef".repeat(4);
+
+/** A well-formed pairing request body the fake port accepts. */
 export function fakePairingRequestBody(
   overrides: Partial<SessionPairingAttestation> = {},
 ): SessionPairingAttestation {
   return {
     requestId: overrides.requestId ?? "req_fake_pairing",
     issuedAtMs: overrides.issuedAtMs ?? 1,
-    claim: overrides.claim ?? "fake-claim",
+    claim: overrides.claim ?? FAKE_PAIRING_CLAIM,
   };
 }
 
@@ -73,6 +79,8 @@ export function createStaticContentSource(
 export interface AppSessionTestServerOptions {
   readonly sessionPairingPort?: SessionPairingPort | undefined;
   readonly contentSource?: CodingAppSessionContentSource | undefined;
+  /** Injected diagnostic sink, e.g. to observe the KEIKO-0838 pairing-denial aggregate directly. */
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 export interface AppSessionTestServer {
@@ -101,6 +109,7 @@ export async function startAppSessionTestServer(
     store: createInMemoryUiStore(),
     sessionPairingPort: options.sessionPairingPort,
     codingAppSessionContentSource: options.contentSource,
+    diagnostics: options.diagnostics,
   });
   const started = await startUiTestServer({
     staticRoot,

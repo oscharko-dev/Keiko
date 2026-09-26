@@ -4,8 +4,10 @@
 // contract. `readonly` everywhere; optional props are `| undefined` because
 // exactOptionalPropertyTypes is on. Imports end `.js`, double quotes, `type` keyword.
 
+import type { CatalogToolPort } from "./governed-tool-bridge.js";
 import type { ToolDefinition } from "./gateway.js";
 import type { ContextToolObservation } from "./context-observations.js";
+import { deepFreeze } from "./deep-freeze.js";
 
 // ─── Sandbox policy (the 5 documented, inspectable dimensions) ───────────────────
 
@@ -13,7 +15,84 @@ import type { ContextToolObservation } from "./context-observations.js";
 // default egress boundary at the keiko-tools spawn boundary (ADR-0043), and a host that cannot enforce
 // it fails the command closed. `"inherit"` stays the default for the read-only command tools; a caller
 // that executes untrusted code opts into `"none"` explicitly, WITHOUT any consumer change.
+//
+// A long-lived coding sidecar (ADR-0043 D11-D14, Issue #2951) is a third shape: neither fully
+// inherited nor fully denied, it must reach exactly one loopback destination — Keiko's own
+// authenticated gateway/BFF — for its whole lifetime. `NetworkGatewayPolicy` is deliberately NOT a
+// general allowlist: a single loopback host and a single port, nothing else is expressible. A host
+// with no backend that can bind a child to exactly that destination fails the run closed rather than
+// silently widening to "inherit" or narrowing to the unusable "none".
+//
+// `NetworkGatewayPolicy` is deliberately NOT folded into `NetworkPolicy` below. `NetworkPolicy` is
+// `SandboxPolicy.network` — the general keiko-tools spawn-boundary type that every command-execution
+// caller (keiko-verification, the git/registry tool lanes, …) reads with an exhaustive `=== "none"` /
+// `!== "none"` check (see keiko-tools/src/exec.ts's resolveSpawnTarget). Widening that union to
+// include an object variant would make `!== "none"` true for a gateway policy too and silently spawn
+// it on the INHERITED (unconfined) path — a fail-open hole in a trust boundary this type does not
+// otherwise reach. Only the keiko-sandbox planning layer (`IsolatedRunPlan.network`, exported there as
+// `IsolatedRunNetworkPolicy`) accepts the gateway shape; it is a long-lived coding-sidecar concept,
+// never constructed by a `SandboxPolicy`.
+export interface NetworkGatewayPolicy {
+  readonly mode: "gateway";
+  readonly host: "127.0.0.1" | "::1";
+  readonly port: number;
+}
+
 export type NetworkPolicy = "inherit" | "none";
+
+const NETWORK_GATEWAY_POLICY_KEYS = new Set(["mode", "host", "port"]);
+
+function ownNetworkGatewayPolicyData(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return undefined;
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (Reflect.ownKeys(descriptors).length !== NETWORK_GATEWAY_POLICY_KEYS.size) return undefined;
+  const entries = Object.entries(descriptors);
+  if (
+    !entries.every(
+      ([key, descriptor]) =>
+        NETWORK_GATEWAY_POLICY_KEYS.has(key) && Object.hasOwn(descriptor, "value"),
+    )
+  ) {
+    return undefined;
+  }
+  return Object.fromEntries(entries.map(([key, descriptor]) => [key, descriptor.value as unknown]));
+}
+
+function networkGatewayPolicyData(value: unknown): Record<string, unknown> | undefined {
+  try {
+    return ownNetworkGatewayPolicyData(value);
+  } catch {
+    return undefined;
+  }
+}
+
+export function copyNetworkGatewayPolicy(value: unknown): NetworkGatewayPolicy | undefined {
+  const record = networkGatewayPolicyData(value);
+  if (record?.mode !== "gateway") return undefined;
+  const host = record.host;
+  const port = record.port;
+  if (
+    (host !== "127.0.0.1" && host !== "::1") ||
+    typeof port !== "number" ||
+    !Number.isSafeInteger(port) ||
+    port <= 0 ||
+    port > 65_535
+  ) {
+    return undefined;
+  }
+  return Object.freeze({ mode: "gateway", host, port });
+}
+
+// Structural guard, not a coercion: true only for a value shaped exactly like a
+// `NetworkGatewayPolicy` — a loopback host, an in-range TCP port, and no other fields. A
+// non-loopback host, a missing/fractional/out-of-range port, or an extra field is rejected, never
+// widened or truncated into something that would look valid.
+export function isValidNetworkGatewayPolicy(value: unknown): value is NetworkGatewayPolicy {
+  return copyNetworkGatewayPolicy(value) !== undefined;
+}
+
 export type FilesystemPolicy = "inherit" | "execution-root";
 
 // How the spawn boundary supplies HOME/USERPROFILE to the child.
@@ -26,6 +105,8 @@ export type FilesystemPolicy = "inherit" | "execution-root";
 //                 asks to inherit an absent/empty HOME falls back to "ephemeral" so the child is
 //                 never left without a home directory.
 export type HomeIsolation = "ephemeral" | "inherit";
+
+export type OutputScrubMode = "every-non-allowlisted-value" | "credentials-only";
 
 export interface SandboxPolicy {
   // Names (never values) of parent env vars allowed to reach the child. No credential-bearing
@@ -50,6 +131,19 @@ export interface SandboxPolicy {
   readonly pinnedEnv?: Readonly<Record<string, string>> | undefined;
   // Defaults to "ephemeral" when absent.
   readonly homeIsolation?: HomeIsolation | undefined;
+  // Which parent env VALUES the spawn boundary scrubs out of captured stdout/stderr.
+  //   "every-non-allowlisted-value" (default, absent): the value of every parent var not on
+  //     `envAllowlist` (plus every credential) is replaced with the redaction marker. Right for a
+  //     command whose output is diagnostic — a stray secret must never survive into evidence.
+  //   "credentials-only": only credential values are scrubbed — the governed credential names, any
+  //     name that looks credential-bearing, and `credentialEnvAllowlist` — while ordinary context
+  //     values survive. For governed reads whose stdout IS transient source data: configured
+  //     remote URLs and GitHub issue provenance legitimately contain an owner/repository name, which is
+  //     also what a CI runner puts in GITHUB_REPOSITORY, what a user is called in USER, what a
+  //     shell exports in a dozen harmless variables. Under the default mode such a read came back
+  //     as `https://github.com/[REDACTED].git` and every consumer addressed a repository that does
+  //     not exist. Never a way to leak a token: the shape-based redaction always applies too.
+  readonly outputScrub?: OutputScrubMode | undefined;
   // Hard cap on combined stdout+stderr bytes buffered before the child is killed (flood guard).
   readonly maxOutputBytes: number;
   // Default per-command wall-time before SIGTERM/SIGKILL.
@@ -93,6 +187,21 @@ export const DEFAULT_SANDBOX_POLICY: SandboxPolicy = {
   defaultTimeoutMs: 30_000,
   terminationGraceMs: 2_000,
 } as const;
+
+// ─── Governed tools that wait for a human decision ─────────────────────────────────
+// How long a governed tool call may wait in place for a decision only a local human can make: the
+// approval of a stage, commit, push or pull-request proposal, or an ADR-0147 package-script trust
+// grant inside the verification tool. One value bounds every layer such a call crosses: the
+// server's approval challenge ceiling and the waits themselves, the catalog budget the tool is
+// settled at (its own work budget, this wait and the settlement grace), the sidecar tool bridge's
+// deadline and the generated plugin client's timeout, each outliving the one before it. A fixed
+// 30 s budget cut a waiting approval off long before its own five-minute ceiling (PR #3452, F44).
+export const GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS = 5 * 60 * 1_000;
+export const GOVERNED_TOOL_SETTLEMENT_GRACE_MS = 15_000;
+export const GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS =
+  DEFAULT_SANDBOX_POLICY.defaultTimeoutMs +
+  GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS +
+  GOVERNED_TOOL_SETTLEMENT_GRACE_MS;
 
 // ─── Governed git lanes: the two credential-capable env profiles ─────────────────
 //
@@ -141,6 +250,8 @@ const GOVERNED_GIT_ACCOUNT_ENV: readonly string[] = Object.freeze([
 // signed FAILS instead of silently landing unsigned. No credential token: this lane never egresses.
 const GOVERNED_GIT_IDENTITY_ENV_ALLOWLIST: readonly string[] = Object.freeze([
   ...DEFAULT_ENV_ALLOWLIST,
+  "HOME",
+  "USERPROFILE",
   ...GOVERNED_GIT_ACCOUNT_ENV,
 ]);
 
@@ -175,20 +286,33 @@ const GOVERNED_GIT_PINNED_ENV: Readonly<Record<string, string>> = Object.freeze(
 });
 
 // Additional lane-2 pins, mirroring keiko-git `networkGitEnv`: every askpass/GUI credential prompt
-// is disabled (`/dev/null` is a non-executable path on POSIX and a non-existent one on Windows, so
-// the helper fails; GIT_ASKPASS also outranks a `core.askPass` from any config scope, and git then
-// falls back to the already-disabled terminal prompt), and SSH runs in batch mode with no
-// first-use host-key trust, so an unknown or changed host key fails closed.
+// is disabled (the platform null device is a non-executable path, so the helper fails; GIT_ASKPASS
+// also outranks a `core.askPass` from any config scope, and git then falls back to the
+// already-disabled terminal prompt), and SSH runs in batch mode with no first-use host-key trust,
+// so an unknown or changed host key fails closed.
 //
 // `networkGitEnv` additionally sets GIT_CONFIG_NOSYSTEM; this lane deliberately does NOT. On several
 // platforms the SYSTEM git config is where the platform credential helper is declared (macOS ships
 // `credential.helper = osxkeychain` there), so suppressing that scope would disable exactly the
 // credentials this lane exists to use. Nothing fail-closed depends on it: the prompt pins above
 // outrank every config scope.
-const GOVERNED_GIT_REMOTE_PINNED_ENV: Readonly<Record<string, string>> = Object.freeze({
+
+// Mirrors keiko-git's `devNullPath` (packages/keiko-git/src/env.ts): the null device is
+// `/dev/null` on POSIX and the reserved device name `NUL` on Windows — the literal string
+// "/dev/null" is not a valid Windows path, so pinning it unconditionally there relied on an
+// incidental "file not found" failure instead of the platform's own null device (KEIKO-0717).
+// keiko-contracts is the ADR-0019 leaf package and must not import keiko-git (direction-1), so the
+// primitive is duplicated here rather than shared. keiko-tools sits above both packages and pins
+// this table against keiko-git's `networkGitEnv()` for every key they both declare in
+// packages/keiko-tools/src/git-env-parity.test.ts, so the two copies cannot silently drift.
+function devNullPath(platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32" ? "NUL" : "/dev/null";
+}
+
+export const GOVERNED_GIT_REMOTE_PINNED_ENV: Readonly<Record<string, string>> = Object.freeze({
   ...GOVERNED_GIT_PINNED_ENV,
-  GIT_ASKPASS: "/dev/null",
-  SSH_ASKPASS: "/dev/null",
+  GIT_ASKPASS: devNullPath(),
+  SSH_ASKPASS: devNullPath(),
   SSH_ASKPASS_REQUIRE: "never",
   GCM_INTERACTIVE: "never",
   GIT_SSH_COMMAND:
@@ -273,7 +397,13 @@ export interface CommandRule {
 }
 
 // Minimal, justified default rules. Everything not listed is denied (deny-by-default).
-export const DEFAULT_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
+//
+// deepFreeze, not Object.freeze: several fields below already individually wrap their own nested
+// array in Object.freeze, but that only protects THOSE specific fields — the rule object itself
+// (and any field on it not individually wrapped, e.g. `executable`) was still writable, the same
+// bug class command-runner.ts's COMMAND_TASK_RULES already documents and was fixed for
+// (KEIKO-0139). The inner Object.freeze calls below are now redundant but harmless.
+export const DEFAULT_COMMAND_RULES: readonly CommandRule[] = deepFreeze([
   {
     executable: "npm",
     // Read-only npm only. Mutating/package-installing subcommands are excluded by omission.
@@ -331,11 +461,33 @@ export const DEFAULT_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
     // --config-env/--ext-diff/--textconv) make git spawn an arbitrary command via its OWN shell,
     // defeating the Node spawn's shell:false; --exec-path redirects git to attacker-supplied sub-binaries.
     // hasDeniedFlag runs BEFORE subcommand resolution and matches both `--flag value` and
-    // `--flag=value`. `-C`/--git-dir/--work-tree stay value-flags (location only, not execution).
+    // `--flag=value`.
+    // `-C`/--git-dir/--work-tree/--namespace are denied here too. They are not inert location data
+    // the way npm's `--prefix` is: they make git operate AS IF launched from that directory,
+    // overriding the resolved-in-workspace cwd that exec.ts's spawn boundary relies on, so
+    // `git -C /etc log` reads a repository outside the workspace. Workspace escape is a hard,
+    // mode-independent denial (AGENTS.md §1). They stay listed as value flags as well, so that
+    // subcommand resolution keeps its S-H2 behaviour if this rule is ever copied without the
+    // denial. The sibling git rule sets — GIT_WORKTREE_COMMAND_RULES, GIT_MUTATION_COMMAND_RULES,
+    // GIT_PUBLISH_COMMAND_RULES and terminal-policy.ts's TERMINAL_COMMAND_RULES/Layer 2 — already
+    // denied the same flags; sandbox.test.ts pins that every git rule set keeps denying them.
+    // Cross-reference (audit finding #3348): packages/keiko-git/src/runner.ts — the lower-level
+    // spawn boundary this tool ultimately shares with gitRoutes.ts and
+    // grounded-git-history-evidence.ts — cannot deny `-c`/`--config-env` outright the way this
+    // narrow, read-only tool surface does, because a real production caller legitimately needs
+    // `-c core.quotepath=false`. That runner instead permits `-c`/`--config-env` in general and
+    // denies by the specific config KEY carried in the value (diff.external, core.pager, etc.), a
+    // deliberately separate check operating on a different shape of data than this flat flag-name
+    // list. If the enabling flag NAMES below (--ext-diff/--textconv/--config-env) ever change,
+    // update both lists together.
     denyFlags: Object.freeze([
       "-c",
+      "-C",
       "--config-env",
       "--exec-path",
+      "--git-dir",
+      "--work-tree",
+      "--namespace",
       "--ext-diff",
       "--textconv",
       "--no-index",
@@ -356,6 +508,8 @@ export interface CommandRunInput {
 }
 
 export interface CommandResult {
+  /** Owning runner changed captured output during redaction; exact-content readers must refuse. */
+  readonly outputRedacted?: true;
   readonly command: string;
   readonly args: readonly string[];
   readonly exitCode: number | null;
@@ -483,6 +637,7 @@ export interface ToolHostConfigInput {
 
 // ─── Hexagonal tool ports (shared between harness consumer and tools implementer) ──────
 
+/** Legacy migration transport only; new producers use GovernedToolCallRequest. */
 export interface ToolCallRequest {
   readonly toolCallId: string;
   readonly toolName: string;
@@ -544,6 +699,8 @@ export interface ToolCallResult {
 }
 
 export interface ToolPort {
+  /** Absence is unavailable for governed callers, never permission to use the legacy methods. */
+  readonly catalog?: CatalogToolPort | undefined;
   readonly execute: (request: ToolCallRequest) => Promise<ToolCallResult>;
   readonly listTools: () => readonly ToolDefinition[];
 }

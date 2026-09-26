@@ -194,6 +194,65 @@ describe("runGroundedAnswer — happy path", () => {
     expect(result.citations.length).toBeGreaterThan(0);
   });
 
+  it("forces citation repair for a long no-evidence refusal that would otherwise match a skip pattern (KEIKO-0275)", async () => {
+    // KEIKO-0275: shouldRepairMissingCitations short-circuits to `return true` at the
+    // > 240-char length gate BEFORE the NO_EVIDENCE_REPAIR_SKIP_PATTERNS check even runs.
+    // A long enumerated refusal that mentions "no evidence found" therefore still triggers
+    // a repair round trip. This pin locks that ordering: reducing the length gate below the
+    // compacted length would let the pattern skip win and drop the second generator call.
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-long-refusal" });
+    const longRefusal =
+      "No evidence found in the selected sources because " +
+      "the query terms did not match any indexed passage ".repeat(4);
+    expect(longRefusal.replace(/\s+/g, " ").trim().length).toBeGreaterThan(240);
+    const calls: AnswerGeneratorInput[] = [];
+    const answers = [longRefusal, "No evidence found [1]."];
+    const generator: AnswerGenerator = {
+      generate: (input) => {
+        calls.push(input);
+        return Promise.resolve(answers[Math.min(calls.length - 1, answers.length - 1)] ?? "");
+      },
+    };
+    await runGroundedAnswer(
+      {
+        retrieval: { store, embeddingAdapter: scriptedAdapter() },
+        answerGenerator: generator,
+      },
+      { conversationId: "conv-long-refusal", capsuleId: seeded.capsuleId, text: "alpha" },
+    );
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.citationRepair).toBeUndefined();
+    expect(calls[1]?.citationRepair).toBe(true);
+  });
+
+  it("forces citation repair when the generator returns an empty answer (KEIKO-0275)", async () => {
+    // KEIKO-0275: the `compact.length === 0` half of the same length gate. An empty answer
+    // with non-empty references must be retried with citationRepair: true instead of being
+    // published as a citation-less blank. AnswerGenerator is a general interface — the
+    // runner cannot rely on ModelGatewayAnswerGenerator's own empty-content guard.
+    const { store } = getFixture();
+    const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-empty-answer" });
+    const calls: AnswerGeneratorInput[] = [];
+    const answers = ["", "Found the detail [1]."];
+    const generator: AnswerGenerator = {
+      generate: (input) => {
+        calls.push(input);
+        return Promise.resolve(answers[Math.min(calls.length - 1, answers.length - 1)] ?? "");
+      },
+    };
+    await runGroundedAnswer(
+      {
+        retrieval: { store, embeddingAdapter: scriptedAdapter() },
+        answerGenerator: generator,
+      },
+      { conversationId: "conv-empty-answer", capsuleId: seeded.capsuleId, text: "alpha" },
+    );
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.citationRepair).toBeUndefined();
+    expect(calls[1]?.citationRepair).toBe(true);
+  });
+
   it("does not force citation repair for short no-evidence refusals", async () => {
     const { store } = getFixture();
     const seeded = await seedCapsuleWithVectors(store, { capsuleId: "cap-refusal" });

@@ -11,8 +11,8 @@ import {
   firstPane,
   openEditorWorkspace,
   paneCount,
-  typeIntoActiveEditor,
 } from "./support/editorWorkspace.js";
+import { replaceEditorBuffer } from "./support/editor-chord.js";
 
 const MUTATION_HEADERS = { "X-Keiko-CSRF": "1" };
 const EVIDENCE_PATH = join(
@@ -132,9 +132,13 @@ async function seedWindows(page: Page, windows: readonly Record<string, unknown>
   }, windows);
 }
 
-function shortcutModifier(): "Meta" | "Control" {
-  return process.platform === "darwin" ? "Meta" : "Control";
-}
+// The APP-SHELL shortcuts below are product shortcuts, and the product resolves their modifier from
+// `navigator.platform` (useKeyboardShortcuts' detectPlatform). Playwright's device presets override
+// the userAgent but NOT navigator.platform, so on a Mac the page still reports "MacIntel" and the
+// product waits for metaKey — which is exactly what the host-derived "ControlOrMeta" sends.
+// `editorModifier` reads the userAgent and would send Control here, failing on every real Mac.
+// It is the right helper for MONACO chords only; see support/editor-chord.ts.
+const SHELL_CHORD_MODIFIER = "ControlOrMeta";
 
 async function waitForShell(page: Page): Promise<void> {
   await expect(page.getByRole("button", { name: "Open quick access" })).toBeVisible();
@@ -143,7 +147,7 @@ async function waitForShell(page: Page): Promise<void> {
 
 async function openSearchPanel(page: Page): Promise<Locator> {
   await waitForShell(page);
-  await page.keyboard.press(`${shortcutModifier()}+Shift+KeyF`);
+  await page.keyboard.press(`${SHELL_CHORD_MODIFIER}+Shift+KeyF`);
   const searchbox = page.getByRole("searchbox", { name: "Search files and symbols" });
   await expect(searchbox).toBeEnabled();
   return searchbox;
@@ -151,7 +155,7 @@ async function openSearchPanel(page: Page): Promise<Locator> {
 
 async function openQuickAccess(page: Page): Promise<Locator> {
   await waitForShell(page);
-  await page.keyboard.press(`${shortcutModifier()}+KeyP`);
+  await page.keyboard.press(`${SHELL_CHORD_MODIFIER}+KeyP`);
   const quickInput = page.getByRole("combobox", {
     name: /workspace file or symbol query/i,
   });
@@ -233,7 +237,21 @@ test("workspace search panel opens a result at its reported start line", async (
   expect(reportedRange).toBeDefined();
   if (reportedRange === undefined) return;
   const pageErrors = collectPageErrors(page);
-  await seedWindows(page, []);
+  // Workspace search is root-bound. Give the shell a deterministic editor owner rather than
+  // relying on the most recently registered project to supply an implicit search root.
+  await seedWindows(page, [
+    {
+      id: "editor-2090-search",
+      type: "editor",
+      x: 24,
+      y: 24,
+      w: 760,
+      h: 620,
+      z: 10,
+      cfg: { root, file: "src/search-target.ts", openFiles: ["src/search-target.ts"] },
+      max: false,
+    },
+  ]);
   await page.goto("/");
   const searchbox = await openSearchPanel(page);
   await searchbox.fill("workspaceSearchNeedle");
@@ -275,12 +293,13 @@ test("replace preview applies closed files and dirty open buffers only after con
   ]);
   await page.goto("/");
   const workspace = await openEditorWorkspace(page);
-  await typeIntoActiveEditor(
+  await replaceEditorBuffer(
     page,
     firstPane(workspace),
     `export const replaceTarget = "replaceNeedle";
 export const unsavedOnly = true;
 `,
+    root,
   );
   const searchbox = await openSearchPanel(page);
   await searchbox.fill("replaceNeedle");

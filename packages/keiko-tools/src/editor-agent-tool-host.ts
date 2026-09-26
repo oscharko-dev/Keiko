@@ -1,28 +1,32 @@
+import type {
+  EditorAgentAction,
+  EditorAgentActionQueuedResponse,
+  EditorAgentNavigateSymbolOperation,
+  EditorAgentRootBinding,
+  EditorAgentSessionsResponse,
+  EditorAgentSearchWorkspaceMode,
+  EditorAgentGitAspect,
+  EditorAgentSnapshotResponse,
+  EditorAgentSnapshotTextMode,
+  EditorAgentVerificationResult,
+  EditorAgentVerificationRunRequest,
+  LanguageDiagnostic,
+  ToolCallRequest,
+  ToolCallResult,
+  ToolPort,
+  VerificationKind,
+} from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_EDITOR_AGENT_SNAPSHOT_TEXT_MODE,
   EDITOR_AGENT_NAVIGATE_SYMBOL_OPERATIONS,
   EDITOR_AGENT_SCHEMA_VERSION,
-  EDITOR_VERIFICATION_SCHEMA_VERSION,
   isEditorAgentAction,
   isEditorAgentRootBinding,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import {
+  EDITOR_VERIFICATION_SCHEMA_VERSION,
   isVerificationKind,
-  type EditorAgentAction,
-  type EditorAgentActionQueuedResponse,
-  type EditorAgentNavigateSymbolOperation,
-  type EditorAgentRootBinding,
-  type EditorAgentSessionsResponse,
-  type EditorAgentSearchWorkspaceMode,
-  type EditorAgentGitAspect,
-  type EditorAgentSnapshotResponse,
-  type EditorAgentSnapshotTextMode,
-  type EditorAgentVerificationResult,
-  type EditorAgentVerificationRunRequest,
-  type LanguageDiagnostic,
-  type ToolCallRequest,
-  type ToolCallResult,
-  type ToolPort,
-  type VerificationKind,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
 import { type EditorAgentClientError, EditorAgentHttpClient } from "./editor-agent-client.js";
 import { EDITOR_AGENT_TOOL_DEFINITIONS } from "./editor-agent-schemas.js";
 

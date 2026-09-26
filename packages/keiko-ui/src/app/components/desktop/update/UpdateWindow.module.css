@@ -30,3 +30,18 @@
 .failedCopy {
   color: color-mix(in oklch, var(--feedback-danger) 78%, var(--text-secondary));
 }
+
+.cmpCommandLine > .cmpCommandCopyCode {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 720px) {
+  /* A visible foreground ready updater owns the same critical context and action. Keep its
+     manual-path control reachable; loading and error-only updater states retain the startup alert. */
+  :global(.workspace):has(:global(.window)[data-top="true"]:not([hidden]) .cmpReady)
+    :global(.update-notice) {
+    display: none;
+  }
+}

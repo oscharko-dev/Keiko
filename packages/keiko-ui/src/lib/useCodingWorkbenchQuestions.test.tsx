@@ -8,6 +8,11 @@ import {
   newCodingWorkbenchRuntimeRequestId,
   rejectCodingWorkbenchRuntimeQuestion,
 } from "./coding-workbench-runtime-api";
+import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import {
+  redeemCodingAppSessionPairingNavigation,
+  type CodingAppSessionPairingSeams,
+} from "./coding-app-session-client";
 import { useCodingWorkbenchQuestions } from "./useCodingWorkbenchQuestions";
 
 vi.mock("./coding-workbench-runtime-api", () => ({
@@ -36,6 +41,19 @@ const pending = {
 } as const;
 
 const emptyActive = { session: "active", questions: [] } as const;
+
+// A launcher re-pair that arrives without a page load (F65): a fragment, and a pair endpoint that
+// acknowledges it.
+const REPAIR_SEAMS: CodingAppSessionPairingSeams = {
+  readFragment: (): string =>
+    encodeCodingAppSessionPairingFragment({
+      requestId: "req_re-pair",
+      issuedAtMs: 1,
+      claim: "e".repeat(64),
+    }),
+  stripFragment: (): void => undefined,
+  postPairing: (): Promise<unknown> => Promise.resolve({ schemaVersion: "1" }),
+};
 
 const snapshot = { schemaVersion: "1", state: "paused", revision: 3, updatedAt: "x" } as const;
 
@@ -73,6 +91,24 @@ function activeInput(
 
 describe("useCodingWorkbenchQuestions", () => {
   afterEach(() => vi.clearAllMocks());
+
+  it("lists again after a re-pair without a page load (F65)", async () => {
+    vi.mocked(listCodingWorkbenchRuntimeQuestions)
+      .mockResolvedValueOnce({ session: "unpaired", questions: [] })
+      .mockResolvedValue(pending);
+    const view = renderHook(() => useCodingWorkbenchQuestions(activeInput()));
+    await flush();
+    expect(view.result.current).toMatchObject({ status: "unpaired" });
+
+    await act(async () => {
+      await redeemCodingAppSessionPairingNavigation(REPAIR_SEAMS);
+    });
+    await flush();
+
+    expect(listCodingWorkbenchRuntimeQuestions).toHaveBeenCalledTimes(2);
+    expect(view.result.current).toMatchObject({ status: "ready", questions: pending.questions });
+    view.unmount();
+  });
 
   it("lists the run's questions without refreshing the revision-stable read", async () => {
     const refreshSnapshot = vi.fn(() => Promise.resolve());

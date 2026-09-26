@@ -9,11 +9,11 @@ import { performance } from "node:perf_hooks";
 import { clearTimeout, setTimeout } from "node:timers";
 
 import {
+  portableManifestValidationFailuresForDeclaredLane,
   portableTargetByName,
   sha256File,
-  validatePortableCandidateManifest,
-  validatePortableStagingManifest,
 } from "./portable-runtime.mjs";
+import { portableResourceRoot } from "./portable-signed-archive.mjs";
 
 function fail(message) {
   throw new Error(`portable-secure-read-smoke: ${message}`);
@@ -73,9 +73,7 @@ function decode(bytes) {
 }
 
 function manifestFailures(manifest) {
-  return manifest.security?.verificationPolicy === "production"
-    ? validatePortableCandidateManifest(manifest)
-    : validatePortableStagingManifest(manifest);
+  return portableManifestValidationFailuresForDeclaredLane(manifest);
 }
 
 export async function smokePortableSecureRead(stageRoot, platformTarget, load = false) {
@@ -86,10 +84,7 @@ export async function smokePortableSecureRead(stageRoot, platformTarget, load = 
   const failures = manifestFailures(manifest);
   if (failures.length > 0) fail("manifest is invalid");
   const helper = secureReadHelper(manifest);
-  const resourceRoot =
-    target.nodePlatform === "darwin"
-      ? join(stageRoot, "payload", "Keiko", "Keiko.app", "Contents", "Resources")
-      : join(stageRoot, "payload", "Keiko");
+  const resourceRoot = portableResourceRoot(stageRoot, platformTarget, manifest);
   const executable = join(resourceRoot, ...helper.executablePath.split("/"));
   if ((await sha256File(executable)) !== helper.shippedSha256)
     fail("helper digest does not match manifest");

@@ -8,8 +8,8 @@
 
 import type { MemoryAuditRecord } from "./memory-operations.js";
 import { MEMORY_AUDIT_INITIATOR_SURFACES, MEMORY_UPDATE_FIELDS } from "./memory-operations.js";
-import type { MemoryAuditActionKind } from "./memory.js";
-import { MEMORY_AUDIT_ACTION_KINDS, MEMORY_EDGE_KINDS } from "./memory.js";
+import type { MemoryAuditActionKind } from "./memory-contracts.js";
+import { MEMORY_AUDIT_ACTION_KINDS, MEMORY_EDGE_KINDS } from "./memory-contracts.js";
 import {
   looksLikeSecretShape,
   validateMemoryScope,

@@ -5,6 +5,7 @@
 // isRecord + predicate envelope and live in the sibling context-engineering-validation.ts to
 // keep both files under the 400-LOC budget (mirrors the memory-validation.ts split).
 
+import { deepFreeze } from "./deep-freeze.js";
 import type { ModelCapability } from "./gateway.js";
 
 export const CONTEXT_ENGINEERING_SCHEMA_VERSION = "1" as const;
@@ -15,10 +16,10 @@ export const DEFAULT_TOKEN_ESTIMATOR_ID = "keiko-conservative-content-v2" as con
 
 export type ContextTokenAccountingSource = "calibrated" | "fallback-estimated";
 
-export const CONTEXT_TOKEN_ACCOUNTING_SOURCES: readonly ContextTokenAccountingSource[] = [
-  "calibrated",
-  "fallback-estimated",
-] as const;
+// KEIKO-0880: Object.freeze — `as const` alone is compile-time only and left this table's backing
+// array writable at runtime.
+export const CONTEXT_TOKEN_ACCOUNTING_SOURCES: readonly ContextTokenAccountingSource[] =
+  Object.freeze(["calibrated", "fallback-estimated"] as const);
 
 export interface ContextTokenAccounting {
   readonly source: ContextTokenAccountingSource;
@@ -28,10 +29,12 @@ export interface ContextTokenAccounting {
   readonly offsetTokens?: number | undefined;
 }
 
-export const DEFAULT_CONTEXT_TOKEN_ACCOUNTING = {
+// KEIKO-0880: deepFreeze — this table is also embedded as DEFAULT_CONTEXT_PROFILE.tokenAccounting
+// below, so freezing it here keeps both references pointing at the one frozen object.
+export const DEFAULT_CONTEXT_TOKEN_ACCOUNTING = deepFreeze({
   source: "fallback-estimated",
   counterId: DEFAULT_TOKEN_ESTIMATOR_ID,
-} as const satisfies ContextTokenAccounting;
+} as const satisfies ContextTokenAccounting);
 
 // ─── Lane identity (the eight lanes) ──────────────────────────────────────── [PR1]
 export type ContextLaneId =
@@ -44,7 +47,9 @@ export type ContextLaneId =
   | "history-summary"
   | "verification-evidence";
 
-export const CONTEXT_LANE_IDS: readonly ContextLaneId[] = [
+// KEIKO-0880: Object.freeze — `as const` alone is compile-time only and left this table's backing
+// array writable at runtime.
+export const CONTEXT_LANE_IDS: readonly ContextLaneId[] = Object.freeze([
   "system-contract",
   "user-task",
   "active-plan",
@@ -53,18 +58,20 @@ export const CONTEXT_LANE_IDS: readonly ContextLaneId[] = [
   "working-memory",
   "history-summary",
   "verification-evidence",
-] as const;
+] as const);
 
 // Eviction policy per lane. "none" => non-evictable (reserved off the top).
 export type ContextEvictionPolicy =
   "none" | "summarize-then-drop" | "drop-oldest" | "drop-lowest-score";
 
-export const CONTEXT_EVICTION_POLICIES: readonly ContextEvictionPolicy[] = [
+// KEIKO-0880: Object.freeze — `as const` alone is compile-time only and left this table's backing
+// array writable at runtime.
+export const CONTEXT_EVICTION_POLICIES: readonly ContextEvictionPolicy[] = Object.freeze([
   "none",
   "summarize-then-drop",
   "drop-oldest",
   "drop-lowest-score",
-] as const;
+] as const);
 
 export type ContextBudgetPressure = "low" | "moderate" | "high" | "exceeded";
 
@@ -95,7 +102,9 @@ export interface ContextProfile {
 
 // Conservative defaults. 128k window, 8k reserved for output, 4k safety margin =>
 // 116k effective input budget. Frozen. `model` is intentionally omitted (optional).
-export const DEFAULT_CONTEXT_PROFILE: ContextProfile = {
+// KEIKO-0880: deepFreeze, not Object.freeze — this table nests a `tokenAccounting` object, and a
+// shallow freeze would have left that nested object writable at runtime.
+export const DEFAULT_CONTEXT_PROFILE: ContextProfile = deepFreeze({
   schemaVersion: CONTEXT_ENGINEERING_SCHEMA_VERSION,
   maxInputTokens: 128_000,
   reservedOutputTokens: 8_000,
@@ -103,7 +112,7 @@ export const DEFAULT_CONTEXT_PROFILE: ContextProfile = {
   effectiveInputBudget: 116_000,
   tokenEstimatorId: DEFAULT_TOKEN_ESTIMATOR_ID,
   tokenAccounting: DEFAULT_CONTEXT_TOKEN_ACCOUNTING,
-} as const;
+} as const);
 
 // ─── Per-lane budget allocation (one row per lane) ────────────────────────── [PR1]
 export interface ContextLaneBudget {
@@ -156,8 +165,10 @@ export interface ContextAssemblyDiagnostics {
 // ─── Provenance reference (the atomic source pointer) ─────────────────────── [PR2, additive]
 // A stable, content-addressable pointer to a single authoritative source. No raw text,
 // no absolute paths — only stable IDs plus an optional relative workspace path and line
-// range for repo-file items. contentHash is fileContentHash (keiko-workspace) at compaction
-// time; a mismatch at rehydration time means the source has changed and the summary MAY be stale.
+// range for repo-file items. contentHash is hashExcerptContent over the EXCERPT the ref points at
+// (see compaction-helpers.ts, its only live producer) — not a whole-file hash — so it invalidates
+// on a change to the referenced range rather than anywhere in the file; a mismatch at rehydration
+// time means that excerpt has changed and the summary MAY be stale.
 // REFINEMENT over ADR-0053 D1: the fourth kind is "message" (a conversation message id) rather
 // than "intentionally-not-persisted"; the not-persisted case is carried by notPersistedReason on
 // any kind. ADR-0053 D1 note updated to match.
@@ -172,8 +183,9 @@ export interface ContextProvenanceRef {
   // Closed line range [startLine, endLine] (1-indexed, inclusive). Present only when a line range
   // was recorded. Prefer line ranges over whole-file rehydration.
   readonly lineRange?: { readonly startLine: number; readonly endLine: number } | undefined;
-  // SHA-256 hex of the file content at compaction time. A mismatch at rehydration time signals
-  // invalidation. Present only when fileContentHash ran successfully.
+  // SHA-256 hex of the EXCERPT content at compaction time (hashExcerptContent), matching
+  // ContextRehydrationHandle.contentHash. A mismatch at rehydration time signals invalidation.
+  // Present only when the hash was computed successfully.
   readonly contentHash?: string | undefined;
   // Stable evidence atom id (evidenceAtomStableId output). Present when kind === "evidence-atom".
   readonly evidenceAtomId?: string | undefined;
@@ -181,11 +193,12 @@ export interface ContextProvenanceRef {
   readonly notPersistedReason?: string | undefined;
 }
 
-// ─── Preserved fact (durable, authoritative) ──────────────────────────────── [PR2, additive]
+// ─── Preserved fact (durable, verbatim or explicitly inferred) ─────────────── [PR2, additive]
 // Structurally DISTINCT from ContextAssumption — no shared base type. A ContextPreservedFact
 // carries statement + (sourceRef and/or inferred) + optional corroborating; it has NO rationale
-// and NO confidence, so a ContextAssumption is not assignable here and vice versa. This is the
-// load-bearing anti-poisoning rule: structural separation, NOT a flag on a common type.
+// and NO confidence, so a ContextAssumption is not assignable here and vice versa. The inferred
+// marker is provenance, not an assumption: consumers MUST partition it before a fact-labeled
+// projection so an inferred entry cannot be presented as a verbatim pinned fact.
 // REFINEMENT 1 over ADR-0053 D1: sourceRef is OPTIONAL but the validator REQUIRES sourceRef OR
 // inferred===true — an unsourced, non-inferred "fact" is rejected. Every factual claim points to
 // a source OR is explicitly marked an inference. ADR-0053 D1 note updated to match.
@@ -203,6 +216,28 @@ export interface ContextPreservedFact {
   // zero-runtime — valid facts simply never set these. This is the compile-time anti-poisoning gate.
   readonly rationale?: never;
   readonly confidence?: never;
+}
+
+// The shared owner for every fact-labeled compaction projection. The partition is deliberately
+// immutable and does not reinterpret a false or absent marker: only inferred===true is inferred.
+export interface ContextPreservedFactPartition {
+  readonly verbatim: readonly ContextPreservedFact[];
+  readonly inferred: readonly ContextPreservedFact[];
+}
+
+export function partitionContextPreservedFacts(
+  facts: readonly ContextPreservedFact[] | undefined,
+): ContextPreservedFactPartition {
+  const verbatim: ContextPreservedFact[] = [];
+  const inferred: ContextPreservedFact[] = [];
+  for (const fact of facts ?? []) {
+    if (fact.inferred === true) {
+      inferred.push(fact);
+    } else {
+      verbatim.push(fact);
+    }
+  }
+  return { verbatim, inferred };
 }
 
 // ─── Assumption (uncertain, model-derived) ────────────────────────────────── [PR2, additive]
@@ -307,7 +342,12 @@ export interface ContextCompactionRecord {
   readonly itemsAfter: number;
   readonly tokensBefore: number;
   readonly tokensAfter: number;
-  // Stable hash of the summarized content so a reviewer can correlate without storing raw text.
+  // Stable hash of the dropped content (raw text of the excluded items), for correlation with a
+  // rehydration handle. This is NOT a hash of a summary — see `modelSummary` for the actual
+  // model-generated summary, when present. The compaction allocator populates this via
+  // `summaryHashOf(excluded)` in keiko-workflows/src/context-budget/compaction-helpers.ts, which
+  // hashes the concatenated raw text of the excluded items — no summarization step exists on that
+  // path. Keep field name unchanged: it is on the wire and consumed by evidence redactors.
   readonly summaryRefHash?: string | undefined;
   // Optional handle to rehydrate the original items (see ContextRehydrationHandle).
   readonly rehydration?: ContextRehydrationHandle | undefined;
@@ -404,11 +444,27 @@ const TOKEN_EMOJI_LIKE_CODE_POINT_RANGES: readonly (readonly [number, number])[]
   [0x1f000, 0x1faff],
   [0x2600, 0x27bf],
 ] as const;
-const TOKEN_WHITESPACE_CODE_POINTS: readonly number[] = [
+// KEIKO-0797: Set<number>, not a readonly array + `.includes` — O(1) membership instead of a
+// linear scan on every code point of every estimated string. Same six members, same order.
+const TOKEN_WHITESPACE_CODE_POINTS: ReadonlySet<number> = new Set([
   0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20,
-] as const;
+]);
+// KEIKO-0797: Set<string>, not a string-literal + `.includes` — O(1) membership instead of a
+// linear scan on every code point of every estimated string. Built from the identical source
+// string so membership is byte-for-byte the same as the string it replaces.
+const TOKEN_STRUCTURAL_CHARACTERS: ReadonlySet<string> = new Set("{}[]()<>;:=+-*/%&|!?,.#`$@\\\"'");
 const TOKEN_ESTIMATE_CACHE_MAX_ENTRIES = 4_096;
+// KEIKO-0797: byte cap tracked ALONGSIDE the entry-count cap above. A cache of
+// TOKEN_ESTIMATE_CACHE_MAX_ENTRIES very large distinct strings would stay under the entry cap while
+// retaining unbounded memory, so retained bytes are charged and bounded independently. Documented
+// cap: 2 MiB, charged per entry as the UTF-8 byte length of the cached key (the estimated text)
+// plus a fixed small overhead for the numeric value and Map bookkeeping.
+const TOKEN_ESTIMATE_CACHE_MAX_BYTES = 2_097_152;
+const TOKEN_ESTIMATE_CACHE_ENTRY_OVERHEAD_BYTES = 48;
 const tokenEstimateCache = new Map<string, number>();
+// Running total of bytes currently retained by tokenEstimateCache, per the accounting above. Reset
+// to 0 whenever the cache is cleared so it never drifts from the Map's actual contents.
+let tokenEstimateCacheBytes = 0;
 const tokenTextEncoder: TextEncoder | undefined =
   typeof TextEncoder === "undefined" ? undefined : new TextEncoder();
 
@@ -460,7 +516,7 @@ function isEmojiLikeCodePoint(codePoint: number): boolean {
 }
 
 function isWhitespaceCodePoint(codePoint: number): boolean {
-  return TOKEN_WHITESPACE_CODE_POINTS.includes(codePoint);
+  return TOKEN_WHITESPACE_CODE_POINTS.has(codePoint);
 }
 
 function tokenShapeStats(text: string): TokenShapeStats {
@@ -475,7 +531,7 @@ function tokenShapeStats(text: string): TokenShapeStats {
     if (isCjkCodePoint(codePoint)) cjkChars += 1;
     if (isEmojiLikeCodePoint(codePoint)) emojiLikeChars += 1;
     if (codePoint === 0x0a) newlineChars += 1;
-    if ("{}[]()<>;:=+-*/%&|!?,.#`$@\\\"'".includes(char)) structuralChars += 1;
+    if (TOKEN_STRUCTURAL_CHARACTERS.has(char)) structuralChars += 1;
   }
   return { cjkChars, emojiLikeChars, structuralChars, newlineChars, nonWhitespaceChars };
 }
@@ -491,6 +547,27 @@ function requiresDenseTokenizerFloor(text: string): boolean {
   );
 }
 
+// KEIKO-0797: charges the new entry's byte weight (its key's UTF-8 length plus a fixed
+// bookkeeping overhead) and evicts — mirroring the pre-existing entry-count eviction below: a full
+// clear, not partial LRU — whenever EITHER cap would be exceeded, before inserting. A single entry
+// that alone exceeds the byte cap is never cached; estimateTokens already returned its correct
+// value to the caller regardless, so skipping the cache write changes nothing observable.
+function cacheTokenEstimate(text: string, textBytes: number, tokens: number): void {
+  const entryBytes = textBytes + TOKEN_ESTIMATE_CACHE_ENTRY_OVERHEAD_BYTES;
+  if (entryBytes > TOKEN_ESTIMATE_CACHE_MAX_BYTES) {
+    return;
+  }
+  if (
+    tokenEstimateCache.size >= TOKEN_ESTIMATE_CACHE_MAX_ENTRIES ||
+    tokenEstimateCacheBytes + entryBytes > TOKEN_ESTIMATE_CACHE_MAX_BYTES
+  ) {
+    tokenEstimateCache.clear();
+    tokenEstimateCacheBytes = 0;
+  }
+  tokenEstimateCache.set(text, tokens);
+  tokenEstimateCacheBytes += entryBytes;
+}
+
 export function estimateTokens(text: string): number {
   const cached = tokenEstimateCache.get(text);
   if (cached !== undefined) {
@@ -502,11 +579,22 @@ export function estimateTokens(text: string): number {
     ? Math.ceil(bytes / TOKEN_WORST_CASE_BYTES_PER_TOKEN_DIVISOR)
     : baseline;
   const tokens = TOKEN_STRUCTURAL_OVERHEAD + Math.max(baseline, denseFloor);
-  if (tokenEstimateCache.size >= TOKEN_ESTIMATE_CACHE_MAX_ENTRIES) {
-    tokenEstimateCache.clear();
-  }
-  tokenEstimateCache.set(text, tokens);
+  cacheTokenEstimate(text, bytes, tokens);
   return tokens;
+}
+
+// Exported test-only helpers so hermetic unit tests can observe and reset the token-estimate
+// cache's population without cross-test bleed. Product code never calls these.
+export function __resetContextTokenCacheForTests(): void {
+  tokenEstimateCache.clear();
+  tokenEstimateCacheBytes = 0;
+}
+
+export function __contextTokenCacheDiagnosticsForTests(): {
+  readonly entries: number;
+  readonly bytesRetained: number;
+} {
+  return { entries: tokenEstimateCache.size, bytesRetained: tokenEstimateCacheBytes };
 }
 
 // Sum estimateTokens over a set of segments (e.g. messages). The per-segment overhead models
@@ -533,8 +621,18 @@ export function resolveContextTokenAccounting(
 function calibratedTokenCount(fallbackTokens: number, accounting: ContextTokenAccounting): number {
   const scaleMilli = accounting.scaleMilli ?? 1_000;
   const offsetTokens = accounting.offsetTokens ?? 0;
-  // Clamp defends callers that construct a ContextTokenAccounting object literal directly (the
-  // type system permits it) without passing through validateContextProfile.
+  // An out-of-range calibration falls back to the UNCALIBRATED estimate rather than through the
+  // clamp. `??` does not substitute for 0, so `scaleMilli: 0` survived and the whole expression
+  // collapsed to Math.max(0, 0) — every text reported as costing zero tokens. That is the permissive
+  // direction: this is the single canonical token currency, so a silent uniform under-count makes
+  // every lane, prompt segment and compaction decision believe its content is free, and the failure
+  // surfaces only as a provider-side context overflow with nothing pointing at the calibration.
+  // The rule mirrors the sibling validator (context-engineering-validation.ts), expressed inline
+  // because this is a hot per-segment path.
+  if (!Number.isInteger(scaleMilli) || scaleMilli <= 0) return fallbackTokens;
+  if (!Number.isInteger(offsetTokens) || offsetTokens < 0) return fallbackTokens;
+  // Floor only on the valid-calibration path: it defends callers that build a
+  // ContextTokenAccounting literal directly (the type system permits it) without validating it.
   return Math.max(0, Math.ceil((fallbackTokens * scaleMilli) / 1_000 + offsetTokens));
 }
 
@@ -596,6 +694,40 @@ export function deriveContextProfile(input: {
   };
 }
 
+// A gateway that declares no output limit (the field customer's `hosted_vllm` models report none)
+// used to have the default 8k reserve scaled down with its window: a window probed to exactly
+// 32,000 tokens left 2,000 output tokens, which a reasoning model spends on its reasoning before
+// the first content token, so every coding turn ended as an empty answer (#3591, 1.1.7). The
+// reserve for an undeclared limit is therefore at least the default, bounded to a quarter of the
+// window so a small placeholder window keeps an input budget.
+const UNDECLARED_OUTPUT_RESERVE_WINDOW_FRACTION = 4;
+
+/** The default safety margin scaled to a window, never eating into the output reserve. */
+export function safetyMarginTokensFor(
+  maxInputTokens: number,
+  reservedOutputTokens: number,
+): number {
+  return Math.min(
+    maxInputTokens - reservedOutputTokens,
+    Math.ceil(
+      (maxInputTokens * DEFAULT_CONTEXT_PROFILE.safetyMarginTokens) /
+        DEFAULT_CONTEXT_PROFILE.maxInputTokens,
+    ),
+  );
+}
+
+export function undeclaredOutputReserveTokens(maxInputTokens: number): number {
+  const scaled = Math.ceil(
+    (maxInputTokens * DEFAULT_CONTEXT_PROFILE.reservedOutputTokens) /
+      DEFAULT_CONTEXT_PROFILE.maxInputTokens,
+  );
+  const floor = Math.min(
+    DEFAULT_CONTEXT_PROFILE.reservedOutputTokens,
+    Math.floor(maxInputTokens / UNDECLARED_OUTPUT_RESERVE_WINDOW_FRACTION),
+  );
+  return Math.max(scaled, floor);
+}
+
 // Derives a model-keyed ContextProfile from a configured chat capability. Unknown/placeholder
 // runtime capabilities (0 window / 0 output) fall back to the DEFAULT_CONTEXT_PROFILE geometry.
 export function deriveContextProfileFromCapability(
@@ -608,17 +740,8 @@ export function deriveContextProfileFromCapability(
   const reservedOutputTokens =
     capability.maxOutputTokens > 0
       ? Math.min(maxInputTokens, capability.maxOutputTokens)
-      : Math.ceil(
-          (maxInputTokens * DEFAULT_CONTEXT_PROFILE.reservedOutputTokens) /
-            DEFAULT_CONTEXT_PROFILE.maxInputTokens,
-        );
-  const safetyMarginTokens = Math.min(
-    maxInputTokens - reservedOutputTokens,
-    Math.ceil(
-      (maxInputTokens * DEFAULT_CONTEXT_PROFILE.safetyMarginTokens) /
-        DEFAULT_CONTEXT_PROFILE.maxInputTokens,
-    ),
-  );
+      : undeclaredOutputReserveTokens(maxInputTokens);
+  const safetyMarginTokens = safetyMarginTokensFor(maxInputTokens, reservedOutputTokens);
   return {
     ...deriveContextProfile({
       maxInputTokens,

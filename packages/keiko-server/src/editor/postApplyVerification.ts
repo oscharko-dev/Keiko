@@ -21,8 +21,11 @@ import {
   type VerificationReport,
   type VerificationResult,
 } from "@oscharko-dev/keiko-verification";
-import { detectWorkspaceAt, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
-import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import {
+  detectWorkspaceAt,
+  type WorkspaceFs,
+  type WorkspaceInfo,
+} from "@oscharko-dev/keiko-workspace";
 import type { EditorPatchVerificationSummary } from "@oscharko-dev/keiko-contracts";
 import {
   executeVerificationEnforced,
@@ -37,9 +40,13 @@ export type { NetworkIsolationProbe };
 
 export interface PostApplyVerificationArgs {
   readonly realRoot: string;
+  readonly fs: WorkspaceFs;
   // Workspace-relative paths of the applied test files to re-confirm (deleted paths excluded).
   readonly appliedTestFiles: readonly string[];
   readonly signal: AbortSignal;
+  // The patch-apply request correlation id. This keeps termination evidence emitted by the
+  // verification subprocess on the same reconstructable activity-log timeline as the apply.
+  readonly correlationId?: string | undefined;
 }
 
 export interface PostApplyVerificationResult {
@@ -55,6 +62,7 @@ export type PostApplyVerificationPort = (
 
 export interface PostApplyVerificationPreflightArgs {
   readonly realRoot: string;
+  readonly fs: WorkspaceFs;
   // Workspace-relative paths that would be verified if the patch is written.
   readonly appliedTestFiles: readonly string[];
 }
@@ -134,7 +142,11 @@ export function deniedVerificationSummary(): EditorPatchVerificationSummary {
 }
 
 function isRunnableTestFramework(workspace: WorkspaceInfo): boolean {
-  return workspace.testFramework === "vitest" || workspace.testFramework === "jest";
+  return (
+    workspace.testFramework === "vitest" ||
+    workspace.testFramework === "jest" ||
+    workspace.testFramework === "node-test"
+  );
 }
 
 // Statuses that count as an actual test failure. `denied` is deliberately excluded: a denied step was
@@ -205,6 +217,9 @@ function verificationCommand(workspace: WorkspaceInfo): string {
   if (workspace.testFramework === "jest") {
     return "npx jest";
   }
+  if (workspace.testFramework === "node-test") {
+    return "node --test";
+  }
   return "none";
 }
 
@@ -221,16 +236,22 @@ export function requiresPostApplyVerificationPreflight(
 // The route's default post-apply verification: plan a targeted-test step for the applied files, then run
 // it through the orchestrator with enforced, fail-closed egress isolation.
 export const defaultPostApplyVerification: PostApplyVerificationPort = async (args) => {
-  const workspace = detectWorkspaceAt(args.realRoot, nodeWorkspaceFs);
-  const steps = planDirectTargetedTests(workspace, args.appliedTestFiles, nodeWorkspaceFs);
+  const workspace = detectWorkspaceAt(args.realRoot, args.fs);
+  const steps = planDirectTargetedTests(workspace, args.appliedTestFiles, args.fs);
   if (steps.length === 0) {
     return { summary: notRunVerificationSummary(), command: "none" };
   }
   const { report, probe } = await executeVerificationEnforced({
     plan: { workspaceRoot: workspace.root, steps },
     workspace,
+    // The admitted capability must reach the EFFECT, not just detection and planning (#3347 owner
+    // P1). Omitting it here made runVerification fall back to `nodeWorkspaceFs` at the command
+    // spawn boundary, so a managed root replaced or revoked after planning could still execute the
+    // verification command through unbound filesystem authority.
+    fs: args.fs,
     signal: args.signal,
     probeCwd: args.realRoot,
+    correlationId: args.correlationId,
   });
   return { summary: toSummary(report, probe), command: verificationCommand(workspace) };
 };
@@ -238,7 +259,7 @@ export const defaultPostApplyVerification: PostApplyVerificationPort = async (ar
 // Preflight the same isolation control before any workspace write. If no targeted test would run, the
 // route may apply and report `not-run` post-apply; otherwise an unenforced host fails closed before write.
 export const defaultPostApplyVerificationPreflight: PostApplyVerificationPreflightPort = (args) => {
-  const workspace = detectWorkspaceAt(args.realRoot, nodeWorkspaceFs);
+  const workspace = detectWorkspaceAt(args.realRoot, args.fs);
   if (!requiresPostApplyVerificationPreflight(workspace, args.appliedTestFiles)) {
     return Promise.resolve({ ok: true });
   }

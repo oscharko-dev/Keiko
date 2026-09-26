@@ -162,5 +162,8 @@ export function validateHtmlManualPodCreateRequest(
   if (errors.length > 0 || typeof displayName !== "string" || typeof origin !== "string") {
     return { ok: false, errors: errors.length > 0 ? errors : ["request is invalid"] };
   }
-  return { ok: true, value: { displayName, origin, pathPrefix } };
+  // isSafeDisplayName bounds the TRIMMED length, so the trimmed string is the value that was
+  // actually checked — returning the raw one let leading padding carry an arbitrarily long name
+  // past a bound this validator exists to enforce.
+  return { ok: true, value: { displayName: displayName.trim(), origin, pathPrefix } };
 }

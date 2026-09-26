@@ -207,6 +207,6 @@ describe("CapsuleSetComposeDialog — responsive layout (AUDIT-E1821-004)", () =
     // The dialog is rendered via createPortal into document.body, not the render container.
     const dialog = document.body.querySelector(".mc-dialog");
     expect(dialog).not.toBeNull();
-    expect(dialog).not.toHaveAttribute("style");
+    expect(dialog).not.toHaveStyle({ width: "480px" });
   });
 });

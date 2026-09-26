@@ -1,7 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
-import { realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { e2eStateDir } from "../support/e2e-state-dir.js";
 
 // Issue #2253 - isolated unavailable-Codex browser evidence. The three ports deliberately do
 // not overlap the #1990/#1991/#1992/#1994 Coding Workbench plans.
@@ -11,8 +10,7 @@ const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32353");
 const bffPort = Number(process.env.KEIKO_E2E_BFF_PORT ?? "32354");
 const nextPort = Number(process.env.KEIKO_E2E_NEXT_PORT ?? "32355");
 const stateId = process.env.GITHUB_RUN_ID ?? `issue-2253-coding-workbench-${String(process.pid)}`;
-const stateDir =
-  process.env.KEIKO_E2E_STATE_DIR ?? join(realpathSync(tmpdir()), "keiko-e2e", stateId);
+const stateDir = e2eStateDir(stateId);
 const fixtureConfigPath = join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json");
 const runtimeConfigPath = join(stateDir, "keiko.e2e.config.json");
 const prepareRuntimeConfig = [

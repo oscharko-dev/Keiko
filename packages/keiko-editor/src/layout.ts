@@ -7,7 +7,7 @@ export {
   editorLayoutPanes,
   editorLayoutReducer,
   serializeEditorLayoutStateV2,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-layout";
 export type {
   CreateEditorLayoutStateV2Input,
   EditorLayoutAction,

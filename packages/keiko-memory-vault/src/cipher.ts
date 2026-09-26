@@ -9,11 +9,11 @@
 //   3. Keyfile           — <memoryDir>/vault.key, mode 0600. Documented WEAKER tier: the key sits
 //                          next to the DB, so an attacker with the directory has both halves.
 //
-// The keychain call is the only OS boundary in this module, so it is the only place wrapped in
-// try/catch: any failure (no `security` binary, locked keychain, non-darwin) falls through to the
-// keyfile tier rather than bricking the vault.
+// The keychain call is the only OS boundary in this module. It is delegated to the shared bounded
+// owner in keiko-security: any failure OR non-answer (no `security` binary, locked or absent
+// keychain, a keychain that raises a modal prompt instead of returning, non-darwin) falls through to
+// the keyfile tier within a bounded time rather than bricking the vault or hanging the boot path.
 
-import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { userInfo } from "node:os";
 import { join } from "node:path";
@@ -25,13 +25,17 @@ import {
   sealBytes,
   sealString,
 } from "@oscharko-dev/keiko-security";
+import {
+  readMacosKeychainSecret,
+  writeMacosKeychainSecret,
+  type MacosKeychainOptions,
+} from "@oscharko-dev/keiko-security/macos-keychain";
 import { chmodIfPresent, ensureDirHardened } from "./db.js";
 import { MemoryStorageError } from "./errors.js";
 
 const KEY_BYTES = 32;
 const KEYFILE_NAME = "vault.key";
 const KEYCHAIN_SERVICE = "keiko-memory-vault";
-const MACOS_SECURITY_EXECUTABLE = "/usr/bin/security";
 
 export type VaultKeySource = "env" | "keychain" | "keyfile";
 
@@ -67,34 +71,56 @@ function keyFromEnv(env: Readonly<Record<string, string | undefined>>): Buffer |
   return decodeKeyOrThrow(raw, "KEIKO_MEMORY_KEY");
 }
 
-// macOS Keychain via the `security` CLI. find→use; on miss, generate+store. Every spawn is wrapped
-// so a hardened/locked/headless keychain degrades to the keyfile tier instead of throwing.
-function keyFromKeychain(): Buffer | undefined {
-  if (process.platform !== "darwin") return undefined;
+// macOS Keychain via the shared bounded owner. find→use; on miss, generate+store. A keychain that
+// does not answer (`unavailable`) skips the store attempt: it would meet the same wall and spend a
+// second timeout on the boot path for nothing. `options` is a test seam only — production calls it
+// with none and gets the real `security` CLI and the production bound.
+export function keyFromKeychain(options: MacosKeychainOptions = {}): Buffer | undefined {
   const account = userInfo().username;
-  try {
-    const found = execFileSync(
-      MACOS_SECURITY_EXECUTABLE,
-      ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account, "-w"],
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
-    ).trim();
-    return decodeKeyOrThrow(found, "Keychain key");
-  } catch {
-    return generateKeychainKey(account);
+  const read = readMacosKeychainSecret(KEYCHAIN_SERVICE, account, options);
+  if (read.kind === "unavailable") return undefined;
+  if (read.kind === "found") {
+    try {
+      return decodeKeyOrThrow(read.secret, "Keychain key");
+    } catch {
+      // A stored value we cannot decode is replaced, exactly as before.
+    }
   }
+  return generateKeychainKey(account, options);
 }
 
-function generateKeychainKey(account: string): Buffer | undefined {
+function generateKeychainKey(account: string, options: MacosKeychainOptions): Buffer | undefined {
   const key = randomBytes(KEY_BYTES);
+  return writeMacosKeychainSecret(KEYCHAIN_SERVICE, account, key.toString("base64"), options)
+    ? key
+    : undefined;
+}
+
+// Result of the read-only keychain lookup below. A plain `Buffer | undefined` cannot distinguish
+// "no stored secret" from "a stored secret exists but failed to decode as a 32-byte key" — both
+// collapsed to `undefined` — so an operator inspecting a diagnostic export's absent `keySource`
+// could not tell "this tier was never used" from "this tier is broken" (coding guideline: "Errors
+// must surface with enough context to diagnose"). `malformed` carries exactly that distinction and
+// nothing else — no secret material, no keychain account/service name, just a boolean.
+export interface ReadOnlyKeychainLookup {
+  readonly key: Buffer | undefined;
+  readonly malformed: boolean;
+}
+
+// Read-only keychain lookup for the diagnostic export seam (Wave 4a, epic #3233 §6.2): a plain
+// find, never `generateKeychainKey`'s find-or-mint-and-store. A miss (including `unavailable`) is
+// reported as "this tier has nothing to offer", not "mint one" — the export path this feeds must
+// never write a new secret to the OS keychain any more than it may write a keyfile.
+export function keyFromKeychainReadOnly(
+  options: MacosKeychainOptions = {},
+): ReadOnlyKeychainLookup {
+  const account = userInfo().username;
+  const read = readMacosKeychainSecret(KEYCHAIN_SERVICE, account, options);
+  if (read.kind !== "found") return { key: undefined, malformed: false };
   try {
-    execFileSync(
-      MACOS_SECURITY_EXECUTABLE,
-      ["add-generic-password", "-s", KEYCHAIN_SERVICE, "-a", account, "-w", key.toString("base64")],
-      { stdio: ["ignore", "ignore", "ignore"] },
-    );
-    return key;
+    return { key: decodeKeyOrThrow(read.secret, "Keychain key"), malformed: false };
   } catch {
-    return undefined;
+    return { key: undefined, malformed: true };
   }
 }
 
@@ -124,6 +150,40 @@ export function resolveVaultKey(
 
 // Test/CI seam: an explicit "no keychain" reader so callers can force the keyfile tier.
 export const NO_KEYCHAIN: KeychainAccess = () => undefined;
+
+export interface ResolvedVaultKeyReadOnly {
+  readonly key: Buffer | undefined;
+  readonly source: VaultKeySource | undefined;
+  // True iff the keychain tier held a stored secret that failed to decode as a 32-byte key —
+  // distinct from an absent `source`, which also covers "the keychain had nothing at all" and "the
+  // env tier resolved the key so the keychain was never consulted" (both `false`). This is a
+  // read-only classification: unlike `keyFromKeychain`'s mutating counterpart, this path never
+  // replaces or regenerates the malformed value (Finding: Thread 5).
+  readonly keychainMalformed: boolean;
+}
+
+// Test/CI seam for the read-only diagnostic path (Finding: Thread 5): distinct from `KeychainAccess`
+// because the read-only resolver reports a `malformed` classification the mutating tier does not.
+export type ReadOnlyKeychainAccess = () => ReadOnlyKeychainLookup;
+
+// Read-only counterpart to `resolveVaultKey` for the diagnostic export seam (Wave 4a, epic #3233
+// §6.2/Finding 0): tries env, then a plain keychain lookup, and — unlike `resolveVaultKey` — never
+// falls through to the keyfile tier, because that tier's only miss behaviour is minting and
+// persisting a brand-new key to the customer's state directory. No `memoryDir` parameter: the
+// whole point of this function is that it never touches the filesystem, so it must not carry a
+// parameter that invites a future keyfile branch.
+export function resolveVaultKeyReadOnly(
+  env: Readonly<Record<string, string | undefined>>,
+  keychainAccess: ReadOnlyKeychainAccess = keyFromKeychainReadOnly,
+): ResolvedVaultKeyReadOnly {
+  const fromEnv = keyFromEnv(env);
+  if (fromEnv !== undefined) return { key: fromEnv, source: "env", keychainMalformed: false };
+  const fromKeychain = keychainAccess();
+  if (fromKeychain.key !== undefined) {
+    return { key: fromKeychain.key, source: "keychain", keychainMalformed: false };
+  }
+  return { key: undefined, source: undefined, keychainMalformed: fromKeychain.malformed };
+}
 
 export function createMemoryContentCipher(key: Buffer): MemoryContentCipher {
   return {

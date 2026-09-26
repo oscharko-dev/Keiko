@@ -18,11 +18,19 @@ import {
   KNOWLEDGE_CAPSULE_MIGRATIONS,
   KNOWLEDGE_CAPSULE_TABLES,
   LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { KnowledgeStoreError } from "./errors.js";
-import { LK_STORE_BUSY_TIMEOUT_MS, openKnowledgeStore } from "./store.js";
+import type { KnowledgeLogEvent, KnowledgeLogSink } from "./knowledge-log.js";
+import {
+  computeStoreFingerprint,
+  LK_STORE_BUSY_TIMEOUT_MS,
+  openKnowledgeStore,
+  openKnowledgeStoreReadOnly,
+  type KnowledgeStoreKeyProvider,
+} from "./store.js";
+import { STORE_CONTENT_ENCRYPTION_TEST_CONSTANTS } from "./store-content-encryption.js";
 
 interface CountRow {
   readonly n: number;
@@ -401,6 +409,262 @@ describe("openKnowledgeStore — upgrade path from v1", () => {
   });
 });
 
+// KEIKO-0371: capsule_sources carries `FOREIGN KEY (id) REFERENCES knowledge_sources(id) ON
+// DELETE RESTRICT` on a fresh install, but no migration ever added it to a store created at v1.
+// The obvious fix (the create/copy/DROP/rename rebuild used elsewhere in the schema) was tried and
+// reverted: capsule_sources is the FK TARGET of eight dependent tables under `ON DELETE CASCADE`,
+// this store opens with `PRAGMA foreign_keys = ON`, runMigrations wraps pending migrations in one
+// BEGIN/COMMIT, and `PRAGMA foreign_keys = OFF` is a documented no-op once that transaction is
+// open — so the DROP would have cascaded and silently deleted every upgraded store's documents,
+// chunks, and vectors. This suite proves the fix through the REAL runMigrations engine (not a
+// simplified statement-loop fixture — see AGENTS.md #2285 on fixtures restating the producer),
+// against a store populated exactly like a real installed capsule would be.
+const SEED_CAPSULE_SQL =
+  "INSERT INTO capsules (id, display_name, tags_json, retrieval_effort, output_mode, " +
+  "answer_grounding_policy, embedding_model_provider, embedding_model_id, vector_dimensions, " +
+  "vector_metric, lifecycle_state, storage_reference, created_at, updated_at) VALUES " +
+  "('cap-1', 'Demo capsule', '[]', 'default', 'answers', 'require-citations', 'openai', " +
+  "'text-embedding-3-small', 4, 'cosine', 'ready', 'capsules/cap-1', 1000, 1000)";
+
+const SEED_KNOWLEDGE_SOURCE_SQL =
+  "INSERT INTO knowledge_sources (id, display_name, tags_json, scope_kind, scope_json, " +
+  "created_at, updated_at) VALUES ('src-1', 'Demo source', '[]', 'folder', '{}', 1000, 1000)";
+
+const SEED_CAPSULE_SOURCE_SQL =
+  "INSERT INTO capsule_sources (id, capsule_id, display_name, tags_json, scope_kind, " +
+  "scope_json, created_at, updated_at) VALUES ('src-1', 'cap-1', 'Demo source', '[]', " +
+  "'folder', '{}', 1000, 1000)";
+
+const SEED_DOCUMENT_SQL =
+  "INSERT INTO documents (id, capsule_id, source_id, document_path, size_bytes, media_type, " +
+  "content_hash, parser_id, parser_version, last_extracted_at, status, safe_display_name) " +
+  "VALUES ('doc-1', 'cap-1', 'src-1', 'docs/intro.md', 10, 'text/markdown', 'deadbeef', " +
+  "'markdown', '1.0.0', 1000, 'extracted', 'intro.md')";
+
+const SEED_PARSED_UNIT_SQL =
+  "INSERT INTO parsed_units (id, capsule_id, document_id, kind) VALUES " +
+  "('unit-1', 'cap-1', 'doc-1', 'section')";
+
+const SEED_CHUNK_SQL =
+  "INSERT INTO chunks (id, capsule_id, source_id, document_id, parsed_unit_id, order_index, " +
+  "token_count, safe_excerpt_hash) VALUES ('chunk-1', 'cap-1', 'src-1', 'doc-1', 'unit-1', 0, " +
+  "4, 'abc')";
+
+const SEED_VECTOR_SQL =
+  "INSERT INTO vectors (id, capsule_id, source_id, document_id, chunk_id, embedding, " +
+  "embedding_model_provider, embedding_model_id, vector_dimensions, vector_metric, " +
+  "storage_reference, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+
+// Manually builds a v32-state store on disk (every migration through v32 applied — capsule_sources
+// still in its v1, FK-less shape) and populates one row in every table that cascades from
+// capsule_sources, so the real migration runner is the only thing standing between this fixture and
+// a passing test — exactly what an upgraded, populated, real-world store looks like today.
+function seedPopulatedV32Store(dbPath: string): void {
+  const seed = new DatabaseSync(dbPath);
+  try {
+    for (const migration of KNOWLEDGE_CAPSULE_MIGRATIONS) {
+      if (migration.version > 32) break;
+      for (const stmt of migration.up) seed.exec(stmt);
+    }
+    seed.exec(SEED_CAPSULE_SQL);
+    seed.exec(SEED_KNOWLEDGE_SOURCE_SQL);
+    seed.exec(SEED_CAPSULE_SOURCE_SQL);
+    seed.exec(SEED_DOCUMENT_SQL);
+    seed.exec(SEED_PARSED_UNIT_SQL);
+    seed.exec(SEED_CHUNK_SQL);
+    seed
+      .prepare(SEED_VECTOR_SQL)
+      .run(
+        "vec-1",
+        "cap-1",
+        "src-1",
+        "doc-1",
+        "chunk-1",
+        new Uint8Array(16),
+        "openai",
+        "text-embedding-3-small",
+        4,
+        "cosine",
+        "store-ref-1",
+        1000,
+      );
+    seed.exec("PRAGMA user_version = 32");
+  } finally {
+    seed.close();
+  }
+}
+
+describe("openKnowledgeStore — capsule_sources foreign key backfill (KEIKO-0371)", () => {
+  it("migrates a populated v32 store to v33 with zero dependent rows lost, and the new foreign key enforces ON DELETE RESTRICT", () => {
+    const dbPath = join(tmp, "capsules.db");
+    seedPopulatedV32Store(dbPath);
+
+    const store = openKnowledgeStore({ dbPath });
+    try {
+      const db = store._internal.db;
+      const version = db.prepare("PRAGMA user_version").get() as unknown as VersionRow;
+      expect(version.user_version).toBe(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION);
+
+      const dependentTables = [
+        "capsule_sources",
+        "knowledge_sources",
+        "documents",
+        "parsed_units",
+        "chunks",
+        "vectors",
+      ];
+      for (const table of dependentTables) {
+        const row = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as unknown as CountRow;
+        expect(row.n, `expected the seeded ${table} row to survive the v33 migration`).toBe(1);
+      }
+
+      const fkListRows = db.prepare("PRAGMA foreign_key_list('capsule_sources')").all();
+      const fkList = fkListRows as unknown as readonly {
+        readonly table: string;
+        readonly on_delete: string;
+      }[];
+      expect(
+        fkList.some((fk) => fk.table === "knowledge_sources" && fk.on_delete === "RESTRICT"),
+      ).toBe(true);
+
+      // Presence in the FK list is not enforcement; prove the constraint actually fires. src-1 is
+      // still referenced by capsule_sources (and, transitively, documents/chunks/vectors), so
+      // deleting it must be rejected rather than silently cascading away the whole lineage.
+      expect(() => db.prepare("DELETE FROM knowledge_sources WHERE id = ?").run("src-1")).toThrow(
+        /FOREIGN KEY constraint failed/,
+      );
+      const stillPresent = db
+        .prepare("SELECT COUNT(*) AS n FROM knowledge_sources")
+        .get() as unknown as CountRow;
+      expect(stillPresent.n).toBe(1);
+    } finally {
+      store.close();
+    }
+
+    const entries = readdirSync(tmp);
+    expect(entries.some((name) => name.includes(".corrupt."))).toBe(false);
+  });
+
+  it("aborts the v33 migration instead of committing a capsule_sources row with no matching knowledge_sources row", () => {
+    // The v10 backfill's `GROUP BY id` should make a dangling capsule_sources.id impossible, but the
+    // migration does not assume that — PRAGMA foreign_key_check inside the suspended-enforcement
+    // transaction is the backstop. This seeds exactly the anomaly that check exists to catch: a
+    // capsule_sources row whose id has no knowledge_sources counterpart at all.
+    const dbPath = join(tmp, "capsules.db");
+    const seed = new DatabaseSync(dbPath);
+    try {
+      for (const migration of KNOWLEDGE_CAPSULE_MIGRATIONS) {
+        if (migration.version > 32) break;
+        for (const stmt of migration.up) seed.exec(stmt);
+      }
+      seed.exec(SEED_CAPSULE_SQL);
+      // Deliberately no knowledge_sources row for 'src-1' — capsule_sources is populated directly.
+      seed.exec(SEED_CAPSULE_SOURCE_SQL);
+      seed.exec("PRAGMA user_version = 32");
+    } finally {
+      seed.close();
+    }
+
+    expect(() => openKnowledgeStore({ dbPath })).toThrow(/Failed to open knowledge-capsule store/);
+
+    // A rejected migration must fail closed, not corrupt: the file is not quarantined, and a plain
+    // read against it still sees the original v32 state untouched — capsule_sources kept its row and
+    // was never dropped, because ROLLBACK undid the whole suspended-enforcement transaction.
+    const entries = readdirSync(tmp);
+    expect(entries.some((name) => name.includes(".corrupt."))).toBe(false);
+    const reopened = new DatabaseSync(dbPath);
+    try {
+      const version = reopened.prepare("PRAGMA user_version").get() as unknown as VersionRow;
+      expect(version.user_version).toBe(32);
+      const row = reopened
+        .prepare("SELECT COUNT(*) AS n FROM capsule_sources")
+        .get() as unknown as CountRow;
+      expect(row.n).toBe(1);
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("reports every violating table, deduplicated and sorted, when the rebuild finds more than one", () => {
+    // assertNoForeignKeyViolations runs PRAGMA foreign_key_check against the WHOLE database, not
+    // just capsule_sources — a genuine safety net, not a narrow check. Plants a second, unrelated
+    // pre-existing violation (foreign_keys off for that one insert only) alongside the
+    // capsule_sources/knowledge_sources gap, so the reported table list has two distinct entries and
+    // the dedup+sort formatting path actually runs.
+    const dbPath = join(tmp, "capsules.db");
+    const seed = new DatabaseSync(dbPath);
+    try {
+      for (const migration of KNOWLEDGE_CAPSULE_MIGRATIONS) {
+        if (migration.version > 32) break;
+        for (const stmt of migration.up) seed.exec(stmt);
+      }
+      seed.exec(SEED_CAPSULE_SQL);
+      seed.exec(SEED_CAPSULE_SOURCE_SQL);
+      seed.exec("PRAGMA foreign_keys = OFF");
+      seed.exec(
+        "INSERT INTO capsule_set_members (set_id, capsule_id, ordinal, composed_at) " +
+          "VALUES ('set-1', 'no-such-capsule', 0, 1000)",
+      );
+      seed.exec("PRAGMA foreign_keys = ON");
+      seed.exec("PRAGMA user_version = 32");
+    } finally {
+      seed.close();
+    }
+
+    let caught: unknown;
+    try {
+      openKnowledgeStore({ dbPath });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(KnowledgeStoreError);
+    const migrationFailure = (caught as Error).cause;
+    expect(migrationFailure).toBeInstanceOf(KnowledgeStoreError);
+    const violationDetail = (migrationFailure as Error).cause;
+    expect(violationDetail).toBeInstanceOf(KnowledgeStoreError);
+    expect((violationDetail as Error).message).toMatch(/\[capsule_set_members, capsule_sources\]/);
+  });
+});
+
+describe("openKnowledgeStore — migration runner failure (standard, non-suspended group)", () => {
+  it("rolls back and rethrows when a normal migration fails mid-group, leaving the store at its prior version", () => {
+    // Every migration before v33 runs through applyStandardMigrationGroup's own BEGIN/COMMIT with no
+    // foreign-key suspension. Pre-creates capsule_membership_changes (the very table v2 tries to
+    // CREATE) so v2's first statement collides and throws — proving the standard group's ROLLBACK
+    // path undoes the whole batch instead of leaving a half-applied schema.
+    const dbPath = join(tmp, "capsules.db");
+    const v1 = KNOWLEDGE_CAPSULE_MIGRATIONS.find((m) => m.version === 1);
+    if (v1 === undefined) throw new Error("v1 migration not found");
+    const seed = new DatabaseSync(dbPath);
+    try {
+      for (const stmt of v1.up) seed.exec(stmt);
+      seed.exec("CREATE TABLE capsule_membership_changes (id INTEGER)");
+      seed.exec("PRAGMA user_version = 1");
+    } finally {
+      seed.close();
+    }
+
+    expect(() => openKnowledgeStore({ dbPath })).toThrow(/Failed to open knowledge-capsule store/);
+
+    const entries = readdirSync(tmp);
+    expect(entries.some((name) => name.includes(".corrupt."))).toBe(false);
+    const reopened = new DatabaseSync(dbPath);
+    try {
+      const version = reopened.prepare("PRAGMA user_version").get() as unknown as VersionRow;
+      // Still 1: the whole v2..v32 group rolled back, so user_version never advanced past v1.
+      expect(version.user_version).toBe(1);
+      const columns = reopened.prepare("PRAGMA table_info('capsule_membership_changes')").all() as {
+        readonly name?: string;
+      }[];
+      // The pre-created placeholder table (one INTEGER column) is still there, unreplaced by v2's
+      // real shape — proof the rest of v2's statements never committed either.
+      expect(columns.map((column) => column.name)).toEqual(["id"]);
+    } finally {
+      reopened.close();
+    }
+  });
+});
+
 describe("openKnowledgeStore — sequential transactions", () => {
   it("two prepared transactions in sequence both succeed under WAL", () => {
     const store = openKnowledgeStore({ dbPath: join(tmp, "capsules.db") });
@@ -450,5 +714,257 @@ describe("openKnowledgeStore — sidecar quarantine", () => {
     expect(corruptMain).toBe(true);
     expect(corruptWal).toBe(true);
     expect(corruptShm).toBe(true);
+  });
+});
+
+// ─── Activity log ────────────────────────────────────────────────────────────
+// Store recovery is otherwise invisible: a corrupt database is renamed aside and an EMPTY one
+// takes its place, and until these lines existed the only trace was a diagnostic sidecar
+// nobody looks for until the missing capsules are already noticed.
+describe("openKnowledgeStore — activity log", () => {
+  function recordingSink(): { sink: KnowledgeLogSink; events: KnowledgeLogEvent[] } {
+    const events: KnowledgeLogEvent[] = [];
+    return {
+      sink: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+      events,
+    };
+  }
+
+  it("records a data-losing quarantine at error level, with the reopen outcome", () => {
+    const dbPath = join(tmp, "capsules.db");
+    writeFileSync(dbPath, "not a sqlite database — partial write");
+    const { sink, events } = recordingSink();
+
+    const store = openKnowledgeStore({ dbPath, logSink: sink });
+    store.close();
+
+    const quarantine = events.find((event) => event.op === "knowledge.store.quarantined");
+    expect(quarantine).toBeDefined();
+    expect(quarantine?.level).toBe("error");
+    expect(quarantine?.category).toBe("diagnostic");
+    expect(quarantine?.extra).toMatchObject({ reopenState: "reopened" });
+    expect(typeof quarantine?.extra?.failureKind).toBe("string");
+    expect(quarantine?.errorKind).toBe("read-failed");
+  });
+
+  it("writes nothing when the store opens cleanly", () => {
+    const { sink, events } = recordingSink();
+    const store = openKnowledgeStore({ dbPath: join(tmp, "capsules.db"), logSink: sink });
+    store.close();
+    expect(events).toEqual([]);
+  });
+
+  it("never places the database path in a logged field", () => {
+    const dbPath = join(tmp, "capsules.db");
+    writeFileSync(dbPath, "not a sqlite database — partial write");
+    const { sink, events } = recordingSink();
+
+    const store = openKnowledgeStore({ dbPath, logSink: sink });
+    store.close();
+
+    const serialized = JSON.stringify(events);
+    expect(serialized).not.toContain(dbPath);
+    expect(serialized).not.toContain(tmp);
+    expect(serialized).not.toContain("capsules.db");
+  });
+
+  it("records the fail-closed rejection when the content cipher cannot be resolved", () => {
+    const dbPath = join(tmp, "capsules.db");
+    const { sink, events } = recordingSink();
+
+    expect(() =>
+      openKnowledgeStore({
+        dbPath,
+        logSink: sink,
+        protection: { mode: "encrypted-key-provider" },
+      }),
+    ).toThrow(KnowledgeStoreError);
+
+    const rejection = events.find((event) => event.op === "knowledge.store.encryption-rejected");
+    expect(rejection).toBeDefined();
+    expect(rejection?.level).toBe("error");
+    expect(rejection?.errorKind).toBe("permission-denied");
+    expect(rejection?.extra).toMatchObject({ protectionMode: "encrypted-key-provider" });
+    expect(typeof rejection?.extra?.failureKind).toBe("string");
+  });
+
+  function testKeyProvider(fill: number): KnowledgeStoreKeyProvider {
+    return {
+      providerId: `test-${String(fill)}`,
+      resolveKey: () => new Uint8Array(32).fill(fill),
+    };
+  }
+
+  it("records store.encryption-migrated on a fresh forward migration to encrypted storage", () => {
+    const dbPath = join(tmp, "capsules.db");
+    const { sink, events } = recordingSink();
+
+    const store = openKnowledgeStore({
+      dbPath,
+      logSink: sink,
+      protection: { mode: "encrypted-key-provider", keyProvider: testKeyProvider(7) },
+    });
+    store.close();
+
+    const migrated = events.find((event) => event.op === "store.encryption-migrated");
+    expect(migrated).toBeDefined();
+    expect(migrated?.category).toBe("diagnostic");
+    expect(migrated?.durationMs).toBeGreaterThanOrEqual(0);
+    expect(migrated?.extra).toEqual({
+      completeness: "complete",
+      fromScope: "plaintext",
+      loss: "none",
+      toScope: STORE_CONTENT_ENCRYPTION_TEST_CONSTANTS.scopeValue,
+    });
+  });
+
+  it("records store.encryption-migrated with the prior scope on a scope upgrade", () => {
+    const dbPath = join(tmp, "capsules.db");
+    const store = openKnowledgeStore({
+      dbPath,
+      protection: { mode: "encrypted-key-provider", keyProvider: testKeyProvider(9) },
+    });
+    store.close();
+
+    const raw = new DatabaseSync(dbPath);
+    try {
+      raw
+        .prepare("UPDATE schema_meta SET value = ? WHERE key = ?")
+        .run("reconstructive-columns/v2", STORE_CONTENT_ENCRYPTION_TEST_CONSTANTS.scopeKey);
+    } finally {
+      raw.close();
+    }
+
+    const { sink, events } = recordingSink();
+    const upgraded = openKnowledgeStore({
+      dbPath,
+      logSink: sink,
+      protection: { mode: "encrypted-key-provider", keyProvider: testKeyProvider(9) },
+    });
+    upgraded.close();
+
+    const migrated = events.find((event) => event.op === "store.encryption-migrated");
+    expect(migrated).toBeDefined();
+    expect(migrated?.extra).toEqual({
+      completeness: "complete",
+      fromScope: "reconstructive-columns/v2",
+      loss: "none",
+      toScope: STORE_CONTENT_ENCRYPTION_TEST_CONSTANTS.scopeValue,
+    });
+  });
+
+  it("never writes store.encryption-migrated when nothing needed migrating", () => {
+    const dbPath = join(tmp, "capsules.db");
+    const provider = testKeyProvider(11);
+    openKnowledgeStore({
+      dbPath,
+      protection: { mode: "encrypted-key-provider", keyProvider: provider },
+    }).close();
+
+    const { sink, events } = recordingSink();
+    openKnowledgeStore({
+      dbPath,
+      logSink: sink,
+      protection: { mode: "encrypted-key-provider", keyProvider: provider },
+    }).close();
+
+    expect(events.find((event) => event.op === "store.encryption-migrated")).toBeUndefined();
+  });
+});
+
+describe("computeStoreFingerprint", () => {
+  it("reports schema version, applied migrations, table row counts, and quick_check on a fresh plaintext store", () => {
+    const store = openKnowledgeStore({ dbPath: join(tmp, "capsules.db") });
+    try {
+      const fingerprint = computeStoreFingerprint(store._internal.db);
+      expect(fingerprint.store).toBe("local-knowledge");
+      expect(fingerprint.schemaVersion).toBe(LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION);
+      expect(fingerprint.migrationsApplied).toEqual(
+        KNOWLEDGE_CAPSULE_MIGRATIONS.map((migration) => `v${String(migration.version)}`),
+      );
+      expect(Object.keys(fingerprint.tableRowCounts).sort()).toEqual(
+        [...KNOWLEDGE_CAPSULE_TABLES].sort(),
+      );
+      expect(Object.values(fingerprint.tableRowCounts).every((count) => count === 0)).toBe(true);
+      expect(fingerprint.quickCheckOk).toBe(true);
+      expect(fingerprint.encryptionMode).toBe("plaintext");
+      expect(fingerprint.keySource).toBeUndefined();
+    } finally {
+      store.close();
+    }
+  });
+
+  it("counts existing rows and reports encryptionMode: encrypted for an encrypted store", () => {
+    const dbPath = join(tmp, "capsules.db");
+    const store = openKnowledgeStore({
+      dbPath,
+      protection: {
+        mode: "encrypted-key-provider",
+        keyProvider: { providerId: "fp-test", resolveKey: () => new Uint8Array(32).fill(3) },
+      },
+    });
+    try {
+      store._internal.db
+        .prepare(
+          `INSERT INTO capsules (id, display_name, tags_json, retrieval_effort, output_mode,
+             answer_grounding_policy, lifecycle_state, storage_reference,
+             embedding_model_provider, embedding_model_id, vector_dimensions, vector_metric,
+             created_at, updated_at)
+           VALUES ('cap-fp', 'Fingerprint capsule', '[]', 'default', 'answers',
+             'require-citations-or-state-no-evidence', 'draft', 'capsules/cap-fp',
+             'test', 'model', 8, 'cosine', 1, 1)`,
+        )
+        .run();
+      const fingerprint = computeStoreFingerprint(store._internal.db);
+      expect(fingerprint.tableRowCounts.capsules).toBe(1);
+      expect(fingerprint.encryptionMode).toBe("encrypted");
+      expect(fingerprint.quickCheckOk).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("degrades a failing quick_check read to quickCheckOk: false rather than throwing", () => {
+    const dbPath = join(tmp, "capsules.db");
+    const store = openKnowledgeStore({ dbPath });
+    // A quick_check failure must degrade, never propagate — a bundle export must not crash
+    // because the very store it is reporting on is unhealthy. Overriding `prepare` for just the
+    // one statement (rather than corrupting the on-disk file, which `openKnowledgeStore` already
+    // quarantines at open time) isolates the ONE read this function's `quickCheckOkFor` helper
+    // must swallow, without disturbing every other prepared statement `computeStoreFingerprint`
+    // also issues.
+    const originalPrepare = store._internal.db.prepare.bind(store._internal.db);
+    store._internal.db.prepare = (sql: string): ReturnType<typeof originalPrepare> => {
+      if (sql === "PRAGMA quick_check") throw new Error("simulated quick_check read failure");
+      return originalPrepare(sql);
+    };
+    try {
+      const fingerprint = computeStoreFingerprint(store._internal.db);
+      expect(fingerprint.quickCheckOk).toBe(false);
+    } finally {
+      store._internal.db.prepare = originalPrepare;
+      store.close();
+    }
+  });
+});
+
+describe("openKnowledgeStoreReadOnly (Finding 2 — busy_timeout on the read-only diagnostic open)", () => {
+  it("sets the active PRAGMA busy_timeout to LK_STORE_BUSY_TIMEOUT_MS, not node:sqlite's default of 0", () => {
+    const dbPath = join(tmp, "capsules.db");
+    openKnowledgeStore({ dbPath }).close();
+
+    const db = openKnowledgeStoreReadOnly(dbPath);
+    try {
+      const rows = db.prepare("PRAGMA busy_timeout").all() as unknown as readonly {
+        timeout: number;
+      }[];
+      expect(rows[0]?.timeout).toBe(LK_STORE_BUSY_TIMEOUT_MS);
+    } finally {
+      db.close();
+    }
   });
 });

@@ -1,6 +1,6 @@
 // Issue #2129 — tests for HealthScanFindings: loading, empty state, all 4 finding kinds, a11y.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { axe } from "jest-axe";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -89,6 +89,31 @@ describe("HealthScanFindings — load error", () => {
       expect(screen.getByRole("alert")).toBeInTheDocument();
       expect(screen.getByText(/scan load failed/i)).toBeInTheDocument();
     });
+  });
+
+  // A previous successful scan must not be presented as fresh while the current refresh is
+  // rate-limited. In particular, the summary count is a health claim, not a stale-cache badge.
+  it("clears a stale health claim for a rate-limited refresh and replaces the error on retry", async () => {
+    const initialFetch = scanWith(resultWith([]));
+    const rateLimitedRefresh = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Health scan refresh is rate-limited"))
+      .mockResolvedValueOnce(resultWith([makeFinding()]));
+    const { rerender } = render(<HealthScanFindings fetchImpl={initialFetch} />);
+
+    await screen.findByText("No issues found");
+    rerender(<HealthScanFindings fetchImpl={rateLimitedRefresh} />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert")).toHaveTextContent("Health scan refresh is rate-limited"),
+    );
+    expect(screen.queryByText("0 findings")).not.toBeInTheDocument();
+    expect(screen.queryByText("No issues found")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    await screen.findByText("Orphan memory");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText("1 findings")).toBeInTheDocument();
   });
 });
 

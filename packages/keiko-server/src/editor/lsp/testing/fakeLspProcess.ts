@@ -8,6 +8,7 @@ import { PassThrough } from "node:stream";
 
 import { createLspFrameReader, writeLspFrame } from "../lspFrameCodec.js";
 import type { LspBytes } from "../lspFrameCodec.js";
+import type { LspProcessKillResult } from "../lspNodeAdapter.js";
 import type { LspSpawnHandle } from "../lspTransport.js";
 
 // "unresponsive" answers `initialize` (so the manager reaches READY) but ignores BOTH the `shutdown`
@@ -25,12 +26,26 @@ export type FakeLspBehavior =
 // hooks. Mirrors the node adapter's `LspSpawnFn` return so the fake is a drop-in for the manager.
 interface FakeLspSpawnHandle extends LspSpawnHandle {
   kill(signal: NodeJS.Signals): void;
+  lastKillResult(): LspProcessKillResult | undefined;
+  releaseRuntimeResources?(): void;
+  treeLifetimeBoundary?: "os-owned" | undefined;
   onExit(callback: (code: number | null, signal: NodeJS.Signals | null) => void): void;
   onError(callback: (error: Error) => void): void;
 }
 
 export interface FakeLspOptions {
   readonly behavior?: FakeLspBehavior;
+  // Defaults to the historical synchronous confirmation. Set false to model a real kill request
+  // whose OS exit notification arrives later (or never), so ownership/reaper tests cannot mistake
+  // requested SIGKILL for confirmed exit.
+  readonly killConfirmsExit?: boolean;
+  // Defaults to confirmed containment only for SIGKILL; SIGTERM alone remains unconfirmed. Override
+  // to model a failed/refused Windows tree kill where the cmd.exe wrapper can exit while its
+  // language-server grandchild survives.
+  readonly killResult?: LspProcessKillResult | undefined;
+  // `null` selects an undefined handle pid, modelling Node's asynchronous pre-spawn ENOENT shape:
+  // the ChildProcess emits `error`, never acquired an OS pid, and will not later emit `exit`.
+  readonly pid?: number | null | undefined;
   // The byte size the `oversized` behavior declares in its Content-Length header (defaults to a value
   // intentionally larger than any test's maxFrameBytes).
   readonly oversizedContentLength?: number;
@@ -41,6 +56,8 @@ export interface FakeLspOptions {
   readonly results?: Readonly<Record<string, unknown>>;
   readonly initializeResult?: unknown;
   readonly onMessage?: ((method: string, params: unknown) => void) | undefined;
+  readonly releaseRuntimeResources?: (() => void) | undefined;
+  readonly treeLifetimeBoundary?: "os-owned" | undefined;
 }
 
 interface JsonRpcMessage {
@@ -60,6 +77,8 @@ export interface FakeLspController {
   // a child that has already been superseded by a restart (real ChildProcess can fire both `error`
   // and `exit`). Used to prove the manager discards a stale-generation crash (FIX 4).
   emitLateExit(code?: number): void;
+  emitError(error?: Error): void;
+  confirmExit(signal?: NodeJS.Signals): void;
   killed(): readonly NodeJS.Signals[];
   exitEmitted(): boolean;
   receivedMethods(): readonly string[];
@@ -72,6 +91,7 @@ export function createFakeLspProcess(options: FakeLspOptions = {}): FakeLspContr
   const behavior = options.behavior ?? "normal";
   const killedSignals: NodeJS.Signals[] = [];
   const exitCallbacks: ((code: number | null, signal: NodeJS.Signals | null) => void)[] = [];
+  const errorCallbacks: ((error: Error) => void)[] = [];
   let exitEmitted = false;
   const receivedMethods: string[] = [];
 
@@ -90,8 +110,40 @@ export function createFakeLspProcess(options: FakeLspOptions = {}): FakeLspContr
     stderr.write(Buffer.from(options.sentinel, "utf8"));
   }
 
-  const handle = fakeSpawnHandle(stdin, stdout, stderr, killedSignals, exitCallbacks, emitExit);
+  const handle = fakeSpawnHandle(
+    stdin,
+    stdout,
+    stderr,
+    killedSignals,
+    exitCallbacks,
+    errorCallbacks,
+    emitExit,
+    options.killConfirmsExit ?? true,
+    options.killResult,
+    options.pid === null ? undefined : (options.pid ?? 4242),
+    options.releaseRuntimeResources,
+    options.treeLifetimeBoundary,
+  );
 
+  return fakeController(handle, stderr, exitCallbacks, errorCallbacks, emitExit, {
+    killedSignals,
+    receivedMethods,
+    exitEmitted: (): boolean => exitEmitted,
+  });
+}
+
+function fakeController(
+  handle: FakeLspSpawnHandle,
+  stderr: PassThrough,
+  exitCallbacks: ((code: number | null, signal: NodeJS.Signals | null) => void)[],
+  errorCallbacks: ((error: Error) => void)[],
+  emitExit: ExitFn,
+  state: {
+    readonly killedSignals: NodeJS.Signals[];
+    readonly receivedMethods: string[];
+    readonly exitEmitted: () => boolean;
+  },
+): FakeLspController {
   return {
     handle,
     emitStderr: (text): void => {
@@ -103,9 +155,15 @@ export function createFakeLspProcess(options: FakeLspOptions = {}): FakeLspContr
     emitLateExit: (code = 1): void => {
       for (const callback of exitCallbacks) callback(code, null);
     },
-    killed: (): readonly NodeJS.Signals[] => killedSignals,
-    exitEmitted: (): boolean => exitEmitted,
-    receivedMethods: (): readonly string[] => receivedMethods,
+    emitError: (error = new Error("fake child error")): void => {
+      for (const callback of errorCallbacks) callback(error);
+    },
+    confirmExit: (signal = "SIGKILL"): void => {
+      emitExit(null, signal);
+    },
+    killed: (): readonly NodeJS.Signals[] => state.killedSignals,
+    exitEmitted: state.exitEmitted,
+    receivedMethods: (): readonly string[] => state.receivedMethods,
   };
 }
 
@@ -115,22 +173,37 @@ function fakeSpawnHandle(
   stderr: PassThrough,
   killedSignals: NodeJS.Signals[],
   exitCallbacks: ((code: number | null, signal: NodeJS.Signals | null) => void)[],
+  errorCallbacks: ((error: Error) => void)[],
   emitExit: ExitFn,
+  killConfirmsExit: boolean,
+  killResult: LspProcessKillResult | undefined,
+  pid: number | undefined,
+  releaseRuntimeResources: (() => void) | undefined,
+  treeLifetimeBoundary: "os-owned" | undefined,
 ): FakeLspSpawnHandle {
+  let latestKillResult: LspProcessKillResult | undefined;
   return {
     stdin,
     stdout,
     stderr,
-    pid: 4242,
+    pid,
     kill: (signal): void => {
       killedSignals.push(signal);
-      if (signal === "SIGKILL") emitExit(null, "SIGKILL");
+      latestKillResult =
+        killResult ??
+        (signal === "SIGKILL"
+          ? { treeContainment: "confirmed", windowsTreeKill: "not-attempted" }
+          : { treeContainment: "unconfirmed", windowsTreeKill: "not-attempted" });
+      if (signal === "SIGKILL" && killConfirmsExit) emitExit(null, "SIGKILL");
     },
+    lastKillResult: (): LspProcessKillResult | undefined => latestKillResult,
+    ...(releaseRuntimeResources === undefined ? {} : { releaseRuntimeResources }),
+    ...(treeLifetimeBoundary === undefined ? {} : { treeLifetimeBoundary }),
     onExit: (callback): void => {
       exitCallbacks.push(callback);
     },
-    onError: (): void => {
-      // The fake never emits a spawn-time error; SPAWN_FAILED is exercised via a throwing spawn fn.
+    onError: (callback): void => {
+      errorCallbacks.push(callback);
     },
   };
 }

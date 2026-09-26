@@ -30,9 +30,11 @@ import type {
 import {
   evaluateGitDeliveryEffectivePolicy,
   evaluateGitPolicy,
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import {
   GIT_DELIVERY_SCHEMA_VERSION,
   gitDeliveryRiskClassForInputs,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import type { GitLocalMutationAdapter } from "./git-mutation-adapter.js";
 import type {
   GitPreflightFinding,
@@ -40,6 +42,7 @@ import type {
   GitWorktreeSnapshot,
 } from "./git-mutation-preflight.js";
 import { evaluateGitPreflight } from "./git-mutation-preflight.js";
+import { resolveGitDeliveryApprovalGate } from "./git-approval-gate.js";
 import type {
   GitMutationFailureCategory,
   GitMutationLifecyclePhase,
@@ -69,6 +72,8 @@ export interface GitStageCommand {
   readonly kind: "stage";
   readonly pathspecs: readonly string[];
   readonly includeUntracked: boolean;
+  readonly worktreeDigest?: string;
+  readonly verified?: import("./git-mutation-adapter.js").GitVerifiedCommitPrecondition;
 }
 
 export interface GitUnstageCommand {
@@ -80,6 +85,7 @@ export interface GitCommitCommand {
   readonly kind: "commit";
   readonly message: string;
   readonly allowEmpty: boolean;
+  readonly verified?: import("./git-mutation-adapter.js").GitVerifiedCommitPrecondition;
 }
 
 export interface GitAbortCommand {
@@ -307,32 +313,23 @@ type PolicyGate =
       readonly blockReason: GitDeliveryBlockReason;
     };
 
-function approvalIsValid(
-  approval: GitDeliveryApprovalRequirement,
-  now: number,
-): "valid" | "absent" | "expired" {
-  if (!approval.required) {
-    return "absent";
-  }
-  if (approval.expiresAtMs !== undefined && approval.expiresAtMs <= now) {
-    return "expired";
-  }
-  return "valid";
-}
-
+// KEIKO-0535: delegates to the one shared approval-gate resolver (git-approval-gate.ts) instead of
+// re-deriving valid/expired/absent + KEIKO-0147's identity check locally, then maps the canonical
+// result onto this file's own PolicyGate shape — the same shape every existing caller already
+// consumes, so behavior is unchanged.
 function resolveApprovalGate(
-  approvers: readonly string[],
+  decision: GitDeliveryPolicyDecision,
   approval: GitDeliveryApprovalRequirement,
   now: number,
 ): PolicyGate {
-  const state = approvalIsValid(approval, now);
-  if (state === "valid") {
+  const gate = resolveGitDeliveryApprovalGate(decision, approval, now);
+  if (gate.proceed) {
     return { proceed: true };
   }
-  if (state === "expired") {
-    return { proceed: false, status: "policy-block", blockReason: "approval-expired" };
+  if (gate.status === "approval-required") {
+    return { proceed: false, status: "approval-required", requiredApprovers: gate.approvers };
   }
-  return { proceed: false, status: "approval-required", requiredApprovers: approvers };
+  return { proceed: false, status: "policy-block", blockReason: gate.blockReason };
 }
 
 // Delegates effective constraint resolution to the contract-owned evaluator so every execution and
@@ -356,14 +353,21 @@ function resolvePolicyGate(
   if (effective.outcome === "blocked") {
     return { proceed: false, status: "policy-block", blockReason: effective.blockReason };
   }
-  return resolveApprovalGate(
-    decision.outcome === "approval-gated" ? decision.requiredApprovers : [],
-    request.approval,
-    now,
-  );
+  return resolveApprovalGate(decision, request.approval, now);
 }
 
 // ─── Phase 5: execution dispatch ─────────────────────────────────────────────────────────────
+
+function dispatchStage(
+  command: GitStageCommand,
+  adapter: GitLocalMutationAdapter,
+): Promise<GitDeliveryExecutionResult> {
+  return adapter.stage({
+    pathspecs: command.pathspecs,
+    ...(command.worktreeDigest === undefined ? {} : { worktreeDigest: command.worktreeDigest }),
+    ...(command.verified === undefined ? {} : { verified: command.verified }),
+  });
+}
 
 function dispatchExecution(
   command: GitMutationCommand,
@@ -378,11 +382,15 @@ function dispatchExecution(
     case "branch-switch":
       return adapter.switchBranch({ branchName: command.branchName });
     case "stage":
-      return adapter.stage({ pathspecs: command.pathspecs });
+      return dispatchStage(command, adapter);
     case "unstage":
       return adapter.unstage({ pathspecs: command.pathspecs });
     case "commit":
-      return adapter.commit({ message: command.message, allowEmpty: command.allowEmpty });
+      return adapter.commit({
+        message: command.message,
+        allowEmpty: command.allowEmpty,
+        ...(command.verified === undefined ? {} : { verified: command.verified }),
+      });
     case "abort":
       return adapter.abort({ operationToAbort: command.operationToAbort });
     case "recovery":

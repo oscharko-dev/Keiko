@@ -16,6 +16,14 @@ denials and the separate delivery approval boundary remain unchanged.
 
 `npm run test:e2e:editor-agent-docking-2122` passed locally on Chromium: **4 tests passed**.
 
+> **Retired (#2955).** This is the historical record of the run that closed #2122 and it is left
+> intact. The suite itself no longer exists: two of its journeys drove
+> `POST /api/editor/agent/authority` and `/api/coding-workbench/autonomous-delivery/confirm`, which
+> #2256 later unmounted on purpose, so from that point the suite could not have passed again — and
+> nothing noticed, because it ran in no lane. Its split-pane single-session invariant survives as a
+> pin in `tests/e2e/editor-agent-pins.spec.ts`; the selection, apply, review and save journeys are
+> covered by `tests/e2e/editor-chat-roundtrip-2119.spec.ts`. Both run in a workflow lane.
+
 The suite proves:
 
 - editor selection -> Ask Keiko -> selection-grounded response;

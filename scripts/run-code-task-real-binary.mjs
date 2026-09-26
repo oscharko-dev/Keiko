@@ -6,24 +6,47 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { clearInterval, setInterval } from "node:timers";
 import { fileURLToPath } from "node:url";
 
+import {
+  loadConfigFromFile,
+  resolveCodingSafeSidecarGatewayProfile,
+} from "@oscharko-dev/keiko-model-gateway";
+import { OPENCODE_PINNED_VERSION } from "../packages/keiko-server/dist/coding-runtime/opencodeToolSchemas.js";
+import { resolveOpenCodeContextGeometry } from "../packages/keiko-server/dist/coding-runtime/opencodeLaunchProfile.js";
+
 import { hostDevLaneTarget } from "./stage-dev-coding-runtime.mjs";
+import { realBinaryScenarioArtifactErrors } from "./lib/coding-issue-journey-real-binary-evidence.mjs";
+import { writeQualificationEvidenceReceipt } from "./lib/qualification-evidence-receipt.mjs";
+import {
+  TOOL_CATALOG_QUALIFICATION_DIR_ENV,
+  TOOL_CATALOG_QUALIFICATION_HEAD_ENV,
+  captureToolCatalogQualificationBinding,
+  validToolCatalogQualificationOutcome,
+  writeToolCatalogQualificationObservation,
+} from "./lib/tool-catalog-qualification-observation.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { activityLogFiles, readActivityLogText } from "./lib/activity-log-files.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const MAX_DISTINCT_CONNECTIONS = 4_096;
-const REAL_BINARY_VERSION = "1.17.17";
+const MAX_ACTIVITY_LOG_BYTES = 32 * 1_024 * 1_024;
+const EVIDENCE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+const QUALIFICATION_RECEIPTS_DIR_ENV = "KEIKO_CODE_TASK_QUALIFICATION_RECEIPTS_DIR";
+const GEOMETRY_CREDENTIAL_PLACEHOLDER = "qualification-metadata-only";
 
 // Absolute, fixed system paths — never a bare name resolved through PATH. This runner samples
 // process and socket facts on a developer or CI machine whose PATH may contain writable
@@ -170,14 +193,26 @@ function runPlaywright(env, observer, limitObserver) {
 }
 
 export function readGatewayObservation(path) {
-  if (!existsSync(path)) return { requestCount: 0, outputTokenLimits: [] };
-  const parsed = JSON.parse(readFileSync(path, "utf8"));
-  return {
-    requestCount: Number(parsed.requestCount ?? 0),
-    outputTokenLimits: Array.isArray(parsed.outputTokenLimits)
-      ? parsed.outputTokenLimits.filter((value) => Number.isSafeInteger(value))
-      : [],
+  const empty = {
+    requestCount: 0,
+    outputTokenLimits: [],
+    catalogBinding: undefined,
+    catalogBindingRequestCount: 0,
   };
+  if (!existsSync(path)) return empty;
+  try {
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    return {
+      requestCount: Number(parsed.requestCount ?? 0),
+      outputTokenLimits: Array.isArray(parsed.outputTokenLimits)
+        ? parsed.outputTokenLimits.filter((value) => Number.isSafeInteger(value))
+        : [],
+      catalogBinding: captureToolCatalogQualificationBinding(parsed.catalogBinding),
+      catalogBindingRequestCount: Number(parsed.catalogBindingRequestCount ?? 0),
+    };
+  } catch {
+    return empty;
+  }
 }
 
 function materializedConfigPaths(stateDir) {
@@ -199,22 +234,98 @@ export function readMaterializedLimits(stateDir) {
     try {
       const config = JSON.parse(readFileSync(path, "utf8"));
       const limit = config.provider?.["keiko-runtime"]?.models?.coding?.limit;
-      return Number.isSafeInteger(limit?.context) && Number.isSafeInteger(limit?.output)
-        ? [{ context: limit.context, output: limit.output }]
+      const geometry = [limit?.context, limit?.input, limit?.output];
+      return geometry.every((value) => Number.isSafeInteger(value))
+        ? [{ context: limit.context, input: limit.input, output: limit.output }]
         : [];
     } catch {
       return [];
     }
   });
-  return [...new Map(limits.map((limit) => [`${limit.context}:${limit.output}`, limit])).values()];
+  return [
+    ...new Map(
+      limits.map((limit) => [`${limit.context}:${limit.input}:${limit.output}`, limit]),
+    ).values(),
+  ];
 }
 
-function createMaterializedLimitObserver(stateDir) {
+export function readDeclaredChildGeometry(
+  stateDir,
+  loadConfig = loadGeometryConfig,
+  resolveProfile = resolveCodingSafeSidecarGatewayProfile,
+  resolveGeometry = resolveOpenCodeContextGeometry,
+  observeFailure = () => undefined,
+) {
+  let stage = "config-load";
+  try {
+    const config = loadConfig(
+      join(stateDir, "bff-state", "ui-db", "keiko.config.json"),
+      process.env,
+    );
+    stage = "profile-resolution";
+    const profile = resolveProfile(config);
+    if (profile.status !== "available") {
+      observeFailure({ stage, errorClass: "ProfileUnavailable" });
+      return undefined;
+    }
+    stage = "geometry-resolution";
+    const geometry = resolveGeometry(profile.runMetadata);
+    if (geometry === undefined) {
+      observeFailure({ stage, errorClass: "GeometryUnavailable" });
+      return undefined;
+    }
+    return {
+      ...geometry,
+      runMetadata: {
+        maxPromptTokens: profile.runMetadata.maxPromptTokens,
+        maxOutputTokens: profile.runMetadata.maxOutputTokens,
+        maxInputMessages: profile.runMetadata.maxInputMessages,
+        maxRequestBytes: profile.runMetadata.maxRequestBytes,
+      },
+    };
+  } catch (error) {
+    observeFailure({
+      stage,
+      errorClass: error instanceof Error ? error.constructor.name : "UnknownThrownValue",
+    });
+    return undefined;
+  }
+}
+
+function loadGeometryConfig(path, env) {
+  // Production migrates plaintext credentials to opaque references before the journey runs. This
+  // post-run observer needs only the validated provider metadata; the successful gateway requests
+  // independently prove that the runtime resolved the real credential. A fixed non-secret value
+  // lets the shared production parser validate that persisted shape without opening the vault.
+  return loadConfigFromFile(path, env, {
+    secretResolver: () => GEOMETRY_CREDENTIAL_PLACEHOLDER,
+  });
+}
+
+function readGatewayGeometryEvidence(context) {
+  let declaredGeometryFailure;
+  const declaredGeometry = readDeclaredChildGeometry(
+    context.stateDir,
+    loadGeometryConfig,
+    resolveCodingSafeSidecarGatewayProfile,
+    resolveOpenCodeContextGeometry,
+    (failure) => {
+      declaredGeometryFailure = failure;
+    },
+  );
+  return {
+    gateway: readGatewayObservation(context.gatewayObservation),
+    declaredGeometry,
+    declaredGeometryFailure,
+  };
+}
+
+export function createMaterializedLimitObserver(stateDir) {
   const observed = new Map();
   return {
     sample: () => {
       for (const limit of readMaterializedLimits(stateDir)) {
-        observed.set(`${limit.context}:${limit.output}`, limit);
+        observed.set(`${limit.context}:${limit.input}:${limit.output}`, limit);
       }
     },
     report: () => [...observed.values()],
@@ -268,15 +379,30 @@ function writeEvidence(path, report) {
   writeFileSync(path, `${JSON.stringify(report, null, 2)}\n`);
 }
 
-function ensureMacTarget() {
-  const target = hostDevLaneTarget();
-  if (target === undefined) throw new Error("real-binary journey requires macOS arm64 or x64");
+export function ensureMacTarget(target = hostDevLaneTarget()) {
+  if (target !== "macos-arm64" && target !== "macos-x64") {
+    throw new Error("real-binary journey requires macOS arm64 or x64");
+  }
   return target;
+}
+
+/**
+ * The same resolved temp root `tests/e2e/support/e2e-state-dir.ts` uses.
+ *
+ * It is repeated rather than imported because that helper is TypeScript, loaded by Playwright, and
+ * this is a plain Node script — but the VALUE has to agree, because the paths below are forced into
+ * `KEIKO_E2E_STATE_DIR`, which the helper returns verbatim. Handing it an unresolved path routes
+ * every downstream consumer around the very resolution the helper exists to perform, on the one
+ * lane (`code-task-real-binary`, macOS) where the symlinked temp root actually bites.
+ * `e2e-state-dir.static.test.ts` pins that this file and the helper stay in step.
+ */
+function e2eTempRoot() {
+  return realpathSync(tmpdir());
 }
 
 export function createJourneyContext(target) {
   const runKey = process.env.GITHUB_RUN_ID ?? String(process.pid);
-  const stateDir = join(tmpdir(), "keiko-e2e", `code-task-2483-real-binary-${runKey}`);
+  const stateDir = join(e2eTempRoot(), "keiko-e2e", `code-task-2483-real-binary-${runKey}`);
   return {
     executable: join(
       repoRoot,
@@ -289,7 +415,7 @@ export function createJourneyContext(target) {
     ),
     stateDir,
     gatewayObservation: join(stateDir, "gateway-observation.json"),
-    probeState: join(tmpdir(), "keiko-e2e", `code-task-2483-missing-${runKey}`),
+    probeState: join(e2eTempRoot(), "keiko-e2e", `code-task-2483-missing-${runKey}`),
     evidencePath: resolve(
       repoRoot,
       process.env.KEIKO_CODE_TASK_EVIDENCE_OUT ??
@@ -302,17 +428,279 @@ export function buildJourneyReport(input) {
   return {
     schemaVersion: 1,
     issue: 2483,
+    sourceHead: input.sourceHead,
     evidenceClass: "functional-not-platform-qualified",
-    runtime: { name: "opencode-compatible", version: REAL_BINARY_VERSION, target: input.target },
-    journey: { exitCode: input.exitCode, wallClockMs: input.wallClockMs },
+    runtime: {
+      name: "opencode-compatible",
+      version: OPENCODE_PINNED_VERSION,
+      target: input.target,
+    },
+    journey: {
+      exitCode: input.exitCode,
+      wallClockMs: input.wallClockMs,
+      completedAt: input.completedAt,
+    },
     limits: {
+      declaredChildGeometry: input.declaredGeometry,
+      ...(input.declaredGeometryFailure === undefined
+        ? {}
+        : { declaredChildGeometryFailure: input.declaredGeometryFailure }),
       materializedChildLimits: input.limits,
       gatewayRequestCount: input.gateway.requestCount,
+      gatewayCatalogBindingRequestCount: input.gateway.catalogBindingRequestCount,
       observedGatewayOutputTokenLimits: input.gateway.outputTokenLimits,
     },
     egress: input.observer.report(),
     missingPayload: input.missingPayload,
+    h1Search: input.h1Search,
+    managedCatalog: input.managedCatalog,
+    activityLog: input.activityLog,
   };
+}
+
+function journeyActivityLogDirectory(stateDir) {
+  return join(stateDir, "activity", "logs");
+}
+
+// Retains every Activity Log segment of the journey, in logical order, as one JSONL artifact before
+// the ephemeral state directory is deleted; the digest covers exactly the retained bytes.
+export function retainJourneyActivityLog(context) {
+  const logsDir = journeyActivityLogDirectory(context.stateDir);
+  if (activityLogFiles(logsDir).length === 0) return { status: "missing" };
+  const text = readActivityLogText(logsDir);
+  mkdirSync(dirname(context.evidencePath), { recursive: true });
+  writeFileSync(`${context.evidencePath}.activity.jsonl`, text);
+  return {
+    status: "retained",
+    sha256: createHash("sha256").update(text).digest("hex"),
+  };
+}
+
+function hasRetainedActivity(report) {
+  return (
+    report.activityLog?.status === "retained" && /^[a-f0-9]{64}$/u.test(report.activityLog.sha256)
+  );
+}
+
+function validSourceHead(report) {
+  return /^[a-f0-9]{40}$/u.test(report.sourceHead);
+}
+
+function validJourneyIdentity(report) {
+  return validSourceHead(report) && report.journey.exitCode === 0;
+}
+
+function validH1SearchEvidence(value) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    value.schemaVersion === 1 &&
+    value.toolCallId === "h1-real-binary-search" &&
+    value.hitCount === 1 &&
+    value.startLine === 1 &&
+    value.endLine === 1 &&
+    value.readTargetDerivedFromResult === true &&
+    /^[a-f0-9]{64}$/u.test(value.pathDigest) &&
+    /^[a-f0-9]{64}$/u.test(value.snippetDigest)
+  );
+}
+
+export function readH1SearchEvidence(stateDir) {
+  const path = join(stateDir, "h1-result-consumption.json");
+  if (!existsSync(path) || statSync(path).size > 4_096) return undefined;
+  const value = JSON.parse(readFileSync(path, "utf8"));
+  if (!validH1SearchEvidence(value)) return undefined;
+  return {
+    schemaVersion: value.schemaVersion,
+    toolCallId: value.toolCallId,
+    hitCount: value.hitCount,
+    pathDigest: value.pathDigest,
+    snippetDigest: value.snippetDigest,
+    startLine: value.startLine,
+    endLine: value.endLine,
+    readTargetDerivedFromResult: true,
+  };
+}
+
+function readActivityRecords(stateDir) {
+  const logsDir = journeyActivityLogDirectory(stateDir);
+  const files = activityLogFiles(logsDir);
+  const totalBytes = files.reduce((sum, file) => sum + file.sizeBytes, 0);
+  if (files.length === 0 || totalBytes > MAX_ACTIVITY_LOG_BYTES) return undefined;
+  const records = readActivityLogText(logsDir)
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      try {
+        const value = JSON.parse(line);
+        return value !== null && typeof value === "object" ? value : undefined;
+      } catch {
+        return undefined;
+      }
+    });
+  return records.includes(undefined) ? undefined : records;
+}
+
+function catalogSettlement(value, expectedBinding) {
+  const toolRef = value.toolRef;
+  const valid = [
+    value.op === "tool-catalog.invocation-settled",
+    typeof value.correlationId === "string" && EVIDENCE_ID.test(value.correlationId),
+    toolRef !== null && typeof toolRef === "object",
+    typeof toolRef?.canonicalId === "string" && EVIDENCE_ID.test(toolRef.canonicalId),
+    typeof value.status === "string",
+    typeof value.invocationId === "string" && EVIDENCE_ID.test(value.invocationId),
+  ].every(Boolean);
+  if (!valid) {
+    return undefined;
+  }
+  const binding = captureToolCatalogQualificationBinding({
+    catalogRevision: value.catalogRevision,
+    profile: value.profile,
+    projectionDigest: value.projectionDigest,
+    handlerSetDigest: expectedBinding.handlerSetDigest,
+  });
+  if (binding === undefined) return undefined;
+  return {
+    correlationId: value.correlationId,
+    invocationId: value.invocationId,
+    status: value.status,
+    canonicalId: value.toolRef.canonicalId,
+    catalogRevision: binding.catalogRevision,
+    profile: binding.profile,
+    projectionDigest: binding.projectionDigest,
+  };
+}
+
+function removeJourneyState(context) {
+  rmSync(context.stateDir, { recursive: true, force: true });
+  rmSync(context.probeState, { recursive: true, force: true });
+}
+
+function settlementUsesBinding(settlement, binding) {
+  return (
+    settlement.catalogRevision === binding.catalogRevision &&
+    settlement.profile.id === binding.profile.id &&
+    settlement.profile.version === binding.profile.version &&
+    settlement.projectionDigest === binding.projectionDigest
+  );
+}
+
+function completedToolIndex(settlements, canonicalId, after = -1) {
+  return settlements.findIndex(
+    (settlement, index) =>
+      index > after && settlement.status === "completed" && settlement.canonicalId === canonicalId,
+  );
+}
+
+export function readManagedCatalogEvidence(stateDir, gateway, h1Search) {
+  const binding = captureToolCatalogQualificationBinding(gateway.catalogBinding);
+  if (
+    binding === undefined ||
+    gateway.requestCount <= 0 ||
+    gateway.catalogBindingRequestCount !== gateway.requestCount ||
+    !validH1SearchEvidence(h1Search)
+  ) {
+    return undefined;
+  }
+  const activity = readActivityRecords(stateDir);
+  if (activity === undefined) return undefined;
+  const terminalRecords = activity.filter(
+    (value) => value.op === "tool-catalog.invocation-settled",
+  );
+  const settlements = terminalRecords.flatMap((value) => {
+    const captured = catalogSettlement(value, binding);
+    return captured === undefined ? [] : [captured];
+  });
+  if (settlements.length !== terminalRecords.length) return undefined;
+  const correlations = [...new Set(settlements.map(({ correlationId }) => correlationId))];
+  const candidates = correlations.flatMap((correlationId) => {
+    const scoped = settlements.filter((item) => item.correlationId === correlationId);
+    if (
+      !scoped.every((item) => settlementUsesBinding(item, binding)) ||
+      new Set(scoped.map(({ invocationId }) => invocationId)).size !== scoped.length
+    ) {
+      return [];
+    }
+    const search = completedToolIndex(scoped, "keiko.repo.search");
+    const read = completedToolIndex(scoped, "keiko.workspace.read", search);
+    if (search < 0 || read < 0) return [];
+    return [{ correlationId, settlementCount: scoped.length }];
+  });
+  if (candidates.length !== 1) return undefined;
+  const candidate = candidates[0];
+  return {
+    binding,
+    correlationId: candidate.correlationId,
+    settlementCount: candidate.settlementCount,
+    proof: {
+      kind: "managed-search-read",
+      searchSettled: true,
+      boundedReadSettled: true,
+      causalHandoff: true,
+    },
+  };
+}
+
+function validManagedCatalogEvidence(value) {
+  return (
+    value !== undefined &&
+    captureToolCatalogQualificationBinding(value.binding) !== undefined &&
+    typeof value.correlationId === "string" &&
+    EVIDENCE_ID.test(value.correlationId) &&
+    validToolCatalogQualificationOutcome(
+      "managed-opencode",
+      "completed",
+      value.settlementCount,
+      value.proof,
+    )
+  );
+}
+
+function hasStableGatewayCatalogBinding(limits) {
+  return (
+    limits.gatewayRequestCount > 0 &&
+    limits.gatewayCatalogBindingRequestCount === limits.gatewayRequestCount
+  );
+}
+
+function onlyItem(values) {
+  return Array.isArray(values) && values.length === 1 ? values[0] : undefined;
+}
+
+function validDeclaredChildGeometry(geometry) {
+  if (geometry?.runMetadata === undefined) return false;
+  let derived;
+  try {
+    derived = resolveOpenCodeContextGeometry(geometry.runMetadata);
+  } catch {
+    return false;
+  }
+  return (
+    derived !== undefined &&
+    derived.contextWindowTokens === geometry.contextWindowTokens &&
+    derived.maxInputTokens === geometry.maxInputTokens &&
+    derived.maxOutputTokens === geometry.maxOutputTokens
+  );
+}
+
+function observedChildGeometry(limits) {
+  const geometry = onlyItem(limits.materializedChildLimits);
+  const admittedOutput = onlyItem(limits.observedGatewayOutputTokenLimits);
+  const declared = limits.declaredChildGeometry;
+  if (
+    !validDeclaredChildGeometry(declared) ||
+    !Number.isSafeInteger(geometry?.context) ||
+    !Number.isSafeInteger(geometry.input) ||
+    !Number.isSafeInteger(geometry.output) ||
+    geometry.context !== declared.contextWindowTokens ||
+    geometry.input !== declared.maxInputTokens ||
+    geometry.output !== declared.maxOutputTokens ||
+    admittedOutput !== declared.maxOutputTokens
+  ) {
+    return undefined;
+  }
+  return geometry;
 }
 
 /**
@@ -322,42 +710,189 @@ export function buildJourneyReport(input) {
 export function missingRealBinaryEvidence(report) {
   const limits = report.limits;
   const gaps = [];
+  if (!validSourceHead(report)) gaps.push("no exact source head was retained");
   if (report.journey.exitCode !== 0)
     gaps.push(`journey exit code ${String(report.journey.exitCode)}`);
-  if (!limits.materializedChildLimits.some((l) => l.context === 32_768 && l.output === 4_096)) {
-    gaps.push("no materialized child limits of context 32768 / output 4096");
+  if (observedChildGeometry(limits) === undefined) {
+    const failure = limits.declaredChildGeometryFailure;
+    const detail =
+      failure === undefined
+        ? ""
+        : ` (stage ${String(failure.stage)}, error ${String(failure.errorClass)})`;
+    gaps.push(
+      `no single materialized child geometry matched the admitted gateway output limit${detail}`,
+    );
   }
   if (limits.gatewayRequestCount <= 0) gaps.push("no gateway request was observed");
-  if (!limits.observedGatewayOutputTokenLimits.includes(4_096)) {
-    gaps.push("no gateway request carried the effective output limit 4096");
+  if (!hasStableGatewayCatalogBinding(limits)) {
+    gaps.push("not every gateway request carried the stable productive catalog binding");
   }
-  if (report.missingPayload?.passed !== true) {
-    gaps.push(
-      `payload-missing probe did not pass (reason ${String(report.missingPayload?.unavailableReason)})`,
-    );
-  } else if (report.missingPayload.unavailableReason !== "payload-missing") {
-    gaps.push(`payload-missing probe reported ${report.missingPayload.unavailableReason}`);
+  gaps.push(...missingPayloadEvidence(report.missingPayload));
+  if (!validH1SearchEvidence(report.h1Search))
+    gaps.push("no useful H1 search-to-read result evidence");
+  if (!validManagedCatalogEvidence(report.managedCatalog)) {
+    gaps.push("no stable managed catalog binding with completed search and bounded read");
   }
+  if (!hasRetainedActivity(report)) gaps.push("no retained canonical activity log");
   return gaps;
+}
+
+function missingPayloadEvidence(probe) {
+  if (probe?.passed !== true) {
+    return [`payload-missing probe did not pass (reason ${String(probe?.unavailableReason)})`];
+  }
+  return probe.unavailableReason === "payload-missing"
+    ? []
+    : [`payload-missing probe reported ${probe.unavailableReason}`];
 }
 
 export function realBinaryEvidenceComplete(report) {
   const limits = report.limits;
   return (
-    report.journey.exitCode === 0 &&
-    limits.materializedChildLimits.some(
-      (limit) => limit.context === 32_768 && limit.output === 4_096,
-    ) &&
-    limits.gatewayRequestCount > 0 &&
-    limits.observedGatewayOutputTokenLimits.includes(4_096) &&
+    validJourneyIdentity(report) &&
+    observedChildGeometry(limits) !== undefined &&
+    hasStableGatewayCatalogBinding(limits) &&
     report.missingPayload?.passed === true &&
-    report.missingPayload.unavailableReason === "payload-missing"
+    report.missingPayload.unavailableReason === "payload-missing" &&
+    validH1SearchEvidence(report.h1Search) &&
+    validManagedCatalogEvidence(report.managedCatalog) &&
+    hasRetainedActivity(report)
   );
+}
+
+export function buildRealBinaryScenarioArtifact(report) {
+  const geometry = observedChildGeometry(report.limits);
+  if (!realBinaryEvidenceComplete(report) || geometry === undefined) {
+    throw new TypeError("real-binary qualification evidence is incomplete");
+  }
+  const artifact = {
+    schemaVersion: 1,
+    evidenceKind: "keiko-code-task-real-binary-v1",
+    scenarioId: "real-binary-lane",
+    evidenceClass: "production-functional",
+    sourceCommitSha: report.sourceHead,
+    platformTarget: report.runtime.target,
+    result: "passed",
+    runtime: report.runtime,
+    run: {
+      correlationId: report.managedCatalog.correlationId,
+      activityLogSha256: report.activityLog.sha256,
+    },
+    limits: {
+      admission: report.limits.declaredChildGeometry.runMetadata,
+      contextWindow: geometry.context,
+      inputTokens: geometry.input,
+      outputTokens: geometry.output,
+      gatewayRequestCount: report.limits.gatewayRequestCount,
+      gatewayCatalogBindingRequestCount: report.limits.gatewayCatalogBindingRequestCount,
+    },
+    missingPayload: { unavailableReason: report.missingPayload.unavailableReason },
+    h1Search: {
+      toolCallId: report.h1Search.toolCallId,
+      hitCount: report.h1Search.hitCount,
+      pathDigest: report.h1Search.pathDigest,
+      snippetDigest: report.h1Search.snippetDigest,
+      startLine: report.h1Search.startLine,
+      endLine: report.h1Search.endLine,
+      readTargetDerivedFromResult: report.h1Search.readTargetDerivedFromResult,
+    },
+    managedCatalog: {
+      binding: report.managedCatalog.binding,
+      settlementCount: report.managedCatalog.settlementCount,
+      proof: report.managedCatalog.proof,
+    },
+  };
+  if (realBinaryScenarioArtifactErrors(artifact).length > 0) {
+    throw new TypeError("real-binary qualification artifact is invalid");
+  }
+  return artifact;
+}
+
+function privateQualificationReceiptsDirectory(configured) {
+  if (!isAbsolute(configured)) {
+    throw new TypeError("qualification receipts directory must be absolute");
+  }
+  const entry = lstatSync(configured);
+  if (!entry.isDirectory() || entry.isSymbolicLink() || (entry.mode & 0o077) !== 0) {
+    throw new TypeError("qualification receipts directory must be a private real directory");
+  }
+  return resolve(configured);
+}
+
+export function writeRealBinaryQualificationEvidence(report, env = process.env) {
+  const configured = env[QUALIFICATION_RECEIPTS_DIR_ENV];
+  if (configured === undefined) return false;
+  const artifact = buildRealBinaryScenarioArtifact(report);
+  writeQualificationEvidenceReceipt({
+    receiptsDir: privateQualificationReceiptsDirectory(configured),
+    scenarioId: artifact.scenarioId,
+    receipt: artifact,
+    recordedAt: report.journey.completedAt,
+    provenance: "production-functional",
+  });
+  return true;
+}
+
+function persistJourneyEvidence(context, report) {
+  writeEvidence(context.evidencePath, report);
+  writeManagedCatalogObservation(report);
+  writeRealBinaryQualificationEvidence(report);
+}
+
+export function writeManagedCatalogObservation(report) {
+  const qualificationDirectory = process.env[TOOL_CATALOG_QUALIFICATION_DIR_ENV];
+  const qualificationHead = process.env[TOOL_CATALOG_QUALIFICATION_HEAD_ENV];
+  if (
+    !realBinaryEvidenceComplete(report) ||
+    (qualificationDirectory !== undefined && qualificationHead !== report.sourceHead)
+  ) {
+    return false;
+  }
+  writeToolCatalogQualificationObservation({
+    consumer: "managed-opencode",
+    component: "managed-opencode",
+    binding: report.managedCatalog.binding,
+    terminalStatus: "completed",
+    settlementCount: report.managedCatalog.settlementCount,
+    proof: report.managedCatalog.proof,
+    runBinding: {
+      correlationId: report.managedCatalog.correlationId,
+      activityLogSha256: report.activityLog.sha256,
+    },
+  });
+  return true;
+}
+
+function reportMissingEvidence(report) {
+  if (realBinaryEvidenceComplete(report)) return;
+  for (const gap of missingRealBinaryEvidence(report)) {
+    console.error(`[code-task-real-binary] incomplete evidence: ${gap}`);
+  }
+  process.exitCode = 1;
+}
+
+function currentSourceHead() {
+  return execFileSync(resolveHostExecutable("git"), ["rev-parse", "HEAD"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    timeout: 30_000,
+  }).trim();
+}
+
+function realBinaryJourneyEnvironment(context) {
+  return {
+    ...process.env,
+    KEIKO_E2E_STATE_DIR: context.stateDir,
+    KEIKO_STATE_DIR: join(context.stateDir, "activity"),
+    KEIKO_E2E_REAL_BINARY: "1",
+    KEIKO_2483_GATEWAY_OBSERVATION_PATH: context.gatewayObservation,
+  };
 }
 
 export async function runRealBinaryJourney() {
   const target = ensureMacTarget();
   const context = createJourneyContext(target);
+  const sourceHead = currentSourceHead();
   if (!existsSync(context.executable)) {
     throw new Error("staged approved OpenCode payload is missing");
   }
@@ -366,38 +901,39 @@ export async function runRealBinaryJourney() {
   const limitObserver = createMaterializedLimitObserver(context.stateDir);
   const startedAt = Date.now();
   const exitCode = await runPlaywright(
-    {
-      ...process.env,
-      KEIKO_E2E_STATE_DIR: context.stateDir,
-      KEIKO_E2E_REAL_BINARY: "1",
-      KEIKO_2483_GATEWAY_OBSERVATION_PATH: context.gatewayObservation,
-    },
+    realBinaryJourneyEnvironment(context),
     observer,
     limitObserver,
   );
   const missingPayload =
     exitCode === 0 ? runMissingPayloadProbe(target, context.probeState) : undefined;
+  const { gateway, declaredGeometry, declaredGeometryFailure } =
+    readGatewayGeometryEvidence(context);
+  const h1Search = readH1SearchEvidence(context.stateDir);
+  const managedCatalog = readManagedCatalogEvidence(context.stateDir, gateway, h1Search);
+  const activityLog = retainJourneyActivityLog(context);
+  const completedAt = new Date().toISOString();
   const report = buildJourneyReport({
     context,
+    sourceHead,
     exitCode,
-    gateway: readGatewayObservation(context.gatewayObservation),
+    gateway,
+    declaredGeometry,
+    declaredGeometryFailure,
     limits: limitObserver.report(),
     missingPayload,
+    h1Search,
+    managedCatalog,
+    activityLog,
     observer,
     target,
     wallClockMs: Date.now() - startedAt,
+    completedAt,
   });
-  writeEvidence(context.evidencePath, report);
-  rmSync(context.stateDir, { recursive: true, force: true });
-  rmSync(context.probeState, { recursive: true, force: true });
-  if (!realBinaryEvidenceComplete(report)) {
-    // Name the missing observation. A bare nonzero exit forces the next reader to diff the evidence
-    // file against the predicate by hand to learn which half of the proof did not hold.
-    for (const gap of missingRealBinaryEvidence(report)) {
-      console.error(`[code-task-real-binary] incomplete evidence: ${gap}`);
-    }
-    process.exitCode = 1;
-  }
+  persistJourneyEvidence(context, report);
+  removeJourneyState(context);
+  // A bare nonzero exit forces the next reader to diff the evidence file against the predicate.
+  reportMissingEvidence(report);
   return report;
 }
 

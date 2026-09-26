@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 2,
+  "windowsGeneration": {
+    "schemaVersion": 1,
+    "resourceRoot": ".portable/generations/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "treeHashSchema": "KHT1",
+    "treeSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "launcherPath": "Keiko.exe",
+    "launcherSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  "provenance": {
+    "windowsGeneration": {
+      "schemaVersion": 1,
+      "resourceRoot": ".portable/generations/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "treeHashSchema": "KHT1",
+      "treeSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "launcherPath": "Keiko.exe",
+      "launcherSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  },
+  "releaseImpact": {
+    "reviewedBinding": {
+      "windowsGeneration": {
+        "schemaVersion": 1,
+        "resourceRoot": ".portable/generations/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "treeHashSchema": "KHT1",
+        "treeSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "launcherPath": "Keiko.exe",
+        "launcherSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    }
+  },
+  "setupManifest": {
+    "schemaVersion": 2,
+    "platformTarget": "windows-x64",
+    "primaryLauncher": "Keiko.exe",
+    "windowsGeneration": {
+      "schemaVersion": 1,
+      "resourceRoot": ".portable/generations/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "treeHashSchema": "KHT1",
+      "treeSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "launcherPath": "Keiko.exe",
+      "launcherSha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    }
+  }
+}

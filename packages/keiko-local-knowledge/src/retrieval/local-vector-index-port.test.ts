@@ -16,12 +16,20 @@ import type {
   VectorIndexPort,
   VectorIndexQuery,
 } from "@oscharko-dev/keiko-contracts";
-import { VECTOR_INDEX_NAMESPACES, isValidVectorIndexQuery } from "@oscharko-dev/keiko-contracts";
+import {
+  VECTOR_INDEX_NAMESPACES,
+  isValidVectorIndexQuery,
+} from "@oscharko-dev/keiko-contracts/runtime/vector-index-port";
 import type { VectorIndexUnexpectedFailureDiagnostic as PublicUnexpectedFailureDiagnostic } from "@oscharko-dev/keiko-local-knowledge";
 import { describe, expect, it } from "vitest";
 
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import { DEFAULT_EMBEDDING, freshStore, sampleCapsuleInput } from "../_support.js";
 import { createCapsule } from "../capsule-lifecycle.js";
+import type { KnowledgeLogEvent, KnowledgeLogSink } from "../knowledge-log.js";
 import type { KnowledgeStore } from "../store.js";
 
 // Deep-import the port implementation so vitest's v8 coverage attributes execution to the
@@ -198,6 +206,59 @@ describe("createLocalKnowledgeStoreVectorIndexPort", () => {
           reason: "identity-mismatch",
         },
       });
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("logs search.index-invalidated-for-capsule on identity mismatch, capsule id digested only", async () => {
+    const fixture = freshStore();
+    try {
+      createTestCapsule(fixture.store, "cap-port-a");
+      const events: KnowledgeLogEvent[] = [];
+      const logSink: KnowledgeLogSink = {
+        write: (event): void => {
+          events.push(event);
+        },
+      };
+      const port = createLocalKnowledgeStoreVectorIndexPort({
+        namespace: "knowledge",
+        store: fixture.store,
+        logSink,
+      });
+
+      const roguesIdentity: EmbeddingModelIdentity = {
+        ...DEFAULT_EMBEDDING,
+        embeddingSpaceFingerprint: "keiko-embedding-space-fingerprint-v2:rogue",
+      };
+      const result = await port.search(baseQuery({ identity: roguesIdentity }));
+      expect(result.ok).toBe(false);
+
+      const lines = events.filter((event) => event.op === "search.index-invalidated-for-capsule");
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toMatchObject({
+        level: "warn",
+        category: "search",
+        extra: { namespace: "knowledge" },
+      });
+      // The raw capsule id never reaches the log — only a digest of it.
+      const capsuleIdDigest = lines[0]?.extra?.capsuleIdDigest;
+      expect(capsuleIdDigest).toMatch(/^[0-9a-f]{16}$/u);
+      expect(JSON.stringify(lines[0])).not.toContain("cap-port-a");
+
+      const persisted = expectActivityLogProof(
+        "search.index-invalidated-for-capsule.digest",
+        formatActivityLogProofLine(lines[0] ?? {}),
+      );
+      expect(persisted).toMatchObject({ namespace: "knowledge" });
+      expect(persisted.capsuleIdDigest).toMatch(/^[0-9a-f]{16}$/u);
+
+      // A successful search never emits this line.
+      events.length = 0;
+      await port.search(baseQuery());
+      expect(
+        events.filter((event) => event.op === "search.index-invalidated-for-capsule"),
+      ).toHaveLength(0);
     } finally {
       fixture.cleanup();
     }

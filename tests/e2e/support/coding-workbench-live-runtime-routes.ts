@@ -1,4 +1,17 @@
 import { expect, type Page, type Route } from "@playwright/test";
+import type {
+  CodingWorkbenchMode,
+  CodingWorkbenchRuntimeReadiness,
+  CodingWorkbenchValidationResult,
+  EditorAgentSnapshotResponse,
+  MemoryAutonomyPolicyWire,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS,
+  parseEditorAgentSnapshotRequest,
+  type EditorAgentBridgeSnapshotRequest,
+  type EditorAgentSnapshotRequest,
+} from "@oscharko-dev/keiko-contracts/editor-agent";
 import {
   parseCodingWorkbenchRuntimeApprovalDecisionRequest,
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
@@ -6,19 +19,18 @@ import {
   parseCodingWorkbenchRuntimeStartRequest,
   parseCodingWorkbenchRuntimeStopRequest,
   parseCodingWorkbenchRuntimeTakeoverRequest,
+  validateCodingWorkbenchRuntimeReadiness,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import {
   compareCodingWorkbenchModeAuthority,
   resolveEffectiveCodingWorkbenchMode,
-  validateCodingWorkbenchCodexAuthSetupRequest,
-  validateCodingWorkbenchRuntimeReadiness,
-  type CodingWorkbenchMode,
-  type CodingWorkbenchRuntimeReadiness,
-  type CodingWorkbenchValidationResult,
-  type MemoryAutonomyPolicyWire,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { validateCodingWorkbenchCodexAuthSetupRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth";
 import type { LiveRuntimeFixtureOptions } from "./coding-workbench-live-runtime.js";
 import { parsedAutonomyPolicyUpdate } from "./autonomyPolicyRequest.js";
 import {
   activeWorkspace,
+  approvalReview,
   codexProfile,
   codexSetupPlan,
   eventStream,
@@ -36,6 +48,24 @@ type RuntimeOptions = Required<
     "deploymentCeiling" | "disconnectStreamOnce" | "eventCount" | "runtimeAvailable"
   >
 >;
+
+const FIXTURE_BRIDGE_DECISION_CAPABILITY = "A".repeat(
+  EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS,
+);
+const INVALID_EDITOR_SNAPSHOT_JSON = "request body must contain valid JSON";
+
+export function parseFixtureEditorSnapshotRequest(
+  payload: string | null,
+): CodingWorkbenchValidationResult<EditorAgentSnapshotRequest | EditorAgentBridgeSnapshotRequest> {
+  if (payload === null) return { ok: false, errors: [INVALID_EDITOR_SNAPSHOT_JSON] };
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(payload);
+  } catch {
+    return { ok: false, errors: [INVALID_EDITOR_SNAPSHOT_JSON] };
+  }
+  return parseEditorAgentSnapshotRequest(decoded);
+}
 
 // The clamp is the product invariant under test, so the fixture must not re-implement it: it uses
 // the same contracts resolver the server does. A local copy could drift and let a projection bug
@@ -169,6 +199,34 @@ async function handleCodexSetupRoute(
   return true;
 }
 
+export async function handleEditorSnapshotRoute(
+  route: Route,
+  pathname: string,
+  fixture: RuntimeFixtureState,
+): Promise<boolean> {
+  if (route.request().method() !== "POST" || pathname !== "/api/editor/agent/snapshot") {
+    return false;
+  }
+  const parsed = parseFixtureEditorSnapshotRequest(route.request().postData());
+  if (!parsed.ok) {
+    fixture.validationErrors.push(...parsed.errors);
+    await route.fulfill({ status: 400, contentType: "application/json", body: "{}" });
+    return true;
+  }
+  if (!("kind" in parsed.value)) {
+    await fulfillJson(route, { snapshot: null } satisfies EditorAgentSnapshotResponse);
+    return true;
+  }
+  fixture.editorSnapshotRegistrations += 1;
+  const response: EditorAgentSnapshotResponse = {
+    snapshot: parsed.value.snapshot,
+    bridgeDecisionCapability:
+      parsed.value.bridgeDecisionCapability ?? FIXTURE_BRIDGE_DECISION_CAPABILITY,
+  };
+  await fulfillJson(route, response);
+  return true;
+}
+
 async function parsedRequest<T extends { readonly requestId: string }>(
   route: Route,
   parse: (value: unknown) => CodingWorkbenchValidationResult<T>,
@@ -199,6 +257,29 @@ async function transition(
   await fulfillJson(route, snapshot(fixture));
 }
 
+async function handleReadinessRoute(
+  route: Route,
+  searchParams: URLSearchParams,
+  options: RuntimeOptions,
+): Promise<void> {
+  const requestedMode = (searchParams.get("requestedMode") ??
+    "governed-assist") as CodingWorkbenchMode;
+  const readiness: CodingWorkbenchRuntimeReadiness = {
+    schemaVersion: "1",
+    requestedMode,
+    deploymentCeiling: options.deploymentCeiling,
+    effectiveMode: effectiveMode(requestedMode, options.deploymentCeiling),
+    runtimeAvailable: options.runtimeAvailable,
+    // #2475: an unavailable runtime must name its reason; the fixture mirrors the server.
+    // ADR-0163 D9: and an AVAILABLE runtime must name how strong its evidence is.
+    ...(options.runtimeAvailable
+      ? { runtimeEvidenceClass: "platform-qualified" }
+      : { runtimeUnavailableReason: "runtime-unqualified" }),
+  };
+  expect(validateCodingWorkbenchRuntimeReadiness(readiness).ok).toBe(true);
+  await fulfillJson(route, readiness);
+}
+
 async function handleRuntimeGet(
   route: Route,
   pathname: string,
@@ -207,23 +288,15 @@ async function handleRuntimeGet(
   fixture: RuntimeFixtureState,
 ): Promise<boolean> {
   if (pathname === "/api/coding-workbench/runtime/readiness") {
-    const requestedMode = (searchParams.get("requestedMode") ??
-      "governed-assist") as CodingWorkbenchMode;
-    const readiness: CodingWorkbenchRuntimeReadiness = {
-      schemaVersion: "1",
-      requestedMode,
-      deploymentCeiling: options.deploymentCeiling,
-      effectiveMode: effectiveMode(requestedMode, options.deploymentCeiling),
-      runtimeAvailable: options.runtimeAvailable,
-      // #2475: an unavailable runtime must name its reason; the fixture mirrors the server.
-      ...(options.runtimeAvailable ? {} : { runtimeUnavailableReason: "runtime-unqualified" }),
-    };
-    expect(validateCodingWorkbenchRuntimeReadiness(readiness).ok).toBe(true);
-    await fulfillJson(route, readiness);
+    await handleReadinessRoute(route, searchParams, options);
     return true;
   }
   if (pathname === "/api/coding-workbench/runtime/status") {
     await fulfillJson(route, snapshot(fixture));
+    return true;
+  }
+  if (pathname.endsWith(`/runs/${FIXTURE_RUN_ID}/approval-review`)) {
+    await fulfillJson(route, approvalReview(fixture));
     return true;
   }
   if (pathname.endsWith(`/runs/${FIXTURE_RUN_ID}/events`)) {
@@ -284,6 +357,7 @@ async function handleApprovalCommand(route: Route, fixture: RuntimeFixtureState)
   );
   if (request !== null) {
     expect(request.expectedRevision).toBe(fixture.revision);
+    fixture.approvalDecisions += 1;
     await transition(route, fixture, request.decision === "approved" ? "running" : "cancelled");
   }
   return true;
@@ -354,6 +428,7 @@ export async function installRuntimeRoutes(
       return;
     }
     if (await handleFoundationRoute(route, pathname, authStatus)) return;
+    if (await handleEditorSnapshotRoute(route, pathname, fixture)) return;
     if (await handleCodexSetupRoute(route, pathname, fixture)) return;
     if (route.request().method() === "GET") {
       if (await handleRuntimeGet(route, pathname, searchParams, runtimeOptions, fixture)) return;

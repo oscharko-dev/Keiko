@@ -1,15 +1,16 @@
 import { defineConfig, devices } from "@playwright/test";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { e2eStateDir } from "../support/e2e-state-dir.js";
 
-// Issue #1696 (Epic #1687) - browser evidence for the governed update UI:
+// Issue #3405 (Epic #3403) - browser evidence for the governed update UI:
 // Settings entry point, startup notice, update window state hierarchy, tokenized themes,
-// responsive/manual path, progress status, and axe-backed accessibility proof.
+// responsive/manual path, progress status, and axe-backed accessibility proof. CI runs the
+// @real-bff-outage journey through the retained npm command below.
 
 const root = process.cwd();
 const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32201");
-const stateId = process.env.GITHUB_RUN_ID ?? `issue-1696-update-ui-${String(process.pid)}`;
-const stateDir = process.env.KEIKO_E2E_STATE_DIR ?? join(tmpdir(), "keiko-e2e", stateId);
+const stateId = process.env.GITHUB_RUN_ID ?? `issue-3405-update-ui-${String(process.pid)}`;
+const stateDir = e2eStateDir(stateId);
 const fixtureConfigPath = join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json");
 const runtimeConfigPath = join(stateDir, "keiko.e2e.config.json");
 const prepareRuntimeConfig = [
@@ -30,6 +31,7 @@ export default defineConfig({
   reporter: process.env.CI ? [["github"], ["line"]] : "line",
   use: {
     baseURL: `http://127.0.0.1:${String(publicPort)}`,
+    permissions: ["clipboard-write"],
     trace: "off",
     video: "off",
     screenshot: "off",

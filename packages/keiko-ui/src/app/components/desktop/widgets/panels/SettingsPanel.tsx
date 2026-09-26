@@ -1,18 +1,23 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
+import type { GatewayVerificationState } from "@oscharko-dev/keiko-contracts";
 import {
   gatewayVerificationContradictsReadiness,
   gatewayVerificationFromProbeOutcome,
   UNVERIFIED_GATEWAY,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
+import {
+  isCompleteRealtimeVoiceCapability,
   VOICE_PERSONAS,
-  type GatewayVerificationState,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
   applyGatewayVerifiedCapabilities,
   fetchConfig,
   fetchModels,
+  resetModelRequestCache,
   runGatewayReadiness,
   type VerifiedGatewayCapabilityFields,
 } from "@/lib/api";
@@ -23,7 +28,12 @@ import {
   useSetLocale,
   useTranslate as useGlobalTranslate,
 } from "@/lib/i18n";
-import { useSettingsTranslate as useTranslate, type I18nTranslate } from "./settings-i18n";
+import {
+  useSettingsTranslate as useTranslate,
+  type I18nTranslate,
+  type SettingsMessageKey,
+} from "./settings-i18n";
+import { DynamicChunkLoadFailure } from "../../DynamicChunkLoadFailure";
 import { DebuggingSettings } from "./DebuggingSettings";
 import { EditorSettingsPanel } from "./EditorSettingsPanel";
 import { ManagedLanguageSettings } from "./ManagedLanguageSettings";
@@ -44,6 +54,7 @@ import {
   isConversationEligibleModel,
 } from "@/lib/types";
 import { Icons } from "../../Icons";
+import styles from "./SettingsPanel.module.css";
 
 import KeikoSelect from "../../KeikoSelect";
 import { personaLabel } from "../../VoiceDialogMode";
@@ -53,13 +64,15 @@ import {
   VOICE_PERSONA_STORAGE_KEY,
   writeVoicePersonaPreference,
 } from "../../hooks/useVoiceDialogMode";
-import { GatewaySetupDialog } from "../../modals/GatewaySetupDialog";
 import { Toggle } from "../shared/Toggle";
 import {
   GATEWAY_CONFIG_UPDATED_EVENT,
+  GATEWAY_MODEL_READINESS_UPDATED_EVENT,
   GATEWAY_SETUP_REQUEST_EVENT,
   consumePendingGatewaySetup,
   notifyGatewayConfigUpdated,
+  notifyGatewayModelReadinessUpdated,
+  requestGatewaySetup,
 } from "../shared/gatewaySetupBus";
 import {
   WALLPAPER_ENABLED_EVENT,
@@ -91,6 +104,16 @@ import {
 import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
 import { useDialogTabTrap } from "../../hooks/useDialogTabTrap";
 import editorStyles from "./EditorSettingsPanel.module.css";
+
+// The gateway setup dialog is reached only by an explicit gesture (`setupOpen`), exactly like the
+// shell's own gesture-only modals (ADR-0042 D3.6) — a static import here pulled the whole dialog
+// (and the config-upload import surface behind it) into the first-load chunk. A failed chunk load
+// must not leave `setupOpen` true with nothing on screen — the shared fallback surfaces the
+// redacted error and a retry (review finding on #3031).
+const GatewaySetupDialog = dynamic(
+  () => import("../../modals/GatewaySetupDialog").then((mod) => mod.GatewaySetupDialog),
+  { ssr: false, loading: DynamicChunkLoadFailure },
+);
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const CopyIcon = Icons.copy;
@@ -159,6 +182,16 @@ function voiceProviderShortLabel(model: ModelCapability, t: I18nTranslate): stri
   return t("settings.models.voiceCapabilityVoice");
 }
 
+function voiceSetupIssue(model: ModelCapability): SettingsMessageKey | undefined {
+  if (model.supportsSpeechOutput === true && (model.supportedVoicePersonas?.length ?? 0) === 0) {
+    return "settings.models.voiceNeedsOutputVoice";
+  }
+  if (model.supportsRealtimeVoice === true && !isCompleteRealtimeVoiceCapability(model)) {
+    return "settings.models.voiceNeedsRealtimeTranscription";
+  }
+  return undefined;
+}
+
 function voicePersonasFromModels(models: readonly ModelCapability[]): readonly VoicePersona[] {
   const present = new Set<VoicePersona>();
   for (const model of models) {
@@ -179,35 +212,137 @@ function conversationIneligibilityShortLabel(
   return t("settings.models.ineligibleShortGeneric");
 }
 
-function ConversationEligibilityBadge({ model }: { readonly model: ModelCapability }): ReactNode {
-  const t = useTranslate();
-  const reason = explainConversationIneligibility(model);
-  // Issue #1557 (AC4): a correctly configured voice provider is available for its voice purpose, not a
-  // chat-ineligibility warning. `isConversationEligibleModel` stays unchanged (voice is genuinely not
-  // a chat model) — only the presentation differs.
-  if (isConfiguredVoiceProvider(model)) {
-    const label = voiceProviderAvailabilityLabel(model, t);
+type ReadinessRunState =
+  | { readonly status: "idle" }
+  | {
+      readonly status: "running";
+      readonly deep: boolean;
+      readonly previous?: ReadinessResultState | undefined;
+    }
+  | { readonly status: "done"; readonly report: GatewayReadinessReport }
+  | { readonly status: "error"; readonly message: string };
+
+type ReadinessResultState = Extract<ReadinessRunState, { readonly status: "done" | "error" }>;
+
+function readinessResult(
+  readiness: ReadinessRunState | undefined,
+): ReadinessResultState | undefined {
+  if (readiness?.status === "running") return readiness.previous;
+  return readiness?.status === "done" || readiness?.status === "error" ? readiness : undefined;
+}
+
+function serverReadinessFallback(
+  readiness: ReadinessRunState | undefined,
+  conversationReady: boolean | undefined,
+): boolean | undefined {
+  return readinessResult(readiness) === undefined ? conversationReady : undefined;
+}
+
+function chatReadinessPassed(
+  readiness: ReadinessRunState | undefined,
+  conversationReady?: boolean,
+): boolean {
+  const result = readinessResult(readiness);
+  if (result?.status === "done") {
+    return result.report.probes.some((probe) => probe.name === "chat" && probe.status === "passed");
+  }
+  return serverReadinessFallback(readiness, conversationReady) === true;
+}
+
+function chatReadinessFailed(
+  readiness: ReadinessRunState | undefined,
+  conversationReady?: boolean,
+): boolean {
+  const result = readinessResult(readiness);
+  if (result?.status === "error") return true;
+  if (result?.status === "done") {
+    return !result.report.probes.some(
+      (probe) => probe.name === "chat" && probe.status === "passed",
+    );
+  }
+  return serverReadinessFallback(readiness, conversationReady) === false;
+}
+
+function conversationBadgePresentation(
+  readiness: ReadinessRunState | undefined,
+  conversationReady: boolean | undefined,
+  t: I18nTranslate,
+): { readonly className: string; readonly label: string } {
+  if (chatReadinessFailed(readiness, conversationReady)) {
+    return { className: "ml-elig-no", label: t("settings.models.modelProbeFailed") };
+  }
+  if (chatReadinessPassed(readiness, conversationReady)) {
+    return { className: "ml-elig-ok", label: t("settings.models.eligibilityOk") };
+  }
+  return { className: "ml-type", label: t("settings.models.modelNotVerified") };
+}
+
+function VoiceEligibilityBadge({
+  model,
+  t,
+}: {
+  readonly model: ModelCapability;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  const issue = voiceSetupIssue(model);
+  if (issue !== undefined) {
+    const issueLabel = t(issue);
     return (
       <output
-        className="ml-elig ml-elig-voice"
-        data-testid="voice-elig-ok"
-        aria-label={t("settings.models.eligibilityPrefix", { label })}
-        title={label}
+        className={`ml-elig ${styles.cmpVoiceSetupBadge}`}
+        data-testid="voice-elig-setup"
+        title={issueLabel}
       >
-        {t("settings.models.voiceProviderBadge", { label: voiceProviderShortLabel(model, t) })}
+        {issueLabel}
       </output>
     );
   }
+  const label = voiceProviderAvailabilityLabel(model, t);
+  return (
+    <output
+      className="ml-elig ml-elig-voice"
+      data-testid="voice-elig-ok"
+      aria-label={t("settings.models.eligibilityPrefix", { label })}
+      title={label}
+    >
+      {t("settings.models.voiceProviderBadge", { label: voiceProviderShortLabel(model, t) })}
+    </output>
+  );
+}
+
+function EligibleChatBadge({
+  model,
+  readiness,
+  t,
+}: {
+  readonly model: ModelCapability;
+  readonly readiness: ReadinessRunState | undefined;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  const presentation = conversationBadgePresentation(readiness, model.conversationReady, t);
+  return (
+    <output
+      className={`ml-elig ${presentation.className}`}
+      data-testid="conv-elig-ok"
+      aria-label={t("settings.models.eligibilityPrefix", { label: presentation.label })}
+    >
+      {presentation.label}
+    </output>
+  );
+}
+
+function ConversationEligibilityBadge({
+  model,
+  readiness,
+}: {
+  readonly model: ModelCapability;
+  readonly readiness: ReadinessRunState | undefined;
+}): ReactNode {
+  const t = useTranslate();
+  const reason = explainConversationIneligibility(model);
+  if (isConfiguredVoiceProvider(model)) return <VoiceEligibilityBadge model={model} t={t} />;
   if (reason === undefined) {
-    return (
-      <output
-        className="ml-elig ml-elig-ok"
-        data-testid="conv-elig-ok"
-        aria-label={t("settings.models.eligibilityOkAria")}
-      >
-        {t("settings.models.eligibilityOk")}
-      </output>
-    );
+    return <EligibleChatBadge model={model} readiness={readiness} t={t} />;
   }
   if (reason === "embedding-only") {
     const label = embeddingAvailabilityLabel(t);
@@ -236,12 +371,6 @@ function ConversationEligibilityBadge({ model }: { readonly model: ModelCapabili
     </output>
   );
 }
-
-type ReadinessRunState =
-  | { readonly status: "idle" }
-  | { readonly status: "running"; readonly deep: boolean }
-  | { readonly status: "done"; readonly report: GatewayReadinessReport }
-  | { readonly status: "error"; readonly message: string };
 
 type ReportCopyState = "idle" | "copied" | "failed";
 
@@ -311,6 +440,14 @@ function gatewayConfigIdentity(config: SafeGatewayConfig | null, present: boolea
   if (!present) return "absent";
   if (config === null) return "present";
   return `present:${JSON.stringify(config.providers)}`;
+}
+
+function invalidateServerReadinessObservations(
+  models: readonly ModelCapability[],
+): readonly ModelCapability[] {
+  return models.map((model) =>
+    model.conversationReady === undefined ? model : { ...model, conversationReady: undefined },
+  );
 }
 
 function readinessErrorMessage(error: unknown, t: I18nTranslate): string {
@@ -383,7 +520,10 @@ const BOOLEAN_CAPABILITY_PROBES = [
   ["structuredOutput", "json_schema"],
   ["supportsImageInput", "image_input"],
   ["supportsDocumentInput", "document_input"],
-] as const satisfies readonly (readonly [ObservableCapabilityField, string])[];
+] as const satisfies readonly (readonly [
+  Exclude<ObservableCapabilityField, "contextWindow">,
+  string,
+])[];
 
 function observedProbeValue(
   report: GatewayReadinessReport,
@@ -406,10 +546,22 @@ function capabilityDisagreements(
       disagreements.push({ field, configured, observed });
     }
   }
+  // The long-context probe proves a lower bound: offer it only when it RAISES the stored window.
+  // A gateway that declares no token limits leaves the 4,096 setup placeholder in place, and the
+  // Coding Workbench refuses any model under 32,000 (customer report on 1.1.0).
+  const testedContextTokens = report.verifiedCapabilities.testedContextTokens;
+  if (testedContextTokens !== undefined && testedContextTokens > model.contextWindow) {
+    disagreements.push({
+      field: "contextWindow",
+      configured: model.contextWindow,
+      observed: testedContextTokens,
+    });
+  }
   return disagreements;
 }
 
 function capabilityFieldLabel(field: ObservableCapabilityField, t: I18nTranslate): string {
+  if (field === "contextWindow") return t("settings.models.capabilityContextWindow");
   if (field === "toolCalling") return t("settings.models.capabilityTools");
   if (field === "structuredOutput") return t("settings.models.capabilityJson");
   if (field === "supportsImageInput") return t("settings.models.capabilityImage");
@@ -440,7 +592,7 @@ function CapabilityApplyConfirmDialog({
       if (event.key === "Escape") decline();
     };
     document.addEventListener("keydown", onKeyDown);
-    return () => {
+    return (): void => {
       document.removeEventListener("keydown", onKeyDown);
       if (opener?.isConnected === true) opener.focus();
     };
@@ -693,12 +845,38 @@ function modelStatusTitle(
   conversationEligible: boolean,
   embeddingReady: boolean,
   voiceReady: boolean,
+  readiness: ReadinessRunState | undefined,
   t: I18nTranslate,
 ): string {
-  if (conversationEligible) return t("settings.models.statusConversationEligible");
+  if (conversationEligible && chatReadinessFailed(readiness, model.conversationReady)) {
+    return t("settings.models.statusProbeFailed");
+  }
+  if (conversationEligible && chatReadinessPassed(readiness, model.conversationReady)) {
+    return t("settings.models.statusConversationEligible");
+  }
+  if (conversationEligible) return t("settings.models.statusNotVerified");
   if (embeddingReady) return t("settings.models.statusEmbedding");
+  const voiceIssue = voiceSetupIssue(model);
+  if (voiceReady && voiceIssue !== undefined) return t(voiceIssue);
   if (voiceReady) return voiceProviderAvailabilityLabel(model, t);
   return t("settings.models.statusNotSelectable");
+}
+
+function modelStatusClass(
+  model: ModelCapability,
+  conversationEligible: boolean,
+  embeddingReady: boolean,
+  voiceReady: boolean,
+  readiness: ReadinessRunState | undefined,
+): string {
+  if (conversationEligible && chatReadinessFailed(readiness, model.conversationReady))
+    return "error";
+  if (conversationEligible && chatReadinessPassed(readiness, model.conversationReady)) {
+    return "connected";
+  }
+  if (conversationEligible) return "untested";
+  if (voiceReady && voiceSetupIssue(model) !== undefined) return "ineligible";
+  return embeddingReady || voiceReady ? "connected" : "ineligible";
 }
 
 function ModelCapabilityRow({
@@ -718,9 +896,21 @@ function ModelCapabilityRow({
   const conversationEligible = isConversationEligibleModel(model);
   const embeddingReady = model.kind === "embedding";
   const voiceReady = isConfiguredVoiceProvider(model);
-  const statusClass =
-    conversationEligible || embeddingReady || voiceReady ? "connected" : "ineligible";
-  const statusTitle = modelStatusTitle(model, conversationEligible, embeddingReady, voiceReady, t);
+  const statusClass = modelStatusClass(
+    model,
+    conversationEligible,
+    embeddingReady,
+    voiceReady,
+    readiness,
+  );
+  const statusTitle = modelStatusTitle(
+    model,
+    conversationEligible,
+    embeddingReady,
+    voiceReady,
+    readiness,
+    t,
+  );
   const RowIcon = model.kind === "voice" ? Icons.mic : Icons.cube;
   return (
     <div className="ml-row">
@@ -731,7 +921,7 @@ function ModelCapabilityRow({
         <div className="ml-top">
           <span className="ml-name">{model.id}</span>
           <span className="ml-type mono">{kindLabel(model.kind)}</span>
-          <ConversationEligibilityBadge model={model} />
+          <ConversationEligibilityBadge model={model} readiness={readiness} />
         </div>
         <div className="ml-url mono">
           {t("settings.models.capabilitySummary", {
@@ -747,6 +937,11 @@ function ModelCapabilityRow({
           observedGeneration={observedGeneration}
           onCapabilityApplied={onCapabilityApplied}
         />
+        {voiceSetupIssue(model) !== undefined ? (
+          <button type="button" className="ml-check" onClick={requestGatewaySetup}>
+            {t("settings.models.configureAudio")}
+          </button>
+        ) : null}
       </div>
       {conversationEligible ? (
         <div className="ml-actions">
@@ -772,7 +967,12 @@ function ModelCapabilityRow({
           ) : null}
         </div>
       ) : null}
-      <span className={"ml-status " + statusClass} title={statusTitle} aria-hidden="true" />
+      <span
+        className={"ml-status " + statusClass}
+        title={statusTitle}
+        data-testid={`model-status-${model.id}`}
+        aria-hidden="true"
+      />
     </div>
   );
 }
@@ -819,7 +1019,7 @@ function GeneralPrefs({ voicePersonas, openUpdatesWindow }: GeneralPrefsProps): 
     };
     window.addEventListener(VOICE_PERSONA_CHANGED_EVENT, applyStoredPreference);
     window.addEventListener("storage", applyStoragePreference);
-    return () => {
+    return (): void => {
       window.removeEventListener(VOICE_PERSONA_CHANGED_EVENT, applyStoredPreference);
       window.removeEventListener("storage", applyStoragePreference);
     };
@@ -1224,16 +1424,50 @@ const VERIFIED_GATEWAY: GatewayVerificationState = "verified";
  */
 function gatewayVerificationFromRuns(
   runs: Record<string, ReadinessRunState>,
+  models: readonly ModelCapability[],
 ): GatewayVerificationState {
-  let best: GatewayVerificationState = UNVERIFIED_GATEWAY;
+  let best = gatewayVerificationFromServerObservations(models, runs);
   for (const run of Object.values(runs)) {
-    if (run.status === "error") return FAILED_VERIFICATION;
-    if (run.status !== "done") continue;
-    const state = gatewayVerificationFromProbeOutcome(run.report.overallStatus);
-    if (gatewayVerificationContradictsReadiness(state)) return FAILED_VERIFICATION;
-    if (state === PARTIAL_VERIFICATION || best === UNVERIFIED_GATEWAY) best = state;
+    const result = readinessResult(run);
+    if (result?.status === "error") return FAILED_VERIFICATION;
+    if (result?.status !== "done") continue;
+    const state = gatewayVerificationFromProbeOutcome(result.report.overallStatus);
+    if (best === UNVERIFIED_GATEWAY) {
+      best = state;
+    } else if (state !== UNVERIFIED_GATEWAY) {
+      best = worseGatewayVerification(best, state);
+    }
   }
   return best;
+}
+
+function worseGatewayVerification(
+  left: GatewayVerificationState,
+  right: GatewayVerificationState,
+): GatewayVerificationState {
+  const severity: Readonly<Record<GatewayVerificationState, number>> = {
+    verified: 0,
+    unverified: 1,
+    partial: 2,
+    failed: 3,
+  };
+  return severity[left] >= severity[right] ? left : right;
+}
+
+function gatewayVerificationFromServerObservations(
+  models: readonly ModelCapability[],
+  runs: Record<string, ReadinessRunState>,
+): GatewayVerificationState {
+  let observed: GatewayVerificationState = UNVERIFIED_GATEWAY;
+  for (const model of models) {
+    const localResult = readinessResult(runs[model.id]);
+    if (!isConversationEligibleModel(model) || localResult !== undefined) {
+      continue;
+    }
+    if (model.conversationReady === false) return FAILED_VERIFICATION;
+    if (model.conversationReady === true) observed = VERIFIED_GATEWAY;
+  }
+  return observed;
 }
 
 function computeGatewayStatusLabel(
@@ -1250,7 +1484,7 @@ function computeGatewayStatusLabel(
   // and "configured" already withholds the connection claim (uiux-fix C286's distinction).
   if (!hasDiscoveredModels) return t("settings.models.configured");
   // "connected" is a claim about reaching the gateway, so only a passing probe earns it.
-  if (verification === UNVERIFIED_GATEWAY) return t("settings.models.notVerified");
+  if (verification === UNVERIFIED_GATEWAY) return t("settings.models.configured");
   return t("settings.models.connected");
 }
 
@@ -1352,13 +1586,19 @@ async function runModelReadinessCheck(
   const record = (state: ReadinessRunState): void => {
     setLedger((current) => recordReadinessRun(current, generation, modelId, state));
   };
-  record({ status: "running", deep });
+  setLedger((current) => {
+    const previous = readinessResult(
+      current.generation === generation ? current.runs[modelId] : undefined,
+    );
+    return recordReadinessRun(current, generation, modelId, { status: "running", deep, previous });
+  });
   try {
     const report = await runGatewayReadiness(
       modelId,
       deep ? { includeDeepProbes: true } : undefined,
     );
     record({ status: "done", report });
+    notifyGatewayModelReadinessUpdated();
   } catch (error) {
     record({ status: "error", message: readinessErrorMessage(error, t) });
   }
@@ -1401,7 +1641,7 @@ function renderModelsListBody({
   readonly onCapabilityApplied: (model: ModelCapability, observedGeneration: number) => void;
   readonly t: I18nTranslate;
 }): ReactNode {
-  if (loadingModels) {
+  if (loadingModels && models.length === 0) {
     return (
       <output className="set-placeholder" style={NATIVE_BLOCK_STYLE}>
         {t("settings.models.loading")}
@@ -1454,7 +1694,7 @@ function ModelsTabContent({
   // Issue #144: source of truth is the helper, not an inline kind check.
   const chatCount = models.filter(isConversationEligibleModel).length;
   const hasDiscoveredModels = models.length > 0;
-  const verification = gatewayVerificationFromRuns(readiness);
+  const verification = gatewayVerificationFromRuns(readiness, models);
   const gatewayStatusLabel = computeGatewayStatusLabel(
     gatewayConfigured,
     hasDiscoveredModels,
@@ -1598,7 +1838,7 @@ export function SettingsPanel({
       setTab("editor");
     };
     window.addEventListener(OPEN_EDITOR_SETTINGS_EVENT, onOpenEditorSettings);
-    return () => {
+    return (): void => {
       window.removeEventListener(OPEN_EDITOR_SETTINGS_EVENT, onOpenEditorSettings);
     };
   }, []);
@@ -1648,7 +1888,7 @@ export function SettingsPanel({
       },
       t,
     );
-    return () => {
+    return (): void => {
       cancelled = true;
     };
   }, [applyConfig, reloadTick, t]);
@@ -1658,13 +1898,26 @@ export function SettingsPanel({
   // all it takes: every remembered run is tagged with the generation it measured.
   useEffect(() => {
     const onConfigUpdated = (): void => {
+      setModels(invalidateServerReadinessObservations);
       advanceConfigGeneration();
+      setReloadTick((tick) => tick + 1);
     };
     window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, onConfigUpdated);
-    return () => {
+    return (): void => {
       window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, onConfigUpdated);
     };
   }, [advanceConfigGeneration]);
+
+  useEffect(() => {
+    const onModelReadinessUpdated = (): void => {
+      resetModelRequestCache();
+      setReloadTick((tick) => tick + 1);
+    };
+    window.addEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, onModelReadinessUpdated);
+    return (): void => {
+      window.removeEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, onModelReadinessUpdated);
+    };
+  }, []);
 
   const voicePersonas = useMemo(() => voicePersonasFromModels(models), [models]);
   const gatewayConfigured = configPresent;
@@ -1739,7 +1992,7 @@ export function SettingsPanel({
         {tab === "debugging" && <DebuggingSettings root={root} />}
         {tab === "security" && (
           <div className="set-list">
-            <AutonomySettings />
+            <AutonomySettings root={root} />
             <div className="set-sec-h">
               <div>
                 <div className="set-sec-t">{workspaceT("workspaceTrust.title")}</div>

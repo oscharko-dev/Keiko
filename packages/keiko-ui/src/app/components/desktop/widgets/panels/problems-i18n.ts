@@ -26,6 +26,7 @@ const EN_PROBLEMS_MESSAGES = {
   "problems.sourceHealth.failed":
     "Verification result freshness could not be restored. Existing results may be stale.",
   "problems.jumpTo": "Open {file} at line {line}",
+  "problems.jumpToWithDetails": "{severity}: {message}. Open {file} at line {line}",
   "problems.noLocation": "No location available",
 } as const;
 
@@ -54,6 +55,7 @@ const DE_PROBLEMS_MESSAGES = {
   "problems.sourceHealth.failed":
     "Die Aktualität der Verifikationsergebnisse konnte nicht wiederhergestellt werden. Bestehende Ergebnisse können veraltet sein.",
   "problems.jumpTo": "{file} in Zeile {line} öffnen",
+  "problems.jumpToWithDetails": "{severity}: {message}. {file} in Zeile {line} öffnen",
   "problems.noLocation": "Kein Ort verfügbar",
 } satisfies ProblemsMessageCatalog;
 

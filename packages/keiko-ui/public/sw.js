@@ -39,6 +39,12 @@
 // Bumped v3 -> v4 when portable-first delivery stopped advertising browser PWA installation and
 // removed `/manifest.webmanifest` from the shell cache. Activation deletes stale older caches.
 const CACHE_NAME = "keiko-shell-v4";
+// CacheStorage is shared across the ENTIRE origin, not scoped to this service worker (#2906 round
+// 3): a future feature, another SW, or a dev-tool could open its own cache under the same origin,
+// and activate must never delete a cache it does not own. Every cache this file has ever created
+// is named `keiko-shell-v<N>`, so that prefix is the ownership boundary — activate deletes a name
+// only when it starts with this prefix AND is not the current version.
+const CACHE_NAME_PREFIX = "keiko-shell-";
 const ACTIVATE_WAITING_MESSAGE_TYPE = "KEIKO_ACTIVATE_WAITING_SERVICE_WORKER";
 
 // Static shell pre-cache. These are pathnames that must be available offline for the app
@@ -51,8 +57,6 @@ const PRECACHE_URLS = [
   "/favicon.ico",
   "/icon-192.png",
   "/icon-512.png",
-  "/icon-192-maskable.png",
-  "/icon-512-maskable.png",
   "/apple-touch-icon.png",
   "/fonts/jetbrains-mono-latin-wght-normal.woff2",
 ];
@@ -102,13 +106,28 @@ function isActivateWaitingMessage(event) {
   return data !== null && typeof data === "object" && data.type === ACTIVATE_WAITING_MESSAGE_TYPE;
 }
 
+function reportCacheWriteFailure() {
+  // `reportError` is the browser/worker diagnostic channel. Keep the message redacted: neither the
+  // request URL nor the storage error may cross this boundary, while operators still see that the
+  // offline cache degraded.
+  if (typeof self.reportError === "function") {
+    self.reportError(new Error("Service worker cache write failed."));
+  }
+}
+
 async function putIfCacheable(request, response) {
   if (!isCacheableResponse(response)) return;
   // Clone before .put — the response body can only be consumed once, and the caller still
   // returns the original to the page.
   const copy = response.clone();
-  const cache = await caches.open(CACHE_NAME);
-  await cache.put(request, copy);
+  try {
+    const cache = await caches.open(CACHE_NAME);
+    await cache.put(request, copy);
+  } catch {
+    // Cache Storage is opportunistic. Quota or storage failures must not turn an already-successful
+    // network response into a fetch failure; the caller still returns the original response.
+    reportCacheWriteFailure();
+  }
 }
 
 async function cacheFirst(request) {
@@ -156,9 +175,13 @@ self.addEventListener("activate", (event) => {
     (async () => {
       if (typeof caches === "undefined") return;
       const names = await caches.keys();
-      await Promise.all(
-        names.map((name) => (name === CACHE_NAME ? Promise.resolve(false) : caches.delete(name))),
+      // Only ever delete a stale Keiko-owned shell cache — never a name this file did not
+      // create (CacheStorage is shared across the whole origin; see the CACHE_NAME_PREFIX
+      // comment above).
+      const stale = names.filter(
+        (name) => name.startsWith(CACHE_NAME_PREFIX) && name !== CACHE_NAME,
       );
+      await Promise.all(stale.map((name) => caches.delete(name)));
     })(),
   );
 });

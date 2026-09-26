@@ -7,16 +7,18 @@
 
 import { describe, expect, it } from "vitest";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
+import type {
+  GitDeliveryActionEnvelope,
+  GitDeliveryExecutionResult,
+  GitDeliveryOrgPolicyPack,
+  GitDeliveryPolicyDecision,
+  GitDeliveryRepoPolicyPack,
+  GitDeliveryResolvedInputs,
+} from "@oscharko-dev/keiko-contracts";
 import {
   GIT_DELIVERY_POLICY_SCHEMA_VERSION,
   evaluateGitPolicy,
-  type GitDeliveryActionEnvelope,
-  type GitDeliveryExecutionResult,
-  type GitDeliveryOrgPolicyPack,
-  type GitDeliveryPolicyDecision,
-  type GitDeliveryRepoPolicyPack,
-  type GitDeliveryResolvedInputs,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import { buildGitDeliveryEvidenceRecord } from "./git-mutation-evidence.js";
 import type {
   GitDeliveryEvidenceBuildInput,
@@ -172,6 +174,28 @@ const SCENARIOS: readonly Scenario[] = [
     actionHint: "stage-changes",
   },
   {
+    // #3394 review: the hint is the ONE contracts table shared with the server's action sheet.
+    name: "blocked-preflight-detached-head",
+    result: lifecycle(
+      {
+        status: "blocked",
+        category: "preflight-block",
+        findings: [
+          {
+            code: "detached-head",
+            severity: "blocking",
+            remediation: "user-actionable",
+            phase: "preflight",
+          },
+        ],
+      },
+      "preflight",
+    ),
+    outcomeClass: "blocked",
+    disposition: "user-fixable",
+    actionHint: "recover-via-strategy",
+  },
+  {
     name: "failed-execution",
     result: lifecycle(
       {
@@ -224,6 +248,33 @@ const SCENARIOS: readonly Scenario[] = [
     outcomeClass: "rejected",
     disposition: "user-fixable",
     actionHint: "resolve-conflicts",
+  },
+  {
+    name: "signature-failed",
+    result: lifecycle(
+      {
+        status: "recovery-required",
+        category: "recovery-required",
+        executionResult: {
+          schemaVersion: "1",
+          outcome: "failed",
+          durationMs: 8,
+          errorCode: "signature-failed",
+        },
+      },
+      "result",
+      {
+        executionResult: {
+          schemaVersion: "1",
+          outcome: "failed",
+          durationMs: 8,
+          errorCode: "signature-failed",
+        },
+      },
+    ),
+    outcomeClass: "recovery-required",
+    disposition: "user-fixable",
+    actionHint: "configure-signing",
   },
   {
     name: "recovery-required",
@@ -311,6 +362,7 @@ describe("buildGitDeliveryEvidenceRecord — AC3 recovery disposition + hint", (
 describe("buildGitDeliveryEvidenceRecord — AC2 content-free hashing", () => {
   const PUSH_INPUTS: GitDeliveryResolvedInputs = {
     kind: "push",
+    verifiedCommitSha: "a".repeat(40),
     sourceBranchName: "feature/x",
     remoteAlias: "confidential-remote",
     remoteBranchName: "main",

@@ -13,13 +13,21 @@
 import { mkdtemp, rm, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { VerificationReport } from "@oscharko-dev/keiko-contracts";
 import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
-import { buildVerificationPlan, detectScripts } from "@oscharko-dev/keiko-verification";
+import {
+  buildVerificationPlan,
+  detectScripts,
+  planDirectTargetedTests,
+} from "@oscharko-dev/keiko-verification";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import type { ServerLogEvent } from "../observability/server-log.js";
 import {
   executeVerificationEnforced,
   probeNetworkIsolation,
+  verificationDependencyFailureHandler,
+  verificationTerminationHandler,
   type NetworkIsolationProbe,
 } from "./verificationExecution.js";
 
@@ -61,6 +69,42 @@ function assertFailedClosedWithoutSpawning(
 }
 
 describe("executeVerificationEnforced — the real governed spawn boundary", () => {
+  it("runs the exact Node native test target under enforced isolation when available", async () => {
+    const root = await realpath(await mkdtemp(join(tmpdir(), "keiko-node-test-exec-")));
+    try {
+      await writeFile(
+        join(root, "package.json"),
+        JSON.stringify({ name: "node-test-fixture", scripts: { test: "node --test" } }),
+        "utf8",
+      );
+      await writeFile(
+        join(root, "average.test.js"),
+        'import test from "node:test";\nimport assert from "node:assert/strict";\ntest("average", () => assert.equal((2 + 4) / 2, 3));\n',
+        "utf8",
+      );
+      const workspace = detectWorkspaceAt(root);
+      expect(workspace.testFramework).toBe("node-test");
+      const plan = {
+        workspaceRoot: root,
+        steps: planDirectTargetedTests(workspace, ["average.test.js"]),
+      };
+      expect(plan.steps).toHaveLength(1);
+
+      const { report, probe } = await executeVerificationEnforced({
+        plan,
+        workspace,
+        signal: new AbortController().signal,
+      });
+      if (probe.available) {
+        assertRanUnderEnforcedIsolation(report);
+      } else {
+        assertFailedClosedWithoutSpawning(report, probe);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+
   it("runs a real discovered script under enforced isolation when available, or fails closed without spawning when not — never claiming enforcement it did not apply", async () => {
     const root = await realpath(await mkdtemp(join(tmpdir(), "keiko-verify-exec-")));
     try {
@@ -92,4 +136,57 @@ describe("executeVerificationEnforced — the real governed spawn boundary", () 
     expect(probe.backend.length).toBeGreaterThan(0);
     expect(typeof probe.available).toBe("boolean");
   });
+});
+
+// Audit finding: VerificationRunnerManager already tracks a per-run correlationId at both of its
+// executePort call sites but never forwarded it into executeVerificationEnforced, so every
+// verification termination line was stamped UNKNOWN_CORRELATION_ID even when the run's real id was
+// sitting right there. Unit-tested directly (rather than through a real timeout/abort) because
+// forcing termination through the real spawn boundary is host-dependent: on a host with no
+// enforcing sandbox backend the run denies BEFORE spawning and onTerminated never fires at all.
+describe("verificationTerminationHandler — correlation-id wiring for the runCommand evidence seam", () => {
+  function captureLog(): {
+    events: ServerLogEvent[];
+    sink: { write: (e: ServerLogEvent) => void };
+  } {
+    const events: ServerLogEvent[] = [];
+    return { events, sink: { write: (event): void => void events.push(event) } };
+  }
+
+  it("carries the caller's own correlationId onto the emitted line instead of downgrading it", () => {
+    const log = captureLog();
+    const handler = verificationTerminationHandler(log.sink, "verify-run-correlation-9");
+    handler({ reason: "abort", childPid: 4242, windowsTreeKill: "not-attempted" });
+    expect(log.events).toHaveLength(1);
+    expect(log.events[0]?.op).toBe("command.terminated");
+    expect(log.events[0]?.correlationId).toBe("verify-run-correlation-9");
+  });
+
+  it("falls back to UNKNOWN_CORRELATION_ID only when the caller genuinely has none in scope", () => {
+    const log = captureLog();
+    const handler = verificationTerminationHandler(log.sink, undefined);
+    handler({ reason: "timeout", childPid: 4242, windowsTreeKill: "not-attempted" });
+    expect(log.events[0]?.correlationId).toBe(UNKNOWN_CORRELATION_ID);
+  });
+});
+
+it("records dependency bootstrap failure stages without leaking the error message", () => {
+  const diagnostics = { record: vi.fn() };
+  verificationDependencyFailureHandler(
+    diagnostics,
+    "verify-run-correlation-9",
+  )({
+    stage: "proxy-start",
+    error: new Error("private registry credential"),
+  });
+  expect(diagnostics.record).toHaveBeenCalledWith(
+    expect.objectContaining({
+      correlationId: "verify-run-correlation-9",
+      source: "verification.dependency-bootstrap.proxy-start",
+      errorClass: "Error",
+    }),
+  );
+  expect(JSON.stringify(diagnostics.record.mock.calls)).not.toContain(
+    "private registry credential",
+  );
 });

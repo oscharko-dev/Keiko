@@ -10,20 +10,20 @@
 // remediation — never a raw URL, page path, or page body.
 
 import { randomUUID } from "node:crypto";
-import {
-  DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
-  validateHtmlManualSource,
-  type HtmlManualPodCreateRequest,
-  type HtmlManualPodJob,
-  type HtmlManualPodJobOperation,
-  type HtmlManualPodJobState,
-  type HtmlManualPodRefreshRequest,
-  type HtmlManualSource,
-  type ManualRefreshOutcome,
-  type KnowledgeCapsule,
-  type KnowledgeCapsuleId,
-  type KnowledgeSourceId,
+import type {
+  HtmlManualPodCreateRequest,
+  HtmlManualPodJob,
+  HtmlManualPodJobOperation,
+  HtmlManualPodJobState,
+  HtmlManualPodRefreshRequest,
+  HtmlManualSource,
+  ManualRefreshOutcome,
+  KnowledgeCapsule,
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
+import { validateHtmlManualSource } from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
 import {
   createDefaultParserRegistry,
   createHtmlManualPod,
@@ -40,6 +40,7 @@ import {
   resolveNewCapsuleEmbeddingIdentity,
 } from "../local-knowledge-handlers.js";
 import { currentGatewayEgressConfig, type UiHandlerDeps } from "../deps.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -49,7 +50,7 @@ import { createGatewayManualFetcher } from "./manual-crawl-fetcher.js";
 
 // Terminal jobs are retained so a poll after completion still resolves; the registry is capped so a
 // long-lived server cannot accumulate unbounded job records.
-const MAX_RETAINED_JOBS = 64;
+export const MAX_RETAINED_JOBS = 64;
 
 interface ManualPodJobRun {
   job: HtmlManualPodJob;
@@ -77,10 +78,20 @@ export class ManualPodJobRegistry {
 
   private evictIfFull(): void {
     if (this.runs.size < MAX_RETAINED_JOBS) return;
-    // Evict the oldest terminal job first; if none is terminal, evict the oldest entry.
+    // Evict the oldest terminal job first; if none is terminal, every retained slot is still
+    // actively running and the oldest one is the fallback victim. Round-3 finding: dropping a
+    // still-running victim's registry entry without stopping its work let the crawl/index
+    // pipeline keep consuming resources invisibly -- unregistered (so unpollable), with no
+    // reachable controller (so uncancellable), and its eventual terminal patch() silently
+    // discarded since patch() no-ops on an unknown jobId. Abort the victim's controller first:
+    // refreshRun/createRun already pass `signal: controller.signal` into the domain pipeline
+    // cooperatively, so this actually stops the work through its normal (fail-closed) lifecycle
+    // instead of just forgetting about it.
     const oldestTerminal = [...this.runs.values()].find((run) => run.job.state !== "running");
     const victim = oldestTerminal ?? this.runs.values().next().value;
-    if (victim !== undefined) this.runs.delete(victim.job.jobId);
+    if (victim === undefined) return;
+    if (victim.job.state === "running") victim.controller.abort();
+    this.runs.delete(victim.job.jobId);
   }
 }
 
@@ -225,7 +236,7 @@ export function createTerminalState(progress: HtmlManualIndexingProgress): HtmlM
 export async function executeJob(
   jobId: string,
   base: HtmlManualPodJob,
-  controller: AbortController,
+  _controller: AbortController,
   run: ManualPodJobRunner,
   diagnostics?: ServerDiagnosticSink,
 ): Promise<void> {
@@ -267,8 +278,47 @@ export function buildHttpManualSource(
   return validateHtmlManualSource(source).ok ? { ok: true, source } : { ok: false };
 }
 
-function fetcherFor(deps: UiHandlerDeps): ReturnType<typeof createGatewayManualFetcher> {
-  return createGatewayManualFetcher({ egress: () => currentGatewayEgressConfig(deps) });
+// KEIKO-0647: manual-pod-specific egress resolver, independent of currentGatewayEgressConfig.
+// Before this fix the crawler reused the model-gateway's global egress config wholesale, so
+// enabling `allowPrivateNetwork` for a model-gateway proxy also opened the SSRF surface for the
+// manual HTML crawler. That coupling is wrong: LLM traffic and Manual Pod HTML crawling are
+// independent trust boundaries with independent operator-decisions.
+//
+// The independent resolver INHERITS proxy/CA/other transport settings from the gateway config
+// (a corporate deployment already tunes these once), but takes its own `allowPrivateNetwork`
+// decision from a manual-pod-specific env var (KEIKO_MANUAL_POD_ALLOW_PRIVATE_NETWORK). The
+// default is FALSE -- an intranet manual only reaches private hosts when the operator opts in
+// explicitly for the manual-pod surface, never as a side effect of a model-gateway proxy setting.
+// This gives no MORE reach than the shared config used to (private-network access still requires
+// an explicit opt-in) and does not silently DENY the documented on-prem/intranet use case (the
+// operator still has one flag they can turn on).
+export function currentManualPodEgressConfig(
+  deps: UiHandlerDeps,
+): ReturnType<typeof currentGatewayEgressConfig> {
+  const base = currentGatewayEgressConfig(deps);
+  const allowPrivate = (deps.env.KEIKO_MANUAL_POD_ALLOW_PRIVATE_NETWORK ?? "").trim() === "true";
+  if (base === undefined) {
+    return allowPrivate ? { allowPrivateNetwork: true } : undefined;
+  }
+  return { ...base, allowPrivateNetwork: allowPrivate };
+}
+
+// Only the HTTP (`html-manual-http`) manual-fetch strategy is wired up here today. The
+// domain layer also ships a `html-manual-local` (WorkspaceFs) fetcher in keiko-local-knowledge,
+// but no live server route exposes it: neither manual-pod-routes.ts nor the request shapes
+// accept a local-root selection input. Keeping the local strategy intentionally-unexposed
+// for this release avoids the risk of wiring a filesystem-touching route without the
+// route-level authorization equivalent to resolveRegisteredOrManagedWorkspaceRoot and the
+// route-level TOCTOU/symlink-escape negative test that the local fetcher's own comments
+// require (#2906 KEIKO-0554). See html-manual-source.ts for the matching contract note.
+function fetcherFor(
+  deps: UiHandlerDeps,
+  correlationId?: string,
+): ReturnType<typeof createGatewayManualFetcher> {
+  return createGatewayManualFetcher({
+    egress: () => currentManualPodEgressConfig(deps),
+    ...(correlationId === undefined ? {} : { correlationId }),
+  });
 }
 
 export type StartManualPodJobResult =
@@ -302,6 +352,14 @@ function resolveManualPodContext(deps: UiHandlerDeps): ManualPodJobContext | und
   return env === undefined ? undefined : { env, fetcher: fetcherFor(deps) };
 }
 
+function productionManualPodJobContext(
+  deps: UiHandlerDeps,
+  context: ManualPodJobContext,
+  jobId: string,
+): ManualPodJobContext {
+  return { env: context.env, fetcher: fetcherFor(deps, jobId) };
+}
+
 function refreshRun(
   ctx: ManualPodJobContext,
   request: HtmlManualPodRefreshRequest,
@@ -316,6 +374,7 @@ function refreshRun(
       capsuleId: request.capsuleId as KnowledgeCapsuleId,
       sourceId: request.sourceId as KnowledgeSourceId,
       signal: controller.signal,
+      logSink: processServerLogSink(),
       onCrawlEvent,
     })
       .then((result) => ({
@@ -345,6 +404,7 @@ function createRun(
         capsuleId: ids.capsuleId as KnowledgeCapsuleId,
         sourceId: ids.sourceId as KnowledgeSourceId,
         signal: controller.signal,
+        logSink: processServerLogSink(),
         onCrawlEvent,
       },
       source,
@@ -392,7 +452,15 @@ export async function startManualPodCreate(
   const job = startJob(
     "create",
     ids,
-    (_base, controller) => run ?? createRun(ctx, built.source, identity, ids, controller),
+    (base, controller) =>
+      run ??
+      createRun(
+        overrides.context ?? productionManualPodJobContext(deps, ctx, base.jobId),
+        built.source,
+        identity,
+        ids,
+        controller,
+      ),
     deps.diagnostics,
   );
   return { ok: true, job };
@@ -435,7 +503,13 @@ export function startManualPodRefresh(
   const job = startJob(
     "refresh",
     { capsuleId: request.capsuleId, sourceId: request.sourceId },
-    (_base, controller) => run ?? refreshRun(ctx, request, controller),
+    (base, controller) =>
+      run ??
+      refreshRun(
+        overrides.context ?? productionManualPodJobContext(deps, ctx, base.jobId),
+        request,
+        controller,
+      ),
     deps.diagnostics,
   );
   return { ok: true, job };

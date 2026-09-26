@@ -35,6 +35,9 @@ export interface ActivitySubscriber {
   readonly res: ServerResponse;
   readonly controller: AbortController;
   readonly onBackpressure?: (signal: SseBackpressureSignal) => void;
+  // The subscriber's OWN request-scoped correlation id (#2902 w5-sse-counters), attached to its
+  // own fanned-out stream — never the broadcaster's, since one broadcaster serves many requests.
+  readonly correlationId?: string;
 }
 
 interface Broadcaster {
@@ -58,7 +61,13 @@ function writeTo(subscriber: ActivitySubscriber, frame: string): void {
   // A subscriber whose socket died mid-fan-out is skipped; its abort listener has
   // already detached it and writing to a destroyed response would throw.
   if (subscriber.controller.signal.aborted) return;
-  writeOrDestroy(subscriber.res, frame, subscriber.controller, subscriber.onBackpressure);
+  writeOrDestroy(
+    subscriber.res,
+    frame,
+    subscriber.controller,
+    subscriber.onBackpressure,
+    subscriber.correlationId,
+  );
 }
 
 function runTick(broadcaster: Broadcaster): void {
@@ -66,15 +75,17 @@ function runTick(broadcaster: Broadcaster): void {
   for (const { id, frame } of broadcaster.source.collectFrames()) {
     nextFrames.set(id, frame);
     if (broadcaster.lastFrames.get(id) !== frame) {
-      // Copy before fan-out: a backpressure kill aborts→detaches mid-iteration.
-      for (const subscriber of [...broadcaster.subscribers]) writeTo(subscriber, frame);
+      // Iterating the live Set is safe: a backpressure kill that aborts→detaches mid-iteration
+      // deletes from the Set, and a deleted, not-yet-visited entry is simply skipped — exactly the
+      // subscriber that must not be written to again.
+      for (const subscriber of broadcaster.subscribers) writeTo(subscriber, frame);
     }
   }
   broadcaster.lastFrames = nextFrames;
 }
 
 function runPing(broadcaster: Broadcaster): void {
-  for (const subscriber of [...broadcaster.subscribers]) writeTo(subscriber, PING_FRAME);
+  for (const subscriber of broadcaster.subscribers) writeTo(subscriber, PING_FRAME);
 }
 
 function ensureBroadcaster(
@@ -125,7 +136,7 @@ function emitJoinState(broadcaster: Broadcaster, joiner: ActivitySubscriber): vo
   for (const { id, frame } of broadcaster.source.collectFrames()) {
     nextFrames.set(id, frame);
     const changed = broadcaster.lastFrames.get(id) !== frame;
-    for (const subscriber of [...broadcaster.subscribers]) {
+    for (const subscriber of broadcaster.subscribers) {
       if (subscriber === joiner || changed) writeTo(subscriber, frame);
     }
   }

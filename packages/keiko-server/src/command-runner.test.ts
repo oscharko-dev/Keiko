@@ -23,6 +23,10 @@ import {
 } from "./command-runner.js";
 import { CommandRunnerError } from "./command-runner-errors.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
+import type { ServerLogEvent } from "./observability/server-log.js";
+import { redactLogFields } from "./observability/log-redaction.js";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import type { WorkspaceRootAccess } from "./task-workspace/workspace-root-access.js";
 
 // ── Fake spawn helpers (mirrors terminal.test.ts) ────────────────────────────────
 
@@ -163,6 +167,163 @@ function collect(manager: CommandRunnerManager): CommandRunnerEvent[] {
 // ── Discovery ─────────────────────────────────────────────────────────────────────
 
 describe("CommandRunnerManager — discovery", () => {
+  it("uses managed-root access and fails closed when central resolution denies it", () => {
+    const access: WorkspaceRootAccess = {
+      kind: "managed-task",
+      canonicalRoot: workspaceRoot,
+      fs: nodeWorkspaceFs,
+      // The worktree IS its own repository here, so the ADR-0147 D3 basis comparison is trivially
+      // satisfied and this test keeps measuring only the root-access resolution it is about.
+      repositoryRoot: workspaceRoot,
+    };
+    expect(
+      makeManager(makeSpawn(), { resolveWorkspaceRootAccess: () => access }).discover(workspaceRoot)
+        .tasks,
+    ).not.toHaveLength(0);
+    expect(() =>
+      makeManager(makeSpawn(), { resolveWorkspaceRootAccess: () => undefined }).discover(
+        workspaceRoot,
+      ),
+    ).toThrow(expect.objectContaining({ code: "PROJECT_NOT_FOUND" }));
+  });
+
+  // #3382/L-5. Script trust for a MANAGED TASK WORKTREE is the repository's standing grant AND the
+  // ADR-0147 D3 basis equality that binds it to the worktree's own `package.json` bytes — the exact
+  // rule `verificationRunner.worktreeSharesRepositoryTrustBasis` states, asked here rather than
+  // restated. Before this, the decision was keyed on the worktree's OWN root, which a governed run
+  // can write to: the runner answered "trusted" for a manifest no human ever approved.
+  it("refuses a managed worktree whose package.json differs from its repository's", async () => {
+    const worktreeRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-cmd-worktree-")));
+    try {
+      writeFileSync(
+        join(worktreeRoot, "package.json"),
+        PACKAGE_JSON.replace('"vitest run"', '"vitest run && node ./attacker.js"'),
+        "utf8",
+      );
+      store.createProject(worktreeRoot, "worktree");
+      const spawn = vi.fn(makeSpawn());
+      const manager = makeManager(spawn, {
+        resolveWorkspaceRootAccess: (): WorkspaceRootAccess => ({
+          kind: "managed-task",
+          canonicalRoot: worktreeRoot,
+          fs: nodeWorkspaceFs,
+          repositoryRoot: workspaceRoot,
+        }),
+      });
+
+      expect(
+        manager.discover(worktreeRoot).tasks.find((task) => task.id === "npm-script:test")
+          ?.trustState,
+      ).toBe("approval-required");
+      await expect(
+        manager.execute({ projectId: worktreeRoot, taskId: "npm-script:test" }),
+      ).rejects.toThrow(expect.objectContaining({ code: "TASK_REQUIRES_TRUST" }));
+      expect(spawn).not.toHaveBeenCalled();
+
+      // Control: the SAME worktree with a byte-identical manifest keeps the repository's grant.
+      writeFileSync(join(worktreeRoot, "package.json"), PACKAGE_JSON, "utf8");
+      await manager.execute({ projectId: worktreeRoot, taskId: "npm-script:test" });
+      expect(spawn).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  // ADR-0147 D3 (2026-09-10): once a governed run has rewritten its worktree manifest, the one basis
+  // left is an explicit human grant for the worktree root itself — the same `decideScriptTrust` the
+  // verification runner asks, so the command catalog and the at-effect gate agree with it.
+  it("admits a drifted managed worktree under the worktree root's own explicit human grant", async () => {
+    const worktreeRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-cmd-worktree-grant-")));
+    try {
+      writeFileSync(
+        join(worktreeRoot, "package.json"),
+        PACKAGE_JSON.replace('"vitest run"', '"vitest run --coverage"'),
+        "utf8",
+      );
+      store.createProject(worktreeRoot, "worktree");
+      const spawn = vi.fn(makeSpawn());
+      let granted = false;
+      const manager = makeManager(spawn, {
+        resolveWorkspaceRootAccess: (): WorkspaceRootAccess => ({
+          kind: "managed-task",
+          canonicalRoot: worktreeRoot,
+          fs: nodeWorkspaceFs,
+          repositoryRoot: workspaceRoot,
+        }),
+        isWorktreeTrustedByHumanGrant: (canonicalRoot): boolean =>
+          canonicalRoot === worktreeRoot && granted,
+      });
+      const testTrust = (): string | undefined =>
+        manager.discover(worktreeRoot).tasks.find((task) => task.id === "npm-script:test")
+          ?.trustState;
+
+      expect(testTrust()).toBe("approval-required");
+      await expect(
+        manager.execute({ projectId: worktreeRoot, taskId: "npm-script:test" }),
+      ).rejects.toThrow(expect.objectContaining({ code: "TASK_REQUIRES_TRUST" }));
+
+      granted = true;
+      expect(testTrust()).toBe("trusted");
+      await manager.execute({ projectId: worktreeRoot, taskId: "npm-script:test" });
+      expect(spawn).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  // The at-effect gate must RE-READ the worktree basis, not replay the comparison discovery took.
+  // The manifest here is byte-identical when the catalog is built and is replaced before the run is
+  // admitted — the "another process rewrote package.json between the two checks" window. The trust
+  // decider is the deterministic clock for it: `trustedForScripts` reads the basis and THEN calls the
+  // decider, so a rewrite issued from inside the discovery-time decider call lands strictly between
+  // the two basis reads. Every script survives the rewrite, so the refusal can only come from the
+  // basis — and `spawn` proves the rewritten bytes never reached a child process.
+  it("re-reads the worktree trust basis at the effect boundary and never spawns a rewritten manifest", async () => {
+    const worktreeRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-cmd-toctou-")));
+    try {
+      writeFileSync(join(worktreeRoot, "package.json"), PACKAGE_JSON, "utf8");
+      store.createProject(worktreeRoot, "worktree");
+      const spawn = vi.fn(makeSpawn());
+      let rewriteOnNextTrustCheck = false;
+      let manifestRewritten = false;
+      const isWorkspaceTrustedForPackageScripts: CommandRunnerWorkspaceTrustDecider = () => {
+        if (rewriteOnNextTrustCheck) {
+          rewriteOnNextTrustCheck = false;
+          manifestRewritten = true;
+          writeFileSync(
+            join(worktreeRoot, "package.json"),
+            PACKAGE_JSON.replace('"vitest run"', '"vitest run && node ./attacker.js"'),
+            "utf8",
+          );
+        }
+        return true;
+      };
+      const manager = makeManager(spawn, {
+        isWorkspaceTrustedForPackageScripts,
+        resolveWorkspaceRootAccess: (): WorkspaceRootAccess => ({
+          kind: "managed-task",
+          canonicalRoot: worktreeRoot,
+          fs: nodeWorkspaceFs,
+          repositoryRoot: workspaceRoot,
+        }),
+      });
+
+      // Control: no rewrite, so the repository's standing grant still covers the worktree.
+      await manager.execute({ projectId: worktreeRoot, taskId: "npm-script:test" });
+      expect(spawn).toHaveBeenCalledTimes(1);
+
+      rewriteOnNextTrustCheck = true;
+      await expect(
+        manager.execute({ projectId: worktreeRoot, taskId: "npm-script:test" }),
+      ).rejects.toThrow(expect.objectContaining({ code: "TASK_REQUIRES_TRUST" }));
+      expect(manifestRewritten).toBe(true);
+      expect(spawn).toHaveBeenCalledTimes(1);
+      expect(manager.inFlightCount()).toBe(0);
+    } finally {
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
   // eslint-disable-next-line complexity -- single discovery assertion covers the command kind/trust matrix.
   it("discovers package.json scripts and classifies kinds", () => {
     const catalog = makeManager().discover(workspaceRoot);
@@ -393,7 +554,60 @@ describe("CommandRunnerManager — execution", () => {
     await expect(
       manager.execute({ projectId: workspaceRoot, taskId: "npm-script:test" }),
     ).rejects.toMatchObject({ code: "RUN_LIMIT_EXCEEDED" });
-    void pending;
+  });
+});
+
+// ── runCommand termination evidence (AGENTS.md §8 Rule 1) ──────────────────────────
+// A PR reviewer finding: the keiko-tools win32 taskkill.exe tree-kill decision shipped with no
+// activity-log evidence anywhere. runCommand's onTerminated seam is wired here to this manager's
+// injected activityLog port (defaulting to processServerLogSink() in production); this proves the
+// wiring, not the seam itself — the seam's own reason/pid/tree-kill-outcome matrix is covered by
+// packages/keiko-tools/src/exec.test.ts.
+describe("CommandRunnerManager — runCommand termination evidence (AGENTS.md §8 Rule 1)", () => {
+  it("logs command.terminated with the run's own correlationId on timeout", async () => {
+    const events: ServerLogEvent[] = [];
+    const manager = makeManager(makeSpawn({ hangs: true }), {
+      policy: { ...DEFAULT_SANDBOX_POLICY, defaultTimeoutMs: 20 },
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+    const collected = collect(manager);
+    const result = await manager.execute({ projectId: workspaceRoot, taskId: "npm-script:start" });
+    expect(result.timedOut).toBe(true);
+    const runId = collected.find((event) => event.kind === "run-started")?.runId ?? "";
+    expect(runId).not.toBe("");
+    const terminated = events.find((event) => event.op === "command.terminated");
+    expect(terminated).toBeDefined();
+    expect(terminated?.category).toBe("diagnostic");
+    expect(terminated?.correlationId).toBe(runId);
+    const extra = terminated?.extra ?? {};
+    expect(extra.reason).toBe("timeout");
+    expect(typeof extra.childPid).toBe("number");
+    // makeManager pins platform:"linux" (line ~150) — the win32 tree-kill branch never engages.
+    expect(extra.windowsTreeKill).toBe("not-attempted");
+    // Body-free: exactly the three evidence fields — never the task id, executable, argv, or output.
+    expect(Object.keys(extra).sort()).toEqual([
+      "childPid",
+      "completeness",
+      "loss",
+      "reason",
+      "windowsTreeKill",
+    ]);
+    // THE REAL REDACTOR, not a fake sink (review 5058571583 finding 1): `pid` is a reserved
+    // envelope name and redactLogFields drops it from `extra`, which is exactly how the child
+    // identity silently vanished from every command.terminated line while the fake-sink tests
+    // stayed green. Running the emitted extra through the shipped redactor pins the whole
+    // reserved-name class: every evidence field must SURVIVE redaction.
+    const redacted = redactLogFields(extra) ?? {};
+    expect(Object.keys(redacted).sort()).toEqual(Object.keys(extra).sort());
+    expect(redacted.childPid).toBe(extra.childPid);
+  });
+
+  it("still completes a run and never throws when no activityLog is injected", async () => {
+    const manager = makeManager(makeSpawn({ hangs: true }), {
+      policy: { ...DEFAULT_SANDBOX_POLICY, defaultTimeoutMs: 20 },
+    });
+    const result = await manager.execute({ projectId: workspaceRoot, taskId: "npm-script:start" });
+    expect(result.timedOut).toBe(true);
   });
 });
 

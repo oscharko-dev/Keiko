@@ -1,14 +1,33 @@
 import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { DEFAULT_SEARCH_LIMITS, detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
 import type { RouteContext, UiHandlerDeps } from "../index.js";
+import {
+  createFakeSessionPairingPort,
+  fakePairingRequestBody,
+} from "../coding-app-session/_support.js";
+import { createCodingAppSessionChannel } from "../coding-app-session/sessionChannel.js";
+import { APP_SESSION_COOKIE_NAME } from "../coding-app-session/sessionCookie.js";
+import { createSessionRegistry } from "../coding-app-session/sessionRegistry.js";
 import type { UiStore } from "../store/index.js";
+import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
+import { deriveManagedWorktreePath } from "../task-workspace/naming.js";
+import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
+import {
+  createOrdinaryWorkspaceRootAccess,
+  grantedWorkspaceRootAccess,
+  type WorkspaceRootAccessOutcome,
+} from "../task-workspace/workspace-root-access.js";
+import type { WorkspaceProvisioningService } from "../task-workspace/types.js";
 import {
   handleEditorWorkspaceReplaceApply,
   handleEditorWorkspaceReplacePreview,
@@ -21,6 +40,7 @@ function rawPostContext(raw: string, path: string): RouteContext {
   const req = Readable.from([Buffer.from(raw, "utf8")]) as unknown as IncomingMessage;
   (req as { method?: string }).method = "POST";
   return {
+    correlationId: undefined,
     req,
     res: {} as unknown as ServerResponse,
     params: {},
@@ -33,13 +53,15 @@ function postContext(body: unknown, path = "/api/editor/workspace-search"): Rout
 }
 
 let root: string;
+let managedSourceRoot: string | undefined;
 let store: UiStore;
 
-function deps(): UiHandlerDeps {
+function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
   return {
     store,
     redactor: buildRedactor({}),
     evidenceStore: createInMemoryEvidenceStore(),
+    ...overrides,
   } as unknown as UiHandlerDeps;
 }
 
@@ -76,6 +98,94 @@ function symbolBody(overrides: Record<string, unknown> = {}): Record<string, unk
     query: "parse",
     maxResults: 20,
     ...overrides,
+  };
+}
+
+async function managedSearchFixture(): Promise<{
+  readonly managedWorktree: string;
+  readonly cookie: string;
+  readonly deps: UiHandlerDeps;
+}> {
+  const managedRoot = join(root, ".keiko", "task-workspaces");
+  assertManagedRootOwned(managedRoot);
+  const repositoryId = "repo_0123456789abcdef";
+  const workspaceId = "ws_0123456789abcdef01234567";
+  const managedWorktree = deriveManagedWorktreePath({ managedRoot, repositoryId, workspaceId });
+  // #3347 managed-worktree identity: resolveManagedWorkspaceRootAccess re-proves a real Git
+  // linked-worktree pointer instead of trusting a path shape, so this fixture needs an actual
+  // `git worktree add` linkage -- a separate, independently-cleaned-up repositoryRoot, not the
+  // shared search-fixture `root` (which dozens of unrelated tests scan directly and must not gain
+  // a `.git` directory).
+  const repositoryRoot = await mkdtemp(join(tmpdir(), "keiko-workspace-search-managed-source-"));
+  managedSourceRoot = repositoryRoot;
+  execFileSync("git", ["init", "-q"], { cwd: repositoryRoot });
+  execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: repositoryRoot });
+  execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: repositoryRoot });
+  execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "fixture"], { cwd: repositoryRoot });
+  mkdirSync(dirname(managedWorktree), { recursive: true });
+  execFileSync(
+    "git",
+    [
+      "worktree",
+      "add",
+      "-q",
+      "-b",
+      "keiko/task/workspace-search-01234567",
+      managedWorktree,
+      "HEAD",
+    ],
+    { cwd: repositoryRoot },
+  );
+  const gitdirInspection = inspectManagedGitdirIdentity(managedWorktree, repositoryRoot);
+  if (gitdirInspection === undefined) {
+    throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
+  }
+  await mkdir(join(managedWorktree, "src"), { recursive: true });
+  await writeFile(join(managedWorktree, "src", "managed.ts"), "export const managedNeedle = 1;\n");
+  const timestamp = new Date(0).toISOString();
+  const instance: WorkspaceInstance = {
+    schemaVersion: "1",
+    workspaceId,
+    taskId: "workspace-search",
+    repositoryId,
+    repositoryRoot,
+    baseBranch: "dev",
+    taskBranch: "keiko/task/workspace-search-01234567",
+    managedWorktreePath: managedWorktree,
+    gitdirIdentity: gitdirInspection.identity,
+    lifecycleState: "active",
+    health: "healthy",
+    lock: null,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    driftMarkers: [],
+    recoveryHints: [],
+    auditCorrelationId: "corr_workspace_search",
+  };
+  const workspaceProvisioning = {
+    provision: (): never => {
+      throw new Error("not used in this test");
+    },
+    activate: (): never => {
+      throw new Error("not used in this test");
+    },
+    getInstance: (id: string): WorkspaceInstance | undefined =>
+      id === workspaceId ? instance : undefined,
+  } satisfies WorkspaceProvisioningService;
+  const channel = createCodingAppSessionChannel({
+    registry: createSessionRegistry(),
+    pairingPort: createFakeSessionPairingPort(),
+  });
+  const paired = channel.pair(fakePairingRequestBody());
+  if (!paired.paired) throw new Error("pairing failed");
+  return {
+    managedWorktree,
+    cookie: `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`,
+    deps: deps({
+      managedTaskWorkspaceRoot: managedRoot,
+      workspaceProvisioning,
+      codingAppSessionChannel: channel,
+    }),
   };
 }
 
@@ -117,11 +227,15 @@ beforeEach(async () => {
   await writeFile(join(root, "src", "case.ts"), "Alpha\nalpha\n", "utf8");
   store = createInMemoryUiStore();
   store.createProject(root, "fixture");
+  managedSourceRoot = undefined;
 });
 
 afterEach(async () => {
   store.close();
   await rm(root, { recursive: true, force: true });
+  if (managedSourceRoot !== undefined) {
+    await rm(managedSourceRoot, { recursive: true, force: true });
+  }
 });
 
 // Qodo review on #2869: the raw editor read reaches this route through the package's
@@ -145,6 +259,21 @@ describe("the editor read lane is reachable through its published export subpath
 });
 
 describe("POST /api/editor/workspace-search", () => {
+  it("uses request-scoped owned-root access for a paired managed worktree", async () => {
+    const fixture = await managedSearchFixture();
+    const request = postContext(
+      searchBody({ root: fixture.managedWorktree, query: "managedNeedle" }),
+    );
+    request.req.headers = { cookie: fixture.cookie };
+
+    const result = await handleEditorWorkspaceSearch(request, fixture.deps);
+
+    expect(result.status).toBe(200);
+    const body = result.body as { readonly results: readonly { path: string; snippet: string }[] };
+    expect(body.results[0]?.path, JSON.stringify(body)).toBe("src/managed.ts");
+    expect(body.results[0]?.snippet).toContain("managedNeedle");
+  });
+
   it("returns literal search results with bounded snippets", async () => {
     const result = await handleEditorWorkspaceSearch(postContext(searchBody()), deps());
 
@@ -552,11 +681,101 @@ describe("POST /api/editor/workspace-search/replace-preview", () => {
       fileCount: number;
       omittedFileCount: number;
       truncated: boolean;
+      searchTruncationReasons: readonly string[];
     };
     expect(body.files).toHaveLength(1);
     expect(body.fileCount).toBe(1);
     expect(body.omittedFileCount).toBeGreaterThan(0);
     expect(body.truncated).toBe(true);
+    // KEIKO-0645-r3: this truncation is entirely from the per-request maxFiles cap; the upstream
+    // search selection did not itself truncate, so searchTruncationReasons must be empty.
+    expect(body.searchTruncationReasons).toEqual([]);
+  });
+
+  it("KEIKO-0645-r3: emits searchTruncationReasons on the response so callers can distinguish the truncation cause", async () => {
+    // Prove the field is present and always reflects searchText's own result.coverage.reasons --
+    // so a caller can tell whether `truncated: true` was caused by the upstream candidate-file
+    // selection (maxFilesScanned/maxMatchesReturned/timeout/depth-pruning) or by the per-request
+    // `maxFiles` cap (omittedFileCount > 0). This shape test locks the field in; the maxFiles-only
+    // test above covers the "search did not truncate" branch (searchTruncationReasons: []), and
+    // this one asserts the field is always emitted on the wire even in the trivial no-truncation
+    // case.
+    const result = await handleEditorWorkspaceReplacePreview(
+      postContext(
+        replaceBody({ includeGlobs: ["src/a.ts"] }),
+        "/api/editor/workspace-search/replace-preview",
+      ),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      truncated: boolean;
+      omittedFileCount: number;
+      searchTruncationReasons: readonly string[];
+    };
+    expect(body.truncated).toBe(false);
+    expect(body.omittedFileCount).toBe(0);
+    expect(body.searchTruncationReasons).toEqual([]);
+    // Distinctness: the response must expose both fields as separate wire shape entries so a
+    // future caller can bind on either one without inspecting `truncated`.
+    expect(Object.keys(body)).toEqual(
+      expect.arrayContaining(["truncated", "omittedFileCount", "searchTruncationReasons"]),
+    );
+  });
+
+  it("KEIKO-0645-r3: an upstream match-cap truncation is reported as match-cap, not conflated with a file omission", async () => {
+    // Regression for the round-3 finding: the pre-fix field (`filesOmittedBySearchLimit:
+    // result.truncated`) was set whenever the upstream search truncated for ANY reason -- so a
+    // caller could not tell "the query fanned out across too many distinct files to enumerate them
+    // all" (a genuine per-file omission, reason "file-cap") apart from "the total match-return
+    // budget (200) was exhausted while emitting results" (reason "match-cap"), which can happen
+    // with plenty of scanned files and zero files dropped by the route's own maxFiles cap. Build
+    // more distinct matching files than DEFAULT_SEARCH_LIMITS.maxMatchesReturned (200), each
+    // contributing one match, so searchText's emission-time cap (repoSearchScan.ts hitEmissionLimit)
+    // fires with reason "match-cap" -- never "file-cap" (maxFilesScanned is 2,000, far above 250).
+    const manyDir = join(root, "src", "many");
+    await mkdir(manyDir, { recursive: true });
+    await Promise.all(
+      Array.from({ length: 250 }, (_, i) =>
+        writeFile(
+          join(manyDir, `file-${String(i).padStart(3, "0")}.ts`),
+          "needle_marker\n",
+          "utf8",
+        ),
+      ),
+    );
+
+    const result = await handleEditorWorkspaceReplacePreview(
+      postContext(
+        replaceBody({
+          query: "needle_marker",
+          mode: "literal",
+          includeGlobs: ["src/many/**"],
+          // WORKSPACE_REPLACE_MAX_FILES is 200 -- the contract-validated ceiling for this field --
+          // which happens to equal DEFAULT_SEARCH_LIMITS.maxMatchesReturned, so the route's own
+          // per-request cap never binds ahead of the upstream search's match-cap in this scenario.
+          maxFiles: 200,
+        }),
+        "/api/editor/workspace-search/replace-preview",
+      ),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      omittedFileCount: number;
+      truncated: boolean;
+      searchTruncationReasons: readonly string[];
+    };
+    // The route's own maxFiles cap (300) never bound the response -- every file that made it into
+    // the upstream search's result set was processed, so the route-local omission count is 0.
+    expect(body.omittedFileCount).toBe(0);
+    // The upstream search itself still truncated (match-cap), so `truncated` stays true --
+    // but the precise cause must be "match-cap", never "file-cap".
+    expect(body.truncated).toBe(true);
+    expect(body.searchTruncationReasons).toContain("match-cap");
+    expect(body.searchTruncationReasons).not.toContain("file-cap");
   });
 
   it("accepts a validator-approved regex containing an unescaped quantifier-like character instead of crashing", async () => {
@@ -601,25 +820,28 @@ describe("POST /api/editor/workspace-search/replace-preview", () => {
     expect(after).toBe(before);
   });
 
-  it("treats a literal query with embedded whitespace as an exact multi-word match", async () => {
-    await writeFile(join(root, "src", "d.ts"), 'export const label = "parse Config";\n', "utf8");
+  it.each(["parse Config", "[literal].value (x)+?", "prefix\\suffix", "x-y"])(
+    "keeps exact literal text %s after shared-pattern conversion",
+    async (literal) => {
+      await writeFile(join(root, "src", "d.ts"), `// ${literal}\n`, "utf8");
 
-    const result = await handleEditorWorkspaceReplacePreview(
-      postContext(
-        replaceBody({
-          query: "parse Config",
-          replacement: "parseConfig",
-          includeGlobs: ["src/d.ts"],
-        }),
-        "/api/editor/workspace-search/replace-preview",
-      ),
-      deps(),
-    );
+      const result = await handleEditorWorkspaceReplacePreview(
+        postContext(
+          replaceBody({
+            query: literal,
+            replacement: "parseConfig",
+            includeGlobs: ["src/d.ts"],
+          }),
+          "/api/editor/workspace-search/replace-preview",
+        ),
+        deps(),
+      );
 
-    expect(result.status).toBe(200);
-    const body = result.body as { files: { edits: { originalText: string }[] }[] };
-    expect(body.files[0]?.edits.map((edit) => edit.originalText)).toEqual(["parse Config"]);
-  });
+      expect(result.status).toBe(200);
+      const body = result.body as { files: { edits: { originalText: string }[] }[] };
+      expect(body.files[0]?.edits.map((edit) => edit.originalText)).toEqual([literal]);
+    },
+  );
 
   it("replaces a match that follows a brace-delimited block in the same file, not just the block's own declaration line", async () => {
     // src/a.ts has "parseConfig" both in the function declaration (line 1, inside a
@@ -815,6 +1037,61 @@ describe("POST /api/editor/workspace-search/replace-apply", () => {
     expect(result.body).toMatchObject({ appliedCount: 1, conflictCount: 0, conflicts: [] });
     expect(content).toContain('export const marker = readConfig("large-file");');
   });
+
+  // #3347 write-boundary re-proof. Admission, the closed-file read and the keiko-tools preflight all
+  // run on the capability proved once, at the top of the request; the WRITE is the only effect that
+  // leaves authorized memory. Authority can be revoked — or the managed root replaced — inside that
+  // window, so the writer is constructed from a capability re-proved immediately before it, and a
+  // denial is a route-level 403 rather than a per-file conflict: the request never reached bytes it
+  // was allowed to change. Verified red by hand: with the writer built from the admission-time root,
+  // the revoked apply returned 200 with appliedCount 1 and rewrote the file on disk.
+  it("leaves disk untouched when authority is revoked before the governed write", async () => {
+    const file = await previewForApply();
+    const before = await readFile(join(root, "src", "a.ts"), "utf8");
+
+    const result = await handleEditorWorkspaceReplaceApply(
+      postContext({ root, files: [file] }, "/api/editor/workspace-search/replace-apply"),
+      deps({
+        workspaceRootAccessResolver: (): WorkspaceRootAccessOutcome => ({ decision: "denied" }),
+      }),
+    );
+
+    expect(result.status).toBe(403);
+    expect(result.body).toMatchObject({ error: { code: "DENIED" } });
+    expect(await readFile(join(root, "src", "a.ts"), "utf8")).toBe(before);
+    expect(before).toContain("parseConfig");
+  });
+
+  it("re-proves authority once per governed write, not once per admitted request", async () => {
+    const preview = await handleEditorWorkspaceReplacePreview(
+      postContext(
+        replaceBody({ includeGlobs: ["src/a.ts", "src/b.ts"] }),
+        "/api/editor/workspace-search/replace-preview",
+      ),
+      deps(),
+    );
+    const previewed = (
+      preview.body as {
+        files: { path: string; baseContentHash: string; edits: readonly unknown[] }[];
+      }
+    ).files;
+    expect(previewed).toHaveLength(2);
+    const proofs: string[] = [];
+
+    const result = await handleEditorWorkspaceReplaceApply(
+      postContext({ root, files: previewed }, "/api/editor/workspace-search/replace-apply"),
+      deps({
+        workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccessOutcome => {
+          proofs.push(requestedRoot);
+          return grantedWorkspaceRootAccess(createOrdinaryWorkspaceRootAccess(requestedRoot));
+        },
+      }),
+    );
+
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ appliedCount: 2, conflictCount: 0 });
+    expect(proofs).toEqual([root, root]);
+  });
 });
 
 // ─── Secret-shaped source text (editor P1: a silent, release-blocking replace failure) ───────────
@@ -873,6 +1150,27 @@ describe("workspace search & replace over secret-shaped source text", () => {
     expect(
       body.results.some((entry) => entry.lineRange.startLine <= 2 && entry.lineRange.endLine >= 2),
     ).toBe(true);
+  });
+
+  it("redacts the secret-shaped line inside a search snippet window", async () => {
+    await writeFile(
+      join(root, "src", "secret-snippet.ts"),
+      [SECRET_LINE, 'export const marker = "needlenearsecret";', ""].join("\n"),
+      "utf8",
+    );
+
+    const result = await handleEditorWorkspaceSearch(
+      postContext(
+        searchBody({ query: "needlenearsecret", includeGlobs: ["src/secret-snippet.ts"] }),
+      ),
+      deps(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as { results: { snippet: string }[] };
+    const snippets = body.results.map((entry) => entry.snippet).join("\n");
+    expect(snippets).toContain("[REDACTED]");
+    expect(snippets).not.toContain("s3cr3tlookupvalue");
   });
 
   it("finds a match that only exists inside the redacted region itself", async () => {
@@ -1158,5 +1456,6 @@ describe("replace preview payload crosses the wire verbatim", () => {
     const snippets = body.results.map((entry) => entry.snippet).join("\n");
     expect(snippets).toContain("needleinsearchlane");
     expect(snippets).not.toContain("hunter2placeholder");
+    expect(snippets).toContain("[REDACTED]");
   });
 });

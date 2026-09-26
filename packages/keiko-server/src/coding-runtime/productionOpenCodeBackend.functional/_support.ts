@@ -1,26 +1,31 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   lstatSync,
   mkdirSync,
   readFileSync,
   realpathSync,
   statSync,
+  writeFileSync,
   type BigIntStats,
 } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 
-import {
-  CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS,
-  EDITOR_AGENT_SCHEMA_VERSION,
-  type WorkspaceInfo,
-} from "@oscharko-dev/keiko-contracts";
 import type {
-  GatewayConfig,
-  GatewayRequest,
-  GatewayStreamChunk,
-  NormalizedResponse,
+  CodingWorkbenchSidecarGatewayRunMetadata,
+  WorkspaceInfo,
+} from "@oscharko-dev/keiko-contracts";
+import { CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import {
+  resolveCodingSafeSidecarGatewayProfile,
+  toolCallingConfigurationFingerprint,
+  type GatewayConfig,
+  type GatewayRequest,
+  type GatewayStreamChunk,
+  type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import { applyPatch, inspectPatch } from "@oscharko-dev/keiko-tools";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { createOpenCodeGatewayReadinessRegistry } from "../../coding-sidecar-gateway.js";
 import {
@@ -30,10 +35,19 @@ import {
 import { createFakeSessionPairingPort } from "../../coding-app-session/_support.js";
 import { SESSION_PAIRING_LAUNCHER_SECRET_ENV } from "../../coding-app-session/launcherSessionPairingPort.js";
 import { buildUiHandlerDeps, type UiHandlerDeps } from "../../deps.js";
-import type { ServerDiagnosticSink } from "../../diagnostics-log.js";
+import {
+  contentFreeErrorClass,
+  emitServerDiagnostic,
+  type ServerDiagnosticSink,
+} from "../../diagnostics-log.js";
 import type { VerificationRunnerManager } from "../../editor/verificationRunner.js";
+import { editorAgentWorkspaceRootDigest } from "../../editor/agentAuthorityRegistry.js";
 import type { WorkspaceLifecycleService } from "../../task-workspace/types.js";
 import type { CodingRuntimeEvidenceAggregator } from "../codingRuntimeEvidenceAggregator.js";
+import type {
+  CodingRuntimeEditorMutationLeaseBroker,
+  CodingRuntimeEditorMutationLeaseRequest,
+} from "../codingRuntimeEditorMutationLeaseCoordinator.js";
 import { createAuthenticatedSessionStartConfirmationPlane } from "../codingRuntimeStartConfirmationPlane.js";
 import type { ProductionCodingRuntimeResolver } from "../productionCodingRuntimeHost.js";
 import { createProductionCodingRuntimeResolver } from "../productionCodingRuntimeResolver.js";
@@ -42,20 +56,30 @@ import {
   type ProductionOpenCodeBackendInput,
   type ResolvedPortableOpenCodeRuntime,
 } from "../productionOpenCodeBackend.js";
-import type { ProductionCodingRuntimeResolverInput } from "../productionCodingRuntimeResolver.js";
+import type {
+  ProductionCodingRuntimeResolverInput,
+  ProductionRuntimeBackendInput,
+} from "../productionCodingRuntimeResolver.js";
 import type { SecureWorkspaceTextReadPort } from "../secureWorkspaceTextRead.js";
+import {
+  H1_PROOF_SEARCH_CALL_ID,
+  repositorySearchReadHandoff,
+  type RepositorySearchConsumptionProof,
+} from "./repositorySearchProof.js";
+import {
+  SKILL_DISCOVERY_PROOF_CALL_ID,
+  skillInvocationHandoff,
+  type SkillDiscoveryConsumptionProof,
+} from "./skillDiscoveryProof.js";
 
 const MAX_READ_BYTES = 65_536;
 export const FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX = "VISIBLE_ASSISTANT_TEXT_2479:";
 export const FUNCTIONAL_ACTIVITY_TRUNCATED_TAIL = "TRUNCATED_TAIL_2479";
 export const FUNCTIONAL_PLAN_STEP_READ = "PLAN_STEP_READ_2480";
-export const FUNCTIONAL_PLAN_STEP_EDIT = "PLAN_STEP_EDIT_2480";
 export const FUNCTIONAL_PLAN_STEP_VERIFY = "PLAN_STEP_VERIFY_2480";
-/** Rides an unprojected todo field; it must never appear in any sink, including the feed. */
-export const FUNCTIONAL_PLAN_DROPPED_CANARY = "PLAN_DROPPED_CANARY_2480";
 
 export interface ScriptState {
-  mode: "productive" | "out-of-scope" | "discovery" | "research";
+  mode: "productive" | "productive-search" | "out-of-scope" | "discovery" | "research";
   calls: number;
   readonly old: string;
   readonly next: string;
@@ -67,6 +91,13 @@ export interface ScriptState {
   readonly injectionDirective?: string;
   /** Invoked with every scripted tool name so a journey can assert what the model REQUESTED. */
   readonly observeToolCall?: (name: string) => void;
+  readonly observeRepositorySearch?: (proof: RepositorySearchConsumptionProof) => void;
+  /** #3417: after its search-derived read, discover the approved skills and invoke the listed one. */
+  readonly proveSkillDiscovery?: boolean;
+  readonly observeSkillDiscovery?: (proof: SkillDiscoveryConsumptionProof) => void;
+  /** Keeps a completed verification turn cancellable for browser journeys that prove Stop. */
+  readonly holdAfterVerification?: boolean;
+  verificationIssued?: boolean;
 }
 
 type FunctionalEditorAgentClient = ProductionCodingRuntimeResolverInput["editorAgentClient"];
@@ -74,6 +105,11 @@ type FunctionalEditorAction = Parameters<FunctionalEditorAgentClient["action"]>[
 type FunctionalEditorActionResult = Awaited<ReturnType<FunctionalEditorAgentClient["action"]>>;
 
 interface FunctionalRuntimeResolverBaseInput {
+  /** Uses the same real Git/approval/snapshot bundle as production composition. */
+  readonly verifiedCommit?: ProductionCodingRuntimeResolverInput["verifiedCommit"];
+  readonly draftDelivery?: ProductionCodingRuntimeResolverInput["draftDelivery"];
+  /** A composed fixture can invoke the admitted facade without inventing a model tool catalog. */
+  readonly observeBackendRun?: (input: ProductionRuntimeBackendInput) => void;
   readonly portable: ResolvedPortableOpenCodeRuntime;
   readonly runtimeStateRoot: string;
   readonly gatewayUrl: string;
@@ -82,8 +118,12 @@ interface FunctionalRuntimeResolverBaseInput {
   readonly readWorkspaceHead: (workspaceRoot: string, repositoryRoot: string) => string | undefined;
   readonly verificationRunner: Pick<VerificationRunnerManager, "runToReport">;
   readonly runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">;
+  /** Shares the resolver's per-run coordinators with the BFF editor commit boundary. */
+  readonly runtimeMutationLeaseBroker?: CodingRuntimeEditorMutationLeaseBroker;
   readonly createSupervisor: NonNullable<ProductionOpenCodeBackendInput["createSupervisor"]>;
   readonly diagnostics?: ServerDiagnosticSink;
+  /** Uses the same configured-profile qualification as the mounted gateway when supplied. */
+  readonly resolveManagedModelProfile?: ProductionCodingRuntimeResolverInput["workspaceAuthority"]["resolveManagedModelProfile"];
   /** #2387: opens the network-egress class so the research approval loop is reachable. */
   readonly researchEgressEnabled?: boolean | undefined;
   /** #2387 hermetic research transport; tests never touch the real network. */
@@ -158,25 +198,32 @@ export function createFunctionalRuntimeResolver(
       managedTaskWorkspaceRoot: input.managedTaskWorkspaceRoot,
       deploymentCeiling: "autonomous-delivery",
       readWorkspaceHead: input.readWorkspaceHead,
-      ...(input.researchEgressEnabled === undefined
-        ? {}
-        : { researchEgressEnabled: input.researchEgressEnabled }),
+      verifiedCommitResult: (runId) =>
+        input.verifiedCommit?.snapshots.getLastSuccessfulVerifiedCommit?.(runId),
+      resolveManagedModelProfile: input.resolveManagedModelProfile ?? functionalManagedModelProfile,
+      researchEgressEnabled: input.researchEgressEnabled,
     },
     ...(input.researchFetchImpl ? { researchFetchImpl: input.researchFetchImpl } : {}),
     ...resolveFunctionalChildModelInput(input),
-    backend: createProductionOpenCodeBackend({
-      portable: input.portable,
-      runtimeStateRoot: input.runtimeStateRoot,
-      gatewayUrl: input.gatewayUrl,
-      runtimeEvidence: input.runtimeEvidence,
-      gatewayReadiness: readiness,
-      createSupervisor: input.createSupervisor,
-      ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
-    }),
-    secureWorkspaceTextRead: functionalWorkspaceRead(activeRoot),
-    editorAgentClient: functionalEditorAgentClient(activeRoot),
+    ...(input.verifiedCommit === undefined ? {} : { verifiedCommit: input.verifiedCommit }),
+    ...(input.draftDelivery === undefined ? {} : { draftDelivery: input.draftDelivery }),
+    backend: functionalBackend(input, readiness),
+    secureWorkspaceTextRead: functionalWorkspaceRead(activeRoot, input.diagnostics),
+    editorAgentClient: functionalEditorAgentClient(activeRoot, input.runtimeMutationLeaseBroker),
     verificationRunner: input.verificationRunner,
+    resolveWorkspaceRootAccess: (requestedRoot) =>
+      requestedRoot === activeRoot()
+        ? {
+            kind: "managed-task",
+            canonicalRoot: requestedRoot,
+            fs: nodeWorkspaceFs,
+            repositoryRoot: requestedRoot,
+          }
+        : undefined,
     confirmationConsumer: createAuthenticatedSessionStartConfirmationPlane(),
+    ...(input.runtimeMutationLeaseBroker === undefined
+      ? {}
+      : { runtimeMutationLeaseBroker: input.runtimeMutationLeaseBroker }),
   });
   return {
     resolve: (): ReturnType<ProductionCodingRuntimeResolver["resolve"]> => {
@@ -184,6 +231,47 @@ export function createFunctionalRuntimeResolver(
       return qualified === undefined
         ? undefined
         : { ...qualified, openCodeGatewayReadinessRegistry: readiness };
+    },
+  };
+}
+
+function functionalManagedModelProfile(modelId: string | undefined): {
+  readonly profileId: string;
+} {
+  const resolved = resolveCodingSafeSidecarGatewayProfile(functionalGatewayConfig(), {
+    ...(modelId === undefined ? {} : { modelId }),
+  });
+  if (resolved.status !== "available") throw new Error("functional model is unavailable");
+  return { profileId: resolved.modelAlias };
+}
+
+function functionalBackend(
+  input: FunctionalRuntimeResolverInput,
+  readiness: ReturnType<typeof createOpenCodeGatewayReadinessRegistry>,
+): ReturnType<typeof createProductionOpenCodeBackend> {
+  const backend = createProductionOpenCodeBackend({
+    portable: input.portable,
+    runtimeStateRoot: input.runtimeStateRoot,
+    gatewayUrl: input.gatewayUrl,
+    resolveGatewayRunMetadata: (modelId): CodingWorkbenchSidecarGatewayRunMetadata | undefined => {
+      const result = resolveCodingSafeSidecarGatewayProfile(functionalGatewayConfig(), { modelId });
+      return result.status === "available" ? result.runMetadata : undefined;
+    },
+    // ADR-0043 D11-D14 (#3390): the SAME single attested loopback origin as `gatewayUrl` above,
+    // never a second listener's own port -- derived from it exactly the way
+    // productionOpenCodeActivation.ts derives both from ONE `loopback` origin.
+    toolFacadeUrl: `${new URL(input.gatewayUrl).origin}/api/coding-sidecar/tool`,
+    runtimeEvidence: input.runtimeEvidence,
+    gatewayReadiness: readiness,
+    createSupervisor: input.createSupervisor,
+    ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
+  });
+  return {
+    ...backend,
+    createRun: (run): ReturnType<typeof backend.createRun> => {
+      const created = backend.createRun(run);
+      input.observeBackendRun?.(run);
+      return created;
     },
   };
 }
@@ -225,6 +313,11 @@ export function functionalBffDeps(input: FunctionalBffDepsInput): UiHandlerDeps 
 export interface DiscoveryBffDepsInput {
   readonly stateRoot: string;
   readonly store?: Parameters<typeof buildUiHandlerDeps>[0]["store"];
+  // Required companion whenever `store` is injected: without it the assembly cannot build the
+  // coding-runtime control plane and the discovery journey refuses as unqualified.
+  readonly codingRuntimeSnapshotStore?: Parameters<
+    typeof buildUiHandlerDeps
+  >[0]["codingRuntimeSnapshotStore"];
   readonly workspaceScriptTrust?: Parameters<typeof buildUiHandlerDeps>[0]["workspaceScriptTrust"];
   readonly workspaceLifecycle: WorkspaceLifecycleService;
   readonly workspaceProvisioning?:
@@ -248,6 +341,11 @@ export function productionDiscoveryBffDeps(input: DiscoveryBffDepsInput): UiHand
   for (const dir of ["state", "ui-db", "evidence"]) {
     mkdirSync(join(input.stateRoot, dir), { recursive: true, mode: 0o700 });
   }
+  writeFileSync(
+    join(input.stateRoot, "ui-db", "keiko.config.json"),
+    `${JSON.stringify(functionalGatewayConfig(), null, 2)}\n`,
+    { encoding: "utf8", mode: 0o600 },
+  );
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH ?? "",
     KEIKO_STATE_DIR: join(input.stateRoot, "state"),
@@ -264,6 +362,9 @@ export function productionDiscoveryBffDeps(input: DiscoveryBffDepsInput): UiHand
     env,
     uiDbPath: join(input.stateRoot, "ui-db", "keiko-ui.db"),
     ...(input.store === undefined ? {} : { store: input.store }),
+    ...(input.codingRuntimeSnapshotStore === undefined
+      ? {}
+      : { codingRuntimeSnapshotStore: input.codingRuntimeSnapshotStore }),
     ...(input.workspaceScriptTrust === undefined
       ? {}
       : { workspaceScriptTrust: input.workspaceScriptTrust }),
@@ -310,8 +411,9 @@ function withScriptedModelSeams(
 }
 
 /** Bounded, workspace-confined text read for the managed tool facade (functional stand-in). */
-function functionalWorkspaceRead(
+export function functionalWorkspaceRead(
   resolveRoot: () => string | undefined,
+  diagnostics: ServerDiagnosticSink | undefined,
 ): SecureWorkspaceTextReadPort {
   return {
     readText: ({ relativePath, signal }): ReturnType<SecureWorkspaceTextReadPort["readText"]> => {
@@ -319,7 +421,7 @@ function functionalWorkspaceRead(
       if (signal?.aborted === true || root === undefined) {
         return Promise.resolve({ ok: false as const, reason: "workspace-unavailable" as const });
       }
-      return Promise.resolve(readContainedText(root, relativePath, signal));
+      return Promise.resolve(readContainedText(root, relativePath, signal, diagnostics));
     },
   };
 }
@@ -328,6 +430,7 @@ function readContainedText(
   root: string,
   relativePath: string,
   signal: AbortSignal | undefined,
+  diagnostics: ServerDiagnosticSink | undefined,
 ): Awaited<ReturnType<SecureWorkspaceTextReadPort["readText"]>> {
   try {
     const path = containedRegularFile(root, relativePath);
@@ -343,9 +446,42 @@ function readContainedText(
     const text = bytes.toString("utf8");
     bytes.fill(0);
     return { ok: true, text };
-  } catch {
-    return { ok: false, reason: "not-found" };
+  } catch (error) {
+    return functionalReadFailure(error, diagnostics);
   }
+}
+
+// ENOENT is the ordinary case — no such file, exactly what a plain miss looks like — and is
+// reported as "not-found". Previously every OTHER failure (EACCES, EPERM — a genuine permission
+// denial) collapsed to the SAME "not-found" reason, actively mislabeling a containment/permission
+// failure as mere absence. Distinguish the two and log a content-free diagnostic (error CLASS
+// only, never the path or the raw OS message) noting which one fired, mirroring the
+// isEnoent/emitShardUnreadable split `secret-vault.ts` already uses for the same OS-error class.
+function functionalReadFailure(
+  error: unknown,
+  diagnostics: ServerDiagnosticSink | undefined,
+): { readonly ok: false; readonly reason: "denied" | "not-found" } {
+  const permissionDenied = !isEnoent(error);
+  emitServerDiagnostic(diagnostics, {
+    correlationId: randomUUID(),
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.functional-workspace-read",
+    source: "productionOpenCodeBackend.functional._support.read-contained-text",
+    errorClass: contentFreeErrorClass(error),
+    message: permissionDenied
+      ? "functional-workspace-read-permission-denied"
+      : "functional-workspace-read-not-found",
+  });
+  return { ok: false, reason: permissionDenied ? "denied" : "not-found" };
+}
+
+function isEnoent(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code === "ENOENT"
+  );
 }
 
 /**
@@ -355,36 +491,83 @@ function readContainedText(
  */
 function functionalEditorAgentClient(
   resolveRoot: () => string | undefined,
+  runtimeMutationLeaseBroker: CodingRuntimeEditorMutationLeaseBroker | undefined,
 ): FunctionalEditorAgentClient {
   return {
     action: (action, signal): Promise<FunctionalEditorActionResult> => {
       const root = resolveRoot();
-      if (root === undefined || action.type !== "applyChangeset") {
-        return Promise.resolve(editorDenied("RUNTIME_EDIT_UNSUPPORTED"));
-      }
-      if (!changesetMatchesPatch(root, action)) {
-        return Promise.resolve(editorDenied("RUNTIME_EDIT_CHANGESET_INVALID"));
-      }
-      try {
-        applyPatch(workspace(root), action.changeset?.patch ?? "", {
-          applyEnabled: true,
-          signal,
-        });
-      } catch {
-        return Promise.resolve(editorDenied("RUNTIME_EDIT_APPLY_FAILED"));
-      }
-      return Promise.resolve({
-        ok: true as const,
-        value: {
-          result: {
-            schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
-            actionId: action.actionId,
-            sessionId: action.sessionId,
-            status: "succeeded" as const,
-          },
-        },
-      });
+      return Promise.resolve(
+        functionalEditorAction(action, signal, root, runtimeMutationLeaseBroker),
+      );
     },
+  };
+}
+
+function functionalEditorAction(
+  action: FunctionalEditorAction,
+  signal: AbortSignal,
+  root: string | undefined,
+  broker: CodingRuntimeEditorMutationLeaseBroker | undefined,
+): FunctionalEditorActionResult {
+  if (root === undefined || action.type !== "applyChangeset") {
+    return editorDenied("RUNTIME_EDIT_UNSUPPORTED");
+  }
+  if (!changesetMatchesPatch(root, action)) {
+    return editorDenied("RUNTIME_EDIT_CHANGESET_INVALID");
+  }
+  const request = functionalMutationLeaseRequest(action, root);
+  if (broker !== undefined && (request === undefined || !broker.claim(request))) {
+    return editorDenied("RUNTIME_EDIT_AUTHORITY_INVALID");
+  }
+  return applyFunctionalChangeset(action, signal, root, request, broker);
+}
+
+function applyFunctionalChangeset(
+  action: FunctionalEditorAction,
+  signal: AbortSignal,
+  root: string,
+  request: CodingRuntimeEditorMutationLeaseRequest | undefined,
+  broker: CodingRuntimeEditorMutationLeaseBroker | undefined,
+): FunctionalEditorActionResult {
+  let succeeded = false;
+  try {
+    applyPatch(workspace(root), action.changeset?.patch ?? "", { applyEnabled: true, signal });
+    succeeded = true;
+    return editorSucceeded(action);
+  } catch {
+    return editorDenied("RUNTIME_EDIT_APPLY_FAILED");
+  } finally {
+    if (request !== undefined) broker?.complete(request, succeeded);
+  }
+}
+
+function editorSucceeded(action: FunctionalEditorAction): FunctionalEditorActionResult {
+  return {
+    ok: true,
+    value: {
+      result: {
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        actionId: action.actionId,
+        sessionId: action.sessionId,
+        status: "succeeded",
+      },
+    },
+  };
+}
+
+function functionalMutationLeaseRequest(
+  action: FunctionalEditorAction,
+  workspaceRoot: string,
+): CodingRuntimeEditorMutationLeaseRequest | undefined {
+  const authorityRef = action.authorityRef;
+  if (authorityRef === undefined) return undefined;
+  return {
+    authorityRef,
+    runId: authorityRef.runId,
+    envelopeDigest: authorityRef.envelopeDigest,
+    workspaceRootDigest: editorAgentWorkspaceRootDigest(workspaceRoot),
+    actionId: action.actionId,
+    idempotencyKey: action.idempotencyKey,
   };
 }
 
@@ -445,6 +628,7 @@ function sameFile(left: BigIntStats, right: BigIntStats): boolean {
 function workspace(root: string): WorkspaceInfo {
   return {
     root,
+    selectedRoot: root,
     name: undefined,
     version: undefined,
     testFramework: "unknown",
@@ -540,6 +724,8 @@ export function scriptedResponse(script: ScriptState, transcript = ""): Normaliz
 
 function scriptedResponseFor(script: ScriptState, transcript: string): NormalizedResponse {
   const step = script.calls++;
+  if (script.mode === "productive-search")
+    return productiveSearchResponse(step, script, transcript);
   if (script.mode === "research") return researchScriptedResponse(step, transcript, script);
   if (script.mode === "out-of-scope") {
     return step === 0
@@ -564,41 +750,60 @@ function scriptedResponseFor(script: ScriptState, transcript: string): Normalize
 }
 
 function productiveResponse(step: number, script: ScriptState): NormalizedResponse {
-  if (step === 0) return tool("todowrite", planUpdate(1));
-  if (step === 1)
-    return tool("keiko_workspace_read", { relativePath: "src/example.ts" }, script.toolCallId);
-  if (step === 2) return tool("question", question());
-  if (step === 3) return tool("keiko_changeset_edit", edit(script));
-  if (step === 4) return tool("todowrite", planUpdate(2));
-  return step === 5 ? tool("keiko_verification", { verifierId: "typecheck" }) : normal();
+  if (step === 0)
+    return {
+      ...tool("keiko_workspace_read", { relativePath: "src/example.ts" }, script.toolCallId),
+      content: FUNCTIONAL_PLAN_STEP_READ,
+    };
+  if (step === 1) return tool("question", question());
+  if (step === 2)
+    return { ...tool("keiko_changeset_edit", edit(script)), content: FUNCTIONAL_PLAN_STEP_VERIFY };
+  if (step === 3) {
+    script.verificationIssued = true;
+    return tool("keiko_verification", { verifierId: "typecheck" });
+  }
+  if (script.holdAfterVerification === true && script.verificationIssued === true) {
+    return tool("question", question());
+  }
+  return normal();
 }
 
-/** Revision 1 opens two steps; revision 2 flips their states and appends the verify step. */
-function planUpdate(revision: 1 | 2): Record<string, unknown> {
-  const opened = [
-    {
+function productiveSearchResponse(
+  step: number,
+  script: ScriptState,
+  transcript: string,
+): NormalizedResponse {
+  if (step === 0) {
+    return {
+      ...tool(
+        "keiko_repository_search",
+        {
+          mode: "literal",
+          query: script.old.trim(),
+          caseSensitive: true,
+          includeGlobs: ["src/**/*.ts"],
+          excludeGlobs: [],
+          maxResults: 5,
+        },
+        H1_PROOF_SEARCH_CALL_ID,
+      ),
       content: FUNCTIONAL_PLAN_STEP_READ,
-      status: revision === 1 ? "in_progress" : "completed",
-      priority: "high",
-    },
-    {
-      content: FUNCTIONAL_PLAN_STEP_EDIT,
-      status: revision === 1 ? "pending" : "in_progress",
-      priority: "medium",
-    },
-  ];
-  if (revision === 1) return { todos: opened };
-  return {
-    todos: [
-      ...opened,
-      {
-        content: FUNCTIONAL_PLAN_STEP_VERIFY,
-        status: "pending",
-        priority: "low",
-        notes: FUNCTIONAL_PLAN_DROPPED_CANARY,
-      },
-    ],
-  };
+    };
+  }
+  if (step === 1) {
+    return tool(
+      "keiko_workspace_read",
+      repositorySearchReadHandoff(transcript, script.old.trim(), script.observeRepositorySearch),
+    );
+  }
+  const skillSteps = script.proveSkillDiscovery === true ? 2 : 0;
+  if (skillSteps > 0 && step === 2) {
+    return tool("keiko_skill_discover", {}, SKILL_DISCOVERY_PROOF_CALL_ID);
+  }
+  if (skillSteps > 0 && step === 3) {
+    return tool("keiko_skill", skillInvocationHandoff(transcript, script.observeSkillDiscovery));
+  }
+  return productiveResponse(step - 1 - skillSteps, script);
 }
 
 function question(): Record<string, unknown> {
@@ -629,11 +834,10 @@ function digest(value: string): string {
 function normal(): NormalizedResponse {
   return {
     modelId: "functional-model",
-    // Intrinsically over the projection's segment bound so the assistant text truncates identically
-    // for the scripted child and the real binary (which streams the raw content, without the
-    // child's artificial display expansion). Exercises the long-text admission fix end to end.
+    // Exceed the owning message-byte bound with actual model output. Both the scripted child
+    // and V2 must truncate the same tail without artificially expanding ordinary progress.
     content: `${FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX}${"x".repeat(
-      CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS + 512,
+      CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES + 512,
     )}${FUNCTIONAL_ACTIVITY_TRUNCATED_TAIL}`,
     finishReason: "stop",
     toolCalls: [],
@@ -653,13 +857,14 @@ let scriptedToolCallSequence = 0;
 function tool(
   name:
     | "keiko_workspace_read"
+    | "keiko_repository_search"
     | "keiko_changeset_edit"
     | "keiko_verification"
     | "keiko_research_fetch"
+    | "keiko_skill_discover"
     | "keiko_skill"
     | "keiko_child_agent"
-    | "question"
-    | "todowrite",
+    | "question",
   args: Record<string, unknown>,
   callId?: string,
 ): NormalizedResponse {
@@ -675,28 +880,35 @@ function tool(
 }
 
 export function functionalGatewayConfig(): GatewayConfig {
+  const provider = {
+    modelId: "functional-model",
+    baseUrl: "https://provider.invalid/v1",
+    apiKey: "functional-provider-secret",
+    apiKeyHeaderName: "api-key",
+    endpointStyle: "azure-openai-deployment" as const,
+    apiVersion: "2024-06-01",
+    timeoutMs: 5_000,
+    maxRetries: 0,
+    retryBaseDelayMs: 1,
+  };
   return {
-    providers: [
-      {
-        modelId: "functional-model",
-        baseUrl: "https://provider.invalid/v1",
-        apiKey: "functional-provider-secret",
-        apiKeyHeaderName: "api-key",
-        endpointStyle: "azure-openai-deployment",
-        apiVersion: "2024-06-01",
-        timeoutMs: 5_000,
-        maxRetries: 0,
-        retryBaseDelayMs: 1,
-      },
-    ],
+    providers: [provider],
     circuitBreaker: { failureThreshold: 5, cooldownMs: 1_000, halfOpenProbes: 1 },
     capabilities: [
       {
         id: "functional-model",
         kind: "chat",
         contextWindow: 128_000,
-        maxOutputTokens: 4_096,
+        // Admit the deliberately oversized display sample through the gateway, then prove
+        // the independent safe-activity message bound clips it for the paired client.
+        maxOutputTokens: 8_192,
         toolCalling: true,
+        toolCallingVerification: {
+          status: "verified",
+          checkedAt: new Date().toISOString(),
+          probe: "gateway-tool-calling-v1",
+          configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+        },
         structuredOutput: true,
         streaming: true,
         supportsImageInput: false,

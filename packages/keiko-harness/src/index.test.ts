@@ -10,6 +10,8 @@
 // surface" guarantee is load-bearing.
 
 import { describe, expect, it } from "vitest";
+
+import { createRequire } from "node:module";
 import * as harness from "./index.js";
 import type {
   AgentConfig,
@@ -61,11 +63,17 @@ import type {
   VerificationResultEvent,
 } from "./index.js";
 
+// The packaged manifest owns the version; a literal here re-states it and goes
+// stale on every release cut (KfQ findings on #3055).
+const { version: packageVersion } = createRequire(import.meta.url)("../package.json") as {
+  version: string;
+};
+
 describe("keiko-harness public surface", () => {
   it("exposes the documented value barrel members", () => {
     // Package version (distinct from HARNESS_VERSION which is the runtime/event-schema
     // version re-exported from @oscharko-dev/keiko-contracts).
-    expect(harness.KEIKO_HARNESS_VERSION).toBe("0.2.15");
+    expect(harness.KEIKO_HARNESS_VERSION).toBe(packageVersion);
     // Session API:
     expect(typeof harness.createSession).toBe("function");
     expect(typeof harness.runAgent).toBe("function");
@@ -75,6 +83,7 @@ describe("keiko-harness public surface", () => {
     expect(harness.DEFAULT_LIMITS).toBeDefined();
     expect(harness.HARNESS_CODES).toBeDefined();
     expect(harness.TERMINAL_STATES).toBeDefined();
+    expect(typeof harness.isTerminalHarnessState).toBe("function");
     // Error taxonomy (re-exported from keiko-security):
     expect(typeof harness.HarnessError).toBe("function");
     expect(typeof harness.HarnessInternalError).toBe("function");

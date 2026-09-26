@@ -13,6 +13,8 @@
 // Leaf-package rules (ADR-0019, ADR-0062): pure types, frozen const tables, and pure functions only.
 // No IO, no clock, no crypto, no randomness. Relative imports end in ".js".
 
+import { validateGitCommitMessage, type GitCommitMessagePolicy } from "./git-commit-policy.js";
+
 // Pinned schema version. A breaking change adds a NEW literal member; this one is never mutated.
 export const GIT_COMMIT_INTENT_SCHEMA_VERSION = "1" as const;
 
@@ -29,6 +31,13 @@ export interface GitCommitChangeSummary {
   readonly areaCount: number;
   readonly areas: readonly string[];
   readonly touchesTests: boolean;
+  /**
+   * KEIKO-0816: true when EVERY staged path is a test file (the change contains no production
+   * source). Optional so producers can be upgraded independently — the analyzer treats `undefined`
+   * as "unknown, fall back to the legacy touchesTests heuristic" and treats `false` as an explicit
+   * "at least one non-test file is staged", suppressing the `test` type suggestion.
+   */
+  readonly testsOnly?: boolean;
 }
 
 // ─── Quality-warning vocabulary ───────────────────────────────────────────────────────────────────
@@ -134,7 +143,13 @@ function suggestedTypeFor(
   if (scope === undefined) {
     return undefined;
   }
-  if (summary.touchesTests) {
+  // KEIKO-0816: `touchesTests: true` used to unconditionally suggest "test", contradicting the
+  // documented heuristic that reserves the "test" type for tests-ONLY changes. A mixed change that
+  // adds a production file and its test should suggest the type of the production change (e.g.
+  // "docs" or fall through to undefined), never "test". Respect an explicit testsOnly:false to
+  // suppress the suggestion; treat undefined as unknown and preserve the legacy behaviour so
+  // existing producers keep working.
+  if (summary.touchesTests && summary.testsOnly !== false) {
     return "test";
   }
   if (scope === "docs") {
@@ -207,6 +222,76 @@ export function analyzeGitCommitIntent(input: GitCommitIntentInput): GitCommitIn
   };
 }
 
+// ─── Commit-message drafting ───────────────────────────────────────────────────────────────────
+// The draft intentionally describes only the fact of the staged change. It never guesses a semantic
+// verb from source content, paths, or a model response. A suggestion is returned only when it already
+// satisfies the server-resolved policy; requirements that need user-specific information (for example
+// an issue key or DCO sign-off) leave the draft unavailable for the user to complete deliberately.
+
+const GENERIC_DRAFT_SUBJECT = "Update staged changes";
+
+function plural(count: number, singular: string, pluralValue: string): string {
+  return count === 1 ? singular : pluralValue;
+}
+
+function areaDescription(summary: GitCommitChangeSummary): string {
+  if (summary.areaCount === 0) return "";
+  const areaCount = summary.areaCount.toString();
+  const areaNoun = plural(summary.areaCount, "area", "areas");
+  if (summary.areas.length === 0) return ` across ${areaCount} ${areaNoun}`;
+  if (summary.areaCount === 1) return ` in ${summary.areas[0] ?? "the selected area"}`;
+  const listedAreas = summary.areas.join(", ");
+  if (summary.areaCount === summary.areas.length) return ` across ${listedAreas}`;
+  return ` across ${areaCount} ${areaNoun}, including ${listedAreas}`;
+}
+
+function draftBody(summary: GitCommitChangeSummary): string {
+  const stagedFileCount = summary.stagedFileCount.toString();
+  const fileNoun = plural(summary.stagedFileCount, "file", "files");
+  const lines = [
+    `Update ${stagedFileCount} staged ${fileNoun}${areaDescription(summary)}.`,
+    "Keep the commit limited to the staged selection.",
+  ];
+  if (summary.touchesTests) {
+    lines.push("Includes test-related changes.");
+  }
+  return lines.join("\n");
+}
+
+function suggestedDraftType(
+  intent: GitCommitIntentAnalysis,
+  policy: GitCommitMessagePolicy,
+): string | undefined {
+  if (!policy.conventionalCommit.enabled) return undefined;
+  const { allowedTypes } = policy.conventionalCommit;
+  if (intent.suggestedType !== undefined && allowedTypes.includes(intent.suggestedType)) {
+    return intent.suggestedType;
+  }
+  if (allowedTypes.includes("chore")) return "chore";
+  return allowedTypes[0];
+}
+
+function draftSubject(intent: GitCommitIntentAnalysis, policy: GitCommitMessagePolicy): string {
+  const type = suggestedDraftType(intent, policy);
+  return type === undefined ? GENERIC_DRAFT_SUBJECT : `${type}: update staged changes`;
+}
+
+/**
+ * Returns a conservative, policy-valid commit subject derived from the staged-change intent, when
+ * that is possible without inventing user-specific data. The result is always safe to put into the
+ * editable commit composer, but it never bypasses the server's fresh pre-commit validation.
+ */
+export function suggestGitCommitMessage(
+  intent: GitCommitIntentAnalysis,
+  policy: GitCommitMessagePolicy,
+  summary?: GitCommitChangeSummary,
+): string | undefined {
+  const subject = draftSubject(intent, policy);
+  if (subject.length > policy.subjectMaxLength) return undefined;
+  const message = summary === undefined ? subject : `${subject}\n\n${draftBody(summary)}`;
+  return validateGitCommitMessage(message, policy).ok ? message : undefined;
+}
+
 // ─── Exported guards ────────────────────────────────────────────────────────────────────────────
 
 export const isGitCommitQualityWarningCode = isInSet(GIT_COMMIT_QUALITY_WARNING_CODES);
@@ -217,7 +302,8 @@ export function isGitCommitChangeSummary(value: unknown): value is GitCommitChan
     isNonNegativeInteger(value.stagedFileCount) &&
     isNonNegativeInteger(value.areaCount) &&
     isStringArray(value.areas) &&
-    isBoolean(value.touchesTests)
+    isBoolean(value.touchesTests) &&
+    (value.testsOnly === undefined || isBoolean(value.testsOnly))
   );
 }
 

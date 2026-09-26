@@ -9,7 +9,7 @@ const hygiene = readFileSync(resolve(repoRoot, ".github/workflows/workflow-hygie
 const ci = readFileSync(resolve(repoRoot, ".github/workflows/ci.yml"), "utf8");
 
 // ADR-0159: the four workflow-hygiene micro-gates run as serial steps of one job producing the
-// single required `workflow hygiene` context. The bundling is only legitimate while every tool runs
+// single required `workflow hygiene` context, joined by the repository-owned zizmor anchor check. The bundling is only legitimate while every tool runs
 // at the same pinned version, with the same configuration, over the same evaluation surface - so
 // that is what this file pins, machine-checked rather than asserted in a pull-request description.
 
@@ -38,14 +38,26 @@ function jobSteps(source, jobId) {
   return steps;
 }
 
-// The four gates, in the order the job runs them, and the two steps that are not gates: the shared
+// The gates, in the order the job runs them, and the two steps that are not gates: the shared
 // checkout, and downloading the actionlint binary, which is a prerequisite of `Run actionlint`.
+// Four came from the consolidated micro-gates; the anchor check is repository-owned and runs no
+// external tool, but it is a gate by the only definition that matters here — it fails the required
+// context on a real defect and must report independently of the others (#3130).
 const BUNDLED_JOB = "workflow-hygiene";
 const CHECKOUT_STEP = "Check out repository";
 const ACTIONLINT_PREREQUISITE = "Download and verify actionlint";
 const GATE_STEPS = [
   "Run actionlint",
   "Assert all action references are pinned to 40-hex SHAs",
+  // Ahead of `Run zizmor` on purpose: `.github/zizmor.yml` scopes each risk acceptance to a LINE
+  // NUMBER, so a drifted anchor surfaces as the finding it was accepted for rather than as its
+  // cause. Running the check first makes the required context name the corrected line.
+  "Verify the zizmor ignore anchors still point at what they document",
+  // KEIKO-0955: codeql.yml and dependency-review.yml had silently fallen nine and ten branches
+  // behind ci.yml, so pushes to those integration branches were never code-scanned. Placed with the
+  // other repository-owned checks, ahead of the hosted scanners, and carrying the same guard so its
+  // finding is never suppressed by an earlier gate's failure.
+  "Verify the branch trigger lists agree across ci, codeql and dependency-review",
   "Run zizmor",
   "Scan dependency manifests with OSV Scanner",
 ];
@@ -93,7 +105,7 @@ const TOOL_INVOCATIONS = [
   {
     tool: "zizmor",
     fingerprints: [
-      "zizmorcore/zizmor-action@6599ee8b7a49aef6a770f63d261d214911a7ce02",
+      "zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482",
       'version: "1.26.1"',
       "config: .github/zizmor.yml",
       "advanced-security: false",
@@ -103,7 +115,7 @@ const TOOL_INVOCATIONS = [
   {
     tool: "OSV Scanner",
     fingerprints: [
-      "google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2",
+      "google/osv-scanner-action/osv-scanner-action@a345acffa64b0eaede81a3d9aae6141214d9c8fc",
       "--config=osv-scanner.toml",
       "--recursive",
     ],

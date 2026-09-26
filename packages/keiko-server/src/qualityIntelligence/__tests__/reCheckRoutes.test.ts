@@ -20,7 +20,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { IncomingMessage } from "node:http";
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import {
   listQualityIntelligenceRuns,
   loadQualityIntelligenceCandidates,
@@ -89,6 +89,7 @@ function ctx(
   req: IncomingMessage,
 ): RouteContext {
   return {
+    correlationId: undefined,
     req,
     res: {} as RouteContext["res"],
     params: { id: runId },
@@ -338,6 +339,7 @@ describe("handleQiReCheck — run not found", () => {
 describe("handleQiReCheck — missing id param", () => {
   it("returns 400 QI_BAD_REQUEST when id param is absent", async () => {
     const c: RouteContext = {
+      correlationId: undefined,
       req: makeReq({ sources: [{ kind: "requirements", label: "r", text: "x" }] }),
       res: {} as RouteContext["res"],
       params: {},
@@ -635,7 +637,6 @@ describe("handleQiReCheck — no stored sourceFingerprints", () => {
     // Seed without sourceFingerprints: rest-destructure drops the optional (readonly) key, since
     // exactOptionalPropertyTypes forbids setting it to `undefined` and the field cannot be deleted.
     const { sourceFingerprints: _droppedFingerprints, ...noFpInput } = runRecordInput(runIdNoFp);
-    void _droppedFingerprints;
     recordQualityIntelligenceRun(noFpInput, { evidenceDir });
     recordQualityIntelligenceCandidates({
       runId: runIdNoFp,
@@ -1167,7 +1168,7 @@ describe("handleQiRegenerateStale — no stale candidates still materialises a n
       ],
       editedRevisions: [
         {
-          candidateId: "cand-no-stale-login",
+          candidateId: QualityIntelligence.asQualityIntelligenceTestCaseId("cand-no-stale-login"),
           provenance: {
             editedAt: "2026-06-09T10:02:00.000Z",
             editedBy: "human",
@@ -1345,6 +1346,7 @@ describe("handleQiRegenerateStale — malformed candidates companion", () => {
 describe("handleQiRegenerateStale — missing id param", () => {
   it("returns 400 QI_BAD_REQUEST when id param is absent", async () => {
     const c: RouteContext = {
+      correlationId: undefined,
       req: makeReq({ sources: [{ kind: "requirements", label: "r", text: "x" }] }),
       res: {} as RouteContext["res"],
       params: {},
@@ -1592,7 +1594,7 @@ describe("handleQiRegenerateStale — preserved candidates are materialised in t
       ],
       editedRevisions: [
         {
-          candidateId: "cand-preserved",
+          candidateId: QualityIntelligence.asQualityIntelligenceTestCaseId("cand-preserved"),
           provenance: {
             editedAt: "2026-06-09T10:02:00.000Z",
             editedBy: "human",
@@ -1679,6 +1681,124 @@ describe("handleQiRegenerateStale — preserved candidates are materialised in t
         }),
       ]),
     );
+  });
+});
+
+// KEIKO-0344: when every migrated candidate is individually approved and no candidate was
+// regenerated (zero drift), the new run's aggregate review runState must be derived to "approved"
+// — not hardcoded to "open". Skipping this derivation forces a redundant run-level re-approval
+// with no code path that could distinguish it from a genuinely open run.
+describe("handleQiRegenerateStale — runState derivation on zero-drift regeneration (KEIKO-0344)", () => {
+  it("derives runState 'approved' when every merged candidate is individually approved", async () => {
+    const runId = "run-regen-runstate-approved";
+    const originalText = "Login must work reliably\nMFA must work reliably";
+    const seeded = ingestInlineSources({
+      request: { sources: [{ kind: "requirements", label: "Spec", text: originalText }] },
+      runId,
+      registeredAt: "2026-06-09T10:00:00.000Z",
+    });
+    seedRunFromSources({
+      runId,
+      sources: [{ kind: "requirements", label: "Spec", text: originalText }],
+      candidates: [
+        qiCandidate(runId, "cand-approved-1", "Login test", [
+          String(seeded.ingestedAtoms[0]?.atom.id),
+        ]),
+        qiCandidate(runId, "cand-approved-2", "MFA test", [
+          String(seeded.ingestedAtoms[1]?.atom.id),
+        ]),
+      ],
+    });
+    for (const candidateId of ["cand-approved-1", "cand-approved-2"]) {
+      applyReviewDecision({
+        runId,
+        evidenceDir,
+        action: "approve",
+        scope: "candidate",
+        candidateId,
+        reviewerLabel: "Release reviewer",
+        actor: {
+          actorId: "release-reviewer",
+          displayLabel: "Release reviewer",
+          source: "test",
+          kind: "human",
+        },
+        now: "2026-06-09T10:03:00.000Z",
+        redact: (value: unknown): unknown => value,
+      });
+    }
+
+    const result = asResult(
+      await handleQiRegenerateStale(
+        ctx(
+          "regenerate-stale",
+          runId,
+          // Same source text → zero drift → every candidate preserved, nothing regenerated.
+          makeReq({ sources: [{ kind: "requirements", label: "Spec", text: originalText }] }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as { runId: string };
+    const review = loadRunReviewState(body.runId, evidenceDir);
+    expect(review?.runState).toBe("approved");
+  });
+
+  it("keeps runState 'open' when a merged candidate is not approved", async () => {
+    const runId = "run-regen-runstate-open";
+    const originalText = "Login must work reliably\nMFA must work reliably";
+    const seeded = ingestInlineSources({
+      request: { sources: [{ kind: "requirements", label: "Spec", text: originalText }] },
+      runId,
+      registeredAt: "2026-06-09T10:00:00.000Z",
+    });
+    seedRunFromSources({
+      runId,
+      sources: [{ kind: "requirements", label: "Spec", text: originalText }],
+      candidates: [
+        qiCandidate(runId, "cand-approved", "Login test", [
+          String(seeded.ingestedAtoms[0]?.atom.id),
+        ]),
+        qiCandidate(runId, "cand-untouched", "MFA test", [
+          String(seeded.ingestedAtoms[1]?.atom.id),
+        ]),
+      ],
+    });
+    // Only ONE candidate is approved — the other never receives a decision.
+    applyReviewDecision({
+      runId,
+      evidenceDir,
+      action: "approve",
+      scope: "candidate",
+      candidateId: "cand-approved",
+      reviewerLabel: "Release reviewer",
+      actor: {
+        actorId: "release-reviewer",
+        displayLabel: "Release reviewer",
+        source: "test",
+        kind: "human",
+      },
+      now: "2026-06-09T10:03:00.000Z",
+      redact: (value: unknown): unknown => value,
+    });
+
+    const result = asResult(
+      await handleQiRegenerateStale(
+        ctx(
+          "regenerate-stale",
+          runId,
+          makeReq({ sources: [{ kind: "requirements", label: "Spec", text: originalText }] }),
+        ),
+        deps(evidenceDir),
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as { runId: string };
+    const review = loadRunReviewState(body.runId, evidenceDir);
+    expect(review?.runState).toBe("open");
   });
 });
 
@@ -1781,7 +1901,7 @@ describe("handleQiRegenerateStale — requirement replacements are positional (#
         ],
         editedRevisions: [
           {
-            candidateId: "cand-doc-fresh",
+            candidateId: QualityIntelligence.asQualityIntelligenceTestCaseId("cand-doc-fresh"),
             provenance: {
               editedAt: "2026-06-09T10:02:00.000Z",
               editedBy: "human",
@@ -2176,7 +2296,7 @@ describe("handleQiRegenerateStale — edit history of STALE candidates is droppe
       ],
       editedRevisions: [
         {
-          candidateId: "cand-fresh",
+          candidateId: QualityIntelligence.asQualityIntelligenceTestCaseId("cand-fresh"),
           provenance: {
             editedAt: "2026-06-09T10:02:00.000Z",
             editedBy: "human",
@@ -2185,7 +2305,7 @@ describe("handleQiRegenerateStale — edit history of STALE candidates is droppe
           editedFields: { title: "Login test (edited)" },
         },
         {
-          candidateId: "cand-stale",
+          candidateId: QualityIntelligence.asQualityIntelligenceTestCaseId("cand-stale"),
           provenance: {
             editedAt: "2026-06-09T10:03:00.000Z",
             editedBy: "human",
@@ -2513,6 +2633,187 @@ describe("handleQiRegenerateStale — buildMergedCandidates deduplicates equival
     // And the surviving candidates must cover the shared title (exactly one form of it).
     const titles = artifact?.candidates.map((c) => c.title) ?? [];
     expect(titles.filter((t) => t === sharedTitle)).toHaveLength(1);
+  });
+});
+
+// ─── persistMergedRun: post-dedup survivor set also filters editedRevisions (round-3 KEIKO-0839-r3) ─
+//
+// Fix #1131 GAP-B (above) proved deduplicateCandidates collapses a preserved candidate that is
+// content-identical to a regenerated one, keeping only the lexicographically-smallest id. That
+// preserved candidate can carry a human edit (#743). Before this fix, persistMergedRun still wrote
+// the PRE-dedup preservedEditedRevisions list into the candidates artifact, so a dropped preserved
+// candidate's edited revision was persisted anyway -- an editedRevisions[] entry pointing at a
+// candidateId absent from the same artifact's candidates[] array.
+//
+// deduplicateCandidates' tie-break keeps the lexicographically SMALLEST id. Model/baseline-
+// regenerated candidate ids are always "qi-candidate-<hex>" (testDesignModel.ts /
+// parseGeneratedCandidates.ts), so giving the preserved candidate an id starting with "z" (> "q")
+// guarantees it is the one dropped in this collision, exercising the exact branch the finding
+// describes.
+//
+// RED-verify: revert persistMergedRun to pass args.preservedEditedRevisions straight through
+// (unfiltered) → the dropped candidate's revision appears in the artifact → the "must not contain"
+// assertion fails. Restore → green.
+describe("handleQiRegenerateStale — a dropped preserved candidate's edited revision is not orphaned in the artifact (round-3 KEIKO-0839-r3)", () => {
+  it("excludes the edited revision of a preserved candidate that lost the dedup id tie-break", async () => {
+    const runId = "run-regen-dedup-orphan-revision";
+    const originalText =
+      "Login must work reliably for every registered user.\n" +
+      "Reports must export to PDF for finance teams.";
+    const seeded = ingestInlineSources({
+      request: { sources: [{ kind: "requirements", label: "Spec", text: originalText }] },
+      runId,
+      registeredAt: "2026-06-09T10:00:00.000Z",
+    });
+    expect(seeded.ingestedAtoms).toHaveLength(2);
+
+    const sharedTitle = "Verify login works for every registered user";
+    // Sorts AFTER any "qi-candidate-<hex>" regenerated id ('z' > 'q'), so this preserved candidate
+    // is guaranteed to LOSE the deterministic id tie-break against its content-identical clone.
+    const losingPreservedId = "zz-preserved-loses-tiebreak";
+    seedRunFromSources({
+      runId,
+      sources: [{ kind: "requirements", label: "Spec", text: originalText }],
+      candidates: [
+        {
+          id: QualityIntelligence.asQualityIntelligenceTestCaseId(losingPreservedId),
+          runId: QualityIntelligence.asQualityIntelligenceRunId(runId),
+          derivedFromAtomIds: [
+            QualityIntelligence.asQualityIntelligenceEvidenceAtomId(
+              String(seeded.ingestedAtoms[0]?.atom.id),
+            ),
+          ],
+          title: sharedTitle,
+          preconditions: [],
+          steps: ["Navigate to login", "Enter valid credentials", "Click submit"],
+          expectedResults: ["User is redirected to the dashboard"],
+          priority: "P1" as const,
+          riskClass: "functional" as const,
+          tags: [],
+          status: "proposed" as const,
+        },
+        qiCandidate(runId, "cand-orphan-reports", "Reports test", [
+          String(seeded.ingestedAtoms[1]?.atom.id),
+        ]),
+      ],
+      editedRevisions: [
+        {
+          candidateId: QualityIntelligence.asQualityIntelligenceTestCaseId(losingPreservedId),
+          provenance: {
+            editedAt: "2026-06-09T10:02:00.000Z",
+            editedBy: "human",
+            editorLabel: "Reviewer A",
+          },
+          editedFields: { title: "Edited by a human before the losing regeneration" },
+        },
+      ],
+    });
+
+    const CLONE_CANDIDATES_JSON = JSON.stringify({
+      testCases: [
+        {
+          title: sharedTitle,
+          preconditions: [],
+          steps: ["Navigate to login", "Enter valid credentials", "Click submit"],
+          expectedResults: ["User is redirected to the dashboard"],
+          priority: "P1",
+          riskClass: "functional",
+          derivedFromEvidenceIndexes: [1],
+          tags: [],
+        },
+      ],
+    });
+
+    function chatCapabilityOrphan(modelId: string): ModelCapability {
+      return {
+        id: modelId,
+        kind: "chat",
+        contextWindow: 128_000,
+        maxOutputTokens: 4_096,
+        toolCalling: true,
+        structuredOutput: true,
+        streaming: true,
+        supportsImageInput: false,
+        supportsDocumentInput: false,
+        supportsResponseFormat: true,
+        workflowEligible: true,
+        costClass: "medium",
+        latencyClass: "standard",
+        throughputHint: "test",
+        preferredUseCases: ["Chat"],
+        knownLimitations: [],
+      };
+    }
+
+    const ORPHAN_MODEL_ID = "orphan-revision-chat-model";
+    const orphanConfig = parseGatewayConfig(
+      {
+        providers: [
+          {
+            modelId: ORPHAN_MODEL_ID,
+            baseUrl: "https://fake.example.com/v1",
+            apiKey: "fake-key",
+            capability: chatCapabilityOrphan(ORPHAN_MODEL_ID),
+          },
+        ],
+      },
+      {},
+    );
+    const orphanDeps: UiHandlerDeps = {
+      config: orphanConfig,
+      configPresent: true,
+      evidenceStore: emptyStore(),
+      env: {},
+      redactor: buildRedactor({}, orphanConfig),
+      registry: createRunRegistry(),
+      modelPortFactory: (): ModelPort => ({
+        call: (req: GatewayRequest, _signal: AbortSignal): Promise<NormalizedResponse> =>
+          Promise.resolve({
+            content: CLONE_CANDIDATES_JSON,
+            modelId: req.modelId,
+            finishReason: "stop",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "req-orphan-revision-test",
+              promptTokens: 10,
+              completionTokens: 5,
+              latencyMs: 1,
+              costClass: "medium",
+            },
+          }),
+      }),
+      store: createInMemoryUiStore(),
+      evidenceDir,
+    };
+
+    const changedText =
+      "Login must work reliably for every registered user.\n" +
+      "Reports must now export to CSV and PDF for finance teams.";
+    const result = asResult(
+      await handleQiRegenerateStale(
+        ctx(
+          "regenerate-stale",
+          runId,
+          makeReq({ sources: [{ kind: "requirements", label: "Spec", text: changedText }] }),
+        ),
+        orphanDeps,
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as { runId: string };
+    const artifact = loadQualityIntelligenceCandidates(body.runId, { evidenceDir });
+
+    // Sanity: the tie-break went the way this test relies on -- the preserved candidate's own id
+    // did NOT survive dedup (its content-identical regenerated clone won).
+    const survivingIds = artifact?.candidates.map((c) => c.id) ?? [];
+    expect(survivingIds).not.toContain(losingPreservedId);
+
+    // The actual fix: the dropped candidate's edited revision must not be persisted either -- an
+    // editedRevisions[] entry whose candidateId matches no candidates[] entry is an orphan.
+    const revisionIds = artifact?.editedRevisions?.map((r) => r.candidateId) ?? [];
+    expect(revisionIds).not.toContain(losingPreservedId);
   });
 });
 

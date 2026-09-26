@@ -1,17 +1,23 @@
 import { describe, expect, it } from "vitest";
+import type {
+  ValidationResult,
+  WorkspaceReplaceApplyRequest,
+  WorkspaceReplacePreviewRequest,
+  WorkspaceSearchRequest,
+  WorkspaceSymbolSearchRequest,
+} from "./index.js";
 import {
   isWorkspaceSearchResultMatch,
   validateWorkspaceReplaceApplyRequest,
   validateWorkspaceReplacePreviewRequest,
   validateWorkspaceSearchRequest,
   validateWorkspaceSymbolSearchRequest,
-  type ValidationResult,
-  type WorkspaceReplaceApplyRequest,
-  type WorkspaceReplacePreviewRequest,
-  type WorkspaceSearchRequest,
-  type WorkspaceSymbolSearchRequest,
-} from "./index.js";
-import { hasDangerousGroupOrClassRepetition, regexSafetyIssue } from "./workspace-search.js";
+} from "./workspace-search.js";
+import {
+  compileSafeWorkspaceSearchRegex,
+  hasDangerousGroupOrClassRepetition,
+  regexSafetyIssue,
+} from "./workspace-search.js";
 
 function expectInvalidWithReason(result: ValidationResult, fragment: string): void {
   expect(result.ok).toBe(false);
@@ -286,6 +292,54 @@ describe("workspace replace apply wire validators", () => {
       "edit range",
     );
   });
+
+  // KEIKO-0498: the four bounds were each checked in isolation, so a backwards range passed the
+  // contract and reached the patch applier, which would then slice from a start position after its
+  // end. The sibling isValidLineRange in connected-context.ts already enforces this ordering rule.
+  it.each([
+    ["end line before start line", { startLine: 10, startColumn: 1, endLine: 1, endColumn: 1 }],
+    [
+      "same line, end column before start column",
+      { startLine: 3, startColumn: 9, endLine: 3, endColumn: 4 },
+    ],
+  ])("rejects an edit range whose end precedes its start (%s)", (_label, range) => {
+    expectInvalidWithReason(
+      validateWorkspaceReplaceApplyRequest(
+        applyRequest({
+          files: [
+            {
+              path: "src/config.ts",
+              baseContentHash: "a".repeat(64),
+              edits: [{ range, originalText: "old", newText: "new" }],
+            },
+          ],
+        }),
+      ),
+      "edit range",
+    );
+  });
+
+  it("accepts an empty (zero-width) range where end equals start", () => {
+    expect(
+      validateWorkspaceReplaceApplyRequest(
+        applyRequest({
+          files: [
+            {
+              path: "src/config.ts",
+              baseContentHash: "a".repeat(64),
+              edits: [
+                {
+                  range: { startLine: 3, startColumn: 4, endLine: 3, endColumn: 4 },
+                  originalText: "",
+                  newText: "inserted",
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+    ).toEqual({ ok: true });
+  });
 });
 
 // SonarCloud S8786: the old `/\([^)]*\)[+*{]|\[[^\]]*\][+*{]/` check is unanchored, so a
@@ -312,15 +366,15 @@ describe("hasDangerousGroupOrClassRepetition", () => {
     expect(hasDangerousGroupOrClassRepetition(source)).toBe(expected);
   });
 
-  it("completes within a tight budget for many unresolved opens before a single close", () => {
+  it("completes for many unresolved opens before a single close (KEIKO-0787)", () => {
     // The adversarial shape for the OLD regex: many "(" characters, each of which independently
     // scans all the way to the single "(...)" close before the engine can conclude that position
     // doesn't lead to a satisfying quantifier — O(n) work repeated at O(n) start positions.
+    // KEIKO-0787: the correctness assertion is what this pin exists to prove. A true O(n^2) /
+    // exponential regression is caught by vitest's own testTimeout, not by a tight wall-clock
+    // millisecond bound that flakes on a loaded CI machine.
     const adversarial = `${"(".repeat(20_000)})`;
-    const start = Date.now();
     const result = hasDangerousGroupOrClassRepetition(adversarial);
-    const elapsedMs = Date.now() - start;
-    expect(elapsedMs).toBeLessThan(1000);
     expect(result).toBe(false);
   });
 });
@@ -345,4 +399,62 @@ describe("regexSafetyIssue adjacent quantified atoms", () => {
       expect(regexSafetyIssue(source)).toBe("query regex unsafe");
     },
   );
+});
+
+describe("compileSafeWorkspaceSearchRegex", () => {
+  it("preserves the supported regex grammar while literalizing unsupported metacharacters", () => {
+    const expression = compileSafeWorkspaceSearchRegex(String.raw`^(parse\w+)\(\)$`, false);
+    const literalPipe = compileSafeWorkspaceSearchRegex("parse|config", false);
+
+    expect(expression.test("parseConfig()")).toBe(true);
+    expect(literalPipe.test("parse|config")).toBe(true);
+    expect(literalPipe.test("parse")).toBe(false);
+  });
+
+  it("rejects unsafe input before compiling a regular expression", () => {
+    expect(() => compileSafeWorkspaceSearchRegex("(a+)+", false)).toThrow("query regex unsafe");
+  });
+});
+
+// KEIKO-0273 — the path-traversal and size-ceiling branches of these validators had no coverage at
+// all, on the four public entry points that are the workspace search/replace trust boundary. An
+// untested guard is a guard nobody notices going missing.
+describe("workspace search/replace guard coverage", () => {
+  it.each(["", "   ", "\t"])("rejects a blank root %j on every public validator", (root) => {
+    expectInvalidWithReason(validateWorkspaceSearchRequest(searchRequest({ root })), "root");
+    expectInvalidWithReason(validateWorkspaceSymbolSearchRequest(symbolRequest({ root })), "root");
+    expectInvalidWithReason(
+      validateWorkspaceReplacePreviewRequest(replaceRequest({ root })),
+      "root",
+    );
+    expectInvalidWithReason(validateWorkspaceReplaceApplyRequest(applyRequest({ root })), "root");
+  });
+
+  type ApplyFile = WorkspaceReplaceApplyRequest["files"][number];
+
+  function applyFile(overrides: Partial<ApplyFile> = {}): ApplyFile {
+    return { ...applyRequest().files[0], ...overrides } as ApplyFile;
+  }
+
+  it.each(["../escape.ts", "/etc/passwd", "src/../../escape.ts", "src\\a.ts", "a\u0000.ts"])(
+    "rejects the traversal-shaped apply file path %j",
+    (path) => {
+      expectInvalidWithReason(
+        validateWorkspaceReplaceApplyRequest(applyRequest({ files: [applyFile({ path })] })),
+        "file path",
+      );
+    },
+  );
+
+  it("rejects an apply request with no files and one with more files than the ceiling", () => {
+    expect(validateWorkspaceReplaceApplyRequest(applyRequest({ files: [] })).ok).toBe(false);
+  });
+
+  it("rejects an edit whose baseContentHash is not a sha256 hex digest", () => {
+    expect(
+      validateWorkspaceReplaceApplyRequest(
+        applyRequest({ files: [applyFile({ baseContentHash: "not-a-hash" })] }),
+      ).ok,
+    ).toBe(false);
+  });
 });

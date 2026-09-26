@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  DEFAULT_LANGUAGE_SERVICE_LIMITS,
-  type LanguageServiceLimits,
-} from "@oscharko-dev/keiko-contracts";
+import type { LanguageServiceLimits } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_LANGUAGE_SERVICE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/language-service";
 import {
   sanitizeCodeActions,
   sanitizeCallHierarchy,

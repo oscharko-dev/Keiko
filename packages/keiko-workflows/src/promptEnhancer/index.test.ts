@@ -5,14 +5,14 @@ import {
   type GatewayRequest,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
-import {
-  estimateTokens,
-  type EnhancedPrompt,
-  type MissingInformationStrategy,
-  type PromptEnhancementProfileId,
-  type PromptEnhancementWireRequest,
-  type PromptEnhancementWireResponse,
+import type {
+  EnhancedPrompt,
+  MissingInformationStrategy,
+  PromptEnhancementProfileId,
+  PromptEnhancementWireRequest,
+  PromptEnhancementWireResponse,
 } from "@oscharko-dev/keiko-contracts";
+import { estimateTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   PromptEnhancementCancelledError,

@@ -181,11 +181,17 @@ function isValidPairingRequestId(value: unknown): boolean {
   );
 }
 
+// KEIKO-0742: the claim is documented as a fixed-length HMAC-SHA256 hex digest — a length range of
+// 1..CODING_APP_SESSION_PAIRING_CLAIM_MAX_CHARS is an outer defence-in-depth backstop, not the
+// admission gate. Match the shape the launcher actually emits (64 lowercase hex characters). The
+// outer cap stays as the defence-in-depth bound the field's max-chars constant still documents.
+const HMAC_SHA256_HEX_CLAIM = /^[a-f0-9]{64}$/u;
+
 function isValidPairingClaim(value: unknown): boolean {
   return (
     typeof value === "string" &&
-    value.length >= 1 &&
-    value.length <= CODING_APP_SESSION_PAIRING_CLAIM_MAX_CHARS
+    value.length <= CODING_APP_SESSION_PAIRING_CLAIM_MAX_CHARS &&
+    HMAC_SHA256_HEX_CLAIM.test(value)
   );
 }
 

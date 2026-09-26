@@ -2,11 +2,8 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  DEFAULT_LANGUAGE_SERVICE_LIMITS,
-  type LanguagePosition,
-  type LanguageServiceLimits,
-} from "@oscharko-dev/keiko-contracts";
+import type { LanguagePosition, LanguageServiceLimits } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_LANGUAGE_SERVICE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/language-service";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import ts from "typescript";
 import { createDeadlineCancellation } from "./languageCancellation.js";

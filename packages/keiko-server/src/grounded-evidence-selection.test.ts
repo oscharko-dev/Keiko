@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import {
-  CONNECTED_CONTEXT_SCHEMA_VERSION,
-  type CandidateFile,
-  type EvidenceAtom,
-  type OmittedContextEntry,
+import type {
+  CandidateFile,
+  EvidenceAtom,
+  OmittedContextEntry,
 } from "@oscharko-dev/keiko-contracts";
+import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 
 import {
   selectGroundedCandidateFiles,

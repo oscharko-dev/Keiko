@@ -7,6 +7,7 @@ const facts = {
   taskIntent: "implement bounded change",
   requestedMode: "supervised-coding",
   runtimePreference: "managed-gateway",
+  projectMemoryEnabled: true,
   operatorId: "operator-1",
   taskId: "task-1",
   projectId: "project-1",
@@ -31,6 +32,7 @@ describe("coding runtime start confirmation binding", () => {
       { taskIntent: "altered" },
       { requestedMode: "governed-assist" as const },
       { runtimePreference: "codex-subscription" as const },
+      { projectMemoryEnabled: false },
       { operatorId: "operator-2" },
       { taskId: "task-2" },
       { projectId: "project-2" },
@@ -43,6 +45,9 @@ describe("coding runtime start confirmation binding", () => {
       { runtimeSource: "codex-cli-adapter" as const },
       { modelSource: "chatgpt-codex-subscription-profile" as const },
       { modelProfileId: "codex-subscription" },
+      { issueBindingDigest: "e".repeat(64) },
+      { repositoryIdentity: { kind: "github-origin" as const, digest: "f".repeat(64) } },
+      { repositoryIdentity: { kind: "local" as const, digest: "f".repeat(64) } },
     ]) {
       expect(
         codingRuntimeStartConfirmationClaim({ ...facts, ...changed }, 1).bindingDigest,

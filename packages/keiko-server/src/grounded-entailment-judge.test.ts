@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import type {
-  GatewayRequest,
+  GatewayCallRequest,
   ModelCapability,
   NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
@@ -32,10 +32,10 @@ function throwingPort(): ModelPort {
   };
 }
 
-function respondingPort(content: string): { port: ModelPort; calls: GatewayRequest[] } {
-  const calls: GatewayRequest[] = [];
+function respondingPort(content: string): { port: ModelPort; calls: GatewayCallRequest[] } {
+  const calls: GatewayCallRequest[] = [];
   const port: ModelPort = {
-    call: (request: GatewayRequest): Promise<NormalizedResponse> => {
+    call: (request: GatewayCallRequest): Promise<NormalizedResponse> => {
       calls.push(request);
       return Promise.resolve({
         content,
@@ -174,6 +174,21 @@ describe("createGatewayEntailmentJudge", () => {
     expect(await judge2?.judge({ claimText: "10 years", excerptText: "30 days" })).toBe(
       "unsupported",
     );
+  });
+
+  // ADR-0173 D5: the entailment stage's own turn-scoped correlation id must reach the judge's
+  // model.call so a gateway retry/circuit-breaker line for this second-pass verification joins
+  // the same trail as the answer it is checking.
+  it("stamps the supplied correlation id into the judge's GatewayCallRequest.logContext", async () => {
+    const supported = respondingPort('{"verdict":"supported"}');
+    const judge = createGatewayEntailmentJudge(
+      depsWith(supported.port),
+      MODEL_ID,
+      "cid-entailment-judge-000001",
+    );
+    await judge?.judge({ claimText: "30 days", excerptText: "retention: 30 days" });
+    expect(supported.calls).toHaveLength(1);
+    expect(supported.calls[0]?.logContext?.correlationId).toBe("cid-entailment-judge-000001");
   });
 
   it("fails closed to unavailable when the gateway throws (never supported, never throws)", async () => {

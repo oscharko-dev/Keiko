@@ -32,7 +32,7 @@ reports them on stdout and deliberately keeps them out of this document.
 | Reranker       | facade importer count                  |                                                                1 |
 | Reranker       | importer-set hash                      | dd9bce4fc3ee0c1fb880f10a1e1837e9df317b3df318c8b324ed2f9ba2e1e8fd |
 | Evaluation     | fixture count                          |                                                               29 |
-| Evaluation     | live probe count                       |                                                               16 |
+| Evaluation     | live probe count                       |                                                               26 |
 | Evaluation     | scorecard hash                         | 8c0b19e097f39cba61fbe588c64996db64c8b676c3f4b8b401ecd0c84bf0986b |
 | Wire           | snapshot hash                          | 9ee38880de5f349e56f27724dd35c7472c661629a79541434dde5ca27036b8a9 |
 | Wire           | neutral purpose id                     |                                                   chat-grounding |

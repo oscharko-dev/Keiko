@@ -18,6 +18,7 @@ import {
   type WorkspaceInfo,
   type WorkspaceStat,
 } from "@oscharko-dev/keiko-workspace";
+import { WorkspaceDescriptorReadError } from "@oscharko-dev/keiko-workspace/internal/fs";
 import {
   EMBEDDING_INSTRUCTION_VERSION,
   verifyEmbeddingCapability,
@@ -84,8 +85,48 @@ function childEntries(
   ];
 }
 
-function relativePath(abs: string): string {
-  return abs.startsWith(`${ROOT}/`) ? abs.slice(ROOT.length + 1) : abs;
+// Production's `fileIdentity` is `dev:ino`: stable per path, independent of content. The bounded
+// reader below re-proves it together with the size, so a mid-read content swap still denies.
+function fileStat(
+  files: Readonly<Record<string, string>>,
+  key: string,
+  abs: string,
+): WorkspaceStat {
+  return {
+    size: Buffer.byteLength(files[key] ?? "", "utf8"),
+    isFile: true,
+    isDirectory: false,
+    isSymbolicLink: false,
+    hardLinkCount: 1,
+    fileIdentity: `repo-semantic-test:${abs}`,
+  };
+}
+
+// ADR-0005 D1: discovery's read lane uses the bounded same-descriptor primitive when the port
+// provides it and reports the read as unavailable when it does not -- the unbounded
+// `readFileUtf8` fallback that used to sit beside the byte cap was removed. Without this method
+// the orchestrator's excerpt reads fail outright. Mirrors `readFileUtf8SameDescriptor` in
+// keiko-workspace's node port: refuse a hard-linked alias, re-prove the caller's expected
+// snapshot, and refuse a file that does not fit the cap rather than truncating it.
+function descriptorReader(
+  files: Readonly<Record<string, string>>,
+  keyFor: (abs: string) => string | undefined,
+): NonNullable<WorkspaceFs["readFileUtf8SameDescriptor"]> {
+  return (abs, maxBytes, hardLinkPolicy, expected) => {
+    const key = keyFor(abs);
+    if (key === undefined) throw Object.assign(new Error(`ENOENT: ${abs}`), { code: "ENOENT" });
+    const observed = fileStat(files, key, abs);
+    if (hardLinkPolicy === "reject" && (observed.hardLinkCount ?? 1) > 1) {
+      throw new WorkspaceDescriptorReadError("hard-link");
+    }
+    if (expected.fileIdentity !== observed.fileIdentity || expected.size !== observed.size) {
+      throw new WorkspaceDescriptorReadError("changed");
+    }
+    if (observed.size > Math.max(0, Math.floor(maxBytes))) {
+      throw new WorkspaceDescriptorReadError("too-large", observed.size);
+    }
+    return { rawText: files[key] ?? "", sizeBytes: observed.size, stat: observed };
+  };
 }
 
 function testFs(files: Record<string, string>): WorkspaceFs {
@@ -97,26 +138,17 @@ function testFs(files: Record<string, string>): WorkspaceFs {
       if (key === undefined) throw Object.assign(new Error(`ENOENT: ${abs}`), { code: "ENOENT" });
       return files[key] ?? "";
     },
+    readFileUtf8SameDescriptor: descriptorReader(files, keyFor),
     stat: (abs: string): WorkspaceStat => {
       const key = keyFor(abs);
       if (key === undefined) {
         return { size: 0, isFile: false, isDirectory: true, isSymbolicLink: false };
       }
-      return {
-        size: Buffer.byteLength(files[key] ?? "", "utf8"),
-        isFile: true,
-        isDirectory: false,
-        isSymbolicLink: false,
-        hardLinkCount: 1,
-      };
+      return fileStat(files, key, abs);
     },
     readDir: (abs: string): readonly WorkspaceDirEntry[] => childEntries(files, abs),
     realPath: (abs: string): string => abs,
     exists: (abs: string): boolean => abs === ROOT || keyFor(abs) !== undefined,
-    makeDir: () => undefined,
-    writeFileUtf8: (abs: string, content: string): void => {
-      files[relativePath(abs)] = content;
-    },
     readFileBytes: (abs: string, maxBytes: number): Promise<Uint8Array> => {
       const key = keyFor(abs);
       if (key === undefined) throw Object.assign(new Error(`ENOENT: ${abs}`), { code: "ENOENT" });
@@ -129,6 +161,7 @@ function testFs(files: Record<string, string>): WorkspaceFs {
 function testWorkspace(): WorkspaceInfo {
   return {
     root: ROOT,
+    selectedRoot: ROOT,
     name: "repository-semantic-test",
     version: "1.0.0",
     testFramework: "vitest",
@@ -307,6 +340,52 @@ describe("localizeMatchLine (GEN-AI-GROUNDING-006, RB-4)", () => {
   });
 });
 
+// #3416: a caller that reranks must be able to disclose WHICH index answered, without resolving the
+// pod a second time — a second resolution could name a different pod than the one that searched.
+describe("configuredRepoSemanticSearchProviderFor pod identity (#3416)", () => {
+  it("reports the identity of the pod that answered", async () => {
+    const files = { "src/auth.ts": "// refresh token\nexport const auth = 1;\n" };
+    const embeddingRequest = vi.fn(async (request: OpenAIEmbeddingRequest) =>
+      Promise.resolve({
+        ok: true as const,
+        value: { vector: vectorFor(request.input), modelId: request.modelId },
+      }),
+    );
+    const deps = depsWith(config(true), embeddingRequest);
+    const fs2 = testFs(files);
+    const pod = await seedRepositoryPod(deps, fs2, Object.keys(files));
+    const seen: { readonly capsuleId: string; readonly sourceId: string }[] = [];
+
+    const provider = configuredRepoSemanticSearchProviderFor(deps, undefined, {
+      fs: fs2,
+      repositoryPod: { store: pod.store, repositoryRoot: ROOT },
+      observePodIdentity: (identity): void => void seen.push(identity),
+    });
+
+    expect(provider).toBeDefined();
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.capsuleId.length).toBeGreaterThan(0);
+    expect(seen[0]?.sourceId.length).toBeGreaterThan(0);
+  });
+
+  it("reports no identity when no pod resolves", () => {
+    const embeddingRequest = vi.fn(async (request: OpenAIEmbeddingRequest) =>
+      Promise.resolve({
+        ok: true as const,
+        value: { vector: vectorFor(request.input), modelId: request.modelId },
+      }),
+    );
+    const deps = depsWith(config(true), embeddingRequest);
+    const seen: unknown[] = [];
+
+    configuredRepoSemanticSearchProviderFor(deps, undefined, {
+      observePodIdentity: (identity): void => void seen.push(identity),
+    });
+
+    expect(seen).toHaveLength(0);
+  });
+});
+
 describe("configuredRepoSemanticSearchProviderFor", () => {
   it("returns undefined when no embedding-capable provider is configured", () => {
     const deps = depsWith(config(false), () =>
@@ -441,6 +520,7 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
         workspaceRoot: ROOT,
       },
       {
+        correlationId: undefined,
         answerer: { answer: () => Promise.resolve("") },
         nowMs: () => 1,
         fs,
@@ -537,7 +617,17 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
 
     expect(hits).toEqual([]);
     expect(inputs).toEqual([]);
-    expect(readFileBytes).toHaveBeenCalledWith(absolutePath("src/auth.ts"), indexedText.length + 1);
+    expect(readFileBytes).toHaveBeenCalledWith(
+      absolutePath("src/auth.ts"),
+      indexedText.length + 1,
+      "reject",
+      expect.objectContaining({
+        isFile: true,
+        isDirectory: false,
+        isSymbolicLink: false,
+        size: Buffer.byteLength(liveText),
+      }),
+    );
     pod.store.close();
     deps.store.close();
   });
@@ -594,10 +684,11 @@ describe("configuredRepoSemanticSearchProviderFor", () => {
     let readsFail = false;
     const fs: WorkspaceFs = {
       ...baseFs,
-      readFileBytes: (path, maxBytes) =>
+      readFileBytes: (path, maxBytes, hardLinkPolicy, expected) =>
         readsFail
           ? Promise.reject(new Error("READ_BLOCKED"))
-          : (baseFs.readFileBytes?.(path, maxBytes) ?? Promise.reject(new Error("NO_READER"))),
+          : (baseFs.readFileBytes?.(path, maxBytes, hardLinkPolicy, expected) ??
+            Promise.reject(new Error("NO_READER"))),
     };
     const pod = await seedRepositoryPod(deps, fs, Object.keys(files));
     readsFail = true;

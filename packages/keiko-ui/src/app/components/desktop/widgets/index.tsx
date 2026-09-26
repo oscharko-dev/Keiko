@@ -1,11 +1,10 @@
 import dynamic from "next/dynamic";
 import { gitObjectId } from "./gitObjectId";
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
 import type {
   QualityIntelligenceInlineSource,
   QualityIntelligenceUiRegenerateResult,
 } from "@oscharko-dev/keiko-contracts";
-import { useTranslate } from "@/lib/i18n";
 import type { Chat } from "@/lib/types";
 import { registerWindowRender } from "../windows/WindowsRegistry";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
@@ -22,13 +21,10 @@ import type { AgentRunCfg } from "./cards/AgentRunWidget";
 import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
 import { workspaceRootTargets } from "../workspaceRootTargets";
 import { BoundRootTarget, type BoundRootSurfaceType } from "./BoundRootTarget";
+import { ManagedTaskWorkspaceGate } from "./ManagedTaskWorkspaceGate";
+import { createWindowChunkFallback } from "./WindowChunkFallback";
 
-function WindowChunkFallback(): ReactNode {
-  const t = useTranslate();
-  return <div className="lk-loading">{t("common.loading")}</div>;
-}
-
-const windowChunkFallback = WindowChunkFallback;
+const windowChunkFallback = createWindowChunkFallback("window chunk"); // i18n-exempt: diagnostic stage id, never rendered
 const ChatWindowSessionHost = dynamic(
   () => import("./SelectionAwareWorkspaceHosts").then((mod) => mod.ChatWindowSessionHost),
   { ssr: false, loading: windowChunkFallback },
@@ -84,13 +80,16 @@ const ResourcesPanel = dynamic(
   () => import("./panels/ResourcesPanel").then((mod) => mod.ResourcesPanel),
   { ssr: false, loading: windowChunkFallback },
 );
+type TimelinePanelModule = typeof import("./panels/TimelinePanel");
 const TimelinePanel = dynamic(
-  () => import("./panels/TimelinePanel").then((mod) => mod.TimelinePanel),
-  { ssr: false, loading: windowChunkFallback },
-);
-const KeikoTwinPanel = dynamic(
-  () => import("./panels/KeikoTwinPanel").then((mod) => mod.KeikoTwinPanel),
-  { ssr: false, loading: windowChunkFallback },
+  (): Promise<TimelinePanelModule["TimelinePanel"]> =>
+    import("./panels/TimelinePanel").then(
+      (mod): TimelinePanelModule["TimelinePanel"] => mod.TimelinePanel,
+    ),
+  {
+    ssr: false,
+    loading: windowChunkFallback,
+  },
 );
 const SettingsPanel = dynamic(
   () => import("./panels/SettingsPanel").then((mod) => mod.SettingsPanel),
@@ -128,8 +127,15 @@ const RuntimeHubWidget = dynamic(
   () => import("./cards/RuntimeHubWidget").then((mod) => mod.RuntimeHubWidget),
   { ssr: false, loading: windowChunkFallback },
 );
+const CodingHistoryWindowHost = dynamic(
+  () => import("./coding-workbench/CodingHistoryPanel").then((mod) => mod.CodingHistoryWindowHost),
+  { ssr: false },
+);
 const CodingWorkbenchWindow = dynamic(
-  () => import("./coding-workbench/CodingWorkbenchWindow").then((mod) => mod.CodingWorkbenchWindow),
+  () =>
+    import("./coding-workbench/CodingWorkbenchWindowHost").then(
+      (mod) => mod.CodingWorkbenchWindowHost,
+    ),
   { ssr: false, loading: windowChunkFallback },
 );
 const WorkspaceTrustPanel = dynamic(
@@ -160,8 +166,8 @@ const AgentRunWidget = dynamic(
   () => import("./cards/AgentRunWidget").then((mod) => mod.AgentRunWidget),
   { ssr: false, loading: windowChunkFallback },
 );
-const IntegrationsWidget = dynamic(
-  () => import("./cards/IntegrationsWidget").then((mod) => mod.IntegrationsWidget),
+const AtlassianConnectorsPanel = dynamic(
+  () => import("./connectors/AtlassianConnectorsPanel").then((mod) => mod.AtlassianConnectorsPanel),
   { ssr: false, loading: windowChunkFallback },
 );
 const ConnectorPickerWidget = dynamic(
@@ -213,16 +219,153 @@ function str(cfg: Record<string, unknown>, key: string): string | undefined {
   return typeof v === "string" ? v : undefined;
 }
 
+function num(cfg: Record<string, unknown>, key: string): number | undefined {
+  const value = cfg[key];
+  return typeof value === "number" && Number.isSafeInteger(value) ? value : undefined;
+}
+
+const CODING_REPOSITORY_BINDING = "coding-repository";
+
+function displayNameFromRoot(root: string | null | undefined): string | undefined {
+  if (root === null || root === undefined) return undefined;
+  let segment = "";
+  for (const part of root.split(/[\\/]/u)) {
+    if (part.length > 0) segment = part;
+  }
+  return segment.length > 0 ? segment : root;
+}
+
+function isCodingRepositoryBinding(
+  cfg: Record<string, unknown>,
+  configuredRoot: string | undefined,
+): boolean {
+  return configuredRoot !== undefined && str(cfg, "rootBinding") === CODING_REPOSITORY_BINDING;
+}
+
+function isManagedTaskWorkspaceRoot(root: string | undefined): boolean {
+  if (root === undefined || root.length === 0) return false;
+  const normalized = root.replaceAll("\\", "/");
+  return normalized.includes("/.keiko/") && normalized.includes("/task-workspaces/");
+}
+
+function isNonEmptyRoot(root: string | undefined): root is string {
+  return root !== undefined && root.length > 0;
+}
+
+function hasManagedTaskWorkspaceDrift(
+  cfg: Record<string, unknown>,
+  configuredRoot: string | undefined,
+): boolean {
+  const resolvedRoot = str(cfg, "resolvedRoot");
+  return (
+    isNonEmptyRoot(configuredRoot) &&
+    !isManagedTaskWorkspaceRoot(configuredRoot) &&
+    isManagedTaskWorkspaceRoot(resolvedRoot)
+  );
+}
+
+function shouldUseConfiguredRepositoryRoot(
+  cfg: Record<string, unknown>,
+  configuredRoot: string | undefined,
+  activeRoot: string | null,
+): boolean {
+  if (isCodingRepositoryBinding(cfg, configuredRoot)) return true;
+  // #3506 review — `hasManagedTaskWorkspaceDrift` compares cfg.resolvedRoot (the root the Files
+  // widget last reported through onActiveFileChange) against cfg.root. When an active task
+  // binding is present, `resolveBoundRoot` returned ctx.activeRoot, so FilesWidget correctly
+  // persisted THAT as resolvedRoot. Treating this expected difference as drift pins the window
+  // to the repository via PersistRepositoryRootBinding and permanently disables the
+  // active-root override for the surface. Only apply the drift repair when no active binding is
+  // in effect (ctx.activeRoot === null) — the explicit `coding-repository` binding above stays
+  // untouched.
+  if (activeRoot !== null) return false;
+  return hasManagedTaskWorkspaceDrift(cfg, configuredRoot);
+}
+
+function gitRepositoryRoot(
+  cfg: Record<string, unknown>,
+  ctx: Pick<WindowRenderContext, "selectedRoot" | "linkedRoot">,
+  configuredRoot: string | undefined,
+): string | undefined {
+  if (isCodingRepositoryBinding(cfg, configuredRoot)) return configuredRoot;
+  if (isNonEmptyRoot(configuredRoot) && !isManagedTaskWorkspaceRoot(configuredRoot)) {
+    return configuredRoot;
+  }
+  const contextRoot = ctx.selectedRoot ?? ctx.linkedRoot ?? undefined;
+  return isManagedTaskWorkspaceRoot(contextRoot) ? undefined : contextRoot;
+}
+
+function PersistRepositoryRootBinding({
+  cfg,
+  ctx,
+  root,
+  rootKey,
+}: {
+  readonly cfg: Record<string, unknown>;
+  readonly ctx: WindowRenderContext;
+  readonly root: string | undefined;
+  readonly rootKey: "projectPath" | "root";
+}): null {
+  const needsRepair =
+    root !== undefined &&
+    root.length > 0 &&
+    !isManagedTaskWorkspaceRoot(root) &&
+    (str(cfg, rootKey) !== root || str(cfg, "rootBinding") !== CODING_REPOSITORY_BINDING);
+  useEffect((): void => {
+    if (!needsRepair || root === undefined) return;
+    const patch: Record<string, WindowCfgValue> = {
+      [rootKey]: root,
+      rootBinding: CODING_REPOSITORY_BINDING,
+    };
+    ctx.updateCfg(patch);
+  }, [ctx, needsRepair, root, rootKey]);
+  return null;
+}
+
+function codingRepositoryCfg(root: string): Record<string, WindowCfgValue> {
+  return { root, rootBinding: CODING_REPOSITORY_BINDING };
+}
+
+function completeRepositoryConnection(
+  cfg: Record<string, unknown>,
+  ctx: WindowRenderContext,
+  root: string,
+): void {
+  const returnWindow = str(cfg, "repositoryReturnWindow");
+  if (!returnWindow) return;
+  ctx.updateWindow(returnWindow, { cfg: { repositoryPath: root } });
+  ctx.focusWindow(returnWindow);
+  ctx.updateCfg({ repositoryReturnWindow: "" });
+}
+
 // Issue #446 (ADR-0090) — the single root-resolution choke point for bound surfaces. When a task
-// workspace is active, its managed-worktree root OVERRIDES the window's per-window cfg root and the
-// selected Workbench root, per-window cfg, and linked-window fallback, so a switch atomically
-// retargets every surface and none can keep executing against the previous workspace (AC1/AC2,
-// SC1/SC3). In unbound mode the Workbench-wide selected folder is the shared base context.
+// workspace is active, its managed-worktree root overrides ordinary per-window roots so a switch
+// atomically retargets legacy task-bound surfaces. Windows that explicitly carry
+// `rootBinding: "coding-repository"` are not task-bound: they are repository control surfaces
+// opened from the central Git widget and must keep the configured repository root while a run's
+// managed worktree remains internal. In unbound mode an explicit per-window root stays
+// authoritative; the Workbench-wide selection is only the default for windows without one.
 export function resolveBoundRoot(
   ctx: Pick<WindowRenderContext, "activeRoot" | "selectedRoot" | "linkedRoot">,
   cfgRoot: string | undefined,
 ): string | undefined {
-  return ctx.activeRoot ?? ctx.selectedRoot ?? cfgRoot ?? ctx.linkedRoot ?? undefined;
+  return ctx.activeRoot ?? cfgRoot ?? ctx.selectedRoot ?? ctx.linkedRoot ?? undefined;
+}
+
+function boundRootFallback({
+  ctx,
+  configuredRoot,
+  honorConfiguredRoot,
+  ignoreActiveRoot,
+}: {
+  readonly ctx: Pick<WindowRenderContext, "activeRoot" | "selectedRoot" | "linkedRoot">;
+  readonly configuredRoot: string | undefined;
+  readonly honorConfiguredRoot: boolean;
+  readonly ignoreActiveRoot: boolean;
+}): string | undefined {
+  if (honorConfiguredRoot && configuredRoot !== undefined) return configuredRoot;
+  if (ignoreActiveRoot) return configuredRoot ?? ctx.selectedRoot ?? ctx.linkedRoot ?? undefined;
+  return resolveBoundRoot(ctx, configuredRoot);
 }
 
 // Issue #2619 — `surface` replaces the free-text label: it selects the window's entry in
@@ -234,18 +377,28 @@ function BoundRootSurface({
   surface,
   onSelect,
   children,
+  honorConfiguredRoot = false,
+  ignoreActiveRoot = false,
 }: {
   readonly ctx: WindowRenderContext;
   readonly configuredRoot: string | undefined;
   readonly surface: BoundRootSurfaceType;
   readonly onSelect: (root: string) => void;
   readonly children: (root: string | undefined) => ReactNode;
+  readonly honorConfiguredRoot?: boolean;
+  readonly ignoreActiveRoot?: boolean;
 }): ReactNode {
+  const fallbackRoot = boundRootFallback({
+    ctx,
+    configuredRoot,
+    honorConfiguredRoot,
+    ignoreActiveRoot,
+  });
   return (
     <BoundRootTarget
-      fallbackRoot={resolveBoundRoot(ctx, configuredRoot)}
+      fallbackRoot={fallbackRoot}
       configuredRoot={configuredRoot}
-      lockedToActiveRoot={ctx.activeBinding !== null}
+      lockedToActiveRoot={!honorConfiguredRoot && !ignoreActiveRoot && ctx.activeBinding !== null}
       surface={surface}
       onSelect={onSelect}
     >
@@ -321,11 +474,25 @@ registerWindowRender("chat", (cfg, ctx) => <ChatWindowSessionHost cfg={cfg} ctx=
 registerWindowRender("chatHistory", (_cfg, ctx) => (
   <ChatHistoryPanel
     openChatWindow={(chat: Chat) => {
-      ctx.openWindow("chat", { chatId: chat.id, title: chat.title });
+      ctx.openWindow("chat", {
+        chatId: chat.id,
+        projectPath: chat.projectPath,
+        title: chat.title,
+      });
     }}
   />
 ));
-registerWindowRender("project", () => <ProjectPanel />);
+registerWindowRender("project", (_cfg, ctx) => (
+  <ProjectPanel
+    openChatWindow={(chat: Chat): void => {
+      ctx.openWindow("chat", {
+        chatId: chat.id,
+        projectPath: chat.projectPath,
+        title: chat.title,
+      });
+    }}
+  />
+));
 registerWindowRender("promptEnhancer", (_cfg, ctx) => (
   <PromptEnhancerPanel
     connectedRoot={ctx.linkedRoot}
@@ -357,7 +524,6 @@ registerWindowRender("inspector", () => <InspectorPanel />);
 registerWindowRender("notifications", () => <NotificationsPanel />);
 registerWindowRender("resources", () => <ResourcesPanel />);
 registerWindowRender("activity", () => <TimelinePanel />);
-registerWindowRender("keiko", () => <KeikoTwinPanel />);
 function SettingsPanelSessionHost({ ctx }: { readonly ctx: WindowRenderContext }): ReactNode {
   const { activeProject } = useChatSessionContext();
   return (
@@ -464,12 +630,38 @@ registerWindowRender("qiRun", (cfg, ctx) => {
 registerWindowRender("relationships", () => <RelationshipsView />);
 
 registerWindowRender("files", (cfg, ctx) => {
-  const root = resolveBoundRoot(ctx, str(cfg, "root"));
-  return <FilesWindowSessionHost cfg={cfg} ctx={ctx} root={root} />;
+  const configuredRoot = str(cfg, "root");
+  const honorConfiguredRoot = shouldUseConfiguredRepositoryRoot(
+    cfg,
+    configuredRoot,
+    ctx.activeRoot,
+  );
+  const root = honorConfiguredRoot ? configuredRoot : resolveBoundRoot(ctx, configuredRoot);
+  return (
+    <>
+      {honorConfiguredRoot ? (
+        <PersistRepositoryRootBinding cfg={cfg} ctx={ctx} root={configuredRoot} rootKey="root" />
+      ) : null}
+      <FilesWindowSessionHost cfg={cfg} ctx={ctx} root={root} />
+    </>
+  );
 });
 registerWindowRender("editor", (cfg, ctx) => {
-  const root = resolveBoundRoot(ctx, str(cfg, "root"));
-  return <EditorWindowSessionHost cfg={cfg} ctx={ctx} root={root} />;
+  const configuredRoot = str(cfg, "root");
+  const honorConfiguredRoot = shouldUseConfiguredRepositoryRoot(
+    cfg,
+    configuredRoot,
+    ctx.activeRoot,
+  );
+  const root = honorConfiguredRoot ? configuredRoot : resolveBoundRoot(ctx, configuredRoot);
+  return (
+    <>
+      {honorConfiguredRoot ? (
+        <PersistRepositoryRootBinding cfg={cfg} ctx={ctx} root={configuredRoot} rootKey="root" />
+      ) : null}
+      <EditorWindowSessionHost cfg={cfg} ctx={ctx} root={root} />
+    </>
+  );
 });
 registerWindowRender("browser", (cfg) => {
   const url = str(cfg, "url");
@@ -564,39 +756,59 @@ registerWindowRender("runtime", (cfg, ctx) => {
     </BoundRootSurface>
   );
 });
-registerWindowRender("coding", (_cfg, ctx) => (
-  <CodingWorkbenchWindow selectedRoot={ctx.selectedRoot ?? undefined} />
-));
-// Epic #1571, Issue #1574 — Git client window shell. The active project root acts as the projectId.
-// Read it from cfg (projectPath / workspaceRoot, like terminal/agents) and fall back to a linked
-// Files/Editor window root; an empty state renders when none is available. The shell persists the
-// selected repository via ctx.updateCfg (so resolveBoundRoot re-targets) and opens the reused
-// governed Pull Request / Merge windows via ctx.openWindow.
+registerWindowRender("codingHistory", (_cfg, ctx) => <CodingHistoryWindowHost context={ctx} />);
+registerWindowRender("coding", (cfg, ctx) => <CodingWorkbenchWindow cfg={cfg} context={ctx} />);
+// Epic #1571, Issue #1574 — Git client window shell. The selected repository root acts as the
+// projectId. Read it from cfg (projectPath / workspaceRoot) and fall back to the global selected
+// repository; an empty state renders when none is available. The shell persists the selected
+// repository via ctx.updateCfg and opens the reused governed Pull Request / Merge windows via
+// ctx.openWindow.
 registerWindowRender("governedGit", (cfg, ctx) => {
-  // Issue #446 (AC3 / SC2) — the active workspace root is the projectId, so the read surface and the
-  // governed PR/merge windows run scoped to the active worktree and can never execute against the
-  // previous workspace after a switch.
   const configuredRoot = str(cfg, "projectPath") ?? str(cfg, "workspaceRoot");
+  // Product rule (2026-09-15): Git is the repository's central control surface. A concrete
+  // repository root is authoritative per window, and the global selected repository is the fallback.
+  // The active task worktree is an internal run detail; it must not replace repository truth.
+  const repositoryRoot = gitRepositoryRoot(cfg, ctx, configuredRoot);
+  const honorConfiguredRoot = isNonEmptyRoot(repositoryRoot);
   const initialCommit = gitObjectId(str(cfg, "commit"));
   const initialPath = str(cfg, "path");
+  const dialog = str(cfg, "repositoryDialog");
+  const initialRepositoryDialog = dialog === "clone" || dialog === "open" ? dialog : undefined;
+  const lockedRepositoryLabel = displayNameFromRoot(repositoryRoot ?? ctx.selectedRoot);
   return (
     <BoundRootSurface
       ctx={ctx}
-      configuredRoot={configuredRoot}
+      configuredRoot={repositoryRoot ?? configuredRoot}
       surface="governedGit"
       onSelect={(root) => ctx.updateCfg({ projectPath: root })}
+      honorConfiguredRoot={honorConfiguredRoot}
+      ignoreActiveRoot
     >
       {(projectId) => (
-        <GitClientWindow
-          key={projectId ?? ""}
-          projectId={projectId}
-          initialPath={initialPath}
-          initialCommit={initialCommit}
-          onOpenFiles={(root: string) => ctx.openWindow("files", { root })}
-          onOpenEditor={(root: string) => ctx.openWindow("editor", { root })}
-          onOpenEditorFile={ctx.openEditorFile}
-          updateCfg={(patch: Record<string, WindowCfgValue>) => ctx.updateCfg(patch)}
-        />
+        <ManagedTaskWorkspaceGate ctx={ctx} root={projectId}>
+          {honorConfiguredRoot ? (
+            <PersistRepositoryRootBinding
+              cfg={cfg}
+              ctx={ctx}
+              root={repositoryRoot}
+              rootKey="projectPath"
+            />
+          ) : null}
+          <GitClientWindow
+            key={projectId ?? ""}
+            projectId={projectId}
+            lockedToActiveRoot={false}
+            lockedRepositoryLabel={lockedRepositoryLabel}
+            initialPath={initialPath}
+            initialCommit={initialCommit}
+            initialRepositoryDialog={initialRepositoryDialog}
+            onRepositoryConnected={(root: string) => completeRepositoryConnection(cfg, ctx, root)}
+            onOpenFiles={(root: string) => ctx.openWindow("files", codingRepositoryCfg(root))}
+            onOpenEditor={(root: string) => ctx.openWindow("editor", codingRepositoryCfg(root))}
+            onOpenEditorFile={ctx.openEditorFile}
+            updateCfg={(patch: Record<string, WindowCfgValue>) => ctx.updateCfg(patch)}
+          />
+        </ManagedTaskWorkspaceGate>
       )}
     </BoundRootSurface>
   );
@@ -606,6 +818,23 @@ registerWindowRender("governedGit", (cfg, ctx) => {
 registerWindowRender("governedPullRequest", (cfg, ctx) => {
   const configuredRoot = str(cfg, "projectPath") ?? str(cfg, "workspaceRoot");
   const headBranchName = str(cfg, "headBranchName") ?? undefined;
+  const descriptionOwnerAndRepo = str(cfg, "descriptionOwnerAndRepo");
+  const descriptionPrNumber = num(cfg, "descriptionPrNumber");
+  const descriptionProposalId = str(cfg, "descriptionProposalId");
+  const descriptionSnapshotDigest = str(cfg, "descriptionSnapshotDigest");
+  const descriptionProposal =
+    descriptionOwnerAndRepo === undefined ||
+    descriptionPrNumber === undefined ||
+    descriptionProposalId === undefined ||
+    descriptionSnapshotDigest === undefined
+      ? undefined
+      : {
+          projectId: configuredRoot ?? "",
+          ownerAndRepo: descriptionOwnerAndRepo,
+          prNumber: descriptionPrNumber,
+          proposalId: descriptionProposalId,
+          snapshotDigest: descriptionSnapshotDigest,
+        };
   return (
     <BoundRootSurface
       ctx={ctx}
@@ -614,7 +843,13 @@ registerWindowRender("governedPullRequest", (cfg, ctx) => {
       onSelect={(root) => ctx.updateCfg({ projectPath: root })}
     >
       {(projectId) => (
-        <GovernedPullRequestCard projectId={projectId} headBranchName={headBranchName} />
+        <GovernedPullRequestCard
+          projectId={projectId}
+          headBranchName={headBranchName}
+          ownerAndRepo={descriptionOwnerAndRepo}
+          descriptionPrNumber={descriptionPrNumber}
+          descriptionProposal={descriptionProposal}
+        />
       )}
     </BoundRootSurface>
   );
@@ -673,9 +908,9 @@ registerWindowRender("agents", (cfg, ctx) => (
   />
 ));
 registerWindowRender("memoria", () => <MemoriaVivaWindow />);
-// uiux-fix F023 C054 — no real integrations exist yet; the widget renders an honest
-// static list, so the legacy `provider` cfg (fabricated "connected" state) is ignored.
-registerWindowRender("integ", () => <IntegrationsWidget />);
+// Issues #2950/#3108 — the former prototype integration/twin state is gone. This shipped window
+// renders the existing BFF-owned connector, scope, sync, and approval surface from ADR-0128.
+registerWindowRender("integ", () => <AtlassianConnectorsPanel />);
 // Epic #750 #756 — Figma Snapshot Workspace window. snapshotRunId is persisted into cfg by the
 // component after a successful build so the connected QI hub can read it via linkedFigmaSnapshotRunIds.
 registerWindowRender("figma", (cfg, ctx) => {

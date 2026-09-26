@@ -2,18 +2,62 @@
 // This port intentionally has no event/token append operation: hot-path observations stay in memory.
 import type { DatabaseSync } from "node:sqlite";
 import type {
+  CodingWorkbenchIssueBinding,
   CodingWorkbenchModelSource,
   CodingWorkbenchMode,
+  CodingWorkbenchOperatorDecision,
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchRuntimeResult,
   CodingWorkbenchRuntimeSource,
   CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+  validateCodingWorkbenchIssueBinding,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { CODING_WORKBENCH_OPERATOR_DECISIONS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
+  isVerifiedCommitResult,
+  type VerifiedCommitResult,
+} from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
+import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
+import { activityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  ciReadinessFromRow,
+  readinessMatchesDraft,
+  createCodingRuntimeCiReadinessStore,
+  type CodingRuntimeCiReadinessStore,
+} from "./codingRuntimeCiReadinessStore.js";
+import { createCodingRuntimeCiRepairBudgetStore } from "./codingRuntimeCiRepairBudgetStore.js";
+import type { CodingRuntimeCiRepairBudgetStore } from "./codingRuntimeCiRepairBudgetTypes.js";
+import {
+  createGitJourneyOutcomeStore,
+  type GitJourneyOutcomeStore,
+} from "../gitDelivery/journeyOutcome.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import {
+  adoptDraftDeliveryFromPredecessor,
+  assertDraftDeliveryForSnapshot,
+  draftDeliveryFromRow,
+  recordDraftDelivery,
+} from "./codingRuntimeDraftDeliveryStore.js";
+
+import { draftDeliverySourceFromRow } from "./codingRuntimeDraftDeliverySource.js";
+import { createCodingRuntimeDeliveredPullRequestStore } from "./codingRuntimeDeliveredPullRequestStore.js";
+import type { GitDeliveryDeliveredPullRequestPort } from "../gitDelivery/runBoundAuthority.js";
+import {
+  assertVerifiedCommitRuntimeBinding,
+  readLastSuccessfulVerifiedCommit,
+} from "./codingRuntimeVerifiedCommitAuthorityStore.js";
+import { GIT_VERIFIED_COMMIT_AUTHORITY_OPERATION } from "./codingRuntimeActivityOperations.js";
 
 const MAX_ROWS = 10_000;
+type SnapshotSqlValue = string | number | null;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
 const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const PAUSE_REASONS = new Set<CodingWorkbenchOperatorDecision>(CODING_WORKBENCH_OPERATOR_DECISIONS);
 const STATES = new Set<CodingWorkbenchRuntimeStateName>([
   "starting",
   "ready",
@@ -27,7 +71,6 @@ const STATES = new Set<CodingWorkbenchRuntimeStateName>([
   "taken-over",
   "recovery-required",
   "idle",
-  "unavailable",
 ]);
 const SETTLED = new Set<CodingWorkbenchRuntimeStateName>([
   "succeeded",
@@ -36,7 +79,19 @@ const SETTLED = new Set<CodingWorkbenchRuntimeStateName>([
   "taken-over",
 ]);
 
+function isAdmissibleClosedPredecessor(snapshot: CodingRuntimeSnapshot): boolean {
+  return (
+    SETTLED.has(snapshot.state) ||
+    (snapshot.state === "recovery-required" &&
+      snapshot.terminalAt !== undefined &&
+      snapshot.recoveryAcknowledgedAt !== undefined)
+  );
+}
+
 export interface CodingRuntimeSnapshot {
+  readonly ciReadiness?: ReadinessSnapshot;
+  readonly draftDelivery?: DraftDeliveryRecord;
+  readonly verifiedCommitResult?: VerifiedCommitResult;
   readonly schemaVersion: "1";
   readonly runId: string;
   readonly state: CodingWorkbenchRuntimeStateName;
@@ -45,6 +100,12 @@ export interface CodingRuntimeSnapshot {
   readonly runtimeSource: CodingWorkbenchRuntimeSource;
   readonly modelSource: CodingWorkbenchModelSource;
   readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+  /**
+   * Why a `paused` run is paused, when a governed tool asked for a decision only a local human can
+   * make. Durable so a BFF restart cannot leave the operator looking at a paused run with nothing
+   * saying what it waits for. Absent on every other state and on an operator-initiated pause.
+   */
+  readonly pauseReason?: CodingWorkbenchOperatorDecision | undefined;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly terminalAt?: string | undefined;
@@ -61,6 +122,14 @@ export interface CodingRuntimeSnapshot {
   readonly modelRequestCount: number;
   readonly recoveryHandle?: string | undefined;
   readonly result?: CodingWorkbenchRuntimeResult | undefined;
+  /**
+   * Present exactly when the run was accepted for a GitHub issue (#3385). Immutable for the run's
+   * life — a transition never rewrites it — and content-free: what persists is the identity and
+   * revision the run was accepted against, never the issue's text.
+   */
+  readonly issueBinding?: CodingWorkbenchIssueBinding | undefined;
+  /** Verified issue context retained for retry without imposing a delivery obligation. */
+  readonly issueContextBinding?: CodingWorkbenchIssueBinding | undefined;
 }
 
 export interface CodingRuntimeSnapshotTransition {
@@ -68,6 +137,8 @@ export interface CodingRuntimeSnapshotTransition {
   readonly revision: number;
   readonly updatedAt: string;
   readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+  // Written on every transition, so leaving a paused run always clears the reason it was paused for.
+  readonly pauseReason?: CodingWorkbenchOperatorDecision | undefined;
   readonly terminalAt?: string | undefined;
   readonly toolCallCount?: number | undefined;
   readonly patchByteCount?: number | undefined;
@@ -77,13 +148,46 @@ export interface CodingRuntimeSnapshotTransition {
 }
 
 export interface CodingRuntimeSnapshotStore {
+  /** Optional only for explicitly injected legacy/test stores; absent means CI work is unavailable. */
+  readonly ciReadiness?: CodingRuntimeCiReadinessStore;
+  readonly ciRepairBudget?: CodingRuntimeCiRepairBudgetStore;
+  /**
+   * Durable, run-independent JourneyOutcome CAS projection (#3389 AC6), keyed by remote digest and
+   * PR number rather than run id — reads/writes survive the originating run's termination, recovery
+   * or a process restart. Optional only for explicitly injected legacy/test stores.
+   */
+  readonly journeyOutcomes?: GitJourneyOutcomeStore;
+  /**
+   * #3390: which settled run delivered a given pull request, at which head, under which envelope
+   * -- the durable binding the post-delivery handoff admission (ready-for-review, merge) rests on
+   * once the run-bound authority has ended with the run. Optional only for injected test stores.
+   */
+  readonly deliveredPullRequests?: GitDeliveryDeliveredPullRequestPort;
+  readonly adoptDraftDeliveryFromPredecessor: (
+    record: DraftDeliveryRecord,
+    recordedAt?: string,
+  ) => CodingRuntimeSnapshot;
+  readonly recordDraftDelivery: (
+    record: DraftDeliveryRecord,
+    expectedRevision: number | null,
+    recordedAt?: string,
+  ) => CodingRuntimeSnapshot;
+  readonly recordVerifiedCommit: (
+    result: VerifiedCommitResult,
+    recordedAt?: string,
+  ) => CodingRuntimeSnapshot;
+  /** Internal successful HEAD lineage, separate from the latest public proposal/result. */
+  readonly getLastSuccessfulVerifiedCommit?: (runId: string) => VerifiedCommitResult | undefined;
+  /** Linked recovery successors settle their acknowledged predecessor in the same transaction. */
   readonly create: (snapshot: CodingRuntimeSnapshot) => CodingRuntimeSnapshot;
   readonly transition: (
     runId: string,
     transition: CodingRuntimeSnapshotTransition,
   ) => CodingRuntimeSnapshot;
   readonly get: (runId: string) => CodingRuntimeSnapshot | undefined;
+  /** Non-terminal rows, most recently updated first (`run_id` breaks ties), bounded by `limit`. */
   readonly listRecentActive: (limit?: number) => readonly CodingRuntimeSnapshot[];
+  /** Every row, most recently updated first (`run_id` breaks ties), bounded by `limit`. */
   readonly listAll: (limit?: number) => readonly CodingRuntimeSnapshot[];
   /** Startup-only containment: marks persisted active rows recoverable; never replays them. */
   readonly markNonterminalRecoveryRequired: (updatedAt: string) => readonly string[];
@@ -99,6 +203,10 @@ export interface CodingRuntimeSnapshotStore {
 }
 
 interface Row {
+  readonly ci_readiness_record: string | null;
+  readonly draft_delivery_source_receipt: string | null;
+  readonly draft_delivery_record: string | null;
+  readonly verified_commit_result: string | null;
   readonly run_id: string;
   readonly schema_version: string;
   readonly state: CodingWorkbenchRuntimeStateName;
@@ -107,6 +215,7 @@ interface Row {
   readonly runtime_source: CodingWorkbenchRuntimeSource;
   readonly model_source: CodingWorkbenchModelSource;
   readonly failure_code: CodingWorkbenchRuntimeFailureCode | null;
+  readonly pause_reason: CodingWorkbenchOperatorDecision | null;
   readonly created_at: string;
   readonly updated_at: string;
   readonly terminal_at: string | null;
@@ -132,29 +241,42 @@ interface Row {
   readonly stderr_line_count: number | null;
   readonly stderr_sha256: string | null;
   readonly stderr_truncated: number | null;
+  readonly issue_purpose: string;
+  readonly issue_repository_id: string | null;
+  readonly issue_remote_digest: string | null;
+  readonly issue_number: number | null;
+  readonly issue_id_digest: string | null;
+  readonly issue_default_base_ref: string | null;
+  readonly issue_content_revision_digest: string | null;
+  readonly issue_binding_digest: string | null;
 }
 
 const COLUMNS =
-  "run_id, schema_version, state, revision, requested_mode, runtime_source, model_source, failure_code, created_at, updated_at, terminal_at, recovery_acknowledged_at, predecessor_run_id, task_digest, workspace_digest, operator_digest, authority_digest, binding_digest, provenance_digest, tool_call_count, patch_byte_count, model_request_count, recovery_handle, result_status, exit_code, stdout_byte_count, stdout_line_count, stdout_sha256, stdout_truncated, stderr_byte_count, stderr_line_count, stderr_sha256, stderr_truncated";
+  "run_id, schema_version, state, revision, requested_mode, runtime_source, model_source, failure_code, pause_reason, created_at, updated_at, terminal_at, recovery_acknowledged_at, predecessor_run_id, task_digest, workspace_digest, operator_digest, authority_digest, binding_digest, provenance_digest, tool_call_count, patch_byte_count, model_request_count, recovery_handle, result_status, exit_code, stdout_byte_count, stdout_line_count, stdout_sha256, stdout_truncated, stderr_byte_count, stderr_line_count, stderr_sha256, stderr_truncated, issue_repository_id, issue_remote_digest, issue_number, issue_id_digest, issue_default_base_ref, issue_content_revision_digest, issue_binding_digest, verified_commit_result, draft_delivery_record, draft_delivery_source_receipt, issue_purpose";
 
 // Prepared statements must remain co-located with the closed store operations they support.
 // eslint-disable-next-line max-lines-per-function
 export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntimeSnapshotStore {
-  const get = db.prepare(`SELECT ${COLUMNS} FROM coding_runtime_snapshots WHERE run_id = ?`);
+  const readColumns = `${COLUMNS}, ci_readiness_record`;
+  const get = db.prepare(`SELECT ${readColumns} FROM coding_runtime_snapshots WHERE run_id = ?`);
   const listActive = db.prepare(
-    `SELECT ${COLUMNS} FROM coding_runtime_snapshots WHERE terminal_at IS NULL ORDER BY updated_at DESC, run_id LIMIT ?`,
+    `SELECT ${readColumns} FROM coding_runtime_snapshots WHERE terminal_at IS NULL ORDER BY updated_at DESC, run_id LIMIT ?`,
   );
   const listAll = db.prepare(
-    `SELECT ${COLUMNS} FROM coding_runtime_snapshots ORDER BY updated_at DESC, run_id LIMIT ?`,
+    `SELECT ${readColumns} FROM coding_runtime_snapshots ORDER BY updated_at DESC, run_id LIMIT ?`,
   );
   const insert = db.prepare(
-    `INSERT INTO coding_runtime_snapshots (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO coding_runtime_snapshots (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const update = db.prepare(
-    `UPDATE coding_runtime_snapshots SET state=?, revision=?, updated_at=?, failure_code=?, terminal_at=?, tool_call_count=?, patch_byte_count=?, model_request_count=?, recovery_handle=?, result_status=?, exit_code=?, stdout_byte_count=?, stdout_line_count=?, stdout_sha256=?, stdout_truncated=?, stderr_byte_count=?, stderr_line_count=?, stderr_sha256=?, stderr_truncated=? WHERE run_id=?`,
+    `UPDATE coding_runtime_snapshots SET state=?, revision=?, updated_at=?, failure_code=?, pause_reason=?, terminal_at=?, tool_call_count=?, patch_byte_count=?, model_request_count=?, recovery_handle=?, result_status=?, exit_code=?, stdout_byte_count=?, stdout_line_count=?, stdout_sha256=?, stdout_truncated=?, stderr_byte_count=?, stderr_line_count=?, stderr_sha256=?, stderr_truncated=? WHERE run_id=?`,
   );
+  // Acknowledgement is itself an observable lifecycle event on the row (the operator's attestation
+  // that ADR-0137 D5 reconciliation may treat the predecessor as reaped), so it advances `revision`
+  // and `updated_at` exactly like every other mutating transition — a poller or SSE catch-up must
+  // see this as a new fact, not a same-revision no-op.
   const acknowledge = db.prepare(
-    "UPDATE coding_runtime_snapshots SET recovery_acknowledged_at = ? WHERE run_id = ? AND state = 'recovery-required'",
+    "UPDATE coding_runtime_snapshots SET recovery_acknowledged_at = ?, updated_at = ?, revision = revision + 1 WHERE run_id = ? AND state = 'recovery-required'",
   );
   const releaseRecovery = db.prepare(
     "UPDATE coding_runtime_snapshots SET terminal_at = ?, updated_at = ?, revision = revision + 1 WHERE run_id = ? AND state = 'recovery-required' AND recovery_acknowledged_at IS NOT NULL AND terminal_at IS NULL",
@@ -164,10 +286,51 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
   const one = (runId: string): CodingRuntimeSnapshot | undefined =>
     map(get.get(runId) as Row | undefined);
   return {
+    ciReadiness: createCodingRuntimeCiReadinessStore(db, { get: one }),
+    ciRepairBudget: createCodingRuntimeCiRepairBudgetStore({
+      db,
+      snapshots: { get: one },
+      activityLog: processServerLogSink(),
+    }),
+    journeyOutcomes: createGitJourneyOutcomeStore(db),
+    deliveredPullRequests: createCodingRuntimeDeliveredPullRequestStore(db),
+    adoptDraftDeliveryFromPredecessor: (record, recordedAt): CodingRuntimeSnapshot =>
+      adoptDraftDeliveryFromPredecessor(db, one, record, recordedAt),
+    recordDraftDelivery: (record, expectedRevision, recordedAt): CodingRuntimeSnapshot =>
+      recordDraftDelivery(db, one, record, expectedRevision, recordedAt),
+    recordVerifiedCommit: (result, recordedAt): CodingRuntimeSnapshot =>
+      recordVerifiedCommit(db, one, result, recordedAt),
+    getLastSuccessfulVerifiedCommit: (runId): VerifiedCommitResult | undefined =>
+      readLastSuccessfulVerifiedCommit(db, one(runId)),
     create(snapshot): CodingRuntimeSnapshot {
       assertSnapshot(snapshot);
-      insert.run(...values(snapshot));
-      return snapshot;
+      if (snapshot.ciReadiness !== undefined)
+        throw new TypeError("CI readiness requires its owning observation operation");
+      if (snapshot.predecessorRunId === undefined) {
+        insert.run(...values(snapshot));
+        return snapshot;
+      }
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        const predecessor = one(snapshot.predecessorRunId);
+        if (predecessor === undefined)
+          throw new Error("predecessor runtime snapshot was not found");
+        if (predecessor.terminalAt === undefined) {
+          if (
+            releaseRecovery.run(snapshot.updatedAt, snapshot.updatedAt, snapshot.predecessorRunId)
+              .changes !== 1
+          )
+            throw new Error("acknowledged recovery runtime snapshot was not found");
+        } else if (!isAdmissibleClosedPredecessor(predecessor)) {
+          throw new Error("predecessor runtime snapshot was not settled");
+        }
+        insert.run(...values(snapshot));
+        db.exec("COMMIT");
+        return snapshot;
+      } catch (error) {
+        db.exec("ROLLBACK");
+        throw error;
+      }
     },
     // The closed store operation keeps SQL binding adjacent to its validated state transition.
     // eslint-disable-next-line complexity
@@ -182,6 +345,9 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
         ...current,
         ...transition,
         failureCode: transition.failureCode,
+        // Written, never merged: a run leaving `paused` must lose the reason it was paused for,
+        // which a spread of `current` would otherwise carry into every later state.
+        pauseReason: transition.pauseReason,
         terminalAt: SETTLED.has(transition.state)
           ? (transition.terminalAt ?? transition.updatedAt)
           : undefined,
@@ -197,6 +363,7 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
         next.revision,
         next.updatedAt,
         next.failureCode ?? null,
+        next.pauseReason ?? null,
         next.terminalAt ?? null,
         next.toolCallCount,
         next.patchByteCount,
@@ -232,7 +399,11 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
       db.exec("BEGIN");
       try {
         const statement = db.prepare(
-          "UPDATE coding_runtime_snapshots SET state='recovery-required', failure_code='recovery-required', revision=?, updated_at=? WHERE run_id=?",
+          // `pause_reason` is cleared here as on every other state change: a run paused for an
+          // operator decision that the process restart interrupts must not keep naming a wait
+          // nobody is holding — and `assertSnapshot` would otherwise refuse the row on the very
+          // next read, which is `startupReconcileNow`'s own `listRecentActive` (owner review).
+          "UPDATE coding_runtime_snapshots SET state='recovery-required', failure_code='recovery-required', pause_reason=NULL, revision=?, updated_at=? WHERE run_id=?",
         );
         for (const row of active) statement.run(row.revision + 1, updatedAt, row.run_id);
         db.exec("COMMIT");
@@ -245,7 +416,7 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
     acknowledgeRecovery(runId, acknowledgedAt): CodingRuntimeSnapshot {
       assertId(runId, "runId");
       assertIso(acknowledgedAt, "acknowledgedAt");
-      if (acknowledge.run(acknowledgedAt, runId).changes !== 1)
+      if (acknowledge.run(acknowledgedAt, acknowledgedAt, runId).changes !== 1)
         throw new Error("recovery-required runtime snapshot was not found");
       return requireSnapshot(one(runId));
     },
@@ -272,7 +443,7 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
         : (
             db
               .prepare(
-                "SELECT run_id FROM coding_runtime_snapshots WHERE terminal_at IS NOT NULL ORDER BY terminal_at, updated_at, run_id LIMIT ?",
+                "SELECT parent.run_id FROM coding_runtime_snapshots parent WHERE parent.terminal_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM coding_runtime_snapshots child WHERE child.predecessor_run_id = parent.run_id) ORDER BY parent.terminal_at, parent.updated_at, parent.run_id LIMIT ?",
               )
               .all(excess) as { run_id: string }[]
           ).map((row) => row.run_id);
@@ -282,7 +453,7 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
       db.exec("BEGIN");
       try {
         const del = db.prepare(
-          "DELETE FROM coding_runtime_snapshots WHERE run_id=? AND terminal_at IS NOT NULL",
+          "DELETE FROM coding_runtime_snapshots AS parent WHERE run_id=? AND terminal_at IS NOT NULL AND NOT EXISTS (SELECT 1 FROM coding_runtime_snapshots child WHERE child.predecessor_run_id = parent.run_id)",
         );
         for (const id of runIds) {
           assertId(id, "runId");
@@ -319,6 +490,7 @@ function map(row: Row | undefined): CodingRuntimeSnapshot | undefined {
     patchByteCount: row.patch_byte_count,
     modelRequestCount: row.model_request_count,
     ...(row.failure_code ? { failureCode: row.failure_code } : {}),
+    ...(row.pause_reason ? { pauseReason: row.pause_reason } : {}),
     ...(row.terminal_at ? { terminalAt: row.terminal_at } : {}),
     ...(row.recovery_acknowledged_at
       ? { recoveryAcknowledgedAt: row.recovery_acknowledged_at }
@@ -326,9 +498,126 @@ function map(row: Row | undefined): CodingRuntimeSnapshot | undefined {
     ...(row.predecessor_run_id ? { predecessorRunId: row.predecessor_run_id } : {}),
     ...(row.recovery_handle ? { recoveryHandle: row.recovery_handle } : {}),
     ...(runtimeResult(row) === undefined ? {} : { result: runtimeResult(row) }),
+    ...persistedIssue(row),
+    ...verifiedCommitFromRow(row.verified_commit_result),
+    ...draftDeliveryFromRow(row.draft_delivery_record),
   };
   assertSnapshot(value);
-  return value;
+  draftDeliverySourceFromRow(value, row.draft_delivery_source_receipt);
+  return projectStoredReadiness(value, row.ci_readiness_record);
+}
+
+function projectStoredReadiness(
+  value: CodingRuntimeSnapshot,
+  encoded: string | null,
+): CodingRuntimeSnapshot {
+  const readiness = ciReadinessFromRow(encoded).ciReadiness;
+  return readiness !== undefined && readinessMatchesDraft(readiness, value.draftDelivery)
+    ? { ...value, ciReadiness: readiness }
+    : value;
+}
+
+function verifiedCommitFromRow(value: string | null): {
+  readonly verifiedCommitResult?: VerifiedCommitResult;
+} {
+  if (value === null) return {};
+  const parsed: unknown = JSON.parse(value);
+  if (!isVerifiedCommitResult(parsed)) throw new TypeError("invalid persisted verified commit");
+  return { verifiedCommitResult: parsed };
+}
+
+// CAS: the WHERE clause's `IS ?` predicates pin the write to the exact prior bytes this call
+// observed, so a second writer that raced in between (propose/execute/reconcile can all reach this
+// path) never silently overwrites — its own predicate no longer matches and it throws instead
+// (#3384 batch-1 B3-6). The write also advances `revision`/`updated_at` like every other mutating
+// transition on this row (acknowledge/releaseRecovery above), so a poller or SSE catch-up observes
+// a new fact rather than a same-revision no-op (#3384 batch-1 B5-6).
+function recordVerifiedCommit(
+  db: DatabaseSync,
+  read: (runId: string) => CodingRuntimeSnapshot | undefined,
+  result: VerifiedCommitResult,
+  recordedAt: string = new Date().toISOString(),
+): CodingRuntimeSnapshot {
+  if (!isVerifiedCommitResult(result)) throw new TypeError("invalid verified commit result");
+  assertIso(recordedAt, "recordedAt");
+  const current = requireSnapshot(read(result.runId));
+  assertVerifiedCommitRuntimeBinding(current, result);
+  const previous = readLastSuccessfulVerifiedCommit(db, current);
+  const retained = result.status === "succeeded" ? result : previous;
+  const priorRow = db
+    .prepare(
+      "SELECT verified_commit_result, last_successful_verified_commit FROM coding_runtime_snapshots WHERE run_id = ?",
+    )
+    .get(result.runId) as
+    | { verified_commit_result: string | null; last_successful_verified_commit: string | null }
+    | undefined;
+  if (priorRow === undefined) throw new TypeError("runtime snapshot was not found");
+  const update = db
+    .prepare(
+      "UPDATE coding_runtime_snapshots SET verified_commit_result = ?, last_successful_verified_commit = ?, revision = revision + 1, updated_at = ? WHERE run_id = ? AND verified_commit_result IS ? AND last_successful_verified_commit IS ?",
+    )
+    .run(
+      JSON.stringify(result),
+      retained === undefined ? null : JSON.stringify(retained),
+      recordedAt,
+      result.runId,
+      priorRow.verified_commit_result,
+      priorRow.last_successful_verified_commit,
+    );
+  if (Number(update.changes) !== 1) throw new TypeError("concurrent verified commit update");
+  if (retained !== undefined)
+    processServerLogSink().write(
+      activityLogEvent(
+        GIT_VERIFIED_COMMIT_AUTHORITY_OPERATION,
+        { correlationId: result.runId },
+        {
+          phase: "retained",
+          runId: result.runId,
+          proposalId: retained.proposalId,
+          ...(retained.headSha === undefined ? {} : { headSha: retained.headSha }),
+        },
+      ),
+    );
+  return requireSnapshot(read(result.runId));
+}
+
+// All seven columns present, or none: a row with some of them is not a generic run and not a
+// bound one, and projecting it as either would let a run silently lose or invent its issue. It is
+// refused as the corruption it is.
+function persistedIssue(
+  row: Row,
+): Pick<CodingRuntimeSnapshot, "issueBinding" | "issueContextBinding"> {
+  if (row.issue_purpose !== "context" && row.issue_purpose !== "delivery")
+    throw new TypeError("Invalid stored issue purpose");
+  const binding = issueBindingFromRow(row);
+  if (binding === undefined) return {};
+  return row.issue_purpose === "context"
+    ? { issueContextBinding: binding }
+    : { issueBinding: binding };
+}
+function issueBindingFromRow(row: Row): CodingWorkbenchIssueBinding | undefined {
+  const columns = [
+    row.issue_repository_id,
+    row.issue_remote_digest,
+    row.issue_number,
+    row.issue_id_digest,
+    row.issue_default_base_ref,
+    row.issue_content_revision_digest,
+    row.issue_binding_digest,
+  ];
+  const present = columns.filter((column) => column !== null).length;
+  if (present === 0) return undefined;
+  if (present !== columns.length) throw new Error("partially persisted issue binding");
+  return {
+    schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+    repositoryId: String(row.issue_repository_id),
+    remoteDigest: String(row.issue_remote_digest),
+    issueNumber: Number(row.issue_number),
+    issueIdDigest: String(row.issue_id_digest),
+    defaultBaseRef: String(row.issue_default_base_ref),
+    contentRevisionDigest: String(row.issue_content_revision_digest),
+    bindingDigest: String(row.issue_binding_digest),
+  };
 }
 function rows(values: Row[]): readonly CodingRuntimeSnapshot[] {
   return values.map((row) => requireSnapshot(map(row)));
@@ -338,7 +627,7 @@ function requireSnapshot(snapshot: CodingRuntimeSnapshot | undefined): CodingRun
   if (snapshot === undefined) throw new Error("runtime snapshot was not found");
   return snapshot;
 }
-function values(v: CodingRuntimeSnapshot): readonly (string | number | null)[] {
+function values(v: CodingRuntimeSnapshot): readonly SnapshotSqlValue[] {
   return [
     v.runId,
     v.schemaVersion,
@@ -348,6 +637,7 @@ function values(v: CodingRuntimeSnapshot): readonly (string | number | null)[] {
     v.runtimeSource,
     v.modelSource,
     v.failureCode ?? null,
+    v.pauseReason ?? null,
     v.createdAt,
     v.updatedAt,
     v.terminalAt ?? null,
@@ -364,12 +654,36 @@ function values(v: CodingRuntimeSnapshot): readonly (string | number | null)[] {
     v.modelRequestCount,
     v.recoveryHandle ?? null,
     ...runtimeResultValues(v.result),
+    ...snapshotIssueValues(v),
+    v.verifiedCommitResult === undefined ? null : JSON.stringify(v.verifiedCommitResult),
+    v.draftDelivery === undefined ? null : JSON.stringify(v.draftDelivery),
+    null, // Only the draft operation can create its internal verified source receipt.
+    v.issueContextBinding === undefined ? "delivery" : "context",
+  ];
+}
+
+function snapshotIssueValues(snapshot: CodingRuntimeSnapshot): readonly SnapshotSqlValue[] {
+  return issueBindingValues(snapshot.issueBinding ?? snapshot.issueContextBinding);
+}
+
+function issueBindingValues(
+  binding: CodingWorkbenchIssueBinding | undefined,
+): readonly SnapshotSqlValue[] {
+  if (binding === undefined) return [null, null, null, null, null, null, null];
+  return [
+    binding.repositoryId,
+    binding.remoteDigest,
+    binding.issueNumber,
+    binding.issueIdDigest,
+    binding.defaultBaseRef,
+    binding.contentRevisionDigest,
+    binding.bindingDigest,
   ];
 }
 
 function runtimeResultValues(
   result: CodingWorkbenchRuntimeResult | undefined,
-): readonly (string | number | null)[] {
+): readonly SnapshotSqlValue[] {
   if (result === undefined) return [null, null, null, null, null, null, null, null, null, null];
   return [
     result.status,
@@ -398,6 +712,44 @@ function assertSnapshot(v: CodingRuntimeSnapshot): void {
   assertSnapshotDigests(v);
   assertSnapshotCounts(v);
   if (v.result !== undefined) assertRuntimeResult(v.result);
+  assertSnapshotIssue(v);
+  assertOptionalVerifiedCommit(v);
+  assertOptionalDraftDelivery(v);
+  assertPauseReason(v);
+}
+
+function assertSnapshotIssue(v: CodingRuntimeSnapshot): void {
+  assertIssueBinding(v.issueBinding);
+  assertIssueBinding(v.issueContextBinding);
+  if (v.issueBinding !== undefined && v.issueContextBinding !== undefined)
+    throw new TypeError("Issue context and delivery bindings are mutually exclusive");
+}
+
+// A pause reason on any other state would describe a wait the run is not in, and the row would then
+// outlive the decision it names. Fails closed here rather than being silently dropped on write, so
+// a caller that forgets to clear it is a defect the store reports instead of absorbing.
+function assertPauseReason(v: CodingRuntimeSnapshot): void {
+  if (v.pauseReason === undefined) return;
+  if (!PAUSE_REASONS.has(v.pauseReason)) throw new Error("invalid pauseReason");
+  if (v.state !== "paused") throw new Error("pauseReason is only valid while paused");
+}
+
+function assertOptionalDraftDelivery(snapshot: CodingRuntimeSnapshot): void {
+  if (snapshot.draftDelivery !== undefined)
+    assertDraftDeliveryForSnapshot(snapshot, snapshot.draftDelivery);
+}
+
+function assertOptionalVerifiedCommit(snapshot: CodingRuntimeSnapshot): void {
+  if (snapshot.verifiedCommitResult === undefined) return;
+  if (!isVerifiedCommitResult(snapshot.verifiedCommitResult))
+    throw new TypeError("invalid verified commit result");
+  assertVerifiedCommitRuntimeBinding(snapshot, snapshot.verifiedCommitResult);
+}
+
+function assertIssueBinding(binding: CodingWorkbenchIssueBinding | undefined): void {
+  if (binding === undefined) return;
+  if (!validateCodingWorkbenchIssueBinding(binding).ok)
+    throw new TypeError("invalid issue binding");
 }
 
 function runtimeResult(row: Row): CodingWorkbenchRuntimeResult | undefined {
@@ -496,7 +848,7 @@ function assertTransition(v: CodingRuntimeSnapshotTransition): void {
 function assertId(value: string, name: string): void {
   if (!SAFE_ID.test(value)) throw new Error(`invalid ${name}`);
 }
-function assertIso(value: string, name: string): void {
+export function assertIso(value: string, name: string): void {
   if (!ISO_UTC.test(value) || Number.isNaN(Date.parse(value))) throw new Error(`invalid ${name}`);
 }
 function assertLimit(value: number): number {

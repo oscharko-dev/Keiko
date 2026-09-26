@@ -1,0 +1,78 @@
+{
+  "issue": 3184,
+  "verdict": "PASS",
+  "proofType": "browser-capture-plus-axe-core",
+  "sourceSha256": "c31bd5b0dcb84c8e07ba6cf1cc5c7c2ef0929b6d942417c1dc3a7988fdaed570",
+  "captures": [
+    {
+      "file": "01-dark.png",
+      "theme": "dark",
+      "contrast": "no-preference",
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "menuHasFreshPod": true,
+      "selectedUnavailable": 0
+    },
+    {
+      "file": "02-light.png",
+      "theme": "light",
+      "contrast": "no-preference",
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "menuHasFreshPod": true,
+      "selectedUnavailable": 0
+    },
+    {
+      "file": "03-dark-hc.png",
+      "theme": "dark",
+      "contrast": "more",
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "menuHasFreshPod": true,
+      "selectedUnavailable": 0
+    },
+    {
+      "file": "04-light-hc.png",
+      "theme": "light",
+      "contrast": "more",
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "menuHasFreshPod": true,
+      "selectedUnavailable": 0
+    },
+    {
+      "file": "05-prefers-contrast.png",
+      "theme": "dark",
+      "contrast": "more",
+      "forcedColors": "none",
+      "reducedMotion": "no-preference",
+      "menuHasFreshPod": true,
+      "selectedUnavailable": 0
+    },
+    {
+      "file": "06-forced-colors.png",
+      "theme": "dark",
+      "contrast": "no-preference",
+      "forcedColors": "active",
+      "reducedMotion": "no-preference",
+      "menuHasFreshPod": true,
+      "selectedUnavailable": 0
+    },
+    {
+      "file": "07-reduced-motion.png",
+      "theme": "dark",
+      "contrast": "no-preference",
+      "forcedColors": "none",
+      "reducedMotion": "reduce",
+      "menuHasFreshPod": true,
+      "selectedUnavailable": 0
+    }
+  ],
+  "responsive": {
+    "file": "08-responsive-560.png",
+    "viewport": {
+      "width": 560,
+      "height": 820
+    }
+  }
+}

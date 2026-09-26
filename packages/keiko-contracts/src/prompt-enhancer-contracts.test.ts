@@ -5,8 +5,13 @@
 // credential, provider endpoint, hidden system prompt, or tool-authority grant.
 
 import { describe, it, expect } from "vitest";
+import type {
+  EnhancedPrompt,
+  PromptEnhancementProfileId,
+  PromptEnhancementRequest,
+} from "./index.js";
+import { analyzePrompt } from "./prompt-enhancer-analyzer.js";
 import {
-  analyzePrompt,
   assertNeverTaskClass,
   asEnhancedPromptId,
   asPromptEnhancementRequestId,
@@ -28,10 +33,7 @@ import {
   PROMPT_SIGNAL_STRENGTHS,
   PROMPT_TASK_CLASSES,
   SAFETY_CRITICAL_DOMAINS,
-  type EnhancedPrompt,
-  type PromptEnhancementProfileId,
-  type PromptEnhancementRequest,
-} from "./index.js";
+} from "./prompt-enhancer.js";
 
 function collectKeys(value: unknown, into: Set<string>): void {
   if (Array.isArray(value)) {

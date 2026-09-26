@@ -6,17 +6,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import { PassThrough, Readable } from "node:stream";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync, realpathSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { IncomingMessage } from "node:http";
 
+import type {
+  KnowledgeCapsuleId,
+  KnowledgePodModelUsePolicy,
+  WorkspaceInstance,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  deriveContextProfileFromCapability,
+  maxUtf8BytesForTokenBudget,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
-  maxUtf8BytesForTokenBudget,
   standardPodModelUsePolicy,
-  type KnowledgePodModelUsePolicy,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
+import * as readiness from "./gateway-readiness.js";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   type ConnectedContextPack,
@@ -31,6 +41,8 @@ import {
   buildGroundedGatewayMessages,
   groundedPromptInputTokensForCapability,
   handleGroundedAsk,
+  mappedGatewayError,
+  mappedWorkspaceError,
   modelWindowAwareBudget,
   modelInputPromptByteLimit,
   promptByteLength,
@@ -39,7 +51,7 @@ import {
   type GroundedRunner,
 } from "./grounded-qa.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
-import type { UiHandlerDeps } from "./deps.js";
+import type { RuntimeGatewayConfig, UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import type { OrchestratorInput, OrchestratorOutput } from "./grounded-orchestrator.js";
@@ -49,6 +61,8 @@ import { createInMemoryEvidenceStore, loadEvidence } from "@oscharko-dev/keiko-e
 import {
   CancelledError,
   ContextOverflowError,
+  RateLimitError,
+  type GatewayCallRequest,
   type GatewayConfig,
   type GatewayRequest,
   type NormalizedResponse,
@@ -63,11 +77,16 @@ import {
   scriptedAdapter,
   seedCapsuleWithVectors,
 } from "@oscharko-dev/keiko-local-knowledge/testing";
-import { RepoSearchInvalidQueryError } from "@oscharko-dev/keiko-workspace";
+import {
+  PathDeniedError,
+  RepoSearchInvalidQueryError,
+  WorkspaceNotFoundError,
+  detectWorkspaceAt,
+} from "@oscharko-dev/keiko-workspace";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { MemoryId } from "@oscharko-dev/keiko-contracts/memory";
 import type { MemoryUserId } from "@oscharko-dev/keiko-contracts";
-import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 import { handleSendDesktopChat } from "./chat-handlers.js";
 import {
   canonicalChatTurnGroundingScopeIdentity,
@@ -79,6 +98,23 @@ import {
   CONVERSATION_MEMORY_FENCE_END,
   CONVERSATION_MEMORY_FENCE_START,
 } from "./conversation-prompt.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
+import {
+  createFakeSessionPairingPort,
+  fakePairingRequestBody,
+} from "./coding-app-session/_support.js";
+import { APP_SESSION_COOKIE_NAME } from "./coding-app-session/sessionCookie.js";
+import { createCodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
+import { createSessionRegistry } from "./coding-app-session/sessionRegistry.js";
+import { assertManagedRootOwned } from "./task-workspace/managed-root.js";
+import { deriveManagedWorktreePath } from "./task-workspace/naming.js";
+import { inspectManagedGitdirIdentity } from "./task-workspace/gitdir-identity.js";
+import type { WorkspaceProvisioningService } from "./task-workspace/types.js";
 
 const NOW = 1_700_000_000_000;
 const CHAT_MODEL = "example-chat-model";
@@ -120,9 +156,12 @@ function fakeRes(): RouteContext["res"] {
   return res;
 }
 
-function ctx(body: string, res: RouteContext["res"] = fakeRes()): RouteContext {
+function ctx(body: string, res: RouteContext["res"] = fakeRes(), cookie?: string): RouteContext {
+  const req = fakeReq(body);
+  req.headers = cookie === undefined ? {} : { cookie };
   return {
-    req: fakeReq(body),
+    correlationId: undefined,
+    req,
     res,
     params: {},
     url: new URL("http://localhost/api/chats/messages/grounded"),
@@ -214,6 +253,48 @@ function deps(
   };
 }
 
+function runtimeGatewayConfig(config: GatewayConfig, ready: boolean): RuntimeGatewayConfig {
+  let current = config;
+  let generation = 0;
+  const observations = new Map<string, ReturnType<RuntimeGatewayConfig["verifiedCapability"]>>();
+  const holder: RuntimeGatewayConfig = {
+    storagePath: join(tmp, "gateway.json"),
+    current: () => current,
+    present: () => true,
+    set(next): void {
+      if (next === undefined) throw new Error("test runtime config must stay configured");
+      current = next;
+      generation += 1;
+      observations.clear();
+    },
+    generation: () => generation,
+    verification: () => UNVERIFIED_GATEWAY,
+    recordVerification: () => undefined,
+    verifiedCapability: (modelId) => observations.get(modelId),
+    recordVerifiedCapability(modelId, fields, checkedAt, observedGeneration): void {
+      if (observedGeneration !== undefined && observedGeneration !== generation) return;
+      observations.set(modelId, { modelId, generation, checkedAt, fields: { ...fields } });
+    },
+    clearVerifiedCapability(modelId, observedGeneration): boolean {
+      if (observedGeneration !== undefined && observedGeneration !== generation) return false;
+      return observations.delete(modelId);
+    },
+  };
+  if (ready) {
+    holder.recordVerifiedCapability(
+      CHAT_MODEL,
+      { conversationReady: true },
+      "2026-08-16T00:00:00.000Z",
+      generation,
+    );
+  }
+  return holder;
+}
+
+function unreadyRuntimeGatewayConfig(config: GatewayConfig): RuntimeGatewayConfig {
+  return runtimeGatewayConfig(config, false);
+}
+
 function fakeModel(content: string, seenRequests: GatewayRequest[]): ModelPort {
   return {
     call(request): Promise<NormalizedResponse> {
@@ -278,7 +359,7 @@ function expectGroundedGatewayRequest(request: GatewayRequest): void {
   expect(userMessage.content).toContain("Repository evidence excerpts:");
   expect(userMessage.content).toContain("src/foo.ts");
   expect(userMessage.content).toContain("MyClass");
-  expect(userMessage.content).toContain("model input tokens 0/59904");
+  expect(userMessage.content).toContain("model input tokens 0/57904");
 }
 
 function emptyPack(): ConnectedContextPack {
@@ -417,8 +498,7 @@ function requirePackExcerpt(
 }
 
 function runner(pack: ConnectedContextPack, content = "answered"): GroundedRunner {
-  return (input: OrchestratorInput): Promise<OrchestratorOutput> => {
-    void input;
+  return (_input: OrchestratorInput): Promise<OrchestratorOutput> => {
     return Promise.resolve({
       pack,
       assistantContent: content,
@@ -428,8 +508,7 @@ function runner(pack: ConnectedContextPack, content = "answered"): GroundedRunne
 }
 
 function runnerWithPlan(pack: ConnectedContextPack, content = "answered"): GroundedRunner {
-  return (input: OrchestratorInput): Promise<OrchestratorOutput> => {
-    void input;
+  return (_input: OrchestratorInput): Promise<OrchestratorOutput> => {
     return Promise.resolve({
       pack,
       assistantContent: content,
@@ -486,7 +565,7 @@ function assertGroundedEvidenceManifest(
 
 beforeEach(() => {
   store = createInMemoryUiStore();
-  tmp = mkdtempSync(join(tmpdir(), "keiko-grounded-qa-"));
+  tmp = mkdtempSync(join(realpathSync(tmpdir()), "keiko-grounded-qa-"));
 });
 
 afterEach(() => {
@@ -510,6 +589,38 @@ function connectTestScope(chatId: string): void {
   store.updateChat(chatId, {
     connectedScope: { kind: "directory", relativePaths: ["src"], connectedAtMs: NOW },
   });
+}
+
+type GroundedTopology = "single-folder" | "multi-folder" | "hybrid" | "local-knowledge";
+
+function connectGroundedTopology(chatId: string, kind: GroundedTopology): void {
+  if (kind === "single-folder") {
+    connectTestScope(chatId);
+  } else if (kind === "multi-folder") {
+    store.updateChat(chatId, {
+      connectedScopes: [
+        { kind: "directory", relativePaths: ["src"], connectedAtMs: NOW },
+        { kind: "files", relativePaths: ["package.json"], connectedAtMs: NOW + 1 },
+      ],
+    });
+  } else if (kind === "hybrid") {
+    connectTestScope(chatId);
+    store.updateChat(chatId, {
+      localKnowledgeScope: {
+        kind: "capsule",
+        capsuleId: "readiness-hybrid-capsule" as KnowledgeCapsuleId,
+        connectedAtMs: NOW + 1,
+      },
+    });
+  } else {
+    store.updateChat(chatId, {
+      localKnowledgeScope: {
+        kind: "capsule",
+        capsuleId: "readiness-local-capsule" as KnowledgeCapsuleId,
+        connectedAtMs: NOW,
+      },
+    });
+  }
 }
 
 async function setupChatWithScope(): Promise<{ chatId: string; projectPath: string }> {
@@ -558,10 +669,53 @@ async function runHandler(
   return handleGroundedAsk(ctx(body), deps(), customRunner);
 }
 
+describe("mappedWorkspaceError", () => {
+  it("maps an unavailable workspace root without exposing its path", () => {
+    const unavailablePath = "/private/customer/.aws/workspace";
+    const result = mappedWorkspaceError(
+      new WorkspaceNotFoundError("root disappeared", unavailablePath, [unavailablePath]),
+    );
+
+    expect(result).toEqual({
+      status: 400,
+      body: {
+        error: {
+          code: "BAD_REQUEST",
+          message: "Connected scope root is not accessible.",
+        },
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain(unavailablePath);
+  });
+});
+
 describe("buildGroundedGatewayMessages", () => {
-  it("derives prompt input budget from chat model context window minus output reserve", () => {
+  it("derives prompt input budget from the shared capability→context profile (KEIKO-0461)", () => {
+    // 64_000 context - 4_096 output - 2_000 safety = 57_904, matching
+    // deriveContextProfileFromCapability so both the exploration and final-answer phases
+    // share one budget mechanism.
     const capability = customModelConfig(CHAT_MODEL).capabilities?.[0];
-    expect(groundedPromptInputTokensForCapability(capability)).toBe(59_904);
+    if (capability === undefined) throw new Error("expected capability");
+    expect(groundedPromptInputTokensForCapability(capability)).toBe(57_904);
+    expect(groundedPromptInputTokensForCapability(capability)).toBe(
+      deriveContextProfileFromCapability(capability).effectiveInputBudget,
+    );
+  });
+
+  it("falls back to the shared default-profile budget when contextWindow=0 (KEIKO-0461)", () => {
+    // A placeholder / not-yet-probed capability arrives with contextWindow=0 and
+    // maxOutputTokens=0. The final-answer budget must not silently return undefined and
+    // inherit the separately-derived exploration-phase default — it must reuse the shared
+    // deriveContextProfileFromCapability fallback so both phases share one budget mechanism.
+    const capability = customModelConfig(CHAT_MODEL, {
+      contextWindow: 0,
+      maxOutputTokens: 0,
+    }).capabilities?.[0];
+    if (capability === undefined) throw new Error("expected capability");
+    const budget = groundedPromptInputTokensForCapability(capability);
+    expect(budget).toBeDefined();
+    expect(budget).toBeGreaterThan(0);
+    expect(budget).toBe(deriveContextProfileFromCapability(capability).effectiveInputBudget);
   });
 
   it("accepts a model-derived prompt budget override without mutating the pack default", () => {
@@ -723,6 +877,136 @@ describe("modelWindowAwareBudget", () => {
 });
 
 describe("handleGroundedAsk", () => {
+  it.each(["single-folder", "multi-folder", "hybrid", "local-knowledge"] as const)(
+    "rejects a configured but unready %s ask before provider egress",
+    async (kind) => {
+      const { chatId, projectPath } = await setupChatWithoutScope();
+      seedScopedRepo(projectPath);
+      connectGroundedTopology(chatId, kind);
+      let providerCalls = 0;
+      const model: ModelPort = {
+        call: () => {
+          providerCalls += 1;
+          return Promise.resolve({
+            modelId: CHAT_MODEL,
+            content: "must not run",
+            finishReason: "stop",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "unready-grounded",
+              promptTokens: 1,
+              completionTokens: 1,
+              latencyMs: 1,
+              costClass: "medium",
+            },
+          });
+        },
+      };
+      const config = customModelConfig();
+      const runtime = unreadyRuntimeGatewayConfig(config);
+      const sharedDeps = deps(model, {}, { config, gatewayConfig: runtime });
+
+      const probe = vi.spyOn(readiness, "ensureOnDemandConversationReadiness");
+      const correlationId = "grounded-admission-request";
+      const result = await handleGroundedAsk(
+        { ...ctx(JSON.stringify({ chatId, content: GROUNDED_FIXTURE_QUESTION })), correlationId },
+        sharedDeps,
+      );
+      expect(probe).toHaveBeenCalledWith(sharedDeps, CHAT_MODEL, correlationId);
+      probe.mockRestore();
+
+      expect(result).toEqual({
+        status: 400,
+        body: {
+          error: {
+            code: "BAD_REQUEST",
+            message:
+              "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.",
+          },
+        },
+      });
+      expect(providerCalls).toBe(0);
+    },
+  );
+
+  it.each(["single-folder", "multi-folder", "hybrid", "local-knowledge"] as const)(
+    "rejects a %s ask when its admitted gateway generation changes during async memory work",
+    async (kind) => {
+      const { chatId, projectPath } = await setupChatWithoutScope();
+      seedScopedRepo(projectPath);
+      connectGroundedTopology(chatId, kind);
+      const memoryDir = join(tmp, `readiness-race-${kind}`);
+      mkdirSync(memoryDir);
+      const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+      const rememberedId = `readiness-race-memory-${kind}` as MemoryId;
+      insertGroundedTestMemory(
+        memoryVault,
+        rememberedId,
+        "The current release requires an explicit readiness check.",
+      );
+      memoryVault.upsertEmbedding(rememberedId, {
+        provider: "test-provider",
+        modelId: "text-embedding-3-small",
+        metric: "cosine",
+        vector: Float32Array.from([1, 0]),
+      });
+      const embeddingStarted = deferred<undefined>();
+      const embedding = deferred<OpenAIEmbeddingOutcome>();
+      const config = customModelConfig();
+      const runtime = runtimeGatewayConfig(config, true);
+      let providerCalls = 0;
+      const model = fakeModel("must not run", []);
+      const guardedModel: ModelPort = {
+        call: (request, signal) => {
+          providerCalls += 1;
+          return model.call(request, signal);
+        },
+      };
+      const outcome = handleGroundedAsk(
+        ctx(
+          JSON.stringify({
+            chatId,
+            content: GROUNDED_FIXTURE_QUESTION,
+            memory: { enabled: true, budgetTokens: 900, context: {} },
+          }),
+        ),
+        deps(
+          guardedModel,
+          {},
+          {
+            config,
+            gatewayConfig: runtime,
+            memoryVault,
+            localKnowledgeEmbeddingRequest: () => {
+              embeddingStarted.resolve(undefined);
+              return embedding.promise;
+            },
+          },
+        ),
+      );
+      await embeddingStarted.promise;
+      runtime.set(customModelConfig(), true);
+      embedding.resolve({
+        ok: true,
+        value: { vector: Float32Array.from([1, 0]), modelId: "text-embedding-3-small" },
+      });
+
+      await expect(outcome).resolves.toEqual({
+        status: 400,
+        body: {
+          error: {
+            code: "BAD_REQUEST",
+            message:
+              "The selected model failed its live readiness check. Open Settings > Models and run the readiness check to see the provider status.",
+          },
+        },
+      });
+      expect(providerCalls).toBe(0);
+      memoryVault.close();
+    },
+  );
+
   it("shares the chat turn serializer with the ungrounded route", async () => {
     const { chatId, projectPath } = await setupChatWithoutScope();
     const firstResponse = deferred<NormalizedResponse>();
@@ -928,6 +1212,7 @@ describe("handleGroundedAsk", () => {
     let groundedCalls = 0;
     const outcome = handleGroundedAsk(
       {
+        correlationId: undefined,
         req,
         res,
         params: {},
@@ -1187,6 +1472,7 @@ describe("handleGroundedAsk", () => {
     await started.promise;
     const patch = handleUpdateChat(
       {
+        correlationId: undefined,
         req: fakeReq(JSON.stringify({ connectedScopes: null })),
         res: fakeRes(),
         params: {},
@@ -1377,6 +1663,30 @@ describe("handleGroundedAsk", () => {
     ]);
   });
 
+  it("maps a runner root denial to a path-free policy response and retains the user turn", async () => {
+    const { chatId } = await setupChatWithScope();
+    const sensitivePath = join(tmp, ".aws", "private-customer-root");
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "explain src/foo.ts" })),
+      deps(),
+      () =>
+        Promise.reject(
+          new PathDeniedError(`denied sensitive root: ${sensitivePath}`, sensitivePath),
+        ),
+    );
+
+    expect(result.status).toBe(400);
+    const body = result.body as { error: { code: string; message: string } };
+    expect(body.error).toEqual({
+      code: "WORKSPACE_PATH_DENIED",
+      message: "The workspace path is denied by policy.",
+    });
+    expect(JSON.stringify(result)).not.toContain(sensitivePath);
+    expect(store.listMessages(chatId)).toMatchObject([
+      { role: "user", content: "explain src/foo.ts" },
+    ]);
+  });
+
   it("rejects a grounded ask whose workspace root is on the deny-list before invoking the runner", async () => {
     // Epic #177 audit (GAP-B): a chat whose projectPath sits inside a credential directory must be
     // refused at the route — before any filesystem access — with a generic message that does not
@@ -1390,23 +1700,175 @@ describe("handleGroundedAsk", () => {
     });
 
     let runnerCalled = false;
-    const spyRunner: GroundedRunner = (input): Promise<OrchestratorOutput> => {
-      void input;
+    const spyRunner: GroundedRunner = (_input): Promise<OrchestratorOutput> => {
       runnerCalled = true;
       return Promise.resolve({ pack: emptyPack(), assistantContent: "ok", elapsedMs: 1 });
     };
+    const activityLog = createBufferedServerLogSink();
+    const correlationId = "grounded-direct-denied-root-corr-0001";
+    setServerLogger(createServerLogger({ sink: activityLog, level: "info" }));
 
-    const result = await handleGroundedAsk(
-      ctx(JSON.stringify({ chatId: chat.id, content: "What is in here?", modelId: CHAT_MODEL })),
-      deps(),
-      spyRunner,
+    try {
+      const result = await handleGroundedAsk(
+        {
+          ...ctx(
+            JSON.stringify({ chatId: chat.id, content: "What is in here?", modelId: CHAT_MODEL }),
+          ),
+          correlationId,
+        },
+        deps(),
+        spyRunner,
+      );
+
+      expect(result.status).toBe(400);
+      expect(runnerCalled).toBe(false);
+      const body = result.body as { error: { code: string; message: string } };
+      expect(body.error).toEqual({
+        code: "WORKSPACE_PATH_DENIED",
+        message: "The workspace path is denied by policy.",
+      });
+      expect(JSON.stringify(result)).not.toContain(".aws");
+      const denialEvents = activityLog.events.filter(
+        (event) => event.op === "workspace.root.denied",
+      );
+      expect(denialEvents).toHaveLength(1);
+      expect(denialEvents[0]).toMatchObject({
+        level: "warn",
+        category: "security",
+        op: "workspace.root.denied",
+        correlationId,
+        errorKind: "permission-denied",
+        extra: {
+          decision: "denied",
+          reason: "denied-locus",
+          failureKind: "WORKSPACE_PATH_DENIED",
+        },
+      });
+      expect(JSON.stringify(denialEvents)).not.toContain(deniedRoot);
+      expect(JSON.stringify(denialEvents)).not.toContain(".aws");
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it("admits a persisted managed workspace only for a paired request and threads exact root authority", async () => {
+    // A managed root may be configured outside a deny-listed `.keiko` segment. Authorization must
+    // therefore classify the configured boundary itself, never rely on the deny-list as a proxy.
+    const managedRoot = join(tmp, "managed", "task-workspaces");
+    assertManagedRootOwned(managedRoot);
+    const repositoryId = "repo_0123456789abcdef";
+    const workspaceId = "ws_0123456789abcdef01234567";
+    const managedWorktree = deriveManagedWorktreePath({
+      managedRoot,
+      repositoryId,
+      workspaceId,
+    });
+    // #3347 managed-worktree identity: resolveManagedWorkspaceRootAccess re-proves a real Git
+    // linked-worktree pointer (gitdir-identity.ts) instead of trusting a path shape, so `tmp` (the
+    // instance's repositoryRoot) and managedWorktree must be an actual `git worktree add` linkage,
+    // not a plain mkdir, for the paired branch below to reach 200 instead of a fail-closed denial.
+    execFileSync("git", ["init", "-q"], { cwd: tmp });
+    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: tmp });
+    execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: tmp });
+    writeFileSync(join(tmp, "README.md"), "managed grounding fixture\n");
+    execFileSync("git", ["add", "README.md"], { cwd: tmp });
+    execFileSync("git", ["commit", "-qm", "fixture"], { cwd: tmp });
+    mkdirSync(dirname(managedWorktree), { recursive: true });
+    execFileSync(
+      "git",
+      [
+        "worktree",
+        "add",
+        "-q",
+        "-b",
+        "keiko/task/managed-grounding-01234567",
+        managedWorktree,
+        "HEAD",
+      ],
+      { cwd: tmp },
+    );
+    writeFileSync(join(managedWorktree, "package.json"), '{"name":"managed-grounding"}\n');
+    const gitdirInspection = inspectManagedGitdirIdentity(managedWorktree, tmp);
+    if (gitdirInspection === undefined) {
+      throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
+    }
+    const instance: WorkspaceInstance = {
+      schemaVersion: "1",
+      workspaceId,
+      taskId: "managed-grounding",
+      repositoryId,
+      repositoryRoot: tmp,
+      baseBranch: "dev",
+      taskBranch: "keiko/task/managed-grounding-01234567",
+      managedWorktreePath: managedWorktree,
+      gitdirIdentity: gitdirInspection.identity,
+      lifecycleState: "active",
+      health: "healthy",
+      lock: null,
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+      driftMarkers: [],
+      recoveryHints: [],
+      auditCorrelationId: "corr_managed_grounding",
+    };
+    const workspaceProvisioning = {
+      provision: (): never => {
+        throw new Error("not used in this test");
+      },
+      activate: (): never => {
+        throw new Error("not used in this test");
+      },
+      getInstance: (id: string): WorkspaceInstance | undefined =>
+        id === workspaceId ? instance : undefined,
+    } satisfies WorkspaceProvisioningService;
+    const codingAppSessionChannel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const paired = codingAppSessionChannel.pair(fakePairingRequestBody());
+    if (!paired.paired) throw new Error("pairing failed");
+    const project = store.createProject(managedWorktree, "managed-grounding-host");
+    const chat = store.createChat(project.path, "Managed grounding", CHAT_MODEL);
+    store.updateChat(chat.id, {
+      connectedScope: {
+        kind: "workspace-root",
+        relativePaths: [],
+        connectedAtMs: NOW,
+      },
+    });
+    const managedDeps = deps(
+      undefined,
+      {},
+      {
+        managedTaskWorkspaceRoot: managedRoot,
+        workspaceProvisioning,
+        codingAppSessionChannel,
+      },
+    );
+    let runnerCalls = 0;
+    const captureRunner: GroundedRunner = (input): Promise<OrchestratorOutput> => {
+      runnerCalls += 1;
+      if (input.workspaceFs === undefined) throw new Error("managed authority was not threaded");
+      expect(detectWorkspaceAt(input.workspaceRoot, input.workspaceFs).name).toBe(
+        "managed-grounding",
+      );
+      return runner(emptyPack(), "managed answer")(input);
+    };
+    const body = JSON.stringify({ chatId: chat.id, content: "Inspect the managed repository" });
+
+    const unpaired = await handleGroundedAsk(ctx(body), managedDeps, captureRunner);
+    const pairedResult = await handleGroundedAsk(
+      ctx(body, fakeRes(), `${APP_SESSION_COOKIE_NAME}=${paired.cookieToken}`),
+      managedDeps,
+      captureRunner,
     );
 
-    expect(result.status).toBe(400);
-    expect(runnerCalled).toBe(false);
-    const body = result.body as { error: { code: string; message: string } };
-    expect(body.error.message).toContain("safe read surface");
-    expect(JSON.stringify(result)).not.toContain(".aws");
+    expect(unpaired).toMatchObject({
+      status: 400,
+      body: { error: { code: "WORKSPACE_PATH_DENIED" } },
+    });
+    expect(pairedResult.status, JSON.stringify(pairedResult.body)).toBe(200);
+    expect(runnerCalls).toBe(1);
   });
 
   it("rejects a grounded ask when a persisted symlink root is repointed into a denied directory", async () => {
@@ -1430,23 +1892,63 @@ describe("handleGroundedAsk", () => {
     symlinkSync(deniedRoot, linkedRoot, "dir");
 
     let runnerCalled = false;
-    const spyRunner: GroundedRunner = (input): Promise<OrchestratorOutput> => {
-      void input;
+    const spyRunner: GroundedRunner = (_input): Promise<OrchestratorOutput> => {
       runnerCalled = true;
       return Promise.resolve({ pack: emptyPack(), assistantContent: "ok", elapsedMs: 1 });
     };
+    const activityLog = createBufferedServerLogSink();
+    const correlationId = "grounded-root-relocation-corr-0001";
+    setServerLogger(createServerLogger({ sink: activityLog, level: "info" }));
 
-    const result = await handleGroundedAsk(
-      ctx(JSON.stringify({ chatId: chat.id, content: "Inspect leak.txt", modelId: CHAT_MODEL })),
-      deps(),
-      spyRunner,
-    );
+    try {
+      const result = await handleGroundedAsk(
+        {
+          ...ctx(
+            JSON.stringify({
+              chatId: chat.id,
+              content: "Inspect leak.txt",
+              modelId: CHAT_MODEL,
+            }),
+          ),
+          correlationId,
+        },
+        deps(),
+        spyRunner,
+      );
 
-    expect(result.status).toBe(400);
-    expect(runnerCalled).toBe(false);
-    const body = result.body as { error: { message: string } };
-    expect(body.error.message).toContain("safe read surface");
-    expect(JSON.stringify(result)).not.toContain(".ssh");
+      expect(result.status).toBe(400);
+      expect(runnerCalled).toBe(false);
+      const body = result.body as { error: { code: string; message: string } };
+      expect(body.error).toEqual({
+        code: "WORKSPACE_PATH_DENIED",
+        message: "The workspace path is denied by policy.",
+      });
+      expect(JSON.stringify(result)).not.toContain(".ssh");
+      const denialEvents = activityLog.events.filter(
+        (event) => event.op === "workspace.root.denied",
+      );
+      expect(denialEvents).toHaveLength(1);
+      expect(denialEvents[0]).toMatchObject({
+        level: "warn",
+        category: "security",
+        op: "workspace.root.denied",
+        correlationId,
+        errorKind: "permission-denied",
+      });
+      expect(denialEvents[0]?.extra).toMatchObject({
+        decision: "denied",
+        reason: "denied-locus",
+        failureKind: "WORKSPACE_PATH_DENIED",
+      });
+      const serializedEvents = JSON.stringify(denialEvents);
+      expect(serializedEvents).not.toContain(tmp);
+      expect(serializedEvents).not.toContain(linkedRoot);
+      expect(serializedEvents).not.toContain(deniedRoot);
+      expect(serializedEvents).not.toContain(".ssh");
+      expect(serializedEvents).not.toContain("leak.txt");
+    } finally {
+      resetServerLogger();
+    }
   });
 
   it("passes repository-root connectedScope kind through to the grounded runner", async () => {
@@ -1494,6 +1996,66 @@ describe("handleGroundedAsk", () => {
     expect(store.listMessages(chatId).map((message) => message.content)).toContain(
       "Grounded answer [src/foo.ts:1-3]",
     );
+  });
+
+  // ADR-0173 D5: the folder single-source answerer must stamp the request's correlation id into
+  // GatewayCallRequest.logContext so a gateway retry/circuit-breaker line for this call joins the
+  // same trail as the HTTP request that triggered it.
+  it("links grounded assistant rendering to its originating request", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    seedScopedRepo(projectPath);
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const correlationId = "grounded-render-request";
+      const result = await handleGroundedAsk(
+        {
+          ...ctx(
+            JSON.stringify({ chatId, content: GROUNDED_FIXTURE_QUESTION, modelId: CHAT_MODEL }),
+          ),
+          correlationId,
+        },
+        deps(fakeModel("Grounded answer [src/foo.ts:1-3]", [])),
+      );
+      expect(result.status).toBe(200);
+      const answer = result.body as GroundedAnswer;
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          op: "chat.response.message",
+          correlationId: answer.assistantMessageId,
+          parentCorrelationId: correlationId,
+        }),
+      );
+    } finally {
+      resetServerLogger();
+    }
+  });
+
+  it("threads the request correlation id into the Model Gateway call's logContext", async () => {
+    const { chatId, projectPath } = await setupChatWithScope();
+    seedScopedRepo(projectPath);
+    const seenRequests: GatewayRequest[] = [];
+    const requestCtx: RouteContext = {
+      ...ctx(
+        JSON.stringify({
+          chatId,
+          content: GROUNDED_FIXTURE_QUESTION,
+          modelId: CHAT_MODEL,
+        }),
+      ),
+      correlationId: "cid-grounded-folder-000001",
+    };
+
+    const result = await handleGroundedAsk(
+      requestCtx,
+      deps(fakeModel("Grounded answer [src/foo.ts:1-3]", seenRequests)),
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(seenRequests).toHaveLength(1);
+    expect(
+      (firstGatewayRequest(seenRequests) as GatewayCallRequest).logContext?.correlationId,
+    ).toBe("cid-grounded-folder-000001");
   });
 
   it("production path includes an explicitly connected single file when the question has no lexical hit", async () => {
@@ -1622,8 +2184,8 @@ describe("handleGroundedAsk", () => {
   //    that source and answer from the healthy ones, instead of aborting the whole N+1 run.
   it("fails soft when one connected folder root is inaccessible but a healthy root remains", async () => {
     const project = store.createProject(tmp, "demo");
-    const goodRoot = mkdtempSync(join(tmpdir(), "keiko-good-root-"));
-    const deadRoot = mkdtempSync(join(tmpdir(), "keiko-dead-root-"));
+    const goodRoot = mkdtempSync(join(realpathSync(tmpdir()), "keiko-good-root-"));
+    const deadRoot = mkdtempSync(join(realpathSync(tmpdir()), "keiko-dead-root-"));
     seedScopedRepo(goodRoot);
     const chat = store.createChat(project.path, "Resilient multi-source", CHAT_MODEL);
     store.updateChat(chat.id, {
@@ -1687,14 +2249,17 @@ describe("handleGroundedAsk", () => {
 
     expect(result.status).toBe(400);
     expect(seenRequests).toHaveLength(0);
-    const body = result.body as { error: { message: string } };
-    expect(body.error.message).toContain("excluded from Keiko's safe read surface");
+    const body = result.body as { error: { code: string; message: string } };
+    expect(body.error).toEqual({
+      code: "WORKSPACE_PATH_DENIED",
+      message: "The workspace path is denied by policy.",
+    });
     expect(JSON.stringify(result)).not.toContain(".ssh");
   });
 
   it("hard-fails with the original safe error when the ONLY connected folder root is inaccessible", async () => {
     const project = store.createProject(tmp, "demo");
-    const deadRoot = mkdtempSync(join(tmpdir(), "keiko-dead-only-"));
+    const deadRoot = mkdtempSync(join(realpathSync(tmpdir()), "keiko-dead-only-"));
     const chat = store.createChat(project.path, "Inaccessible only", CHAT_MODEL);
     store.updateChat(chat.id, {
       connectedScopes: [
@@ -2294,6 +2859,7 @@ describe("handleGroundedAsk", () => {
 
       expect(result.status).toBe(200);
       const answer = result.body as GroundedAnswer & {
+        readonly uncertainty: readonly { readonly kind: string; readonly claim: string }[];
         readonly memory?: {
           readonly context: { readonly memories: readonly { readonly bodyExcerpt: string }[] };
         };
@@ -2313,6 +2879,13 @@ describe("handleGroundedAsk", () => {
         generationQuestion.indexOf(CONVERSATION_MEMORY_FENCE_END),
       );
       expect(answerOnlyContextAvailable).toBe(true);
+      expect(answer.uncertainty).toContainEqual({
+        kind: "unsupported-citation",
+        claim:
+          "The answer received governed memory context outside retrieved evidence. Treat claims " +
+          "derived from that memory as uncited and unverified.",
+      });
+      expect(JSON.stringify(answer.uncertainty)).not.toContain("Use pnpm for package installs.");
       expect(
         memoryVault
           .getAccessStats(["mem-package-manager" as MemoryId])
@@ -2377,8 +2950,13 @@ describe("handleGroundedAsk", () => {
       expect(
         (result.body as GroundedAnswer & { readonly memory?: unknown }).memory,
       ).toBeUndefined();
-      expect(diagnostics).toHaveLength(1);
-      expect(diagnostics[0]).toMatchObject({
+      // Two records: the semantic-retrieval signal (now a diagnostic, never console.warn — audit of
+      // #3233) and the enrichment failure this test is about.
+      expect(diagnostics.map((record) => record.operation)).toEqual([
+        "memory.retrieval.semantic-disabled",
+        "grounded.memory",
+      ]);
+      expect(diagnostics[1]).toMatchObject({
         operation: "grounded.memory",
         source: "grounded-qa.attach-memory",
         message: "grounded-memory-enrichment-failed",
@@ -2518,7 +3096,12 @@ describe("handleGroundedAsk", () => {
       expect(result.status).toBe(200);
       expect((result.body as GroundedAnswer).content).toContain("Dark mode");
       expect(store.listMessages(chatId)).toHaveLength(2);
-      expect(diagnostics).toMatchObject([
+      // The semantic-retrieval signal precedes the capture failure (audit of #3233).
+      expect(diagnostics.map((record) => record.operation)).toEqual([
+        "memory.retrieval.semantic-disabled",
+        "grounded.memory",
+      ]);
+      expect(diagnostics.slice(1)).toMatchObject([
         {
           operation: "grounded.memory",
           source: "grounded-qa.attach-memory",
@@ -2787,9 +3370,7 @@ describe("handleGroundedAsk", () => {
     expect(body.error.code).toBe("BAD_REQUEST");
     expect(body.error.message).toBe("modelId must be a configured chat model id.");
     expect(requests).toEqual([]);
-    expect(store.listMessages(chat.id)).toMatchObject([
-      { role: "user", content: "What is alpha?" },
-    ]);
+    expect(store.listMessages(chat.id)).toEqual([]);
   });
 
   it("retains the single-connector user turn when the client disconnects after answering", async () => {
@@ -2957,8 +3538,7 @@ describe("handleGroundedAsk", () => {
         },
       ],
     };
-    const abstainRunner: GroundedRunner = (input): Promise<OrchestratorOutput> => {
-      void input;
+    const abstainRunner: GroundedRunner = (_input): Promise<OrchestratorOutput> => {
       return Promise.resolve({
         pack: noEvidencePack,
         assistantContent: GROUNDED_NO_EVIDENCE_ANSWER,
@@ -3121,5 +3701,61 @@ describe("handleGroundedAsk", () => {
     const answer = asConnectedAnswer(result.body as GroundedAnswer);
     expect(answer.omittedCount).toBe(1);
     expect(answer.uncertainty[0]?.kind).toBe("budget-clipped");
+  });
+});
+
+// ADR-0173 D5 g25/g27 — mirrors the buffered desktop chat path's own symmetry fix
+// (chat-handlers.test.ts's "desktopChatErrorResult gateway diagnostic symmetry"): grounded Q&A used
+// to map a GatewayError straight to a response with no operator diagnostic at all.
+describe("mappedGatewayError diagnostic symmetry", () => {
+  function diagnosticDeps(diagnostics: ServerDiagnosticSink): UiHandlerDeps {
+    return {
+      env: {},
+      config: undefined,
+      redactor: (value: unknown): unknown => value,
+      diagnostics,
+    } as unknown as UiHandlerDeps;
+  }
+
+  it("emits an operator diagnostic for a RateLimitError, keyed to the given correlation id", () => {
+    const events: ServerDiagnosticRecord[] = [];
+    const deps = diagnosticDeps({
+      record: (record): void => {
+        events.push(record);
+      },
+    });
+
+    const result = mappedGatewayError(
+      new RateLimitError("provider rate limited", 1_500),
+      deps,
+      "grounded-correlation-1",
+    );
+
+    expect(result?.status).toBe(503);
+    expect(events).toHaveLength(1);
+    const [event] = events;
+    if (event === undefined) throw new Error("expected a diagnostic record");
+    expect(event.correlationId).toBe("grounded-correlation-1");
+    expect(event.operation).toBe("POST /api/chats/messages/grounded");
+    expect(event.source).toBe("grounded.qa");
+    expect(event.errorClass).toBe("RateLimitError");
+  });
+
+  it("does not diagnose an intentional cancellation", () => {
+    const events: ServerDiagnosticRecord[] = [];
+    const deps = diagnosticDeps({
+      record: (record): void => {
+        events.push(record);
+      },
+    });
+
+    const result = mappedGatewayError(
+      new CancelledError("grounded request cancelled"),
+      deps,
+      "grounded-correlation-2",
+    );
+
+    expect(result?.status).toBe(499);
+    expect(events).toHaveLength(0);
   });
 });

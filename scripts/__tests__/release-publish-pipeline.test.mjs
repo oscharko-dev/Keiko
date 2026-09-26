@@ -33,15 +33,16 @@
 //      falsely report PASS.
 //   D. No npm registry token configured (the OIDC trusted-publishing CI shape) — a fresh
 //      publish must still succeed end-to-end on `npm publish` alone even through transient
-//      dist-tag read propagation lag (retried, not failed), and a dist-tag repair genuinely
-//      needed on an idempotent re-run must fail with an actionable error rather than a bare
-//      npm 401, because npm Trusted Publishing does not authorize `npm dist-tag add`.
+//      registry quarantine and dist-tag read propagation lag (retried, not failed), and a
+//      dist-tag repair genuinely needed on an idempotent re-run must fail with the real recovery
+//      path rather than a bare npm 401.
 
 import { Buffer } from "node:buffer";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -52,16 +53,33 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 
 import {
   hashDirectoryTree,
   portableVerificationSummaryForManifest,
   PORTABLE_TARGETS,
+  WINDOWS_PORTABLE_SETUP_ASSET_NAME,
 } from "../portable-runtime.mjs";
+import {
+  buildPortableEvaluationManifest,
+  PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
+  PORTABLE_EVALUATION_TARGET_NAMES,
+} from "../lib/portable-evaluation-manifest.mjs";
+
+const APPROVED_SIDECAR = JSON.parse(readFileSync("portable-runtime-approvals.json", "utf8"))
+  .sidecarRuntimes[0];
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+beforeAll(() => {
+  if (!existsSync(join(REPO_ROOT, "dist", "index.js"))) {
+    throw new Error(
+      "release-publish tests require dist/index.js; run `npm run build` before this suite.",
+    );
+  }
+});
 
 // The orchestrator reads the release version from the live root manifest at runtime,
 // so the stubs must answer with that same version rather than a hardcoded one. This
@@ -71,8 +89,18 @@ const RELEASE_IMPACT_CATALOG = JSON.parse(
   readFileSync(join(REPO_ROOT, "release-impact.catalog.json"), "utf8"),
 );
 const RELEASE_VERSION = ROOT_MANIFEST.version;
+const EVALUATION_DOWNLOAD_NAMES = [
+  ...PORTABLE_TARGETS.filter((target) =>
+    PORTABLE_EVALUATION_TARGET_NAMES.includes(target.platformTarget),
+  ).map((target) => target.assetName),
+  WINDOWS_PORTABLE_SETUP_ASSET_NAME,
+];
 const RELEASE_NAME = ROOT_MANIFEST.name;
 const RELEASE_SPEC = `${RELEASE_NAME}@${RELEASE_VERSION}`;
+// These cases drive the real orchestrator and its stubbed npm/gh/git/curl child-process graph.
+// Full script coverage recorded 19.6 s under the bounded two-worker scheduler. The repository-wide
+// default remains 15 s; this subprocess-heavy suite alone uses an evidence-based 60 s deadline.
+const RELEASE_PIPELINE_TEST_TIMEOUT_MS = 60_000;
 
 // A deterministic sha the stub `git` returns for both `rev-parse HEAD` and
 // `rev-parse v<version>^{}`, so ensureReleaseTag() sees HEAD === tag and proceeds.
@@ -80,15 +108,26 @@ const HEAD_SHA = "0123456789abcdef0123456789abcdef01234567";
 const DIGEST_B = "b".repeat(64);
 const DIGEST_C = "c".repeat(64);
 const NODE_VERSION = "24.0.0";
+const RELEASE_CREATED_AT = "2026-09-10T08:00:00.000Z";
 
 function digestFor(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+function portableExecutable(marker = 0) {
+  const bytes = Buffer.alloc(128, marker);
+  bytes[0] = 0x4d;
+  bytes[1] = 0x5a;
+  bytes.writeUInt32LE(64, 0x3c);
+  bytes.set([0x50, 0x45, 0x00, 0x00], 64);
+  return bytes;
 }
 
 function targetVerificationChecks(target) {
   if (target.nodePlatform === "win32") {
     return { publisherChainVerified: true, timestampVerified: true };
   }
+  if (target.nodePlatform === "linux") return { provenanceVerified: true };
   return {
     developerIdVerified: true,
     notarizationVerified: true,
@@ -155,7 +194,9 @@ function portableManifestObject(
   const runtimeAttestation =
     target.nodePlatform === "win32" ? portableRuntimeAttestation(target) : undefined;
   const runtimeQualification =
-    target.nodePlatform === "darwin" ? portableRuntimeQualification() : undefined;
+    target.nodePlatform === "darwin" || target.nodePlatform === "linux"
+      ? portableRuntimeQualification(target)
+      : undefined;
   return {
     schemaVersion: 1,
     product: portableProduct(),
@@ -201,6 +242,9 @@ function nativeHelperBytes(target, name) {
 }
 
 function nativeHelperExecutablePath(target, name) {
+  if (target.nodePlatform === "linux" && name === "keiko-runtime-supervisor") {
+    return "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
+  }
   return `runtime/native/${name}${target.nodePlatform === "win32" ? ".exe" : ""}`;
 }
 
@@ -217,13 +261,15 @@ function portableNativeHelper(target, name) {
     executablePath: nativeHelperExecutablePath(target, name),
     protocol: {
       schemaVersion: 1,
-      requestMagic: supervisor ? "KRP1" : "KSR1",
-      responseMagic: supervisor ? "KRS1" : "KSS1",
+      requestMagic: supervisor ? (target.nodePlatform === "linux" ? "none" : "KRP1") : "KSR1",
+      responseMagic: supervisor ? (target.nodePlatform === "linux" ? "none" : "KRS1") : "KSS1",
     },
     source: {
       commitSha: HEAD_SHA,
       path: supervisor
-        ? `native/runtime-supervisor/${target.nodePlatform === "win32" ? "windows" : "macos"}`
+        ? target.nodePlatform === "linux"
+          ? "packages/keiko-sandbox/src"
+          : `native/runtime-supervisor/${target.nodePlatform === "win32" ? "windows" : "macos"}`
         : "native/secure-workspace-read",
       treeSha256: digestFor(`${name}\n`),
     },
@@ -247,7 +293,11 @@ function portableRuntimeActivation(target) {
     path: ".portable/runtime-activation.json",
     sha256: "d".repeat(64),
     trustAnchor:
-      target.nodePlatform === "win32" ? "authenticode-attestor" : "developer-id-app-resource-seal",
+      target.nodePlatform === "win32"
+        ? "authenticode-attestor"
+        : target.nodePlatform === "linux"
+          ? "sigstore-qualification-receipt"
+          : "developer-id-app-resource-seal",
   };
 }
 
@@ -269,12 +319,13 @@ function portableRuntimeAttestation(target) {
   };
 }
 
-function portableRuntimeQualification() {
+function portableRuntimeQualification(target) {
   return {
     schemaVersion: 1,
     path: ".portable/runtime-qualification.json",
     sha256: "e".repeat(64),
-    backend: "macos-endpoint-security",
+    backend:
+      target.nodePlatform === "linux" ? "linux-namespace-gateway" : "macos-endpoint-security",
   };
 }
 
@@ -489,15 +540,26 @@ function portableUpdateEligibility() {
 }
 
 // Shared prologue injected into each stub: append-only call log + tiny JSON state file
-// so a stub can flip "published"/"tagged" as the orchestrator drives it.
+// so a stub can flip "published"/"tagged" as the orchestrator drives it. The real ZIP writer is
+// imported so the artifact-by-id endpoint can answer with archives the production reader
+// actually parses.
+const ZIP_ARCHIVE_LIB_URL = pathToFileURL(
+  resolve(fileURLToPath(import.meta.url), "..", "..", "lib", "zip-archive.mjs"),
+).href;
+
 function stubPrologue(logFile, stateFile) {
   return [
-    'import { appendFileSync, readFileSync, writeFileSync } from "node:fs";',
+    'import { Buffer } from "node:buffer";',
+    'import { createHash } from "node:crypto";',
+    'import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";',
+    'import { join } from "node:path";',
+    `import { writeZipArchiveEntries } from ${JSON.stringify(ZIP_ARCHIVE_LIB_URL)};`,
     `const LOG = ${JSON.stringify(logFile)};`,
     `const STATE = ${JSON.stringify(stateFile)};`,
     `const VERSION = ${JSON.stringify(RELEASE_VERSION)};`,
     "const argv = process.argv.slice(2);",
     "function log(bin) { appendFileSync(LOG, bin + ' ' + JSON.stringify(argv) + '\\n'); }",
+    "function logCwd(bin) { appendFileSync(LOG, bin + '-cwd ' + JSON.stringify(process.cwd()) + '\\n'); }",
     "function state() { return JSON.parse(readFileSync(STATE, 'utf8')); }",
     "function setState(patch) { writeFileSync(STATE, JSON.stringify({ ...state(), ...patch })); }",
     "",
@@ -511,17 +573,134 @@ function ghStubBody() {
   return [
     'log("gh");',
     "const sub = argv[0];",
+    'if (sub === "attestation" && argv[1] === "verify") {',
+    "  if (state().failSetupAttestation) { process.stderr.write('setup provenance verification failed\\n'); process.exit(46); }",
+    "  process.exit(0);",
+    "}",
     'if (sub === "api") {',
+    // Artifact-by-id endpoints: the record probe and the binary zip download. Answered before
+    // the generic runs branch, and refusing when the fixture marks the run's artifacts
+    // unavailable.
+    '  if (argv[1] && argv[1].includes("/actions/artifacts/")) {',
+    "    if (state().runArtifactsUnavailable) process.exit(1);",
+    "    const artifactId = Number(argv[1].split('/artifacts/')[1].split('/')[0]);",
+    "    const listed = (state().runArtifactListing || []).find((entry) => entry.id === artifactId);",
+    "    if (!listed) process.exit(1);",
+    '    if (argv[1].endsWith("/zip")) {',
+    "      const wanted = (state().uploadedAssets || []).filter((asset) => {",
+    "        if (listed.name.includes('windows')) return asset.name.startsWith('keiko-windows-');",
+    "        if (listed.name.includes('arm64')) return asset.name === 'keiko-macos-arm64.zip';",
+    "        return asset.name === 'keiko-macos-x64.zip';",
+    "      });",
+    "      const prefix = state().nestRunArtifacts ? 'nested/' : '';",
+    "      const records = wanted.map((asset) => {",
+    "        let bytes = Buffer.from(asset.content || '', 'base64');",
+    "        if (state().tamperRunArtifacts) bytes = Buffer.concat([bytes, Buffer.from('x')]);",
+    "        return { name: prefix + asset.name, data: bytes };",
+    "      });",
+    "      const zipPath = LOG + '.artifact-' + artifactId + '.zip';",
+    "      writeZipArchiveEntries(zipPath, records);",
+    "      writeFileSync(1, readFileSync(zipPath));",
+    "      rmSync(zipPath, { force: true });",
+    "      process.exit(0);",
+    "    }",
+    "    writeFileSync(1, JSON.stringify({ name: listed.name, expired: listed.expired === true, workflow_run: { id: Number(state().workflowRunId || 31300595709) } }));",
+    "    process.exit(0);",
+    "  }",
+    '  if (argv[1] && argv[1].includes("/actions/runs/")) {',
+    "    writeFileSync(1, JSON.stringify(state().workflowRun || {}));",
+    "    process.exit(0);",
+    "  }",
+    // GitHub immutable releases (2026-09-14): the publisher creates its draft through the REST API and
+    // takes the id from that answer, then reads the draft by id; the by-tag endpoint cannot see it.
+    '  if (argv.includes("--method") && argv.includes("POST") && argv.some((a) => typeof a === "string" && /^repos\\/[^/]+\\/[^/]+\\/releases$/.test(a))) {',
+    "    setState({ publisherDraft: true });",
+    `    writeFileSync(1, JSON.stringify({ id: 987654321, tag_name: \`v\${VERSION}\`, draft: true, created_at: ${JSON.stringify(RELEASE_CREATED_AT)}, assets: [] }));`,
+    "    process.exit(0);",
+    "  }",
+    '  if (argv[1] && argv[1].endsWith("/releases/987654321")) {',
+    `    writeFileSync(1, JSON.stringify({ id: 987654321, created_at: ${JSON.stringify(RELEASE_CREATED_AT)}, draft: state().publisherDraft === true, prerelease: false, assets: state().uploadedAssets || [] }));`,
+    "    process.exit(0);",
+    "  }",
+    '  if (argv[1] && argv[1].includes("/git/ref/tags/")) {',
+    `    writeFileSync(1, JSON.stringify({ object: { sha: state().remoteTagSha || ${JSON.stringify(HEAD_SHA)}, type: "commit" } }));`,
+    "    process.exit(0);",
+    "  }",
+    '  if (argv[1] && argv[1].includes("/releases/latest")) {',
+    // Which release GitHub presents as Latest. By default the same release the by-tag read
+    // answers with; a test can hand the badge to another release to prove the refusal. The
+    // release-alignment gate (issue #3252) reads `tag_name` off this same endpoint; a test can
+    // point it at a different tag to prove a real, post-publish alignment divergence.
+    "    writeFileSync(1, JSON.stringify({ id: state().latestBadgeElsewhere ? 111 : 987654321, tag_name: state().alignmentGithubLatestTag || `v${VERSION}` }));",
+    "    process.exit(0);",
+    "  }",
+    // The npm-publish deployment record (issue #3252): POST creates (deployment, then its
+    // success status), GET lists — the idempotency check (scoped by `ref=`) always reports
+    // nothing recorded yet so the create path runs and can be asserted on; a fixture can force
+    // either write to fail closed the same way a 403/404 token would.
+    '  if (argv.includes("--method") && argv.includes("POST")) {',
+    '    const apiPath = argv.find((a) => typeof a === "string" && a.startsWith("repos/"));',
+    '    if (apiPath && apiPath.endsWith("/statuses")) {',
+    "      if (state().failDeploymentStatus) {",
+    '        process.stderr.write("HTTP 403: Resource not accessible by integration\\n");',
+    "        process.exit(1);",
+    "      }",
+    '      writeFileSync(1, JSON.stringify({ id: 900001, state: "success" }));',
+    "      process.exit(0);",
+    "    }",
+    '    if (apiPath && apiPath.endsWith("/deployments")) {',
+    "      if (state().failDeploymentCreate) {",
+    '        process.stderr.write("HTTP 403: Resource not accessible by integration\\n");',
+    "        process.exit(1);",
+    "      }",
+    "      writeFileSync(1, JSON.stringify({ id: 900000 }));",
+    "      process.exit(0);",
+    "    }",
+    "  }",
+    '  if (argv[1] && argv[1].includes("/deployments?ref=")) {',
+    // The idempotency listing (npm-publish-deployment.mjs): always reports nothing recorded
+    // yet, so the create path runs every time and can be asserted on directly.
+    '    writeFileSync(1, "[]");',
+    "    process.exit(0);",
+    "  }",
+    '  if (argv[1] && argv[1].includes("/deployments?")) {',
+    // The newest-deployment-in-the-environment read (check-release-alignment.mjs): reports the
+    // ref this run's own create call just recorded, unless a fixture overrides it to prove a
+    // stale-deployment divergence.
+    "    writeFileSync(1, JSON.stringify([{ ref: state().alignmentDeploymentRef || `v${VERSION}` }]));",
+    "    process.exit(0);",
+    "  }",
     '  if (argv[1] && argv[1].includes("/releases/tags/")) {',
-    "    writeFileSync(1, JSON.stringify({ id: 987654321, assets: state().uploadedAssets || [] }));",
+    "    if (state().publisherDraft === true) { process.stderr.write('gh: Not Found (HTTP 404)\\n'); process.exit(1); }",
+    // The release-by-tag endpoint always reports both flags; the prepublished gate requires the
+    // published stable shape, so the double states it the way the real API does.
+    `    writeFileSync(1, JSON.stringify({ id: 987654321, created_at: ${JSON.stringify(RELEASE_CREATED_AT)}, draft: state().releaseDraft === true, prerelease: state().releasePrerelease === true, assets: state().uploadedAssets || [] }));`,
     "    process.exit(0);",
     "  }",
     '  process.stdout.write(JSON.stringify({ state: "APPROVED", user: { login: "release-owner" } }));',
     "  process.exit(0);",
     "}",
-    'if (sub === "release" && argv[1] === "view") { process.exit(1); }',
+    // An existing release answers the isDraft,assets probe. An interrupted evaluation publish
+    // leaves a resumable stable-tag DRAFT; a completed one leaves a published release carrying
+    // the evidence manifest — the qualified upload path must refuse to edit over either.
+    'if (sub === "release" && argv[1] === "view") {',
+    "  if (state().existingReleaseIsDraft) { writeFileSync(1, JSON.stringify({ isDraft: true, assets: [] })); process.exit(0); }",
+    "  if (state().existingEvaluationRelease) { writeFileSync(1, JSON.stringify({ isDraft: false, assets: [{ name: 'keiko-portable-evaluation-manifest.json' }] })); process.exit(0); }",
+    "  if (state().releasePublished) { writeFileSync(1, JSON.stringify({ isDraft: false, assets: state().uploadedAssets || [] })); process.exit(0); }",
+    "  if (state().publisherDraft) { writeFileSync(1, JSON.stringify({ isDraft: true, assets: state().uploadedAssets || [] })); process.exit(0); }",
+    "  process.exit(1);",
+    "}",
+    'if (sub === "release" && argv[1] === "create") {',
+    "  setState(argv.includes('--draft') ? { publisherDraft: true } : { releasePublished: true });",
+    "  process.exit(0);",
+    "}",
+    'if (sub === "release" && argv[1] === "edit") {',
+    "  if (argv.includes('--draft=false')) setState({ publisherDraft: false, releasePublished: true });",
+    "  process.exit(0);",
+    "}",
     'if (sub === "release" && argv[1] === "upload") {',
     "  const current = state();",
+    "  if (current.immutableReleases && current.releasePublished) { process.stderr.write('HTTP 422: Cannot upload assets to an immutable release.\\n'); process.exit(1); }",
     "  if (current.failGhUpload) { process.stderr.write('portable upload failed\\n'); process.exit(42); }",
     "  const tag = argv[2];",
     '  const repoIndex = argv.indexOf("--repo");',
@@ -541,18 +720,28 @@ function ghStubBody() {
     "    if (name.endsWith('-portable-manifest.json')) {",
     "      const manifest = JSON.parse(readFileSync(path, 'utf8'));",
     "      const archive = byName.get(manifest.artifact.assetName);",
+    `      const setup = byName.get(${JSON.stringify(WINDOWS_PORTABLE_SETUP_ASSET_NAME)});`,
     "      if (!archive || manifest.release.releaseId !== 987654321 || manifest.artifact.assetId !== archive.id || manifest.releaseImpact.reviewedBinding.assetId !== archive.id || manifest.releaseImpact.reviewedBinding.releaseId !== 987654321) {",
     "        process.stderr.write('portable manifest was not rebound to the remote GitHub ids\\n');",
     "        process.exit(44);",
     "      }",
+    "      if (manifest.artifact.platformTarget === 'windows-x64' && (!setup || manifest.releaseImpact.reviewedBinding.setupAsset?.assetId !== setup.id || manifest.releaseImpact.reviewedBinding.setupAsset?.assetName !== setup.name || manifest.releaseImpact.reviewedBinding.setupAsset?.sizeBytes !== setup.size || manifest.releaseImpact.reviewedBinding.setupAsset?.sha256 !== createHash('sha256').update(Buffer.from(setup.content, 'base64')).digest('hex'))) {",
+    "        process.stderr.write('portable setup asset was not rebound to the remote GitHub asset id\\n');",
+    "        process.exit(45);",
+    "      }",
     "    }",
     "    byName.set(name, {",
     "      content: readFileSync(path).toString('base64'),",
+    "      digest: 'sha256:' + createHash('sha256').update(readFileSync(path)).digest('hex'),",
     "      id,",
     "      name,",
     "      size: readFileSync(path).byteLength,",
     "      browser_download_url: `https://github.com/${repo}/releases/download/${tag}/${name}`",
     "    });",
+    "  }",
+    '  if (current.mutateSetupAfterArchiveUpload && files.some((path) => path.endsWith("keiko-windows-x64-setup.exe"))) {',
+    '    const setupPath = files.find((path) => path.endsWith("keiko-windows-x64-setup.exe"));',
+    "    writeFileSync(setupPath, 'mutated locally after verified remote upload');",
     "  }",
     "  setState({ uploadedAssets: [...byName.values()] });",
     "  process.exit(0);",
@@ -572,6 +761,9 @@ function gitStubBody() {
       JSON.stringify(HEAD_SHA) +
       ' + "\\n"); process.exit(0); }',
     'if (sub === "remote") { process.stdout.write("git@github.com:oscharko-dev/Keiko.git\\n"); process.exit(0); }',
+    // The release-alignment gate (issue #3252) lists tags with `git tag --list v*`; a fixture
+    // can override the reported newest tag to prove a real, post-publish alignment divergence.
+    'if (sub === "tag" && argv[1] === "--list") { process.stdout.write((state().alignmentTags || ["v" + VERSION]).join("\\n") + "\\n"); process.exit(0); }',
     "process.exit(0);",
   ].join("\n");
 }
@@ -582,12 +774,117 @@ function makeStub(binDir, name, body, logFile, stateFile) {
   chmodSync(path, 0o755);
 }
 
+// Every call that makes a release visible outside the run: a GitHub release or its assets, a
+// pushed tag, or registry state.
+const PUBLICATION_CALL_PREFIXES = [
+  'gh ["release","create"',
+  'gh ["release","edit"',
+  'gh ["release","upload"',
+  'git ["push"',
+  'npm ["publish"',
+  'npm ["dist-tag"',
+];
+
+function expectNoPublicationSideEffect(calls) {
+  for (const prefix of PUBLICATION_CALL_PREFIXES) {
+    expect(calls.filter((line) => line.startsWith(prefix))).toEqual([]);
+  }
+}
+
+function passthroughViewBody() {
+  return [
+    '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+    '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+  ].join("\n");
+}
+
+/**
+ * A release that the governed evaluation lane already published: the four downloads with real
+ * bytes, and the evaluation manifest that binds them to this tag, commit and workflow run. Digests
+ * are measured from the same bytes the stub `curl` serves, so the fixture cannot drift from what
+ * the publisher verifies.
+ */
+function prepublishedEvaluationState() {
+  const sourceCommitSha = HEAD_SHA;
+  const workflowRunId = "31300595709";
+  const downloads = EVALUATION_DOWNLOAD_NAMES.map((name, index) => {
+    const content = Buffer.from(`prepublished ${name}\n`);
+    return {
+      id: 500000 + index,
+      name,
+      size: content.byteLength,
+      content: content.toString("base64"),
+      sha256: createHash("sha256").update(content).digest("hex"),
+      browser_download_url: `https://github.com/oscharko-dev/Keiko/releases/download/v${RELEASE_VERSION}/${name}`,
+    };
+  });
+  const runArtifacts = [
+    { name: "portable-stage-windows-x64-evaluation-unsigned", id: 700001 },
+    { name: "portable-stage-macos-arm64-evaluation-unsigned", id: 700002 },
+    { name: "portable-stage-macos-x64-evaluation-unsigned", id: 700003 },
+  ];
+  const manifest = buildPortableEvaluationManifest({
+    releaseTag: `v${RELEASE_VERSION}`,
+    sourceCommitSha,
+    repository: "oscharko-dev/Keiko",
+    workflowPath: ".github/workflows/portable-assets.yml",
+    workflowRunId,
+    workflowRunAttempt: 1,
+    artifacts: runArtifacts,
+    assets: downloads.map((asset) => ({
+      assetName: asset.name,
+      sizeBytes: asset.size,
+      sha256: asset.sha256,
+    })),
+  });
+  const manifestBytes = Buffer.from(`${JSON.stringify(manifest, undefined, 2)}\n`);
+  return {
+    published: true,
+    tagged: true,
+    workflowRun: {
+      path: ".github/workflows/portable-assets.yml",
+      head_sha: sourceCommitSha,
+      conclusion: "success",
+    },
+    runArtifactListing: runArtifacts.map((artifact) => ({ ...artifact, expired: false })),
+    uploadedAssets: [
+      ...downloads,
+      {
+        id: 600000,
+        name: PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
+        size: manifestBytes.byteLength,
+        content: manifestBytes.toString("base64"),
+        browser_download_url: `https://github.com/oscharko-dev/Keiko/releases/download/v${RELEASE_VERSION}/${PORTABLE_EVALUATION_MANIFEST_ASSET_NAME}`,
+      },
+    ],
+  };
+}
+
 function curlStubBody() {
   return [
-    'log("curl");',
+    "const url = argv.at(-1);",
+    "appendFileSync(LOG, 'curl ' + JSON.stringify(argv) + '\\n');",
+    `const versionEndpointSuffix = "/" + VERSION;`,
+    "if (url.endsWith(versionEndpointSuffix)) {",
+    "  const s = state();",
+    "  const attempts = s.versionEndpointAttempts ?? 0;",
+    "  const scripted = s.versionEndpointResponses;",
+    "  if (Array.isArray(scripted) && scripted.length > 0) {",
+    "    const response = scripted[Math.min(attempts, scripted.length - 1)];",
+    "    setState({ versionEndpointAttempts: attempts + 1 });",
+    "    if (Number.isInteger(response.exitCode)) process.exit(response.exitCode);",
+    "    process.stdout.write(String(response.httpStatus));",
+    "    process.exit(0);",
+    "  }",
+    "  if (!s.published) { process.stdout.write('404'); process.exit(0); }",
+    "  setState({ versionEndpointAttempts: attempts + 1 });",
+    "  const visibleAfter = s.versionVisibleAfterAttempts ?? 0;",
+    "  process.stdout.write(attempts >= visibleAfter ? '200' : '404');",
+    "  process.exit(0);",
+    "}",
     'const outputIndex = argv.indexOf("--output");',
     'const output = outputIndex >= 0 ? argv[outputIndex + 1] : "";',
-    'const name = argv.at(-1).split("/").at(-1);',
+    'const name = url.split("/").at(-1);',
     "const asset = (state().uploadedAssets || []).find((entry) => entry.name === name);",
     "if (!asset || output.length === 0) process.exit(2);",
     'const bytes = Buffer.from(asset.content, "base64");',
@@ -624,7 +921,15 @@ function writePortableAssetsFixture(root, options = {}) {
       symlinkSync(outsideEvidence, sbomPath);
     }
     writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n");
-    return { archivePath, manifestPath, platformTarget: target.platformTarget };
+    const entry = { archivePath, manifestPath, platformTarget: target.platformTarget };
+    if (target.platformTarget === "windows-x64") {
+      const setupPath = join(targetRoot, WINDOWS_PORTABLE_SETUP_ASSET_NAME);
+      writeFileSync(setupPath, portableExecutable(29));
+      entry.setupPath = setupPath;
+      entry.setupSha256 = digestFor(readFileSync(setupPath));
+      entry.setupSizeBytes = statSync(setupPath).size;
+    }
+    return entry;
   });
   const manifestPath = join(root, "portable-assets.json");
   const bundle = { schemaVersion: 1, artifacts };
@@ -677,46 +982,18 @@ function addPortableSidecarFixture(targetRoot, manifest, target, unsafeKind) {
     name,
     kind: "coding-runtime",
     approvalSchemaVersion: 2,
-    upstream: {
-      owner: "anomalyco",
-      repository: "opencode",
-      name: "opencode",
-      version: "1.17.17",
-      tag: "v1.17.17",
-      commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
-    },
-    adapterCompatibility: {
-      adapterName: "keiko-coding-sidecar",
-      adapterVersion: "1",
-      transport: "http-sse",
-    },
-    protocolSchema: {
-      path: "packages/sdk/openapi.json",
-      url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/sdk/openapi.json",
-      sha256: "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de",
-      hashAlgorithm: "sha256",
-      hashEncoding: "lowercase-hex",
-      digestInput: "upstream-raw-bytes",
-      transport: "http-sse",
-    },
-    releaseApproval: {
-      redistribution: {
-        status: "approved",
-        reviewReference: "https://github.com/oscharko-dev/Keiko/issues/2253",
-      },
-      subscriptionAuth: {
-        status: "not-applicable",
-        reviewReference: "https://github.com/oscharko-dev/Keiko/issues/2253",
-      },
-    },
+    upstream: structuredClone(APPROVED_SIDECAR.upstream),
+    adapterCompatibility: structuredClone(APPROVED_SIDECAR.adapterCompatibility),
+    protocolSchema: structuredClone(APPROVED_SIDECAR.protocolSchema),
+    releaseApproval: structuredClone(APPROVED_SIDECAR.releaseApproval),
     license: {
       spdxId: "MIT",
-      url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/LICENSE",
+      url: APPROVED_SIDECAR.license.url,
       sha256: digestFor(licenseBytes),
     },
     archive: {
       platformTarget: target.platformTarget,
-      url: `https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode-${target.platformTarget}.zip`,
+      url: APPROVED_SIDECAR.archives[target.platformTarget].url,
       sizeBytes: executableBytes.length,
       sha256: "a".repeat(64),
     },
@@ -807,7 +1084,9 @@ function runPublish({
   portableAssets = true,
   portableFixtureOptions = {},
   qualificationEnv = {},
+  extraArgs = [],
 }) {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   const binDir = mkdtempSync(join(tmpdir(), "keiko-release-publish-stub-"));
   const portableDir = mkdtempSync(join(tmpdir(), "keiko-portable-assets-fixture-"));
   const logFile = join(binDir, "calls.log");
@@ -837,11 +1116,24 @@ function runPublish({
     KEIKO_PORTABLE_ASSETS_WORKFLOW_PATH: ".github/workflows/portable-assets.yml",
     KEIKO_RELEASE_IMPACT_CATALOG_PATH: catalogFile,
     KEIKO_RELEASE_OWNER_GITHUB_LOGINS: "release-owner",
+    // This suite's stub npm/gh/git answer only the questions the pre-existing orchestrator asks;
+    // the deployment-record and alignment-gate logic added for issue #3252 is covered directly
+    // (and hermetically) by npm-publish-deployment.test.mjs and check-release-alignment.test.mjs
+    // instead of being re-proven here through five more fabricated endpoints. Same double gate as
+    // KEIKO_RELEASE_IMPACT_CATALOG_PATH above: NODE_ENV=test alone (a real publish never has it)
+    // cannot trip this on its own.
+    KEIKO_RELEASE_SKIP_ALIGNMENT_PROOF: "1",
+    // The real orchestrator must never inherit a developer's private registry credential. Tests
+    // choose every auth source explicitly through qualificationEnv below.
+    KEIKO_RELEASE_DISABLE_DOTENV_TOKEN: "1",
     // Deterministic npmrc generation; the stub npm never uses this token.
     NPM_CONFIG_STRICT_SSL: "true",
     NODE_AUTH_TOKEN: "stub-token-never-sent",
     KEIKO_RELEASE_VERIFY_ATTEMPTS: "3",
     KEIKO_RELEASE_VERIFY_DELAY_MS: "0",
+    KEIKO_PORTABLE_RELEASE_SIGNING_KEY: privateKey.export({ format: "pem", type: "pkcs8" }),
+    KEIKO_PORTABLE_RELEASE_TEST_PUBLIC_KEY: publicKey.export({ format: "pem", type: "spki" }),
+    NODE_ENV: "test",
     ...qualificationEnv,
   };
   for (const [key, value] of Object.entries(qualificationEnv)) {
@@ -856,11 +1148,15 @@ function runPublish({
     );
   }
 
-  const result = spawnSync(process.execPath, ["scripts/release-publish.mjs", "--tag", "latest"], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    env,
-  });
+  const result = spawnSync(
+    process.execPath,
+    ["scripts/release-publish.mjs", "--tag", "latest", ...extraArgs],
+    {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      env,
+    },
+  );
 
   const calls = readFileSync(logFile, "utf8")
     .split("\n")
@@ -873,6 +1169,19 @@ function runPublish({
 
 // A stub `npm` that shares the config/gate scaffolding and lets each scenario plug in the
 // `view` behaviour that is actually under test.
+function npmPackStubLines() {
+  return [
+    'if (sub === "pack") {',
+    '  const destinationIndex = argv.indexOf("--pack-destination");',
+    "  const destination = destinationIndex === -1 ? process.cwd() : argv[destinationIndex + 1];",
+    '  const manifest = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf8"));',
+    '  const archiveName = `${manifest.name.replace(/^@/u, "").replace("/", "-")}-${manifest.version}.tgz`;',
+    '  writeFileSync(join(destination, archiveName), "deterministic stub archive\\n");',
+    "  process.exit(0);",
+    "}",
+  ];
+}
+
 function npmStub(viewBody, { failOnPublish = false } = {}) {
   return [
     'log("npm");',
@@ -882,10 +1191,12 @@ function npmStub(viewBody, { failOnPublish = false } = {}) {
     // All `npm run <gate>` invocations (version-consistency, publish-manifests,
     // release-impact, prepack, smoke) succeed so control reaches the publish loop.
     'if (sub === "run") { process.exit(0); }',
+    ...npmPackStubLines(),
     'if (sub === "view") {',
     viewBody,
     "}",
     'if (sub === "publish") {',
+    '  logCwd("npm");',
     failOnPublish
       ? '  process.stderr.write("stub npm: publish must not run when the version already exists\\n"); process.exit(97);'
       : "  setState({ published: true }); process.exit(0);",
@@ -900,6 +1211,8 @@ const indexOfCall = (calls, predicate) => calls.findIndex(predicate);
 const isView = (line) => line.startsWith('npm ["view"');
 const isVersionView = (line) => isView(line) && line.includes('"version"');
 const isDistTagView = (line) => isView(line) && line.includes("dist-tags.");
+const isVersionEndpointCurl = (line) =>
+  line.startsWith("curl [") && line.includes(`/${RELEASE_VERSION}`);
 
 // The pipeline suite drives the real orchestrator against the CURRENT root package version
 // and models the stable latest flow (portable uploads, dist-tag resolution). With a prerelease
@@ -909,10 +1222,20 @@ const isDistTagView = (line) => isView(line) && line.includes("dist-tags.");
 const RELEASE_VERSION_IS_PRERELEASE = RELEASE_VERSION.includes("-");
 // An explicit empty value blocks release-publish's intentional local `.env` fallback, keeping the
 // no-token scenarios hermetic even when a developer has registry credentials in the repository.
-const NO_REGISTRY_TOKEN_ENV = { NODE_AUTH_TOKEN: undefined, NPM_TOKEN: "" };
+// These scenarios model CI trusted publishing, and CI always announces its OIDC endpoint — the
+// auth preflight refuses a run that has neither a token nor that signal.
+const NO_REGISTRY_TOKEN_ENV = {
+  NODE_AUTH_TOKEN: undefined,
+  NPM_TOKEN: "",
+  // Both values are required for npm's OIDC identity exchange; the URL alone cannot mint a
+  // token (CodeRabbit finding on #3055).
+  ACTIONS_ID_TOKEN_REQUEST_URL: "https://actions.example/token-request",
+  ACTIONS_ID_TOKEN_REQUEST_TOKEN: "actions-oidc-request-bearer",
+};
 
 describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
   "release-publish pipeline (real orchestrator, stubbed npm/gh/git)",
+  { timeout: RELEASE_PIPELINE_TEST_TIMEOUT_MS },
   () => {
     let lastRun;
 
@@ -920,24 +1243,236 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       lastRun = undefined;
     });
 
-    it("fails stable latest publishing before npm publish when portable assets are missing", () => {
+    it("refuses a stable latest publish whose GitHub release carries no downloads", () => {
+      // The requirement that a stable `latest` offers customer downloads did not move — WHERE it
+      // is answered did. It used to demand a qualified asset MANIFEST as a publish input, which
+      // only the Developer-ID/Azure-signed production lane can produce, so it refused every stable
+      // release this project can currently build. It is now answered against the release itself,
+      // which is strictly stronger: a well-formed manifest input proves nothing about whether the
+      // upload actually landed. npm must never learn `latest` for a release with nothing behind it.
       const viewBody = [
         '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
-        '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+        '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write("0.0.1\\n"); process.exit(0); }',
       ].join("\n");
 
       lastRun = runPublish({
         npmBody: npmStub(viewBody, { failOnPublish: true }),
-        initState: { published: true, tagged: true },
+        initState: { published: false, tagged: true },
         portableAssets: false,
       });
 
       expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("is missing portable downloads");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+      // And it leaves nothing customer-visible behind. Creating the release before proving it
+      // would publish an empty Latest release advertising downloads that are not there, and the
+      // evaluation lane could then no longer create that tag — it refuses a non-draft release.
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","create"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","edit"'))).toBe(false);
+    });
+
+    it("previews a stable latest plan without the workflow-only qualification environment", () => {
+      // A local `release:plan` has no KEIKO_PORTABLE_ASSETS_* environment — that exists only
+      // inside the release workflow. Demanding it here made a preview fail before rendering its
+      // notes even with a valid manifest, which is not what a preview is for (Codex finding on
+      // #3054). The structural manifest validation still runs.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        extraArgs: ["--plan-only"],
+        qualificationEnv: {
+          KEIKO_PORTABLE_ASSETS_ARTIFACT_NAME: undefined,
+          KEIKO_PORTABLE_ASSETS_REPOSITORY: undefined,
+          KEIKO_PORTABLE_ASSETS_RUN_ATTEMPT: undefined,
+          KEIKO_PORTABLE_ASSETS_RUN_ID: undefined,
+          KEIKO_PORTABLE_ASSETS_SOURCE_SHA: undefined,
+          KEIKO_PORTABLE_ASSETS_TAG: undefined,
+          KEIKO_PORTABLE_ASSETS_WORKFLOW_PATH: undefined,
+        },
+      });
+
+      expect(lastRun.status, lastRun.stderr).toBe(0);
+      expect(lastRun.stdout, lastRun.stderr).toContain("PLAN-ONLY complete");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses a stable latest release whose downloads lack Keiko release trust", () => {
+      // The release-owner-scoped path for the first public release: the governed evaluation lane
+      // publishes the four unsigned-but-sealed downloads onto the tag with the evidence that
+      // binds them, and this run promotes the dist-tag without re-uploading anything. It must
+      // actually SUCCEED — an orchestrator that silently skipped publication would satisfy a
+      // weaker assertion while shipping nothing.
+      // The version is NOT on the registry yet, so this run must genuinely publish it: an
+      // orchestrator that skipped publication would otherwise satisfy every other assertion here
+      // while shipping nothing.
+      const viewBody = [
+        "  const s = state();",
+        '  if (argv.includes("version")) {',
+        "    if (!s.published) { process.stderr.write('npm error code E404\\n'); process.exit(1); }",
+        '    process.stdout.write(VERSION + "\\n"); process.exit(0);',
+        "  }",
+        '  if (argv.some((a) => a.startsWith("dist-tags."))) {',
+        '    process.stdout.write((s.published ? VERSION : "0.0.1") + "\\n"); process.exit(0);',
+        "  }",
+      ].join("\n");
+
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody),
+        initState: { ...prepublishedEvaluationState(), published: false },
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("release-trust bundle");
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
+      // And it leaves the release surface alone. That release already carries the Latest flag and
+      // the customer-facing install notes the evaluation lane wrote — first-launch steps,
+      // checksums, provenance. Rewriting its body with the generated catalog notes would replace
+      // exactly the guidance a non-technical customer needs. This run owns npm, not that release.
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","edit"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","create"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses prepublished downloads that carry no evaluation evidence", () => {
+      // A name and a non-zero size authorize nothing: without the manifest that binds these bytes
+      // to a tag, a commit and a successful workflow run, a stale or hand-uploaded file could
+      // promote the npm latest tag (Codex and CodeRabbit findings on #3054).
+      const state = prepublishedEvaluationState();
+      state.uploadedAssets = state.uploadedAssets.filter(
+        (asset) => asset.name !== PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
+      );
+
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: state,
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("release-trust bundle");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses a prepublished release when another release owns the Latest badge", () => {
+      // The npm latest dist-tag and GitHub's Latest release must name the same bytes; a stable
+      // release that lost the badge to another release must not promote (Codex finding on #3054).
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { ...prepublishedEvaluationState(), latestBadgeElsewhere: true },
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("release-trust bundle");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses a prepublished release that is still marked as a prerelease", () => {
+      // The release-by-tag endpoint resolves prereleases with every asset in place, so without
+      // this refusal a manually assembled prerelease-flagged release could promote npm latest
+      // while GitHub never presents it as the stable Latest release (Codex finding on #3054).
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { ...prepublishedEvaluationState(), releasePrerelease: true },
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("release-trust bundle");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses prepublished downloads whose bytes do not match their evidence", () => {
+      // The evidence is only a claim until the bytes agree with it. Every download is re-fetched
+      // over the same unauthenticated URL a customer uses; one tampered byte must stop the
+      // promotion.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { ...prepublishedEvaluationState(), tamperRemoteDownloads: true },
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("release-trust bundle");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("does not accept nested legacy run artifacts as release trust", () => {
+      // `gh run download` places files directly in the target or one level deeper depending on how
+      // the artifact was uploaded. Reading only the top level would refuse a perfectly good
+      // release — the producer resolves them the same way.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { ...prepublishedEvaluationState(), nestRunArtifacts: true },
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("release-trust bundle");
+    });
+
+    it("refuses prepublished downloads that are not the bytes their workflow run produced", () => {
+      // The whole point of the run binding: replacing the downloads AND the manifest that
+      // describes them is ONE action for anyone who can write release assets, so the evidence
+      // sitting next to the assets can never be its own provenance. Workflow-run artifacts are not
+      // writable after the run, so that is where the digests come from.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { ...prepublishedEvaluationState(), tamperRunArtifacts: true },
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("release-trust bundle");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses prepublished downloads when the producing run's artifacts cannot be read", () => {
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { ...prepublishedEvaluationState(), runArtifactsUnavailable: true },
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("release-trust bundle");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses prepublished downloads whose evidence names an unsuccessful workflow run", () => {
+      // Provenance that does not resolve to a successful run of the canonical workflow at the
+      // declared commit is not provenance.
+      const state = prepublishedEvaluationState();
+      state.workflowRun = { ...state.workflowRun, conclusion: "failure" };
+
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: state,
+        portableAssets: false,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("release-trust bundle");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses to skip the GitHub Release when portable assets are supplied", () => {
+      // Announcing downloads that are never uploaded is the failure this replaces: supplying a
+      // manifest and skipping the release would publish an npm dist-tag whose notes point at
+      // assets that do not exist.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        portableAssets: true,
+        extraArgs: ["--skip-github-release"],
+      });
+
+      expect(lastRun.status).toBe(1);
       expect(lastRun.stderr).toContain(
-        "stable latest publishes require --portable-assets-manifest",
+        "a publish that supplies portable assets must attach them to the GitHub Release.",
       );
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
-      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
     });
 
     it.each([
@@ -967,14 +1502,15 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
     });
 
     it("rejects an inner target relabelled against its outer bundle entry", () => {
-      const viewBody =
-        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      const viewBody = passthroughViewBody();
       lastRun = runPublish({
         npmBody: npmStub(viewBody, { failOnPublish: true }),
         initState: { published: true, tagged: true },
         portableFixtureOptions: {
-          mutateManifest: (candidate, _target, index) => {
-            if (index === 1) candidate.artifact.platformTarget = "windows-x64";
+          mutateManifest: (candidate, target) => {
+            if (target.platformTarget === "linux-x64") {
+              candidate.artifact.platformTarget = "windows-x64";
+            }
           },
         },
       });
@@ -992,22 +1528,21 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
     // only thing that can make the run fail is the specific count/duplicate/missing guard
     // under test — never a same-shape neighbor.
     it("rejects a portable assets manifest missing a target before npm publish or dist-tag mutation", () => {
-      const viewBody =
-        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      const viewBody = passthroughViewBody();
       lastRun = runPublish({
         npmBody: npmStub(viewBody, { failOnPublish: true }),
         initState: { published: true, tagged: true },
         portableFixtureOptions: {
-          // Drop the third (macos-x64) target: only two of the three required artifacts remain.
+          // Drop the final (macos-x64) target: only three of the four required artifacts remain.
           mutateBundle: (bundle) => {
-            bundle.artifacts = bundle.artifacts.slice(0, 2);
+            bundle.artifacts = bundle.artifacts.slice(0, -1);
           },
         },
       });
 
       expect(lastRun.status).toBe(1);
       expect(lastRun.stderr).toContain(
-        "portable assets manifest must list exactly three artifacts.",
+        "portable assets manifest must list exactly four artifacts.",
       );
       expect(lastRun.stderr).toContain("missing portable asset entry for macos-x64.");
       expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
@@ -1022,16 +1557,16 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         npmBody: npmStub(viewBody, { failOnPublish: true }),
         initState: { published: true, tagged: true },
         portableFixtureOptions: {
-          // Append a fourth artifact: the three real targets remain untouched and well-formed.
+          // Append a fifth artifact: the four real targets remain untouched and well-formed.
           mutateBundle: (bundle) => {
-            bundle.artifacts.push({ platformTarget: "linux-x64" });
+            bundle.artifacts.push({ platformTarget: "freebsd-x64" });
           },
         },
       });
 
       expect(lastRun.status).toBe(1);
       expect(lastRun.stderr).toContain(
-        "portable assets manifest must list exactly three artifacts.",
+        "portable assets manifest must list exactly four artifacts.",
       );
       expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
       expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
@@ -1046,9 +1581,15 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         initState: { published: true, tagged: true },
         portableFixtureOptions: {
           // Replace the macos-arm64 entry with a second copy of windows-x64: the artifact
-          // count stays at three, so only the duplicate-target guard can catch this.
+          // count stays at four, so only the duplicate-target guard can catch this.
           mutateBundle: (bundle) => {
-            bundle.artifacts[1] = { ...bundle.artifacts[0] };
+            const windows = bundle.artifacts.find(
+              (artifact) => artifact.platformTarget === "windows-x64",
+            );
+            const macosArm64 = bundle.artifacts.findIndex(
+              (artifact) => artifact.platformTarget === "macos-arm64",
+            );
+            bundle.artifacts[macosArm64] = { ...windows };
           },
         },
       });
@@ -1234,9 +1775,9 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(true);
     });
 
-    it("treats an E404 from `npm view … version` as unpublished and publishes, tags, then verifies", () => {
-      // `npm view <spec> version` fails with E404 until a publish has happened; the
-      // dist-tag view reports the wrong version until `npm dist-tag add` runs.
+    it("treats a 404 from the version-specific registry endpoint as unpublished and publishes, tags, then verifies", () => {
+      // The version endpoint stays 404 until a publish has happened; the dist-tag view reports the
+      // wrong version until `npm dist-tag add` runs.
       const viewBody = [
         "  const s = state();",
         '  if (argv.includes("version")) {',
@@ -1254,7 +1795,10 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         "  }",
       ].join("\n");
 
-      lastRun = runPublish({ npmBody: npmStub(viewBody), initState: { published: false } });
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody),
+        initState: { published: false },
+      });
 
       expect(lastRun.status, lastRun.stderr).toBe(0);
       expect(lastRun.stdout).toContain(`PUBLISH ${RELEASE_SPEC}`);
@@ -1264,38 +1808,130 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.stdout).not.toContain(`SKIP ${RELEASE_SPEC} already exists`);
 
       // Decision order: check existence -> publish -> add dist-tag -> re-verify existence -> re-verify dist-tag.
-      const firstVersionView = indexOfCall(lastRun.calls, isVersionView);
+      const firstVersionRead = indexOfCall(lastRun.calls, isVersionEndpointCurl);
       const publishCall = indexOfCall(lastRun.calls, (l) => l.startsWith('npm ["publish"'));
       const distTagAdd = indexOfCall(lastRun.calls, (l) => l.startsWith('npm ["dist-tag","add"'));
 
-      expect(firstVersionView).toBeGreaterThanOrEqual(0);
-      expect(publishCall).toBeGreaterThan(firstVersionView);
+      expect(firstVersionRead).toBeGreaterThanOrEqual(0);
+      expect(publishCall).toBeGreaterThan(firstVersionRead);
       expect(distTagAdd).toBeGreaterThan(publishCall);
 
       // Publish carries the release-safety flags on the real command line.
       const publishLine = lastRun.calls.find((l) => l.startsWith('npm ["publish"'));
-      expect(publishLine).toContain('"--access","public"');
-      expect(publishLine).toContain('"--tag","latest"');
-      expect(publishLine).toContain('"--provenance"');
-      expect(publishLine).toContain('"--ignore-scripts"');
-      expect(publishLine).not.toContain('"--dry-run"');
+      expect(publishLine).toBe(
+        'npm ["publish",".","--access","public","--tag","latest","--registry","https://registry.npmjs.org/","--ignore-scripts"]',
+      );
+      const publishCwdLine = lastRun.calls.find((line) => line.startsWith("npm-cwd "));
+      expect(publishCwdLine).toBeDefined();
+      const publishCwd = JSON.parse(publishCwdLine?.slice("npm-cwd ".length) ?? '""');
+      expect(publishCwd).not.toBe(REPO_ROOT);
+      expect(publishCwd).toMatch(/keiko-publish-stage-[^/\\]+$/u);
+      // A token publish carries no provenance attestation: npm can attest only where an OIDC
+      // provider exists, and the unconditional flag killed every local operator publish (0.3.1).
 
       // The post-publish verification pass re-reads BOTH the version and the dist-tag.
-      const versionViews = lastRun.calls.filter(isVersionView).length;
+      const versionEndpointReads = lastRun.calls.filter(isVersionEndpointCurl);
+      const versionViews = versionEndpointReads.length;
       const distTagViews = lastRun.calls.filter(isDistTagView).length;
       expect(versionViews).toBeGreaterThanOrEqual(2);
       expect(distTagViews).toBeGreaterThanOrEqual(2);
+      expect(versionEndpointReads[0]).toContain('"--connect-timeout","5"');
+      expect(versionEndpointReads[0]).toContain('"--max-time","15"');
 
       const uploadLine = lastRun.calls.find(
         (l) => l.startsWith('gh ["release","upload"') && l.includes("keiko-windows-x64.zip"),
       );
       expect(uploadLine).toContain("keiko-windows-x64.zip");
+      expect(uploadLine).toContain(WINDOWS_PORTABLE_SETUP_ASSET_NAME);
       expect(uploadLine).toContain("keiko-macos-arm64.zip");
       expect(uploadLine).toContain("keiko-macos-x64.zip");
+      const setupAttestation = lastRun.calls.find((line) =>
+        line.startsWith('gh ["attestation","verify"'),
+      );
+      expect(setupAttestation).toContain(WINDOWS_PORTABLE_SETUP_ASSET_NAME);
+      expect(setupAttestation).toContain(
+        '"--signer-workflow","oscharko-dev/Keiko/.github/workflows/portable-assets.yml"',
+      );
+      expect(setupAttestation).toContain(`"--source-digest","${HEAD_SHA}"`);
+      expect(setupAttestation).toContain(`"--source-ref","refs/tags/v${RELEASE_VERSION}"`);
+      expect(
+        indexOfCall(lastRun.calls, (l) => l.startsWith('gh ["release","upload"')),
+      ).toBeGreaterThan(indexOfCall(lastRun.calls, (l) => l === setupAttestation));
       expect(
         indexOfCall(lastRun.calls, (l) => l.startsWith('gh ["release","upload"')),
       ).toBeLessThan(publishCall);
-      expect(lastRun.calls.filter((l) => l.startsWith("curl [")).length).toBeGreaterThanOrEqual(3);
+      const setupDownload = lastRun.calls.find(
+        (line) =>
+          line.startsWith("curl [") &&
+          line.endsWith(
+            `"https://github.com/oscharko-dev/Keiko/releases/download/v${RELEASE_VERSION}/${WINDOWS_PORTABLE_SETUP_ASSET_NAME}"]`,
+          ),
+      );
+      expect(setupDownload).toBeDefined();
+    });
+
+    it("binds setup evidence to verified remote bytes after local post-upload mutation", () => {
+      const viewBody = [
+        '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+        '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+      ].join("\n");
+
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: {
+          mutateSetupAfterArchiveUpload: true,
+          published: true,
+          tagged: true,
+        },
+      });
+
+      expect(lastRun.status, lastRun.stderr).toBe(0);
+      expect(lastRun.stdout).toContain("portable assets uploaded and verified");
+    });
+
+    it("assembles the release as a draft and publishes it only after every download verified", () => {
+      // v1.0.0, 2026-09-14: the release was created as published, and GitHub immutable releases refused
+      // every upload after that ("HTTP 422: Cannot upload assets to an immutable release"), which burned
+      // the tag name. Assets now go into a draft that is published last.
+      const viewBody = [
+        '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+        '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+      ].join("\n");
+
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { immutableReleases: true, published: true, tagged: true },
+      });
+
+      expect(lastRun.status, lastRun.stderr).toBe(0);
+      const create = indexOfCall(
+        lastRun.calls,
+        (l) => l.startsWith('gh ["api","--method","POST"') && l.includes('/releases"'),
+      );
+      const firstUpload = indexOfCall(lastRun.calls, (l) => l.startsWith('gh ["release","upload"'));
+      const publish = indexOfCall(
+        lastRun.calls,
+        (l) => l.startsWith('gh ["release","edit"') && l.includes('"--draft=false"'),
+      );
+      expect(lastRun.calls[create]).toContain('"draft=true"');
+      expect(create).toBeLessThan(firstUpload);
+      expect(firstUpload).toBeLessThan(publish);
+      expect(lastRun.calls.slice(publish).some((l) => l.startsWith('gh ["release","upload"'))).toBe(
+        false,
+      );
+      expect(lastRun.stdout).toContain("portable assets uploaded and verified");
+    });
+
+    it("refuses to upload into a release that is already published without its downloads", () => {
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { immutableReleases: true, published: false, releasePublished: true },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("an immutable release cannot be repaired");
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
     });
 
     it("fails before npm publish when portable upload verification fails", () => {
@@ -1319,6 +1955,122 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
     });
 
+    it("refuses an untrusted release signing key before the GitHub release exists", () => {
+      // The key was first used while binding archives already uploaded to the created release, so
+      // a key the shipped trust roots reject failed only after `gh release create` and the
+      // archive upload, and stranded a half-published Latest release.
+      const signingKey = generateKeyPairSync("ed25519").privateKey.export({
+        format: "pem",
+        type: "pkcs8",
+      });
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { published: false },
+        qualificationEnv: { KEIKO_PORTABLE_RELEASE_SIGNING_KEY: signingKey },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain(
+        "portable release signing key is not trusted (key-untrusted); nothing was published.",
+      );
+      expect(lastRun.stdout + lastRun.stderr).not.toContain(signingKey.split("\n")[1]);
+      expectNoPublicationSideEffect(lastRun.calls);
+    });
+
+    it("refuses an unusable release signing key before the GitHub release exists", () => {
+      const signingKey = "not-an-ed25519-private-key";
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { published: false },
+        qualificationEnv: { KEIKO_PORTABLE_RELEASE_SIGNING_KEY: signingKey },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain(
+        "portable release signing key is not a usable Ed25519 private key; nothing was published.",
+      );
+      expect(lastRun.stdout + lastRun.stderr).not.toContain(signingKey);
+      expectNoPublicationSideEffect(lastRun.calls);
+    });
+
+    it.each([
+      ["empty", ""],
+      ["unset", undefined],
+    ])("refuses an %s release signing key before the GitHub release exists", (_label, value) => {
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { published: false },
+        qualificationEnv: { KEIKO_PORTABLE_RELEASE_SIGNING_KEY: value },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain(
+        "KEIKO_PORTABLE_RELEASE_SIGNING_KEY is required for portable release publication.",
+      );
+      expectNoPublicationSideEffect(lastRun.calls);
+    });
+
+    it("stops before creating the release when a newer candidate moved the tag", () => {
+      // ADR-0177 D8: the release candidate may move an unpublished tag, and `gh release create`
+      // binds the release to wherever the tag points. A publish that checked out the older commit
+      // must not attach its bundle to the newer one.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { published: false, remoteTagSha: "f".repeat(40) },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain(
+        "a release created or published now would bind to another commit",
+      );
+      expectNoPublicationSideEffect(lastRun.calls);
+    });
+
+    it("refuses to upload qualified assets over a published evaluation release", () => {
+      // The evaluation lane's completed release is isDraft:false and carries the evidence
+      // manifest; clobbering it with production bytes would leave that evidence beside foreign
+      // downloads — a mixed-provenance surface (Codex finding on #3054).
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { existingEvaluationRelease: true, published: false },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("published by the evaluation lane");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","edit"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
+    });
+
+    it("refuses to edit over a resumable stable-tag draft left by an interrupted evaluation publish", () => {
+      // Editing the draft would keep it private while npm publishes, clobber only same-named
+      // assets, and leave the evaluation manifest beside qualified uploads (Codex finding on
+      // #3054). The evaluation lane owns resuming or deleting its draft.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { existingReleaseIsDraft: true, published: false },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("exists as a draft");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","edit"'))).toBe(false);
+    });
+
+    it("rejects an unattested setup companion before release upload or npm publication", () => {
+      const viewBody =
+        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { failSetupAttestation: true, published: true, tagged: true },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("setup provenance verification failed");
+      expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+    });
+
     it("rejects same-size remote tampering before npm publish or dist-tag mutation", () => {
       const viewBody = [
         'if (argv.includes("version")) { process.stderr.write("npm error code E404\\n"); process.exit(1); }',
@@ -1336,6 +2088,48 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.calls.some((line) => line.startsWith('npm ["dist-tag","add"'))).toBe(false);
     });
 
+    it("rejects setup companion bytes that do not match the assembled bundle binding", () => {
+      const viewBody =
+        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        portableFixtureOptions: {
+          mutateBundle: (bundle) => {
+            const windows = bundle.artifacts.find(
+              (artifact) => artifact.platformTarget === "windows-x64",
+            );
+            windows.setupSha256 = "0".repeat(64);
+          },
+        },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("windows-x64.setupSha256 must match the setup companion");
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("rejects a setup companion size that does not match the assembled bundle binding", () => {
+      const viewBody =
+        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        portableFixtureOptions: {
+          mutateBundle: (bundle) => {
+            const windows = bundle.artifacts.find(
+              (artifact) => artifact.platformTarget === "windows-x64",
+            );
+            windows.setupSizeBytes += 1;
+          },
+        },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("windows-x64.setupSizeBytes must match the setup companion");
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+    });
+
     it("rejects a wrong remote GitHub asset name before npm publication", () => {
       const viewBody =
         'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
@@ -1345,7 +2139,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       });
 
       expect(lastRun.status).toBe(1);
-      expect(lastRun.stderr).toContain("exactly the three first-class ZIP assets");
+      expect(lastRun.stderr).toContain("exactly the four first-class ZIP assets");
       expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
       expect(lastRun.calls.some((line) => line.startsWith('npm ["dist-tag","add"'))).toBe(false);
     });
@@ -1392,6 +2186,92 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.calls.some(isDistTagView)).toBe(true);
     });
 
+    // The three scenarios below prove the release-alignment wiring in release-publish.mjs
+    // itself (issue #3252): that a real `--tag latest` run actually calls
+    // recordNpmPublishDeployment / checkReleaseAlignment, and that a "failed"/"not aligned"
+    // result actually reaches `fail()`. Every other scenario in this suite sets
+    // KEIKO_RELEASE_SKIP_ALIGNMENT_PROOF=1 (see runPublish's env) precisely so that its own
+    // unrelated fixture does not have to answer the deployment/alignment endpoints too — these
+    // three remove that flag and are the only place the call site itself is exercised end to end.
+    // The library functions' own branches are covered directly and hermetically by
+    // npm-publish-deployment.test.mjs and check-release-alignment.test.mjs; this only has to
+    // prove the wiring between them and release-publish.mjs was not dropped or inverted.
+    const alignmentViewBody = [
+      '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+      '  if (argv.includes("dist-tags") && argv.includes("--json")) { process.stdout.write(JSON.stringify({ latest: VERSION }) + "\\n"); process.exit(0); }',
+      '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+    ].join("\n");
+
+    it("records the npm-publish deployment and passes the alignment gate on a real latest publish", () => {
+      lastRun = runPublish({
+        npmBody: npmStub(alignmentViewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true },
+        qualificationEnv: { KEIKO_RELEASE_SKIP_ALIGNMENT_PROOF: undefined },
+      });
+
+      expect(lastRun.status, lastRun.stderr).toBe(0);
+      expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
+      expect(lastRun.stdout).toContain("npm-publish-deployment: recorded");
+      expect(lastRun.stdout).toContain("release-alignment: PASS");
+      expect(
+        lastRun.calls.some((l) =>
+          l.startsWith(
+            'gh ["api","--method","POST","repos/oscharko-dev/Keiko/deployments","--input","-"]',
+          ),
+        ),
+      ).toBe(true);
+      expect(
+        lastRun.calls.some(
+          (l) => l.startsWith('gh ["api","--method","POST"') && l.includes("/statuses"),
+        ),
+      ).toBe(true);
+    });
+
+    it("publishes but fails the release when the deployment record is refused", () => {
+      // Proves the `if (deploymentResult.kind === "failed") fail(...)` wiring: the publish must
+      // still be reported as failed even though npm and the GitHub release already succeeded —
+      // dropping this line would leave a real publish looking green with no deployment recorded.
+      lastRun = runPublish({
+        npmBody: npmStub(alignmentViewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true, failDeploymentCreate: true },
+        qualificationEnv: { KEIKO_RELEASE_SKIP_ALIGNMENT_PROOF: undefined },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("the GitHub deployment record was refused");
+      expect(lastRun.stderr).toContain("deployments:write");
+      // The publish itself was not rolled back or retried — this is a post-publish gate: the
+      // package was already confirmed present and correctly tagged before the deployment call.
+      expect(lastRun.stdout).toContain(`SKIP ${RELEASE_SPEC} already exists`);
+      expect(lastRun.stdout).toContain(`TAG ${RELEASE_NAME}@latest -> ${RELEASE_VERSION}`);
+      expect(lastRun.stdout).not.toContain(`PASS - ${RELEASE_SPEC} published as latest`);
+    });
+
+    it("publishes but fails the release when the alignment gate finds a real divergence", () => {
+      // Proves the `if (!alignment.aligned) fail(...)` wiring using the real 0.3.12-0.3.15
+      // incident shape: the GitHub Release still names a stale tag even though npm, the tag
+      // list, and the deployment record all agree. Dropping this line is exactly how that
+      // incident went unnoticed.
+      lastRun = runPublish({
+        npmBody: npmStub(alignmentViewBody, { failOnPublish: true }),
+        initState: { published: true, tagged: true, alignmentGithubLatestTag: "v0.0.1" },
+        qualificationEnv: { KEIKO_RELEASE_SKIP_ALIGNMENT_PROOF: undefined },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("release-alignment: FAIL");
+      expect(lastRun.stderr).toContain(
+        "release published, but the alignment gate found a divergence",
+      );
+      expect(lastRun.stderr).toContain(
+        `GitHub Latest release is v0.0.1, expected v${RELEASE_VERSION}`,
+      );
+      expect(lastRun.stdout).not.toContain(`PASS - ${RELEASE_SPEC} published as latest`);
+      // The deployment record itself was NOT refused — only the alignment gate found the
+      // divergence, so the deployment write still succeeded.
+      expect(lastRun.stdout).toContain("npm-publish-deployment: recorded");
+    });
+
     it("retries post-publish registry visibility before failing the release", () => {
       // Real npm can accept the publish and dist-tag update before every registry view
       // endpoint sees the new version. The release must wait for propagation instead of
@@ -1415,13 +2295,100 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         "  }",
       ].join("\n");
 
-      lastRun = runPublish({ npmBody: npmStub(viewBody), initState: { published: false } });
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody),
+        initState: { published: false, versionVisibleAfterAttempts: 1 },
+      });
 
       expect(lastRun.status).toBe(0);
       expect(lastRun.stdout).toContain(`PUBLISH ${RELEASE_SPEC}`);
       expect(lastRun.stdout).toContain(`VERIFY pending ${RELEASE_SPEC}`);
       expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
-      expect(lastRun.calls.filter(isVersionView).length).toBeGreaterThanOrEqual(3);
+      expect(lastRun.calls.filter(isVersionEndpointCurl).length).toBeGreaterThanOrEqual(3);
+    });
+
+    it("retries transient registry responses inside the post-publish verification budget", () => {
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody()),
+        initState: {
+          published: false,
+          tagged: true,
+          versionEndpointResponses: [
+            { httpStatus: 404 },
+            { httpStatus: 503 },
+            { exitCode: 28 },
+            { httpStatus: 200 },
+          ],
+        },
+        qualificationEnv: {
+          ...NO_REGISTRY_TOKEN_ENV,
+          KEIKO_RELEASE_VERIFY_ATTEMPTS: "4",
+        },
+      });
+
+      expect(lastRun.status).toBe(0);
+      expect(lastRun.stdout).toContain("VERIFY pending");
+      expect(lastRun.stdout).toContain("http-503");
+      expect(lastRun.stdout).toContain("curl-exit-28");
+      expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
+      expect(lastRun.calls.filter(isVersionEndpointCurl)).toHaveLength(4);
+    });
+
+    it("refuses to publish when the pre-publish existence probe remains transient", () => {
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: {
+          published: false,
+          tagged: false,
+          versionEndpointResponses: [{ httpStatus: 503 }],
+        },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("registry availability remained transient");
+      expect(lastRun.stderr).toContain("package existence could not be established safely");
+      expect(lastRun.calls.filter(isVersionEndpointCurl)).toHaveLength(3);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("publishes only after transient pre-publish probes resolve to a definitive 404", () => {
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody()),
+        initState: {
+          published: false,
+          tagged: true,
+          versionEndpointResponses: [
+            { httpStatus: 503 },
+            { exitCode: 28 },
+            { httpStatus: 404 },
+            { httpStatus: 200 },
+          ],
+        },
+      });
+
+      expect(lastRun.status).toBe(0);
+      expect(lastRun.stdout).toContain("PREPUBLISH pending");
+      expect(lastRun.stdout).toContain(`PUBLISH ${RELEASE_SPEC}`);
+      expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
+      expect(lastRun.calls.filter(isVersionEndpointCurl)).toHaveLength(4);
+      expect(lastRun.calls.filter((line) => line.startsWith('npm ["publish"'))).toHaveLength(1);
+    });
+
+    it("fails only after the full budget when post-publish registry reads stay transient", () => {
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody()),
+        initState: {
+          published: false,
+          tagged: true,
+          versionEndpointResponses: [{ httpStatus: 404 }, { httpStatus: 429 }],
+        },
+        qualificationEnv: NO_REGISTRY_TOKEN_ENV,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("bounded verification budget");
+      expect(lastRun.stderr).toContain("do not publish again or change deployment state");
+      expect(lastRun.calls.filter(isVersionEndpointCurl)).toHaveLength(4);
     });
 
     it("fails the release when the dist-tag never resolves to the published version", () => {
@@ -1447,6 +2414,47 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.stdout).not.toContain("PASS -");
     });
 
+    it("treats a lone OIDC request URL as no auth path", () => {
+      // The identity exchange needs BOTH GitHub-issued values; a URL without its bearer cannot
+      // mint a token, and counting it as auth would fail twenty minutes later at npm publish.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { published: false },
+        portableAssets: false,
+        qualificationEnv: {
+          NODE_AUTH_TOKEN: undefined,
+          NPM_TOKEN: "",
+          ACTIONS_ID_TOKEN_REQUEST_URL: "https://actions.example/token-request",
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: undefined,
+        },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("no npm auth path is available");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses before any gate work when neither a token nor an OIDC endpoint exists", () => {
+      // The 0.3.1 operator runs discovered missing auth only after the twenty-minute gate chain;
+      // the preflight answers the question first.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { published: false },
+        portableAssets: false,
+        qualificationEnv: {
+          NODE_AUTH_TOKEN: undefined,
+          NPM_TOKEN: "",
+          ACTIONS_ID_TOKEN_REQUEST_URL: undefined,
+          ACTIONS_ID_TOKEN_REQUEST_TOKEN: undefined,
+        },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("no npm auth path is available");
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["run","prepack"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
     it("publishes with no npm registry token configured, matching OIDC trusted publishing in CI", () => {
       // Unlike the shared npmStub() factory, model `publish` as ALSO fixing the dist-tag —
       // that is what real `npm publish --tag <tag>` does atomically on first publish. This
@@ -1458,6 +2466,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         "const sub = argv[0];",
         'if (sub === "config" && argv[1] === "get" && argv[2] === "strict-ssl") { process.stdout.write("true\\n"); process.exit(0); }',
         'if (sub === "run") { process.exit(0); }',
+        ...npmPackStubLines(),
         'if (sub === "view") {',
         "  const s = state();",
         '  if (argv.includes("version")) {',
@@ -1484,7 +2493,10 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.status).toBe(0);
       expect(lastRun.stdout).toContain(`PUBLISH ${RELEASE_SPEC}`);
       expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
-      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(true);
+      const publishLine = lastRun.calls.find((l) => l.startsWith('npm ["publish"'));
+      expect(publishLine).toBeDefined();
+      // Where the OIDC endpoint exists, the publish attests provenance — and only there.
+      expect(publishLine).toContain('"--provenance"');
       // The whole point of this scenario: no dist-tag WRITE was needed or attempted.
       expect(lastRun.calls.some((l) => l.startsWith('npm ["dist-tag","add"'))).toBe(false);
     });
@@ -1500,6 +2512,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         "const sub = argv[0];",
         'if (sub === "config" && argv[1] === "get" && argv[2] === "strict-ssl") { process.stdout.write("true\\n"); process.exit(0); }',
         'if (sub === "run") { process.exit(0); }',
+        ...npmPackStubLines(),
         'if (sub === "view") {',
         "  const s = state();",
         '  if (argv.includes("version")) {',
@@ -1531,6 +2544,55 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.calls.some((l) => l.startsWith('npm ["dist-tag","add"'))).toBe(false);
     });
 
+    it.each([5, 10, 15])(
+      "waits through a %i-minute trusted-publishing registry quarantine simulation",
+      (quarantineMinutes) => {
+        // The workflow's production delay is one minute. The test keeps delay at zero but makes
+        // the version-specific registry endpoint stay 404 for the same number of read cycles.
+        const npmBody = [
+          'log("npm");',
+          "const sub = argv[0];",
+          'if (sub === "config" && argv[1] === "get" && argv[2] === "strict-ssl") { process.stdout.write("true\\n"); process.exit(0); }',
+          'if (sub === "run") { process.exit(0); }',
+          ...npmPackStubLines(),
+          'if (sub === "view") {',
+          '  if (argv.includes("version")) { process.stderr.write("version reads use curl\\n"); process.exit(91); }',
+          '  if (argv.some((a) => a.startsWith("dist-tags."))) {',
+          "    const visible = (state().versionEndpointAttempts ?? 0) >= Number(process.env.KEIKO_TEST_QUARANTINE_MINUTES);",
+          '    process.stdout.write((visible ? VERSION : "0.0.0-stale") + "\\n");',
+          "    process.exit(0);",
+          "  }",
+          "}",
+          'if (sub === "publish") { setState({ published: true }); process.exit(0); }',
+          'process.stderr.write("stub npm: unhandled " + JSON.stringify(argv) + "\\n");',
+          "process.exit(3);",
+        ].join("\n");
+
+        lastRun = runPublish({
+          npmBody,
+          initState: {
+            published: false,
+            versionVisibleAfterAttempts: quarantineMinutes,
+          },
+          qualificationEnv: {
+            ...NO_REGISTRY_TOKEN_ENV,
+            KEIKO_RELEASE_VERIFY_ATTEMPTS: "30",
+            KEIKO_RELEASE_VERIFY_DELAY_MS: "0",
+            KEIKO_TEST_QUARANTINE_MINUTES: String(quarantineMinutes),
+          },
+        });
+
+        expect(lastRun.status).toBe(0);
+        expect(lastRun.stdout).toContain("TAG pending");
+        expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
+        expect(lastRun.calls.filter(isVersionEndpointCurl).length).toBeGreaterThan(
+          quarantineMinutes,
+        );
+        expect(lastRun.calls.some((l) => l.startsWith('npm ["dist-tag","add"'))).toBe(false);
+        expect(lastRun.calls.some(isVersionView)).toBe(false);
+      },
+    );
+
     it("fails with an actionable error, and never attempts an unauthenticated write, when a dist-tag repair needs a token that is not configured", () => {
       // Already published (idempotent re-run) with a stale dist-tag, and no token: this is
       // exactly the path npm Trusted Publishing does not cover (it authorizes `npm publish`
@@ -1550,8 +2612,10 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
 
       expect(lastRun.status).toBe(1);
       expect(lastRun.stderr).toContain(`${RELEASE_NAME}@latest points to 0.0.0-stale`);
-      expect(lastRun.stderr).toContain("Trusted Publishing does not cover");
-      expect(lastRun.stderr).toContain("NODE_AUTH_TOKEN");
+      expect(lastRun.stderr).toContain("version endpoint is visible");
+      expect(lastRun.stderr).toContain("governed release orchestrator");
+      expect(lastRun.stderr).toContain("operator-held npm token");
+      expect(lastRun.stderr).not.toContain("NODE_AUTH_TOKEN");
       expect(lastRun.calls.some((l) => l.startsWith('npm ["dist-tag","add"'))).toBe(false);
       expect(lastRun.stdout).not.toContain("PASS -");
     });

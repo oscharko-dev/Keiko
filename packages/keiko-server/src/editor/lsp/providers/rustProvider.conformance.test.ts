@@ -3,11 +3,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import {
-  DEFAULT_LSP_PROCESS_CONFIG,
-  type ManagedLspRustConfiguration,
-  type WorkspaceInfo,
-} from "@oscharko-dev/keiko-contracts";
+import type { ManagedLspRustConfiguration, WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_LSP_PROCESS_CONFIG } from "@oscharko-dev/keiko-contracts/runtime/lsp-process";
 import type { BackendAvailability } from "@oscharko-dev/keiko-sandbox";
 
 import type { LspSpawnFn } from "../lspNodeAdapter.js";
@@ -72,6 +69,7 @@ function makeExecutable(name: string): void {
 function workspace(): WorkspaceInfo {
   return {
     root,
+    selectedRoot: root,
     name: undefined,
     version: undefined,
     testFramework: "unknown",
@@ -284,7 +282,7 @@ describe("rust-analyzer fake-protocol security conformance", () => {
       },
     });
     await expect.poll(() => processManager.getLspProcessStatus()).toBe("READY");
-    controllers[0]?.crash();
+    controllers[0]?.emitError();
     await expect.poll(() => controllers.length).toBe(2);
     await expect.poll(() => processManager.getLspProcessStatus()).toBe("READY");
     expect(processManager.getHealthSnapshot()?.restartCount).toBe(1);

@@ -3,6 +3,7 @@
 import {
   useEffect,
   useId,
+  useCallback,
   useRef,
   useState,
   type ClipboardEvent,
@@ -13,18 +14,66 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
+  isCompleteRealtimeVoiceCapability,
   selectRealtimeVoiceCapability,
   selectSpeechOutputCapability,
-} from "@oscharko-dev/keiko-contracts";
-import { ApiError, setupGateway, type GatewaySetupInput } from "@/lib/api";
-import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import {
+  ApiError,
+  setupGateway,
+  type GatewaySetupInput,
+  type GatewaySetupResponse,
+} from "@/lib/api";
+import { useTranslate, type MessageValues } from "@/lib/i18n";
+import type { MessageKey } from "@/lib/i18n-messages.en";
+import {
+  OPTIONAL_WIDGET_EN_MESSAGES,
+  type OptionalWidgetMessageKey,
+} from "@/lib/i18n-messages.optional.en";
+import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import type { ModelCapability, VoiceProviderLocality } from "@/lib/types";
 import { Icons } from "../Icons";
 import KeikoSelect from "../KeikoSelect";
 import { useTheme } from "../hooks/useTheme";
 import { NATIVE_BLOCK_STYLE } from "../native-element-styles";
+import dynamic from "next/dynamic";
 import { notifyGatewayConfigUpdated } from "../widgets/shared/gatewaySetupBus";
+import { DynamicChunkLoadFailure } from "../DynamicChunkLoadFailure";
+import type { GatewayConfigUploadFields } from "./gatewayConfigParsing";
+
+// The upload path (control + fail-closed parser) is not first-paint-critical: loading it as its
+// own chunk keeps the setup page inside the static-export first-load budget (bundle gate). A
+// failed upload-chunk load must not make the feature silently disappear from an otherwise
+// working dialog — the shared fallback surfaces the redacted error and a retry (#3031).
+const GatewayConfigUpload = dynamic(
+  () => import("./GatewayConfigUpload").then((mod) => mod.GatewayConfigUpload),
+  { ssr: false, loading: DynamicChunkLoadFailure },
+);
 import styles from "./GatewaySetupDialog.module.css";
+
+/**
+ * The dialog is loaded only through next/dynamic boundaries, so its own copy lives in the
+ * lazily-loaded optional widget catalog (initial-page gzip ceiling, ADR-0042 D3.6) while a
+ * handful of shared keys (common.*, rail.*) stay in the eager catalog. This translator serves
+ * both: membership in the optional EN catalog — the key source of truth for both locales —
+ * decides the route, so no prefix guessing and no double bookkeeping at the call sites.
+ */
+type GatewaySetupTranslate = (
+  key: MessageKey | OptionalWidgetMessageKey,
+  values?: MessageValues,
+) => string;
+
+function useGatewaySetupTranslate(): GatewaySetupTranslate {
+  const tGlobal = useTranslate();
+  const tOptional = useOptionalWidgetTranslate();
+  return useCallback(
+    (key: MessageKey | OptionalWidgetMessageKey, values?: MessageValues): string =>
+      key in OPTIONAL_WIDGET_EN_MESSAGES
+        ? tOptional(key as OptionalWidgetMessageKey, values)
+        : tGlobal(key as MessageKey, values),
+    [tGlobal, tOptional],
+  );
+}
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const CubeIcon = Icons.cube;
@@ -82,6 +131,31 @@ function skippedModelSummary(skippedModelIds: readonly string[]): string {
   // (rate-limit, timeout, content-filter), so the wording must not over-claim a permanent capability
   // verdict the smoke cannot prove.
   return ` Could not verify deployment${skippedModelIds.length === 1 ? "" : "s"}: ${skippedModelIds.join(", ")}.`;
+}
+
+// The operator must learn which models the gateway offered that Keiko will not use, and why. A
+// silent green "setup succeeded" over a gateway whose only embedding model was refused is what made
+// the LiteLLM field incident undiagnosable.
+function unusableModelSummary(t: GatewaySetupTranslate, result: GatewaySetupResponse): string {
+  const parts: string[] = [];
+  const unsupported = result.unsupportedModels ?? [];
+  if (unsupported.length > 0) {
+    const models = unsupported.map((entry) => `${entry.id} (${entry.reason})`).join(", ");
+    parts.push(t("gatewaySetup.unusable.unsupported", { models }));
+  }
+  const dropped = result.droppedEmbeddingModelIds ?? [];
+  if (dropped.length > 0) {
+    parts.push(t("gatewaySetup.unusable.dropped", { models: dropped.join(", ") }));
+  }
+  const unverified = result.unverifiedEmbeddingModelIds ?? [];
+  if (unverified.length > 0) {
+    parts.push(t("gatewaySetup.unusable.unverified", { models: unverified.join(", ") }));
+  }
+  const unverifiedChat = result.unverifiedChatModelIds ?? [];
+  if (unverifiedChat.length > 0) {
+    parts.push(t("gatewaySetup.unusable.unverifiedChat", { models: unverifiedChat.join(", ") }));
+  }
+  return parts.join("");
 }
 
 function storedVoiceModels(models: readonly ModelCapability[]): readonly string[] {
@@ -146,7 +220,10 @@ function endpointIdentity(
   hasStoredVoiceProvider: boolean,
 ): ProviderIdentity | undefined {
   const submitted = value.trim();
-  if (submitted !== "") return submitted;
+  // The identity is CANONICAL, like the server's: a trailing slash or a differently-cased
+  // hostname is the same endpoint, so retyping one must not reset the deployments and the
+  // protocol as though the operator had moved hosts (review finding on #3048).
+  if (submitted !== "") return canonicalEndpointIdentity(submitted);
   return preserveExisting && hasStoredVoiceProvider ? STORED_VOICE_ENDPOINT_IDENTITY : undefined;
 }
 
@@ -178,42 +255,67 @@ function voiceCapabilitySelected(
   );
 }
 
-function voiceCapabilityStatus(
-  t: I18nTranslate,
-  replacementModelId: string,
-  preserveExisting: boolean,
-  storedModels: readonly ModelCapability[],
-  capability: SelectableVoiceCapability,
-): string {
-  return t(
-    voiceCapabilitySelected(replacementModelId, preserveExisting, storedModels, capability)
-      ? "common.on"
-      : "common.off",
-  );
-}
-
 const VOICE_PROVIDER_LOCALITIES: ReadonlySet<VoiceProviderLocality> = new Set([
   "azure-foundry",
   "customer-hosted",
   "local-only",
+  "gateway-managed",
 ]);
 
-const VOICE_PROVIDER_LOCALITY_SECTIONS = [
+// The audio endpoint PROTOCOL is operator-settable now: a manual endpoint move must be able to
+// state how the new host speaks, or the save is refused rather than silently degrading an Azure
+// deployment-path endpoint to the OpenAI-compatible URL shape (review finding on #3042). The
+// empty option is what an unstated protocol looks like on a fresh or non-Azure setup.
+function voiceRealtimeAuthModeSections(
+  t: GatewaySetupTranslate,
+): readonly [{ readonly options: readonly { readonly value: string; readonly label: string }[] }] {
+  return [
+    {
+      options: [
+        { value: "", label: t("gatewaySetup.voice.endpointStyle.unstated") },
+        { value: "api-key", label: t("gatewaySetup.voice.realtimeAuthMode.apiKey") },
+        { value: "ephemeral-session", label: t("gatewaySetup.voice.realtimeAuthMode.ephemeral") },
+      ],
+    },
+  ];
+}
+
+function voiceEndpointStyleSections(
+  t: GatewaySetupTranslate,
+): readonly [{ readonly options: readonly { readonly value: string; readonly label: string }[] }] {
+  return [
+    {
+      options: [
+        { value: "", label: t("gatewaySetup.voice.endpointStyle.unstated") },
+        {
+          value: "openai-compatible",
+          label: t("gatewaySetup.voice.endpointStyle.openaiCompatible"),
+        },
+        {
+          value: "azure-openai-deployment",
+          label: t("gatewaySetup.voice.endpointStyle.azureDeploymentPath"),
+        },
+      ],
+    },
+  ];
+}
+
+function voiceProviderLocalitySections(t: GatewaySetupTranslate): readonly [
   {
-    options: [
-      { value: "azure-foundry", label: "Microsoft Foundry" },
-      { value: "customer-hosted", label: "Customer-hosted" },
-      { value: "local-only", label: "Local-only" },
-    ],
+    readonly options: readonly { readonly value: VoiceProviderLocality; readonly label: string }[];
   },
-] satisfies readonly [
-  {
-    readonly options: readonly {
-      readonly value: VoiceProviderLocality;
-      readonly label: string;
-    }[];
-  },
-];
+] {
+  return [
+    {
+      options: [
+        { value: "azure-foundry", label: t("gatewaySetup.voice.locality.azureFoundry") },
+        { value: "customer-hosted", label: t("gatewaySetup.voice.locality.customerHosted") },
+        { value: "local-only", label: t("gatewaySetup.voice.locality.localOnly") },
+        { value: "gateway-managed", label: t("gatewaySetup.voice.locality.gatewayManaged") },
+      ],
+    },
+  ];
+}
 
 function isVoiceProviderLocality(value: string): value is VoiceProviderLocality {
   return VOICE_PROVIDER_LOCALITIES.has(value as VoiceProviderLocality);
@@ -264,6 +366,9 @@ function dropDatasetOpenCounter(root: HTMLElement, countKey: string, flagAttribu
 
 interface VoiceCredentialInputFields {
   readonly voiceBaseUrl: string;
+  readonly voiceEndpointStyle: string;
+  readonly voiceApiVersion: string;
+  readonly voiceRealtimeAuthMode: string;
   readonly voiceApiKey: string;
   readonly voiceApiKeyHeaderName: string;
   readonly voiceModelId: string;
@@ -272,24 +377,36 @@ interface VoiceCredentialInputFields {
   readonly voiceSpeechOutputModelId: string;
   readonly voiceTimeoutMs: string;
   readonly voiceSemanticTurnDetectionConfigured: boolean;
+  readonly voiceSpeechSynthesisInstructionsConfigured: boolean;
   readonly voiceOutputVoiceIdConfigured: boolean;
   readonly voiceProviderLocalityConfigured: boolean;
 }
 
 function hasVoiceCredentialInput(fields: VoiceCredentialInputFields): boolean {
-  return (
-    fields.voiceBaseUrl.trim() !== "" ||
-    fields.voiceApiKey.trim() !== "" ||
-    fields.voiceApiKeyHeaderName.trim() !== "" ||
-    fields.voiceModelId.trim() !== "" ||
-    fields.voiceRealtimeModelId.trim() !== "" ||
-    fields.voiceRealtimeTranscriptionModelId.trim() !== "" ||
-    fields.voiceSpeechOutputModelId.trim() !== "" ||
-    fields.voiceTimeoutMs.trim() !== "" ||
-    fields.voiceSemanticTurnDetectionConfigured ||
-    fields.voiceOutputVoiceIdConfigured ||
-    fields.voiceProviderLocalityConfigured
-  );
+  const textInputs = [
+    fields.voiceBaseUrl,
+    // The endpoint protocol is voice credential input like any other: without it the save stayed
+    // disabled for the one correction the visible fields exist to allow (review finding on
+    // #3048). In fresh mode this also makes a protocol stated with no deployment report the
+    // canonical "name a deployment" error instead of being ignored.
+    fields.voiceEndpointStyle,
+    fields.voiceApiVersion,
+    fields.voiceRealtimeAuthMode,
+    fields.voiceApiKey,
+    fields.voiceApiKeyHeaderName,
+    fields.voiceModelId,
+    fields.voiceRealtimeModelId,
+    fields.voiceRealtimeTranscriptionModelId,
+    fields.voiceSpeechOutputModelId,
+    fields.voiceTimeoutMs,
+  ];
+  const configuredFlags = [
+    fields.voiceSemanticTurnDetectionConfigured,
+    fields.voiceSpeechSynthesisInstructionsConfigured,
+    fields.voiceOutputVoiceIdConfigured,
+    fields.voiceProviderLocalityConfigured,
+  ];
+  return textInputs.some((value) => value.trim() !== "") || configuredFlags.includes(true);
 }
 
 function hasExplicitVoiceDeployment(fields: VoiceCredentialInputFields): boolean {
@@ -434,6 +551,8 @@ interface VoiceCredentialPayloadInput {
   readonly voiceRealtimeTranscriptionModelId: string;
   readonly voiceSupportsSemanticTurnDetection: boolean;
   readonly voiceSemanticTurnDetectionConfigured: boolean;
+  readonly voiceSupportsSpeechSynthesisInstructions: boolean;
+  readonly voiceSpeechSynthesisInstructionsConfigured: boolean;
   readonly voiceSpeechOutputModelId: string;
   readonly voiceOutputVoiceId: string;
   readonly voiceOutputVoiceIdConfigured: boolean;
@@ -441,6 +560,24 @@ interface VoiceCredentialPayloadInput {
   readonly voiceProviderLocalityConfigured: boolean;
   readonly voiceTimeoutMs: number | undefined;
   readonly preserveExisting: boolean;
+}
+
+// Only an EXPLICIT tuning statement travels — true sets, false clears, unconfigured leaves the
+// stored template in charge; both flags are file-scoped exactly alike (#3037).
+function voiceTuningPayloadFields(
+  input: VoiceCredentialPayloadInput,
+): Pick<
+  GatewaySetupInput,
+  "voiceSupportsSemanticTurnDetection" | "voiceSupportsSpeechSynthesisInstructions"
+> {
+  return {
+    ...(input.voiceSemanticTurnDetectionConfigured
+      ? { voiceSupportsSemanticTurnDetection: input.voiceSupportsSemanticTurnDetection }
+      : {}),
+    ...(input.voiceSpeechSynthesisInstructionsConfigured
+      ? { voiceSupportsSpeechSynthesisInstructions: input.voiceSupportsSpeechSynthesisInstructions }
+      : {}),
+  };
 }
 
 function buildVoiceCredentialFields(
@@ -454,6 +591,7 @@ function buildVoiceCredentialFields(
   | "voiceRealtimeModelId"
   | "voiceRealtimeTranscriptionModelId"
   | "voiceSupportsSemanticTurnDetection"
+  | "voiceSupportsSpeechSynthesisInstructions"
   | "voiceSpeechOutputModelId"
   | "voiceOutputVoiceId"
   | "voiceProviderLocality"
@@ -478,9 +616,7 @@ function buildVoiceCredentialFields(
     ...(voiceRealtimeTranscriptionModelId === undefined
       ? {}
       : { voiceRealtimeTranscriptionModelId }),
-    ...(input.voiceSemanticTurnDetectionConfigured
-      ? { voiceSupportsSemanticTurnDetection: input.voiceSupportsSemanticTurnDetection }
-      : {}),
+    ...voiceTuningPayloadFields(input),
     ...(voiceSpeechOutputModelId === undefined ? {} : { voiceSpeechOutputModelId }),
     ...(voiceOutputVoiceId === undefined || !input.voiceOutputVoiceIdConfigured
       ? {}
@@ -499,6 +635,9 @@ interface GatewayFormFields {
   readonly timeoutMs: string;
   readonly deploymentNames: string;
   readonly imageInputModelIds: string;
+  readonly imageInputModelIdsConfigured: boolean;
+  /** Imported embedding-kind ids asserted to the setup route (empty when nothing was imported). */
+  readonly importedEmbeddingModelIds: readonly string[];
   readonly workflowEligibleModelIds: string;
   readonly workflowEligibleModelIdsConfigured: boolean;
   readonly voiceBaseUrl: string;
@@ -509,21 +648,51 @@ interface GatewayFormFields {
   readonly voiceRealtimeTranscriptionModelId: string;
   readonly voiceSupportsSemanticTurnDetection: boolean;
   readonly voiceSemanticTurnDetectionConfigured: boolean;
+  readonly voiceSupportsSpeechSynthesisInstructions: boolean;
+  readonly voiceSpeechSynthesisInstructionsConfigured: boolean;
   readonly voiceSpeechOutputModelId: string;
   readonly voiceOutputVoiceId: string;
   readonly voiceOutputVoiceIdConfigured: boolean;
   readonly voiceProviderLocality: VoiceProviderLocality;
   readonly voiceProviderLocalityConfigured: boolean;
   readonly voiceTimeoutMs: string;
+  /** Voice endpoint protocol imported from a config upload (empty = nothing imported). */
+  readonly importedVoiceEndpointStyle: string;
+  readonly importedVoiceApiVersion: string;
+  /** Operator-stated audio endpoint protocol (visible fields) — empty means "not stated". */
+  readonly voiceEndpointStyle: string;
+  readonly voiceApiVersion: string;
+  readonly voiceRealtimeAuthMode: string;
+  /**
+   * The audio URL an UPLOADED protocol was declared for; empty once the operator states the
+   * protocol themselves. A fresh dialog never commits an endpoint identity, so the binding —
+   * not an identity transition — is what keeps an uploaded protocol from riding a retyped URL.
+   */
+  readonly voiceProtocolBoundBaseUrl: string;
+  readonly importedVoiceRealtimeAuthMode: string;
+  /** The uploaded endpoint URL the imported protocol is bound to. */
+  readonly importedVoiceEndpointBaseUrl: string;
+  /** Generic endpoint protocol imported from a config upload, bound to its gateway URL (#3042). */
+  readonly importedEndpointStyle: string;
+  readonly importedApiVersion: string;
+  readonly importedEndpointBaseUrl: string;
   readonly figmaAccessToken: string;
   readonly preserveExisting: boolean;
   readonly hasStoredVoiceProvider: boolean;
   readonly storedRealtimeModelId: string | undefined;
 }
 
+// The endpoint PROTOCOL policy is the server's, not the dialog's. Four review rounds on #3048
+// each corrected a client-side rule that had guessed wrong, because the dialog cannot see the
+// stored provider's protocol: whether a restatement is required, and whether an api version can
+// be inherited, both depend on it. The server can see it, decides on the whole request, and
+// answers with named errors (GATEWAY_AZURE_ENDPOINT_REQUIRES_API_VERSION,
+// GATEWAY_API_VERSION_REQUIRES_AZURE_ENDPOINT, and the migration restatement rules). What stays
+// here is the dialog's own job: which fields are visible, what an upload hydrates, and what an
+// endpoint change clears or restores.
 function endpointMigrationValidationError(
   fields: GatewayFormFields,
-  t: I18nTranslate,
+  t: GatewaySetupTranslate,
 ): string | undefined {
   if (!fields.preserveExisting || !fields.hasStoredVoiceProvider) return undefined;
   if (fields.voiceBaseUrl.trim() === "") return undefined;
@@ -545,6 +714,107 @@ function realtimeTranscriptionRequired(fields: GatewayFormFields): boolean {
   return submittedRealtime !== fields.storedRealtimeModelId;
 }
 
+/**
+ * Mirrors the gateway's canonicalBaseUrlIdentity: an endpoint is the SAME endpoint across
+ * trailing slashes and case-insensitive origin spelling, so a semantics-preserving edit must not
+ * throw the uploaded protocol away (review finding on #3046). Anything the URL parser rejects
+ * falls back to the trimmed text, which keeps the comparison total.
+ */
+function stripTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") {
+    end -= 1;
+  }
+  return value.slice(0, end);
+}
+
+const CHAT_COMPLETIONS_SUFFIX = "/chat/completions";
+
+// The server's normalizeBaseUrl also drops a terminal /chat/completions before comparing, so
+// trimming an imported URL down to the endpoint the server would derive is NOT an endpoint
+// change. A narrower client copy read it as one and dropped the imported protocol (review
+// findings on #3046 and #3048). The rule is mirrored rather than imported: keiko-ui may not
+// depend on keiko-model-gateway (ADR-0019), and the shape is pinned on both sides.
+function normalizedEndpoint(raw: string): string {
+  const trimmed = stripTrailingSlashes(raw.trim());
+  return trimmed.endsWith(CHAT_COMPLETIONS_SUFFIX)
+    ? stripTrailingSlashes(trimmed.slice(0, -CHAT_COMPLETIONS_SUFFIX.length))
+    : trimmed;
+}
+
+// ONE identity for both sections: the generic gateway and the audio endpoint are compared by the
+// same server rule (`sameBaseUrlIdentity`), so they are compared by the same rule here.
+function canonicalEndpointIdentity(raw: string): string {
+  const normalized = normalizedEndpoint(raw);
+  try {
+    return stripTrailingSlashes(new URL(normalized).href);
+  } catch {
+    return normalized;
+  }
+}
+
+// The imported GENERIC protocol rides only on a submit that still points at the uploaded gateway
+// endpoint — a manually retyped URL must not inherit the file's protocol (#3042), while an edit
+// that does not change the endpoint's identity keeps it (#3046).
+function importedEndpointPayload(fields: GatewayFormFields): Partial<GatewaySetupInput> {
+  const submittedBaseUrl = fields.baseUrl.trim();
+  if (submittedBaseUrl === "") return {};
+  // An empty binding means the file declared a protocol but left the URL to the operator, so it
+  // applies to whatever endpoint is entered — the same "unbound" rule the voice twin uses. The
+  // imported values always come from the CURRENT file, so this can never resurrect an earlier
+  // upload's protocol (review findings on #3046).
+  if (
+    fields.importedEndpointBaseUrl !== "" &&
+    canonicalEndpointIdentity(submittedBaseUrl) !==
+      canonicalEndpointIdentity(fields.importedEndpointBaseUrl)
+  ) {
+    return {};
+  }
+  return {
+    ...(fields.importedEndpointStyle === "" ? {} : { endpointStyle: fields.importedEndpointStyle }),
+    ...(fields.importedApiVersion === "" ? {} : { apiVersion: fields.importedApiVersion }),
+  };
+}
+
+// The VISIBLE protocol fields are the operator's own statement, so they ride a manual endpoint
+// move — which the server refuses without one — instead of being lost with it. What they never
+// do is travel to an endpoint nobody stated them for: every statement, uploaded or hand-made,
+// is bound to the endpoint it was made against, and the identity reset clears both the fields
+// and their binding (review findings on #3042 and #3048).
+function statedVoiceEndpointPayload(fields: GatewayFormFields): Partial<GatewaySetupInput> {
+  const submittedBaseUrl = fields.voiceBaseUrl.trim();
+  // A blank URL in preserve mode means "keep the stored endpoint", so a statement made against
+  // it is about that endpoint and must be submitted. An UPLOADED protocol carries the URL it was
+  // declared for and stays behind (review finding on #3048).
+  if (submittedBaseUrl === "") {
+    return fields.preserveExisting && fields.voiceProtocolBoundBaseUrl === ""
+      ? statedVoiceProtocolFields(fields)
+      : {};
+  }
+  // A protocol rides only while the form still points at the endpoint it was stated for — the
+  // uploaded URL for an import, the URL in the form for a hand statement (#3042, #3048).
+  if (
+    fields.voiceProtocolBoundBaseUrl !== "" &&
+    canonicalEndpointIdentity(fields.voiceProtocolBoundBaseUrl) !==
+      canonicalEndpointIdentity(submittedBaseUrl)
+  ) {
+    return {};
+  }
+  return statedVoiceProtocolFields(fields);
+}
+
+function statedVoiceProtocolFields(fields: GatewayFormFields): Partial<GatewaySetupInput> {
+  return {
+    ...(fields.voiceEndpointStyle === "" ? {} : { voiceEndpointStyle: fields.voiceEndpointStyle }),
+    ...(fields.voiceApiVersion.trim() === ""
+      ? {}
+      : { voiceApiVersion: fields.voiceApiVersion.trim() }),
+    ...(fields.voiceRealtimeAuthMode === ""
+      ? {}
+      : { voiceRealtimeAuthMode: fields.voiceRealtimeAuthMode }),
+  };
+}
+
 function buildSetupGatewayPayload(
   fields: GatewayFormFields,
   derived: DerivedSubmitFields,
@@ -557,9 +827,14 @@ function buildSetupGatewayPayload(
     ...(derived.parsedTimeoutMs === undefined ? {} : { timeoutMs: derived.parsedTimeoutMs }),
     deploymentNames: derived.parsedDeploymentNames,
     preserveExisting: fields.preserveExisting,
-    ...(derived.parsedImageInputModelIds.length === 0
+    ...(derived.parsedImageInputModelIds.length === 0 && !fields.imageInputModelIdsConfigured
       ? {}
       : { imageInputModelIds: derived.parsedImageInputModelIds }),
+    ...(fields.importedEmbeddingModelIds.length === 0
+      ? {}
+      : { embeddingModelIds: fields.importedEmbeddingModelIds }),
+    ...statedVoiceEndpointPayload(fields),
+    ...importedEndpointPayload(fields),
     ...(!fields.workflowEligibleModelIdsConfigured
       ? {}
       : { workflowEligibleModelIds: derived.parsedWorkflowEligibleModelIds }),
@@ -587,6 +862,8 @@ function voiceCredentialFieldsForMode(
     voiceRealtimeTranscriptionModelId: fields.voiceRealtimeTranscriptionModelId,
     voiceSupportsSemanticTurnDetection: fields.voiceSupportsSemanticTurnDetection,
     voiceSemanticTurnDetectionConfigured: fields.voiceSemanticTurnDetectionConfigured,
+    voiceSupportsSpeechSynthesisInstructions: fields.voiceSupportsSpeechSynthesisInstructions,
+    voiceSpeechSynthesisInstructionsConfigured: fields.voiceSpeechSynthesisInstructionsConfigured,
     voiceSpeechOutputModelId: fields.voiceSpeechOutputModelId,
     voiceOutputVoiceId: fields.voiceOutputVoiceId,
     voiceOutputVoiceIdConfigured: fields.voiceOutputVoiceIdConfigured,
@@ -597,21 +874,27 @@ function voiceCredentialFieldsForMode(
   });
 }
 
-function figmaOnlyMessage(t: I18nTranslate, mode: GatewaySuccessMode): string {
+function figmaOnlyMessage(t: GatewaySetupTranslate, mode: GatewaySuccessMode): string {
   if (mode === "voice") {
     return t("gatewaySetup.voice.success.audioAndFigma");
   }
   return "Verified Figma access token. Reloading Keiko…";
 }
 
-function figmaAndGatewaySettingsMessage(t: I18nTranslate, mode: GatewaySuccessMode): string {
+function figmaAndGatewaySettingsMessage(
+  t: GatewaySetupTranslate,
+  mode: GatewaySuccessMode,
+): string {
   if (mode === "voice") {
     return t("gatewaySetup.voice.success.gatewayAudioAndFigma");
   }
   return "Updated model gateway settings and verified Figma access token. Reloading Keiko…";
 }
 
-function noFigmaNoGatewayCredentialsMessage(t: I18nTranslate, mode: GatewaySuccessMode): string {
+function noFigmaNoGatewayCredentialsMessage(
+  t: GatewaySetupTranslate,
+  mode: GatewaySuccessMode,
+): string {
   if (mode === "voice") {
     return t("gatewaySetup.voice.success.audio");
   }
@@ -619,7 +902,7 @@ function noFigmaNoGatewayCredentialsMessage(t: I18nTranslate, mode: GatewaySucce
 }
 
 function figmaAndVerifiedModelsMessage(
-  t: I18nTranslate,
+  t: GatewaySetupTranslate,
   mode: GatewaySuccessMode,
   verifiedModelSummary: string,
   skippedSummary: string,
@@ -634,7 +917,7 @@ function figmaAndVerifiedModelsMessage(
 }
 
 function verifiedModelsMessage(
-  t: I18nTranslate,
+  t: GatewaySetupTranslate,
   mode: GatewaySuccessMode,
   verifiedModelSummary: string,
   skippedSummary: string,
@@ -649,7 +932,7 @@ function verifiedModelsMessage(
 }
 
 interface ResolveSuccessMessageInput {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly submittedFigmaCredential: boolean;
   readonly submittedGatewaySettings: boolean;
   readonly submittedGatewayCredentials: boolean;
@@ -668,14 +951,17 @@ function resolveSuccessMessage(input: ResolveSuccessMessageInput): string {
     verifiedModelSummary,
     skippedSummary,
   } = input;
+  // The discovery findings ride on EVERY success branch: a preserve-mode save that only touched
+  // Figma or settings still re-ran discovery, so refusing to mention what it refused would put the
+  // operator back in front of a silent green message.
   if (submittedFigmaCredential && !submittedGatewaySettings) {
-    return figmaOnlyMessage(t, mode);
+    return `${figmaOnlyMessage(t, mode)}${skippedSummary}`;
   }
   if (submittedFigmaCredential && !submittedGatewayCredentials) {
-    return figmaAndGatewaySettingsMessage(t, mode);
+    return `${figmaAndGatewaySettingsMessage(t, mode)}${skippedSummary}`;
   }
   if (!submittedFigmaCredential && !submittedGatewayCredentials) {
-    return noFigmaNoGatewayCredentialsMessage(t, mode);
+    return `${noFigmaNoGatewayCredentialsMessage(t, mode)}${skippedSummary}`;
   }
   if (submittedFigmaCredential) {
     return figmaAndVerifiedModelsMessage(t, mode, verifiedModelSummary, skippedSummary);
@@ -689,7 +975,7 @@ type GatewaySubmissionOutcome =
 
 async function performGatewaySubmission(
   fields: GatewayFormFields,
-  t: I18nTranslate,
+  t: GatewaySetupTranslate,
 ): Promise<GatewaySubmissionOutcome> {
   const parsedDeploymentNames = deploymentNamesFromInput(fields.deploymentNames);
   const foundryError = validateFoundryDeploymentNames(fields.baseUrl, parsedDeploymentNames);
@@ -755,6 +1041,7 @@ async function performGatewaySubmission(
   const submittedGatewaySettings =
     submittedGatewayCredentials ||
     derived.parsedTimeoutMs !== undefined ||
+    fields.imageInputModelIdsConfigured ||
     fields.workflowEligibleModelIdsConfigured;
   const submittedFigmaCredential = fields.figmaAccessToken.trim() !== "";
   const result = await setupGateway(
@@ -771,10 +1058,24 @@ async function performGatewaySubmission(
       submittedGatewayCredentials,
       mode: successMode,
       verifiedModelSummary,
-      skippedSummary: skippedModelSummary(result.skippedModelIds ?? []),
+      skippedSummary:
+        skippedModelSummary(result.skippedModelIds ?? []) + unusableModelSummary(t, result),
     }),
-    skippedModelCount: (result.skippedModelIds ?? []).length,
+    // Drives the reload delay, so it must count EVERY diagnostic the message carries. Counting
+    // only skippedModelIds reloaded after 800 ms over a message that also named unsupported,
+    // dropped or unverified models — long enough to render, too short to read.
+    skippedModelCount: reportedModelCount(result),
   };
+}
+
+function reportedModelCount(result: GatewaySetupResponse): number {
+  return (
+    (result.skippedModelIds ?? []).length +
+    (result.unsupportedModels ?? []).length +
+    (result.droppedEmbeddingModelIds ?? []).length +
+    (result.unverifiedEmbeddingModelIds ?? []).length +
+    (result.unverifiedChatModelIds ?? []).length
+  );
 }
 
 interface GatewayBaseUrlFieldProps {
@@ -925,7 +1226,7 @@ function GatewayTimeoutField({
         className="gw-input mono"
         inputMode="numeric"
         value={value}
-        placeholder={preserveExisting ? "Leave blank to keep stored timeout" : "30000"}
+        placeholder={preserveExisting ? "Leave blank to keep stored timeout" : "120000"}
         autoComplete="off"
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
@@ -989,7 +1290,7 @@ function GatewayImageInputModelsField({
 }
 
 interface GatewayWorkflowEligibleModelsFieldProps extends GatewayImageInputModelsFieldProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
 }
 
 function GatewayWorkflowEligibleModelsField({
@@ -1017,7 +1318,7 @@ function GatewayWorkflowEligibleModelsField({
 }
 
 interface GatewayFieldsSectionProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly preserveExisting: boolean;
   readonly busy: boolean;
   readonly success: string | undefined;
@@ -1181,12 +1482,51 @@ function GatewayModelSection({
 }
 
 interface VoiceGuidanceNoteProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly preserveExisting: boolean;
   readonly storedModels: readonly ModelCapability[];
   readonly voiceModelId: string;
   readonly voiceRealtimeModelId: string;
+  readonly voiceRealtimeTranscriptionModelId: string;
   readonly voiceSpeechOutputModelId: string;
+  readonly voiceOutputVoiceId: string;
+}
+
+function hasCompleteRealtimeSelection(
+  modelId: string,
+  transcriptionId: string,
+  preserveExisting: boolean,
+  storedModels: readonly ModelCapability[],
+): boolean {
+  const selected = modelId.trim();
+  if (selected !== "" && transcriptionId.trim() !== "") return true;
+  if (!preserveExisting) return false;
+  return storedModels.some(
+    (model) =>
+      (selected === "" || model.id === selected) &&
+      isCompleteRealtimeVoiceCapability({
+        ...model,
+        realtimeTranscriptionModel: transcriptionId.trim() || model.realtimeTranscriptionModel,
+      }),
+  );
+}
+
+function hasStoredOutputVoice(
+  preserveExisting: boolean,
+  modelId: string,
+  storedModels: readonly ModelCapability[],
+): boolean {
+  const selected = modelId.trim();
+  return (
+    preserveExisting &&
+    storedModels.some(
+      (model) =>
+        model.kind === "voice" &&
+        model.supportsSpeechOutput === true &&
+        (model.supportedVoicePersonas?.length ?? 0) > 0 &&
+        (selected === "" || model.id === selected),
+    )
+  );
 }
 
 function VoiceGuidanceNote({
@@ -1195,41 +1535,49 @@ function VoiceGuidanceNote({
   storedModels,
   voiceModelId,
   voiceRealtimeModelId,
+  voiceRealtimeTranscriptionModelId,
   voiceSpeechOutputModelId,
+  voiceOutputVoiceId,
 }: VoiceGuidanceNoteProps): ReactNode {
+  const speechInput = voiceCapabilitySelected(
+    voiceModelId,
+    preserveExisting,
+    storedModels,
+    "supportsSpeechInput",
+  );
+  const speechOutput = voiceCapabilitySelected(
+    voiceSpeechOutputModelId,
+    preserveExisting,
+    storedModels,
+    "supportsSpeechOutput",
+  );
+  const nativeRealtime = hasCompleteRealtimeSelection(
+    voiceRealtimeModelId,
+    voiceRealtimeTranscriptionModelId,
+    preserveExisting,
+    storedModels,
+  );
+  const storedOutputVoice = hasStoredOutputVoice(
+    preserveExisting,
+    voiceSpeechOutputModelId,
+    storedModels,
+  );
+  const readAloud = speechOutput && (voiceOutputVoiceId.trim() !== "" || storedOutputVoice);
   return (
     <div className="gw-note gw-span-2">
       {t("gatewaySetup.voice.guidance")}
       <br />
       {t("gatewaySetup.voice.selectedCapabilities", {
-        dictate: voiceCapabilityStatus(
-          t,
-          voiceModelId,
-          preserveExisting,
-          storedModels,
-          "supportsSpeechInput",
-        ),
-        digitalVoice: voiceCapabilityStatus(
-          t,
-          voiceRealtimeModelId,
-          preserveExisting,
-          storedModels,
-          "supportsRealtimeVoice",
-        ),
-        readAloud: voiceCapabilityStatus(
-          t,
-          voiceSpeechOutputModelId,
-          preserveExisting,
-          storedModels,
-          "supportsSpeechOutput",
-        ),
+        dictate: t(speechInput ? "common.on" : "common.off"),
+        digitalVoice: t(readAloud && (nativeRealtime || speechInput) ? "common.on" : "common.off"),
+        readAloud: t(readAloud ? "common.on" : "common.off"),
       })}
     </div>
   );
 }
 
 interface VoiceDictateDeploymentFieldProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly value: string;
   readonly disabled: boolean;
   readonly onChange: Dispatch<SetStateAction<string>>;
@@ -1260,7 +1608,7 @@ function VoiceDictateDeploymentField({
 }
 
 interface VoiceRealtimeDeploymentFieldProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly value: string;
   readonly disabled: boolean;
   readonly onChange: Dispatch<SetStateAction<string>>;
@@ -1326,7 +1674,7 @@ function VoiceRealtimeTranscriptionDeploymentField({
 }
 
 interface VoiceSpeechOutputDeploymentFieldProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly value: string;
   readonly disabled: boolean;
   readonly onChange: Dispatch<SetStateAction<string>>;
@@ -1360,7 +1708,7 @@ function VoiceSpeechOutputDeploymentField({
 }
 
 interface VoiceOutputVoiceFieldProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly value: string;
   readonly disabled: boolean;
   readonly onChange: Dispatch<SetStateAction<string>>;
@@ -1391,6 +1739,7 @@ function VoiceOutputVoiceField({
 }
 
 interface VoiceProviderLocalityFieldProps {
+  readonly t: GatewaySetupTranslate;
   readonly labelId: string;
   readonly value: VoiceProviderLocality;
   readonly disabled: boolean;
@@ -1398,6 +1747,7 @@ interface VoiceProviderLocalityFieldProps {
 }
 
 function VoiceProviderLocalityField({
+  t,
   labelId,
   value,
   disabled,
@@ -1411,7 +1761,7 @@ function VoiceProviderLocalityField({
       <KeikoSelect
         ariaLabelledBy={labelId}
         menuTitle="Provider locality"
-        sections={VOICE_PROVIDER_LOCALITY_SECTIONS}
+        sections={voiceProviderLocalitySections(t)}
         showMenuHeader={false}
         triggerClassName="gw-input gw-provider-locality-select"
         menuClassName="gw-provider-locality-menu"
@@ -1425,8 +1775,86 @@ function VoiceProviderLocalityField({
   );
 }
 
+interface VoiceEndpointStyleFieldProps {
+  readonly labelId: string;
+  readonly value: string;
+  readonly disabled: boolean;
+  readonly onChange: (next: string) => void;
+}
+
+interface VoiceProtocolSelectFieldProps {
+  readonly labelId: string;
+  readonly labelKey: MessageKey | OptionalWidgetMessageKey;
+  readonly sections: (
+    t: GatewaySetupTranslate,
+  ) => readonly [
+    { readonly options: readonly { readonly value: string; readonly label: string }[] },
+  ];
+  readonly value: string;
+  readonly disabled: boolean;
+  readonly onChange: (next: string) => void;
+}
+
+// The endpoint style and the realtime auth mode are the same control with a different option
+// list: one optional protocol select, labelled by its own catalog key. The server refuses an
+// audio endpoint move that leaves either unstated, so the operator needs a way to state both
+// (review findings on #3048).
+function VoiceProtocolSelectField({
+  labelId,
+  labelKey,
+  sections,
+  value,
+  disabled,
+  onChange,
+}: VoiceProtocolSelectFieldProps): ReactNode {
+  const t = useGatewaySetupTranslate();
+  return (
+    <div className="gw-field">
+      <span id={labelId}>
+        {t(labelKey)} <span className="dlg-opt">{t("gatewaySetup.voice.protocol.optional")}</span>
+      </span>
+      <KeikoSelect
+        ariaLabelledBy={labelId}
+        menuTitle={t(labelKey)}
+        sections={sections(t)}
+        showMenuHeader={false}
+        triggerClassName="gw-input gw-provider-locality-select"
+        menuClassName="gw-provider-locality-menu"
+        value={value}
+        disabled={disabled}
+        onValueChange={onChange}
+      />
+    </div>
+  );
+}
+
+interface VoiceApiVersionFieldProps {
+  readonly value: string;
+  readonly disabled: boolean;
+  readonly onChange: Dispatch<SetStateAction<string>>;
+}
+
+function VoiceApiVersionField({ value, disabled, onChange }: VoiceApiVersionFieldProps): ReactNode {
+  const t = useGatewaySetupTranslate();
+  return (
+    <label className="gw-field">
+      <span>
+        {t("gatewaySetup.voice.apiVersion.label")}{" "}
+        <span className="dlg-opt">{t("gatewaySetup.voice.apiVersion.azureOnly")}</span>
+      </span>
+      <input
+        className="gw-input"
+        value={value}
+        disabled={disabled}
+        placeholder="2025-04-01-preview"
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
+  );
+}
+
 interface VoiceEndpointUrlFieldProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly preserveExisting: boolean;
   readonly value: string;
   readonly disabled: boolean;
@@ -1468,7 +1896,7 @@ function VoiceEndpointUrlField({
 }
 
 interface VoiceCredentialFieldProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly preserveExisting: boolean;
   readonly value: string;
   readonly disabled: boolean;
@@ -1508,7 +1936,7 @@ function VoiceCredentialField({
 }
 
 interface VoiceAuthHeaderFieldProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly preserveExisting: boolean;
   readonly value: string;
   readonly disabled: boolean;
@@ -1542,7 +1970,7 @@ function VoiceAuthHeaderField({
 }
 
 interface VoiceTimeoutFieldProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly preserveExisting: boolean;
   readonly value: string;
   readonly disabled: boolean;
@@ -1577,31 +2005,23 @@ function VoiceTimeoutField({
 }
 
 interface VoiceDeploymentFieldsProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly preserveExisting: boolean;
   readonly storedModels: readonly ModelCapability[];
   readonly voiceModelId: string;
   readonly setVoiceModelId: Dispatch<SetStateAction<string>>;
   readonly voiceRealtimeModelId: string;
-  readonly setVoiceRealtimeModelId: Dispatch<SetStateAction<string>>;
-  readonly commitVoiceRealtimeModelId: () => void;
   readonly voiceRealtimeTranscriptionModelId: string;
-  readonly setVoiceRealtimeTranscriptionModelId: Dispatch<SetStateAction<string>>;
-  readonly voiceSupportsSemanticTurnDetection: boolean;
-  readonly setVoiceSupportsSemanticTurnDetection: (enabled: boolean) => void;
   readonly voiceSpeechOutputModelId: string;
   readonly setVoiceSpeechOutputModelId: Dispatch<SetStateAction<string>>;
   readonly commitVoiceSpeechOutputModelId: () => void;
   readonly voiceOutputVoiceId: string;
   readonly setVoiceOutputVoiceId: Dispatch<SetStateAction<string>>;
-  readonly voiceProviderLocalityLabelId: string;
-  readonly voiceProviderLocality: VoiceProviderLocality;
-  readonly setVoiceProviderLocality: Dispatch<SetStateAction<VoiceProviderLocality>>;
   readonly disabled: boolean;
 }
 
 interface VoiceSemanticTurnDetectionFieldProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly checked: boolean;
   readonly disabled: boolean;
   readonly onChange: (enabled: boolean) => void;
@@ -1641,7 +2061,9 @@ function VoiceDeploymentFields(props: VoiceDeploymentFieldsProps): ReactNode {
         storedModels={props.storedModels}
         voiceModelId={props.voiceModelId}
         voiceRealtimeModelId={props.voiceRealtimeModelId}
+        voiceRealtimeTranscriptionModelId={props.voiceRealtimeTranscriptionModelId}
         voiceSpeechOutputModelId={props.voiceSpeechOutputModelId}
+        voiceOutputVoiceId={props.voiceOutputVoiceId}
       />
       <VoiceDictateDeploymentField
         t={props.t}
@@ -1649,6 +2071,28 @@ function VoiceDeploymentFields(props: VoiceDeploymentFieldsProps): ReactNode {
         disabled={props.disabled}
         onChange={props.setVoiceModelId}
       />
+      <VoiceSpeechOutputDeploymentField
+        t={props.t}
+        value={props.voiceSpeechOutputModelId}
+        disabled={props.disabled}
+        onChange={props.setVoiceSpeechOutputModelId}
+        onBlur={props.commitVoiceSpeechOutputModelId}
+      />
+      <VoiceOutputVoiceField
+        t={props.t}
+        value={props.voiceOutputVoiceId}
+        disabled={props.disabled}
+        onChange={props.setVoiceOutputVoiceId}
+      />
+    </>
+  );
+}
+
+function VoiceAdvancedDeploymentFields(
+  props: VoiceFieldsSectionProps & { readonly disabled: boolean },
+): ReactNode {
+  return (
+    <>
       <VoiceRealtimeDeploymentField
         t={props.t}
         value={props.voiceRealtimeModelId}
@@ -1669,31 +2113,40 @@ function VoiceDeploymentFields(props: VoiceDeploymentFieldsProps): ReactNode {
         disabled={props.disabled}
         onChange={props.setVoiceSupportsSemanticTurnDetection}
       />
-      <VoiceSpeechOutputDeploymentField
-        t={props.t}
-        value={props.voiceSpeechOutputModelId}
-        disabled={props.disabled}
-        onChange={props.setVoiceSpeechOutputModelId}
-        onBlur={props.commitVoiceSpeechOutputModelId}
-      />
-      <VoiceOutputVoiceField
-        t={props.t}
-        value={props.voiceOutputVoiceId}
-        disabled={props.disabled}
-        onChange={props.setVoiceOutputVoiceId}
-      />
       <VoiceProviderLocalityField
+        t={props.t}
         labelId={props.voiceProviderLocalityLabelId}
         value={props.voiceProviderLocality}
         disabled={props.disabled}
         onChange={props.setVoiceProviderLocality}
+      />
+      <VoiceProtocolSelectField
+        labelId={props.voiceEndpointStyleLabelId}
+        labelKey="gatewaySetup.voice.endpointStyle.label"
+        sections={voiceEndpointStyleSections}
+        value={props.voiceEndpointStyle}
+        disabled={props.disabled}
+        onChange={props.setVoiceEndpointStyle}
+      />
+      <VoiceApiVersionField
+        value={props.voiceApiVersion}
+        disabled={props.disabled}
+        onChange={props.setVoiceApiVersion}
+      />
+      <VoiceProtocolSelectField
+        labelId={props.voiceRealtimeAuthModeLabelId}
+        labelKey="gatewaySetup.voice.realtimeAuthMode.label"
+        sections={voiceRealtimeAuthModeSections}
+        value={props.voiceRealtimeAuthMode}
+        disabled={props.disabled}
+        onChange={props.setVoiceRealtimeAuthMode}
       />
     </>
   );
 }
 
 interface VoiceConnectionFieldsProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly preserveExisting: boolean;
   readonly voiceBaseUrl: string;
   readonly setVoiceBaseUrl: Dispatch<SetStateAction<string>>;
@@ -1744,7 +2197,7 @@ function VoiceConnectionFields(props: VoiceConnectionFieldsProps): ReactNode {
 }
 
 interface VoiceFieldsSectionProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly busy: boolean;
   readonly success: string | undefined;
   readonly preserveExisting: boolean;
@@ -1764,6 +2217,14 @@ interface VoiceFieldsSectionProps {
   readonly voiceOutputVoiceId: string;
   readonly setVoiceOutputVoiceId: Dispatch<SetStateAction<string>>;
   readonly voiceProviderLocalityLabelId: string;
+  readonly voiceEndpointStyleLabelId: string;
+  readonly voiceRealtimeAuthModeLabelId: string;
+  readonly voiceRealtimeAuthMode: string;
+  readonly setVoiceRealtimeAuthMode: (next: string) => void;
+  readonly voiceEndpointStyle: string;
+  readonly setVoiceEndpointStyle: (next: string) => void;
+  readonly voiceApiVersion: string;
+  readonly setVoiceApiVersion: Dispatch<SetStateAction<string>>;
   readonly voiceProviderLocality: VoiceProviderLocality;
   readonly setVoiceProviderLocality: Dispatch<SetStateAction<VoiceProviderLocality>>;
   readonly voiceBaseUrl: string;
@@ -1777,6 +2238,9 @@ interface VoiceFieldsSectionProps {
   readonly setVoiceTimeoutMs: Dispatch<SetStateAction<string>>;
 }
 
+// The endpoint-protocol and locality props travel as one group: they describe the same thing (how
+// this audio connection speaks), and forwarding them individually pushed VoiceFieldsSection past
+// the 50-line bar the keiko-ui suppression register only lets shrink.
 function VoiceFieldsSection(props: VoiceFieldsSectionProps): ReactNode {
   const disabled = props.busy || props.success !== undefined;
   return (
@@ -1788,50 +2252,50 @@ function VoiceFieldsSection(props: VoiceFieldsSectionProps): ReactNode {
         voiceModelId={props.voiceModelId}
         setVoiceModelId={props.setVoiceModelId}
         voiceRealtimeModelId={props.voiceRealtimeModelId}
-        setVoiceRealtimeModelId={props.setVoiceRealtimeModelId}
-        commitVoiceRealtimeModelId={props.commitVoiceRealtimeModelId}
         voiceRealtimeTranscriptionModelId={props.voiceRealtimeTranscriptionModelId}
-        setVoiceRealtimeTranscriptionModelId={props.setVoiceRealtimeTranscriptionModelId}
-        voiceSupportsSemanticTurnDetection={props.voiceSupportsSemanticTurnDetection}
-        setVoiceSupportsSemanticTurnDetection={props.setVoiceSupportsSemanticTurnDetection}
         voiceSpeechOutputModelId={props.voiceSpeechOutputModelId}
         setVoiceSpeechOutputModelId={props.setVoiceSpeechOutputModelId}
         commitVoiceSpeechOutputModelId={props.commitVoiceSpeechOutputModelId}
         voiceOutputVoiceId={props.voiceOutputVoiceId}
         setVoiceOutputVoiceId={props.setVoiceOutputVoiceId}
-        voiceProviderLocalityLabelId={props.voiceProviderLocalityLabelId}
-        voiceProviderLocality={props.voiceProviderLocality}
-        setVoiceProviderLocality={props.setVoiceProviderLocality}
         disabled={disabled}
       />
-      <VoiceConnectionFields
-        t={props.t}
-        preserveExisting={props.preserveExisting}
-        voiceBaseUrl={props.voiceBaseUrl}
-        setVoiceBaseUrl={props.setVoiceBaseUrl}
-        commitVoiceBaseUrl={props.commitVoiceBaseUrl}
-        voiceApiKey={props.voiceApiKey}
-        setVoiceApiKey={props.setVoiceApiKey}
-        voiceApiKeyHeaderName={props.voiceApiKeyHeaderName}
-        setVoiceApiKeyHeaderName={props.setVoiceApiKeyHeaderName}
-        voiceTimeoutMs={props.voiceTimeoutMs}
-        setVoiceTimeoutMs={props.setVoiceTimeoutMs}
-        disabled={disabled}
-      />
+      <details className="gw-replace gw-span-2" data-testid="voice-advanced-settings">
+        <summary>{props.t("gatewaySetup.voice.advancedSettings")}</summary>
+        <div className="gw-grid">
+          <VoiceAdvancedDeploymentFields {...props} disabled={disabled} />
+          <VoiceConnectionFields
+            t={props.t}
+            preserveExisting={props.preserveExisting}
+            voiceBaseUrl={props.voiceBaseUrl}
+            setVoiceBaseUrl={props.setVoiceBaseUrl}
+            commitVoiceBaseUrl={props.commitVoiceBaseUrl}
+            voiceApiKey={props.voiceApiKey}
+            setVoiceApiKey={props.setVoiceApiKey}
+            voiceApiKeyHeaderName={props.voiceApiKeyHeaderName}
+            setVoiceApiKeyHeaderName={props.setVoiceApiKeyHeaderName}
+            voiceTimeoutMs={props.voiceTimeoutMs}
+            setVoiceTimeoutMs={props.setVoiceTimeoutMs}
+            disabled={disabled}
+          />
+        </div>
+      </details>
     </div>
   );
 }
 
 interface VoiceStoredCredentialsProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly voiceModelNames: readonly string[];
   readonly fields: ReactNode;
+  readonly needsSetup: boolean;
 }
 
 function VoiceStoredCredentials({
   t,
   voiceModelNames,
   fields,
+  needsSetup,
 }: VoiceStoredCredentialsProps): ReactNode {
   return (
     <>
@@ -1853,7 +2317,7 @@ function VoiceStoredCredentials({
           </div>
         ) : null}
       </div>
-      <details className="gw-replace">
+      <details className="gw-replace" open={needsSetup}>
         <summary>{t("gatewaySetup.voice.updateSettings")}</summary>
         {fields}
       </details>
@@ -1862,18 +2326,30 @@ function VoiceStoredCredentials({
 }
 
 interface VoiceModelSectionProps {
-  readonly t: I18nTranslate;
+  readonly t: GatewaySetupTranslate;
   readonly preserveExisting: boolean;
   readonly voiceModelNames: readonly string[];
+  readonly storedModels: readonly ModelCapability[];
   readonly fields: ReactNode;
+}
+
+function storedModelsNeedVoiceSetup(models: readonly ModelCapability[]): boolean {
+  return models.some(
+    (model) =>
+      model.kind === "voice" &&
+      ((model.supportsSpeechOutput === true && (model.supportedVoicePersonas?.length ?? 0) === 0) ||
+        (model.supportsRealtimeVoice === true && !isCompleteRealtimeVoiceCapability(model))),
+  );
 }
 
 function VoiceModelSection({
   t,
   preserveExisting,
   voiceModelNames,
+  storedModels,
   fields,
 }: VoiceModelSectionProps): ReactNode {
+  const needsSetup = storedModelsNeedVoiceSetup(storedModels);
   return (
     <section className="gw-section" aria-labelledby="gw-voice-section-title">
       <div className="gw-section-head">
@@ -1883,7 +2359,12 @@ function VoiceModelSection({
         </div>
       </div>
       {preserveExisting ? (
-        <VoiceStoredCredentials t={t} voiceModelNames={voiceModelNames} fields={fields} />
+        <VoiceStoredCredentials
+          t={t}
+          voiceModelNames={voiceModelNames}
+          needsSetup={needsSetup}
+          fields={fields}
+        />
       ) : (
         fields
       )}
@@ -2023,10 +2504,12 @@ export function GatewaySetupDialog({
   readonly storedApiKeyHeaderName?: string | undefined;
   readonly storedModels?: readonly ModelCapability[] | undefined;
 }): ReactNode {
-  const t = useTranslate();
+  const t = useGatewaySetupTranslate();
   const { theme, toggle: toggleTheme } = useTheme();
   const dialogRef = useRef<HTMLDialogElement>(null);
   const voiceProviderLocalityLabelId = useId();
+  const voiceEndpointStyleLabelId = useId();
+  const voiceRealtimeAuthModeLabelId = useId();
   const baseUrlRef = useRef<HTMLInputElement>(null);
   const figmaAccessTokenRef = useRef<HTMLInputElement>(null);
   const triggerRef = useRef<HTMLElement | null>(null);
@@ -2040,6 +2523,51 @@ export function GatewaySetupDialog({
   const [workflowEligibleModelIds, setWorkflowEligibleModelIds] = useState(() =>
     preserveExisting ? storedWorkflowEligibleModelIds(storedModels) : "",
   );
+  const [imageInputModelIdsConfigured, setImageInputModelIdsConfigured] = useState(false);
+  const [importedEmbeddingModelIds, setImportedEmbeddingModelIds] = useState<readonly string[]>([]);
+  const [importedVoiceEndpointStyle, setImportedVoiceEndpointStyle] = useState("");
+  const [importedVoiceApiVersion, setImportedVoiceApiVersion] = useState("");
+  const [voiceEndpointStyle, setVoiceEndpointStyle] = useState("");
+  const [voiceApiVersion, setVoiceApiVersion] = useState("");
+  const [voiceProtocolBoundBaseUrl, setVoiceProtocolBoundBaseUrl] = useState("");
+
+  // Stating the protocol by hand REBINDS it to the endpoint currently in the form (review
+  // finding on #3042). Releasing the binding outright would reopen the hole it closes: after an
+  // upload the endpoint identity ref is still undefined in a fresh dialog — the upload sets the
+  // URL programmatically — so a later URL change fires no reset, and an unbound protocol would
+  // follow the operator to the new host (review finding on #3048). An empty URL binds to
+  // nothing, which is what a statement made before the endpoint is typed, or against the
+  // stored endpoint in preserve mode, has to mean.
+  const bindStatedVoiceProtocol = (): void => {
+    setVoiceProtocolBoundBaseUrl(voiceBaseUrl.trim());
+  };
+  // An api version belongs to the Azure deployment path alone — the gateway parser refuses the
+  // pair — so any style but that path drops the version with it, instead of returning a 400 the
+  // operator has to decode and clear by hand (review findings on #3048). "Not stated" clears it
+  // too, in BOTH modes: it means "inherit the stored protocol", and the stored template supplies
+  // the version along with the style. Keeping a typed version there submitted it with no style,
+  // which the server then paired against an inherited openai-compatible and refused.
+  const statedStyleKeepsApiVersion = (next: string): boolean => next === "azure-openai-deployment";
+  const [voiceRealtimeAuthMode, setVoiceRealtimeAuthMode] = useState("");
+  const stateVoiceRealtimeAuthMode = (next: string): void => {
+    setVoiceRealtimeAuthMode(next);
+    bindStatedVoiceProtocol();
+  };
+  const stateVoiceEndpointStyle = (next: string): void => {
+    setVoiceEndpointStyle(next);
+    if (!statedStyleKeepsApiVersion(next)) setVoiceApiVersion("");
+    bindStatedVoiceProtocol();
+  };
+  const stateVoiceApiVersion: Dispatch<SetStateAction<string>> = (value): void => {
+    setVoiceApiVersion(value);
+    bindStatedVoiceProtocol();
+  };
+  const [importedVoiceRealtimeAuthMode, setImportedVoiceRealtimeAuthMode] = useState("");
+  const [importedVoiceEndpointBaseUrl, setImportedVoiceEndpointBaseUrl] = useState("");
+  const [importedEndpointStyle, setImportedEndpointStyle] = useState("");
+  const [importedApiVersion, setImportedApiVersion] = useState("");
+  const [importedEndpointBaseUrl, setImportedEndpointBaseUrl] = useState("");
+  const [uploadReadPending, setUploadReadPending] = useState(false);
   const [workflowEligibleModelIdsConfigured, setWorkflowEligibleModelIdsConfigured] =
     useState(false);
   const [voiceBaseUrl, setVoiceBaseUrl] = useState("");
@@ -2053,6 +2581,19 @@ export function GatewaySetupDialog({
   );
   const [voiceSemanticTurnDetectionConfigured, setVoiceSemanticTurnDetectionConfigured] =
     useState(false);
+  // No form control exists for speech-synthesis instruction support — the pair is file-scoped
+  // hidden state set by a config upload, cleared on a speech-output identity change (#3037).
+  const [voiceSupportsSpeechSynthesisInstructions, setVoiceSupportsSpeechSynthesisInstructions] =
+    useState(false);
+  const [
+    voiceSpeechSynthesisInstructionsConfigured,
+    setVoiceSpeechSynthesisInstructionsConfigured,
+  ] = useState(false);
+  // The model id the imported flag is BOUND to — a fresh dialog's identity ref never commits,
+  // so the binding, not the ref transition, invalidates the flag when the user retypes the
+  // speech-output deployment (review finding on #3041).
+  const [voiceSpeechSynthesisInstructionsModelId, setVoiceSpeechSynthesisInstructionsModelId] =
+    useState("");
   const [voiceSpeechOutputModelId, setVoiceSpeechOutputModelId] = useState("");
   const [voiceOutputVoiceId, setVoiceOutputVoiceId] = useState("");
   const [voiceOutputVoiceIdConfigured, setVoiceOutputVoiceIdConfigured] = useState(false);
@@ -2092,6 +2633,12 @@ export function GatewaySetupDialog({
   const resetSpeechOutputDependencies = (): void => {
     setVoiceOutputVoiceId("");
     setVoiceOutputVoiceIdConfigured(false);
+    // An EXPLICIT clear, not an omission: the replacement model's template at the same endpoint
+    // is the OLD provider's rawCapability, so an omitted field would re-inherit instruction
+    // support onto a deployment that never declared it (review finding on #3041).
+    setVoiceSupportsSpeechSynthesisInstructions(false);
+    setVoiceSpeechSynthesisInstructionsConfigured(true);
+    setVoiceSpeechSynthesisInstructionsModelId("");
   };
 
   const resetEndpointDependencies = (
@@ -2099,6 +2646,22 @@ export function GatewaySetupDialog({
     nextIdentity: ProviderIdentity | undefined,
   ): void => {
     const restoresStoredEndpoint = nextIdentity === STORED_VOICE_ENDPOINT_IDENTITY;
+    // The protocol was declared for the OLD host: a new endpoint must restate it (the save
+    // refuses otherwise), so it can never travel silently (review finding on #3042). The binding
+    // is part of that state — leaving it behind would point at an endpoint no field describes
+    // any more (review finding on #3048).
+    // Returning to the UPLOADED endpoint restores what that file declared for it, the same way
+    // the stored endpoint restores its own template below. Clearing unconditionally meant undoing
+    // an edit left the original Azure URL without its deployment-path protocol — the save then
+    // succeeded on the OpenAI-compatible shape (review finding on #3048).
+    const restoresUploadedEndpoint = restoresUploadedVoiceEndpoint(nextBaseUrl);
+    setVoiceEndpointStyle(restoresUploadedEndpoint ? importedVoiceEndpointStyle : "");
+    setVoiceApiVersion(restoresUploadedEndpoint ? importedVoiceApiVersion : "");
+    // The realtime auth mode is protocol too and was declared for the OLD host: leaving it while
+    // the binding is emptied let it ride the submit to the new endpoint alone, which the server
+    // reads as a valid restatement (review finding on #3048).
+    setVoiceRealtimeAuthMode(restoresUploadedEndpoint ? importedVoiceRealtimeAuthMode : "");
+    setVoiceProtocolBoundBaseUrl(restoresUploadedEndpoint ? importedVoiceEndpointBaseUrl : "");
     setVoiceModelId("");
     setVoiceRealtimeModelId("");
     setVoiceSpeechOutputModelId("");
@@ -2149,6 +2712,20 @@ export function GatewaySetupDialog({
       resetSpeechOutputDependencies,
       false,
     );
+    invalidateDivergedSynthesisBinding(next);
+  };
+
+  // Instruction support is a property of the exact deployment the file declared it for — a
+  // diverging id turns the configured flag into an EXPLICIT clear, or the server template at
+  // the same endpoint would re-inherit it onto the replacement model (review finding on #3041).
+  const invalidateDivergedSynthesisBinding = (next: string): void => {
+    if (
+      voiceSpeechSynthesisInstructionsConfigured &&
+      voiceSupportsSpeechSynthesisInstructions &&
+      next.trim() !== voiceSpeechSynthesisInstructionsModelId
+    ) {
+      setVoiceSupportsSpeechSynthesisInstructions(false);
+    }
   };
 
   const commitVoiceSpeechOutputModelId = (): void => {
@@ -2173,6 +2750,29 @@ export function GatewaySetupDialog({
       () => resetEndpointDependencies(next, nextIdentity),
       false,
     );
+    // Typing back to the uploaded URL never leaves the committed identity, so no transition
+    // fires and the restore inside the reset is never reached — the protocol stayed cleared by
+    // the first divergent keystroke even though the endpoint is the original one again (review
+    // finding on #3048).
+    if (restoresUploadedVoiceEndpoint(next)) restoreUploadedVoiceProtocol();
+  };
+
+  const restoresUploadedVoiceEndpoint = (nextBaseUrl: string): boolean =>
+    importedVoiceEndpointBaseUrl !== "" &&
+    canonicalEndpointIdentity(nextBaseUrl) ===
+      canonicalEndpointIdentity(importedVoiceEndpointBaseUrl);
+
+  // Only what the RESET cleared comes back, and the binding is what says so: the reset empties
+  // it, while any hand statement — including choosing "Not stated" or clearing the version —
+  // rebinds to the URL in the form. Testing the fields for emptiness could not tell a cleared
+  // field from a deliberately unstated one, so an equivalent URL edit undid the operator's own
+  // choice (review findings on #3048).
+  const restoreUploadedVoiceProtocol = (): void => {
+    if (voiceProtocolBoundBaseUrl !== "") return;
+    setVoiceEndpointStyle(importedVoiceEndpointStyle);
+    setVoiceApiVersion(importedVoiceApiVersion);
+    setVoiceRealtimeAuthMode(importedVoiceRealtimeAuthMode);
+    setVoiceProtocolBoundBaseUrl(importedVoiceEndpointBaseUrl);
   };
 
   const commitVoiceBaseUrl = (): void => {
@@ -2266,6 +2866,169 @@ export function GatewaySetupDialog({
     }
   }, [apiKey, baseUrl, busy, error, preserveExisting]);
 
+  function applyUploadedConfig(fields: GatewayConfigUploadFields): void {
+    if (fields.baseUrl !== undefined) setBaseUrl(fields.baseUrl);
+    if (fields.apiKey !== undefined) setApiKey(fields.apiKey);
+    if (fields.apiKeyHeaderName !== undefined) setApiKeyHeaderName(fields.apiKeyHeaderName);
+    if (fields.timeoutMs !== undefined) setTimeoutMs(fields.timeoutMs);
+    if (fields.deploymentNames.length > 0) setDeploymentNames(fields.deploymentNames.join("\n"));
+    // A defined-but-empty flag list is the file explicitly declaring "none" and must clear the
+    // field exactly like manual emptying would (review finding on #3031); only an undefined list
+    // (the file never speaks about the flag) leaves the field untouched.
+    // The CONFIGURED flags are invisible state and therefore file-scoped like every other hidden
+    // import: each upload states whether THIS file speaks about the flag lists. The visible
+    // textarea values persist unless the file replaces them (the user can see and correct
+    // those), but a stale invisible flag from an earlier file's explicit empty list would turn
+    // the next submit into a stored-flag clear the current file never asked for (#3037).
+    setImageInputModelIdsConfigured(fields.imageInputModelIds !== undefined);
+    if (fields.imageInputModelIds !== undefined) {
+      setImageInputModelIds(fields.imageInputModelIds.join("\n"));
+    }
+    setWorkflowEligibleModelIdsConfigured(fields.workflowEligibleModelIds !== undefined);
+    if (fields.workflowEligibleModelIds !== undefined) {
+      setWorkflowEligibleModelIds(fields.workflowEligibleModelIds.join("\n"));
+    }
+    // Imported embedding kinds ride along invisibly — they assert the kind to the setup route
+    // so a fresh save cannot chat-probe an embedding out of the config (review finding on #3037).
+    // Unlike the VISIBLE fields (which the user can see and correct), hidden imported state is
+    // strictly file-scoped: every successful upload REPLACES it, or a corrected second upload
+    // would still submit the previous file's kind declarations (review finding on #3037).
+    setImportedEmbeddingModelIds(fields.embeddingModelIds ?? []);
+    if (fields.figmaAccessToken !== undefined) setFigmaAccessToken(fields.figmaAccessToken);
+    applyUploadedVoiceConfig(fields);
+    // GENERIC state, so it is applied here rather than inside the voice helper: every sibling in
+    // there returns early when the file carries no voice section, and one added to the voice
+    // entry point would silently reintroduce the stale-binding defect this function exists to
+    // fix (review finding on #3046).
+    applyUploadedGenericEndpoint(fields);
+  }
+
+  /**
+   * Voice fields apply through the SAME update wrappers typing uses, in typing order: the base
+   * URL first (its identity transition resets the dependent role fields), the realtime id before
+   * its transcription id (the realtime transition clears the transcription), and the semantic
+   * turn detection flag last so the file's explicit declaration wins over inherited defaults.
+   */
+  function applyUploadedVoiceConnection(fields: GatewayConfigUploadFields): void {
+    if (fields.voiceBaseUrl !== undefined) updateVoiceBaseUrl(fields.voiceBaseUrl);
+    if (fields.voiceApiKey !== undefined) setVoiceApiKey(fields.voiceApiKey);
+    if (fields.voiceApiKeyHeaderName !== undefined) {
+      setVoiceApiKeyHeaderName(fields.voiceApiKeyHeaderName);
+    }
+    if (fields.voiceTimeoutMs !== undefined) setVoiceTimeoutMs(fields.voiceTimeoutMs);
+  }
+
+  // When the file carries a voice section, its role set REPLACES the form's roles — a corrected
+  // upload that removed a role must not leave the previous deployment visible, or Test & Save
+  // would silently re-add it (review finding on #3037). A file with no voice section leaves the
+  // fields untouched, like every other absent statement. The parser guarantees the gate is
+  // whole: a voice section always carries voiceBaseUrl (a section without one is refused as
+  // invalid), so role ids can never arrive while the section counts as absent (KfQ finding on
+  // #3037).
+  function applyUploadedVoiceRoles(fields: GatewayConfigUploadFields): void {
+    const speaksAboutVoice = fields.voiceBaseUrl !== undefined;
+    const applyRole = (value: string | undefined, set: (next: string) => void): void => {
+      if (speaksAboutVoice) set(value ?? "");
+    };
+    applyRole(fields.voiceModelId, setVoiceModelId);
+    applyRole(fields.voiceRealtimeModelId, updateVoiceRealtimeModelId);
+    applyRole(fields.voiceRealtimeTranscriptionModelId, setVoiceRealtimeTranscriptionModelId);
+    applyRole(fields.voiceSpeechOutputModelId, updateVoiceSpeechOutputModelId);
+  }
+
+  // AFTER the speech-output role update — file-scoped like the roles: a voice section that says
+  // nothing about synthesis support resets the hidden pair, or a fresh dialog whose identity ref
+  // never committed would submit a stale configured true without a speech-output role and make
+  // the corrected file unsavable (review finding on #3041).
+  function applyUploadedSynthesisSupport(fields: GatewayConfigUploadFields): void {
+    if (
+      fields.voiceBaseUrl === undefined &&
+      fields.voiceSupportsSpeechSynthesisInstructions === undefined
+    ) {
+      return;
+    }
+    setVoiceSupportsSpeechSynthesisInstructions(
+      fields.voiceSupportsSpeechSynthesisInstructions ?? false,
+    );
+    setVoiceSpeechSynthesisInstructionsConfigured(
+      fields.voiceSupportsSpeechSynthesisInstructions !== undefined,
+    );
+    setVoiceSpeechSynthesisInstructionsModelId(
+      fields.voiceSupportsSpeechSynthesisInstructions !== undefined
+        ? (fields.voiceSpeechOutputModelId ?? "")
+        : "",
+    );
+  }
+
+  function applyUploadedVoiceConfig(fields: GatewayConfigUploadFields): void {
+    applyUploadedVoiceConnection(fields);
+    applyUploadedVoiceRoles(fields);
+    // After the speech-output update above — its identity transition clears the output voice.
+    // File-scoped like the roles: a voice section that dropped the profile clears the field and
+    // its configured flag, or Test & Save would silently persist the removed profile (#3037).
+    if (fields.voiceBaseUrl !== undefined || fields.voiceOutputVoiceId !== undefined) {
+      setVoiceOutputVoiceId(fields.voiceOutputVoiceId ?? "");
+      setVoiceOutputVoiceIdConfigured(fields.voiceOutputVoiceId !== undefined);
+    }
+    applyUploadedSynthesisSupport(fields);
+    if (fields.voiceProviderLocality !== undefined) {
+      setVoiceProviderLocality(fields.voiceProviderLocality);
+      setVoiceProviderLocalityConfigured(true);
+    }
+    if (fields.voiceSemanticTurnDetection !== undefined) {
+      updateVoiceSemanticTurnDetection(fields.voiceSemanticTurnDetection);
+    }
+    applyUploadedVoiceEndpoint(fields);
+  }
+
+  // The endpoint protocol rides along invisibly and is persisted verbatim by the setup route —
+  // without it a fresh save of an Azure speech endpoint loses its deployment URL shape (#3037).
+  // Hidden imported state is file-scoped: when the file speaks about the voice connection at
+  // all, its protocol declaration REPLACES the previous upload's (a corrected re-upload without
+  // a style must clear the stale one); a file with no voice section leaves the visible voice
+  // fields — and therefore the protocol that belongs to them — untouched.
+  // Twin of the voice binding below: the generic protocol is BOUND to the uploaded gateway
+  // URL and cleared when the file carries none, so a stale binding cannot outlive a corrected
+  // re-upload (#3042). The generic binding is file-scoped without exception — a file that
+  // states no gateway URL states no protocol either, and returning early here would leave the
+  // PREVIOUS file's style bound to a URL the form still holds, riding the next submit unseen.
+  function applyUploadedGenericEndpoint(fields: GatewayConfigUploadFields): void {
+    setImportedEndpointStyle(fields.endpointStyle ?? "");
+    setImportedApiVersion(fields.apiVersion ?? "");
+    setImportedEndpointBaseUrl(fields.baseUrl?.trim() ?? "");
+  }
+
+  function applyUploadedVoiceEndpoint(fields: GatewayConfigUploadFields): void {
+    if (fields.voiceBaseUrl === undefined) return;
+    // The uploaded protocol lands in the VISIBLE fields, where the operator can see and change
+    // it; the endpoint-identity reset then clears it if the URL is retyped (#3042).
+    setVoiceEndpointStyle(fields.voiceEndpointStyle ?? "");
+    setVoiceApiVersion(fields.voiceApiVersion ?? "");
+    // The auth mode is a visible field now, so it hydrates with its siblings: leaving it in the
+    // imported payload alone kept it on raw URL equality while the other two moved to the
+    // canonical binding, and an equivalent edit dropped it by itself (review finding on #3048).
+    setVoiceRealtimeAuthMode(fields.voiceRealtimeAuthMode ?? "");
+    // Committing the identity is what makes that true. The upload sets the URL programmatically,
+    // so in a FRESH dialog the ref stayed undefined, transitionProviderIdentity never fired, and
+    // a move left the protocol standing in the visible fields while the payload silently dropped
+    // it — a save that looked Azure and persisted the OpenAI-compatible shape (review finding on
+    // #3048).
+    endpointIdentityRef.current = endpointIdentity(
+      fields.voiceBaseUrl,
+      preserveExisting,
+      storedVoiceProviderExists,
+    );
+    setVoiceProtocolBoundBaseUrl(fields.voiceBaseUrl.trim());
+    setImportedVoiceEndpointStyle(fields.voiceEndpointStyle ?? "");
+    setImportedVoiceApiVersion(fields.voiceApiVersion ?? "");
+    setImportedVoiceRealtimeAuthMode(fields.voiceRealtimeAuthMode ?? "");
+    // The protocol is BOUND to the uploaded endpoint URL: the payload submits it only while the
+    // form still points at exactly that endpoint, so a manually retyped URL can never inherit
+    // the file's deployment-path shape (#3037). Trimmed with the same trim the submit-time
+    // comparison applies — an untrimmed stored URL would silently drop the protocol.
+    setImportedVoiceEndpointBaseUrl(fields.voiceBaseUrl.trim());
+  }
+
   async function submit(event: FormSubmitEvent): Promise<void> {
     event.preventDefault();
     if (busy) return;
@@ -2286,6 +3049,8 @@ export function GatewaySetupDialog({
           timeoutMs,
           deploymentNames,
           imageInputModelIds,
+          imageInputModelIdsConfigured,
+          importedEmbeddingModelIds,
           workflowEligibleModelIds,
           workflowEligibleModelIdsConfigured,
           voiceBaseUrl,
@@ -2296,6 +3061,19 @@ export function GatewaySetupDialog({
           voiceRealtimeTranscriptionModelId,
           voiceSupportsSemanticTurnDetection,
           voiceSemanticTurnDetectionConfigured,
+          voiceSupportsSpeechSynthesisInstructions,
+          voiceSpeechSynthesisInstructionsConfigured,
+          importedVoiceEndpointStyle,
+          importedVoiceApiVersion,
+          voiceEndpointStyle,
+          voiceRealtimeAuthMode,
+          voiceApiVersion,
+          voiceProtocolBoundBaseUrl,
+          importedVoiceRealtimeAuthMode,
+          importedVoiceEndpointBaseUrl,
+          importedEndpointStyle,
+          importedApiVersion,
+          importedEndpointBaseUrl,
           voiceSpeechOutputModelId,
           voiceOutputVoiceId,
           voiceOutputVoiceIdConfigured,
@@ -2344,6 +3122,9 @@ export function GatewaySetupDialog({
   const parsedWorkflowEligibleModelIds = deploymentNamesFromInput(workflowEligibleModelIds);
   const voiceCredentialInput = hasVoiceCredentialInput({
     voiceBaseUrl,
+    voiceEndpointStyle,
+    voiceApiVersion,
+    voiceRealtimeAuthMode,
     voiceApiKey,
     voiceApiKeyHeaderName,
     voiceModelId,
@@ -2352,6 +3133,7 @@ export function GatewaySetupDialog({
     voiceSpeechOutputModelId,
     voiceTimeoutMs,
     voiceSemanticTurnDetectionConfigured,
+    voiceSpeechSynthesisInstructionsConfigured,
     voiceOutputVoiceIdConfigured,
     voiceProviderLocalityConfigured,
   });
@@ -2369,7 +3151,7 @@ export function GatewaySetupDialog({
   });
   const hasFigmaCredentialInput = figmaAccessToken.trim() !== "";
   const canSubmit = computeCanSubmit({
-    busy,
+    busy: busy || uploadReadPending,
     success,
     requiresGatewayCredentials,
     baseUrl,
@@ -2400,7 +3182,10 @@ export function GatewaySetupDialog({
       deploymentNames={deploymentNames}
       setDeploymentNames={setDeploymentNames}
       imageInputModelIds={imageInputModelIds}
-      setImageInputModelIds={setImageInputModelIds}
+      setImageInputModelIds={(value): void => {
+        setImageInputModelIdsConfigured(true);
+        setImageInputModelIds(value);
+      }}
       workflowEligibleModelIds={workflowEligibleModelIds}
       setWorkflowEligibleModelIds={(value): void => {
         setWorkflowEligibleModelIdsConfigured(true);
@@ -2431,6 +3216,14 @@ export function GatewaySetupDialog({
       voiceOutputVoiceId={voiceOutputVoiceId}
       setVoiceOutputVoiceId={updateVoiceOutputVoiceId}
       voiceProviderLocalityLabelId={voiceProviderLocalityLabelId}
+      voiceEndpointStyleLabelId={voiceEndpointStyleLabelId}
+      voiceRealtimeAuthModeLabelId={voiceRealtimeAuthModeLabelId}
+      voiceRealtimeAuthMode={voiceRealtimeAuthMode}
+      setVoiceRealtimeAuthMode={stateVoiceRealtimeAuthMode}
+      voiceEndpointStyle={voiceEndpointStyle}
+      setVoiceEndpointStyle={stateVoiceEndpointStyle}
+      voiceApiVersion={voiceApiVersion}
+      setVoiceApiVersion={stateVoiceApiVersion}
       voiceProviderLocality={voiceProviderLocality}
       setVoiceProviderLocality={updateVoiceProviderLocality}
       voiceBaseUrl={voiceBaseUrl}
@@ -2483,6 +3276,12 @@ export function GatewaySetupDialog({
             <p id="gw-setup-desc">{dialogCopy.description}</p>
           </div>
 
+          <GatewayConfigUpload
+            disabled={busy || success !== undefined}
+            onApply={applyUploadedConfig}
+            onReadPendingChange={setUploadReadPending}
+          />
+
           <GatewayModelSection
             preserveExisting={preserveExisting}
             storedApiKeyHeaderName={storedApiKeyHeaderName}
@@ -2495,6 +3294,7 @@ export function GatewaySetupDialog({
             t={t}
             preserveExisting={preserveExisting}
             voiceModelNames={voiceModelNames}
+            storedModels={storedModels}
             fields={voiceFields}
           />
 

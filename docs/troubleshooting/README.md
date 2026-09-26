@@ -39,6 +39,22 @@ MemoriaViva mode-aware capture issues are covered in the dedicated
 for "capture did not run in mode X", Journal-visibility questions, and the autonomy control not
 persisting across a reload.
 
+macOS coding-sidecar confinement issues — a managed OpenCode sidecar that never becomes ready or
+exits immediately once the gateway-only Seatbelt confinement wraps its launch (ADR-0043 D11–D13 /
+ADR-0140 D6), or one that starts fine but whose governed `keiko_*` tool calls are denied by that
+same confinement (ADR-0043 D15) — are covered in the dedicated
+[macOS Coding Sidecar Seatbelt Confinement Troubleshooting](macos-coding-sidecar-seatbelt-confinement-failure.md)
+entries.
+
+LiteLLM production-gateway issues are covered in the dedicated
+[LiteLLM Production Gateway](litellm-production-gateway.md) entry. Use that page for
+`x-litellm-key` authentication, `PROXY_BLOCKED_BY_POLICY` on a local proxy, `max_tokens`
+rejections on reasoning aliases, and truncated discovery on large multi-team proxies.
+
+Coding Workbench runs that start with less authority than the composer shows — a Supervised
+workspace or Full access selection capped by the installation's deployment ceiling — are covered in
+the dedicated [Coding Workbench Authority Limit](coding-workbench-authority-limit.md) entry.
+
 ## Severity scale
 
 The severity field on each entry uses the following scale. It is a
@@ -54,12 +70,41 @@ levels.
 
 ## Log locations and debug mode
 
-| Path                   | Purpose                                                                                           |
-| ---------------------- | ------------------------------------------------------------------------------------------------- |
-| `.keiko/ui.log`        | Local UI process log. Written by `keiko start` for the background UI process.                     |
-| `.keiko/ui.pid`        | Background UI process id. Removed by `keiko stop` and by `keiko start` when the pid is not alive. |
-| `.keiko/evidence/`     | Redacted evidence written by surfaces that persist a manifest (for example `keiko verify`).       |
-| `~/.keiko/keiko-ui.db` | Local UI state database. User-scoped, not project-scoped.                                         |
+| Path                   | Purpose                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.keiko/logs/`         | Redacted server activity log (JSON Lines), stored as immutable segments: one active segment per running process, read-only sealed segments, and any legacy `server.log` or `server-YYYY-MM-DD.log` files. Keiko bounds the directory by bytes and age (256 MiB and 14 days by default) and records seals, crash recovery, retention, pins and storage pressure as typed body-free events. Never edit, truncate or delete a file in it by hand. See [Observability: the server activity log](../observability/README.md) for details, `KEIKO_LOG_LEVEL`, and `keiko support export`/`keiko support analyze`. |
+| `.keiko/ui.log`        | Retired. Earlier releases wrote raw UI process output here. Keiko no longer creates it, never reads it into a report, and `keiko uninstall --state` removes an old copy. UI diagnostics are in the Activity Log (`.keiko/logs/`).                                                                                                                                                                                                                                                                                                                                                                           |
+| `.keiko/ui.pid`        | Background UI process id. Removed by `keiko stop` and by `keiko start` when the pid is not alive.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `.keiko/ui.shutdown`   | Pid-bound graceful-stop request written by `keiko stop` / `restart` / `uninstall --force`. The UI drains when it sees its own pid here; Windows cannot deliver cross-process `SIGTERM`. Removed once the process is confirmed gone.                                                                                                                                                                                                                                                                                                                                                                         |
+| `.keiko/evidence/`     | Redacted evidence written by surfaces that persist a manifest (for example `keiko verify`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `~/.keiko/keiko-ui.db` | Local UI state database. User-scoped, not project-scoped.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+
+`keiko support export` exclusively creates its report and integrity sidecar; it never replaces an
+existing destination. After an interrupted export, rerun with the same explicit `--out` path. For
+the default output, rerun from the same working directory. Keiko resolves the one bounded recovery
+slot before reading a new clock or activity-log snapshot. A conflicting target, intent, stage,
+symlink, hard link, or non-regular file fails closed and is not removed or replaced.
+
+If Keiko aborts startup with an Activity Log safe-artifact failure, use the closed failure kind from
+stderr to recover; the diagnostic intentionally does not echo the configured path:
+
+1. Stop processes using the same state directory and inspect the operator-selected `<stateDir>` and
+   its `logs/` directory without following links. Preserve suspicious entries for review;
+   Keiko never deletes or rewrites them as recovery.
+2. For `unsafe-ancestor`, `unsafe-target`, `target-mutated`, or `permission-unsafe`, verify that every
+   state-directory component is an expected real directory and that every file in `logs/` is a
+   regular single-link file owned by the expected account. Do not replace an unknown symlink,
+   reparse point, hard link, or non-regular file in place.
+3. For `open-failed`, `permission-failed`, `write-failed`, or `durability-failed`, verify the selected
+   filesystem is writable, has free space, and permits private directory/file creation and durable
+   writes. On Windows, also verify the operator-selected root ACL because POSIX mode checks are not
+   available there.
+4. Retry with a clean, operator-controlled state directory. A repeated `target-mutated` or unsafe
+   target result indicates continuing mutation or an untrusted path; stop retrying and investigate
+   that boundary instead of weakening the check.
+5. After startup succeeds, run `keiko support analyze` on the newest segment in `<stateDir>/logs/`
+   and confirm the new evidence is current. Treat an incomplete/unavailable writer or an unexplained sequence gap as
+   evidence loss, not as a recovered complete log.
 
 To capture verbose output for a single command run, invoke the CLI in the
 foreground and redirect both streams to a file you control. For example:
@@ -74,8 +119,8 @@ foreground process with `Ctrl+C` when finished and remove the log file
 once it has been reviewed and redacted.
 
 When a CLI verification or workflow command produces unexpected output,
-attach the redacted command output and the relevant section of
-`.keiko/ui.log`. Do not attach `~/.keiko/keiko-ui.db`, runtime config
+attach the redacted command output and, if you choose to share it, a bundle
+from `keiko support export`, which holds the redacted Activity Log. Do not attach `~/.keiko/keiko-ui.db`, runtime config
 files, or files under `.keiko/evidence/` without first reviewing them for
 project content.
 
@@ -94,8 +139,9 @@ project content.
 **Symptom**
 
 `keiko start` (or `npm run keiko:start`) prints
-`keiko start: UI did not become healthy. Logs: <path>/.keiko/ui.log` and
-exits with code `1`. The pid file under `.keiko/ui.pid` is removed by the
+`keiko start: UI did not become healthy (process-exited)` or
+`(health-timeout)`, followed by the Activity Log location, and exits with
+code `1`. The pid file under `.keiko/ui.pid` is removed by the
 lifecycle command before exit. Subsequent calls to `keiko status` report
 that Keiko UI is not running.
 
@@ -106,9 +152,9 @@ The lifecycle command spawns the UI process and polls
 timeout elapses or the child process exits. The error is emitted when the
 child process started but never returned a healthy response inside the
 configured timeout window (default 20 seconds via `KEIKO_START_TIMEOUT_SECS`).
-The two common causes are an immediate process crash recorded in
-`.keiko/ui.log` and a slow start on cold caches where the default timeout
-is too tight.
+The two common causes are an immediate process crash (`process-exited`),
+recorded in the Activity Log as `process.fatal`, and a slow start on cold
+caches where the default timeout is too tight (`health-timeout`).
 
 **Diagnostic Steps**
 
@@ -116,15 +162,16 @@ is too tight.
 # Confirm Keiko is not already running on the same port.
 keiko status
 
-# Read the most recent UI log lines for the immediate stack trace or error.
-tail -n 200 .keiko/ui.log
+# Export the redacted Activity Log and look for the crash (process.fatal).
+keiko support export --out keiko-support.jsonl
+keiko support analyze keiko-support.jsonl --clusters
 
 # Run the UI in the foreground to surface startup errors interactively.
 npx keiko ui --port 1983
 ```
 
-If `.keiko/ui.log` shows a Node.js stack trace, the UI process crashed
-during startup. If the foreground invocation returns
+If the analysis shows a `process.fatal` line, the UI process crashed
+during startup; its `errorKind` and Keiko stack frames locate the failure. If the foreground invocation returns
 `Keiko UI listening on http://127.0.0.1:1983` and serves
 `/api/health`, the previous failure was a startup-timeout race rather
 than a process crash.
@@ -134,8 +181,8 @@ than a process crash.
 - Stop and remove the stale pid file: `npm run keiko:stop`, then delete
   `.keiko/ui.pid` only if it is present and the process is no longer
   alive.
-- If `.keiko/ui.log` contains a crash, address the underlying error
-  reported in the log (typically a port conflict or a Node.js version
+- If the Activity Log contains `process.fatal`, address the underlying
+  error it classifies (typically a port conflict or a Node.js version
   older than 22; see the [Requirements](../../README.md#requirements)
   section).
 - If the foreground UI starts cleanly, raise the start timeout for slow
@@ -154,7 +201,7 @@ than a process crash.
 
 **Symptom**
 
-The UI fails to start. `.keiko/ui.log` (or the foreground command output)
+The UI fails to start. The foreground command output (`keiko ui`)
 contains `Error: listen EADDRINUSE: address already in use 127.0.0.1:1983`
 or an equivalent message naming a different port. `keiko status` reports
 that Keiko UI is not running, even though the bind error has been
@@ -178,7 +225,7 @@ lsof -nP -iTCP:1983 -sTCP:LISTEN
 Get-NetTCPConnection -LocalPort 1983 -State Listen
 
 # Confirm Keiko's own pid file, if any, no longer points at a live process.
-cat .keiko/ui.pid 2>/dev/null && ps -p "$(cat .keiko/ui.pid)" || echo "no live keiko pid"
+cat .keiko/ui.pid 2>/dev/null && ps -p "$(head -n 1 .keiko/ui.pid 2>/dev/null | tr -d ' \t\r')" || echo "no live keiko pid"
 ```
 
 **Resolution**
@@ -731,13 +778,92 @@ The diagnostic record includes `correlationId`, `source`
 
 ---
 
+### 12. Activity Log storage reports pressure or a failed retention
+
+| Field             | Value                                                            |
+| ----------------- | ---------------------------------------------------------------- |
+| Severity          | High                                                             |
+| Surface           | Activity Log persistence                                         |
+| Stable identifier | `activity-log.pressure`, `activity-log.retention.pruned: failed` |
+
+**Symptom**
+
+The Activity Log contains one of these lines:
+
+- `activity-log.pressure` with `pressureState` `disk-full`, `budget-exceeded`, `backpressure`,
+  `low-disk-space` or `retention-blocked`;
+- `activity-log.retention.pruned` with `retentionStatus: "partial"` or `"failed"`;
+- `activity-log.segment.recovered` with `recoveryStatus: "failed"`;
+- `activity-log.policy.conflict` (informational, not a failure — see below).
+
+The records carry closed states, counts and byte sizes only; they deliberately contain no filesystem
+path. `droppedEventCount` states how many events were lost.
+
+**Root Cause**
+
+One of three conditions:
+
+- The filesystem is full or below the low-space threshold.
+- The unprotected files exceed `KEIKO_LOG_RETENTION_BYTES` and retention could not free enough,
+  for example because deletions failed or many processes hold active segments.
+- Keiko refused a seal, a recovery or a deletion. The log directory changed identity, was
+  redirected or was not owner-private, or a target failed the regular, owner-matched, single-link
+  checks.
+
+The triggering product operation continues. The line is evidence that the storage bound needs
+operator attention, not permission to weaken the filesystem checks.
+
+A separate, lower-severity line, `activity-log.policy.conflict` (#3554), is operator-visible but
+never itself a storage failure: it means a cooperating process's own
+`KEIKO_LOG_RETENTION_BYTES`/`_DAYS`/`KEIKO_LOG_PIN_QUOTA_BYTES` differed from the directory's one
+stored governing policy. `policyResolution: "adopted"` means the store kept its existing bounds
+(this process's own env was overridden); `"replaced"` means this process was the directory's sole
+live writer and its own bounds now govern (a clean restart with a changed value taking effect). The
+`stored*`/`requested*` fields name exactly which setting disagreed. Total disk use stayed within the
+one governing budget plus the pin quota either way; the line exists so configuration drift across
+cooperating deployments (a systemd unit, a container env, a shell profile) is visible, never silent.
+
+**Diagnostic Steps**
+
+1. Run `keiko support analyze` on the newest segment in `<stateDir>/logs/`, or on a
+   `keiko support export` bundle. Read the latest `activity-log.pressure`,
+   `activity-log.retention.pruned` and `activity-log.segment.recovered` lines: the state,
+   `droppedEventCount`, and the used, budget, pin-quota and free bytes. Do not infer a path from the
+   body-free record.
+2. Check the free space on the filesystem that holds `<stateDir>`.
+3. Stop every Keiko process using the state directory. Inspect `<stateDir>` and `<stateDir>/logs`
+   without following links. On POSIX, confirm that both are owned by the expected account and have
+   mode `0700`. On Windows, confirm the selected owner's ACL and that neither path is a junction or
+   reparse redirect.
+4. Confirm that every `activity-*.jsonl`, `server.log` and `server-YYYY-MM-DD.log` file is a
+   regular, owner-matched file with one link. Preserve any unexpected link, symlink, device, FIFO or
+   unknown name for investigation.
+
+**Resolution**
+
+Free disk space. Raise `KEIKO_LOG_RETENTION_BYTES` only within the space the filesystem can hold.
+Restore an owner-controlled, non-redirected `logs` directory, and move suspicious entries aside
+only while all writers are stopped. Restart Keiko and confirm that the next
+`activity-log.pressure` line reports `cleared`, or that no new pressure line appears, and that the
+next `activity-log.retention.pruned` reports `pruned`. Never delete, truncate or edit a segment by
+hand to force the usage down. Retention removes the oldest unpinned files itself once the directory
+is safe again.
+
+A `policy.conflict` line needs no storage recovery — the store already kept the total bounded. To
+make an intentionally changed `KEIKO_LOG_RETENTION_BYTES` take effect for the whole directory, align
+every cooperating process's env and restart them one at a time so the last one to start is briefly
+the sole live writer: it republishes the record, and later `adopted` lines stop.
+
+---
+
 ## HTML Manual Knowledge Pod refresh
 
 Common failures and operational guidance for explicit refresh of an indexed HTML manual
 Knowledge Pod are documented separately. Refer to the
 [HTML Manual Knowledge Pod refresh runbook](./html-manual-pod-refresh.md) for scenarios
 including crawl limit exhaustion, embedding-model incompatibility, fail-closed refresh
-behaviour, and empty-crawl handling.
+behaviour, and empty-crawl handling. The runbook documents validated domain behaviour; the
+live, user-triggerable entry point is a tracked follow-up (see the runbook's own status note).
 
 ---
 
@@ -753,15 +879,6 @@ live Jira read, or performing a governed write action are documented separately.
 
 ---
 
-## Model-backed review spend
-
-Unexpected model spend from the Keiko for Quality reviewer, and how to contain it, are documented
-separately. Refer to the [model-review spend runbook](./model-review-spend.md) for the
-non-persisting review store (`cache.store_loaded` reporting zero entries, which fails silently and
-only shows on the bill) and for the two-step emergency stop, which requires cancelling live runs as
-well as setting `KEIKO_QUALITY_ENABLED`. The cost arithmetic itself is in
-[the review cost model](../qa/review-cost-model.md).
-
 ---
 
 ## Related documentation
@@ -774,5 +891,10 @@ well as setting `KEIKO_QUALITY_ENABLED`. The cost arithmetic itself is in
 - [HTML Manual Knowledge Pod refresh runbook](./html-manual-pod-refresh.md) — refresh-specific troubleshooting and operational guidance.
 - [Atlassian connector troubleshooting runbook](./atlassian-connector.md) — verify statuses, sync and write degradation reasons, and enterprise proxy/CA failures for the Atlassian connector.
 - [Native OS file/folder dialog runbook](./native-file-dialog.md) — unsupported platforms, macOS privacy (TCC) read limits, and Windows interactive-session requirements for Browse.
+- [macOS portable first-launch runbook](./macos-portable-first-launch.md) — the "damaged" Gatekeeper verdict, silent double-click exits, and same-path adoption for hand-moved bundles.
+- [Windows portable first-launch runbook](./windows-portable-first-launch.md) — the console flash-and-exit, the three native bootstrap dialogs, and the detached UI server that outlives the setup companion.
+- [Task workspace identity rule retired](./task-workspace-identity-rule-retired.md) — the Coding Workbench refuses to bind a previously bound repository because its managed workspace was registered under a retired identity rule; re-register it through the operator-approved repair.
+- [Start a coding run on an npm installation](./coding-workbench-npm-installation-runtime.md) — "Starting a coding run stays unavailable until this installation's coding runtime is confirmed active" on an npm-installed Keiko: install `@oscharko-dev/keiko-coding-runtime-darwin-arm64` or `-darwin-x64` next to Keiko (1.1.2).
+- [Coding Workbench run blocked inside a task workspace](./coding-workbench-task-workspace-run-blocked.md) — every edit refused as out of scope, or every verification failing as `WORKSPACE_TRUST_REQUIRED`/`PROJECT_NOT_FOUND`, inside a managed task worktree; the 2026-09-03 repair and the gateway readiness step. Also: binding a trusted repository failing `PROVISIONING_FAILED` after the worktree was created (script-trust derivation refused the managed root, 2026-09-10), and a run failing `runtime-failed` on its first large edit because the durable history gate refused the sidecar's record of a legitimate changeset (2026-09-10); every `keiko_verification` failing with `PathDeniedError` because the raw status reader's filesystem helpers asked the plain port for a managed worktree below `.keiko` (2026-09-10); every verification failing with a bare `Error` because the repository tracks `.idea/` and the raw status reader treated a deny-listed path as an incomplete snapshot (2026-09-10); a run failing on its first turn after three `invalid-shape` rejections of one tool call because the gateway's correction never named the missing required properties (2026-09-10); and a run ending as `cancelled` that nobody stopped, because the server process shut down under it and the activity log recorded only the shapes that left behind (2026-09-10).
 
 For new entries, follow the [troubleshooting entry template](./_template.md).

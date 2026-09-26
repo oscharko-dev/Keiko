@@ -4,7 +4,7 @@ Status: Accepted (Issue #1300, Epic #1290, 2026-06-22)
 Version: 0.2.0
 Owner: `verifier` (coordinator) · Human Review Required: **Yes**
 
-This is the **final evidence gate** for epic #1290 (pixel-perfect Keiko Design System). Children #1291–#1299
+This is the **historical acceptance evidence** for epic #1290 (pixel-perfect Keiko Design System). Children #1291–#1299
 each migrated one product surface onto Design System 0.4.0 tokens and shipped a per-surface 0-diff proof.
 This document consolidates that work into a single, **re-runnable** visual-regression suite, a cross-theme
 / cross-viewport screenshot bundle, a dedicated **editor matrix**, an accessibility proof, a performance
@@ -12,8 +12,16 @@ smoke, the **final variance register**, and the **designer-acceptance** record s
 close the epic on evidence rather than subjective claims (per [ADR-0050](../adr/ADR-0050-component-state-and-governance-contract.md)
 Gate 8: visual inspection of the running UI is primary; automated checks are supporting).
 
-All artifacts live under [`evidence/1300/`](evidence/1300/) and are reproduced by four commands plus the
-CI-enforced vitest block (see [Re-runnable verification](#re-runnable-verification)).
+All artifacts live under [`evidence/1300/`](evidence/1300/). All twelve browser equivalence harnesses beneath
+`docs/design-system/evidence/` are
+reproducible historical migration evidence, **not standing CI or pull-request gates**: they compare against
+immutable migration-era baselines, so later intentional design evolution can legitimately change their result.
+The CI-enforced vitest block pins the documented artifact shape and the current product contracts; it does not
+execute these browser harnesses. `test:e2e:editor-fidelity-1296` is a reproducible, packaged-application
+evidence harness: it starts the packaged CLI UI, opens a synthetic project in the live Monaco editor, and
+proves the governed inline-completion ghost-text path across its captured theme modes. It is not a wired
+release-protection suite. Broader editor interaction release coverage remains with the dedicated wired editor
+suites.
 
 ---
 
@@ -60,17 +68,17 @@ the LF-normalized capture-source digest, which CI independently recomputes from 
 rejects on mismatch.
 
 **Retention.** Artifacts are retained **in-repo** under `docs/design-system/evidence/1300/` (PNG + JSON), so
-the baseline travels with the source it proves and any future contributor reruns the harness to regenerate and
-diff. The CI-enforced `Issue #1300` vitest block pins the proof JSON + this register against the product CSS
-and browser harness so drift fails `ci`/`ui` without needing the browser.
+the baseline travels with the source it proves and a contributor can rerun the harness for a historical
+investigation. The CI-enforced `Issue #1300` vitest block pins the proof JSON + this register's structural
+contract; it is deliberately not a substitute for executing the historical browser harnesses.
 
 ---
 
-## 3. Re-runnable verification
+## 3. Historical reproduction
 
 From the repo root, after `npm ci` + `npx playwright install chromium`:
 
-| Command                                                         | Proves                                                                          | Gate                                                                                                      | Artifacts                                               |
+| Command                                                         | Historical assertion                                                            | Failure scope                                                                                             | Artifacts                                               |
 | --------------------------------------------------------------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
 | `node docs/design-system/evidence/1300/equivalence-harness.mjs` | component reference fidelity + a11y smoke + perf smoke                          | exit ≠ 0 on any gated diff / missing selector / a11y / perf failure                                       | `consolidated-fidelity-proof.json`, `01..11-*.png`      |
 | `node docs/design-system/evidence/1300/browser/capture.mjs`     | self-built running-app shell + seeded high-traffic workspaces across the matrix | exit ≠ 0 on page error, missing shell/selector, visible error/crash, unexpected API, or unavailable trust | `browser/*.png`, `browser/manifest.json`                |
@@ -79,7 +87,7 @@ From the repo root, after `npm ci` + `npx playwright install chromium`:
 | `npm run test:coverage:ui` (CI `ui` + `ci`)                     | the `Issue #1300` drift gate pins this register + proofs                        | vitest red on drift                                                                                       | —                                                       |
 | `npm run test:e2e:editor-fidelity-1295` / `-1296`               | running Monaco / tabs / diagnostics / find / ghost-text / agent prompts         | playwright red on regression                                                                              | `evidence/1295/editor/`, `evidence/1296/editor/`        |
 
-### Results (this run)
+### Results (at capture time)
 
 - **Component reference fidelity:** 427 probes, **0 gated diffs** (Dark + Light); 0 recorded diffs in HC /
   forced-colors / prefers-contrast / reduced-motion. `verdict: PASS`.

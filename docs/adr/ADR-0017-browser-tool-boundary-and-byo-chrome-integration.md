@@ -524,10 +524,10 @@ so the existing tests that do not supply it continue to compile.
   guard, SSE pattern, host-check DNS-rebinding defence.
 - ADR-0013: UI-Local Persistence — `UiHandlerDeps` extension pattern (optional `browser?` field
   mirrors optional `terminal?`).
-- ADR-0014: Keiko Workspace Shell Architecture — `BrowserWidget` mount point at
-  `ui/app/components/desktop/widgets/index.tsx:87`.
-- ADR-0016: Deeper Files Explorer BFF Surface — sibling surface showing the same route-family
-  separation rationale.
+- ADR-0014 / ADR-0016: not restored (see `docs/adr/README.md`); the workspace shell is now
+  governed by ADR-0026 through ADR-0030, and the Files Explorer mutation routes by ADR-0097.
+  Historically these records provided the `BrowserWidget` mount-point and route-family
+  cross-references; consult the superseding ADRs for the current locations.
 - Issue #61: Parent epic — local workspace shell.
 - Issue #76: Browser tool boundary (this ADR).
 - [Chrome DevTools Protocol documentation](https://chromedevtools.github.io/devtools-protocol/)

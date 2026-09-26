@@ -5,7 +5,9 @@
 //   - updateMessage(): partial PATCH on the row, re-using the existing redact+truncate path.
 
 import type { DatabaseSync } from "node:sqlite";
-import { validateKnowledgePodRetrievalActivity } from "@oscharko-dev/keiko-contracts";
+import { randomUUID } from "node:crypto";
+import { validateKnowledgePodRetrievalActivity } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-retrieval-activity";
+import { contentFreeErrorClass, emitServerDiagnostic } from "../diagnostics-log.js";
 import type {
   ChatAssistantResponseVersion,
   ChatMessage,
@@ -128,7 +130,20 @@ function parseGroundedPreviewCitations(
   if (raw === null) return undefined;
   try {
     return JSON.parse(raw) as readonly StoredPdfCitationPreviewCitation[];
-  } catch {
+  } catch (error) {
+    // Previously this silently dropped a corrupted stored citation row: the caller got back
+    // `undefined` with no trace anywhere that the row was malformed. Log a content-free
+    // diagnostic (error CLASS only — never the row itself, which can carry document text) noting
+    // the drop, then keep failing open: a stored preview annotation is not worth turning an
+    // otherwise-successful message read into a 500.
+    emitServerDiagnostic(undefined, {
+      correlationId: randomUUID(),
+      timestamp: new Date().toISOString(),
+      operation: "store.messages.grounded-preview-citations.read",
+      source: "store.messages.parse-grounded-preview-citations",
+      errorClass: contentFreeErrorClass(error),
+      message: "grounded-preview-citations-row-dropped",
+    });
     return undefined;
   }
 }
@@ -766,6 +781,46 @@ export function findGroundedPreviewCitations(
 // redact+truncate pipeline. workflowStatus and taskType are validated before SQL is built. An
 // empty patch is an invalid_request — the route surface guards this earlier, but the store layer
 // also fails-closed.
+// A legacy turn (no clientTurnId) rejected AFTER admission has no settle surface: the ledger
+// no-ops without a turn id, so the just-admitted user row must be discarded or every rejected
+// request leaves an orphaned message and a retry duplicates it. The WHERE clause fails closed:
+// ledger rows (client_turn_id set) and non-user rows are never deletable through this path.
+const SQL_DISCARD_LEGACY_TURN_USER = `
+DELETE FROM chat_messages
+WHERE id = ? AND chat_id = ? AND role = 'user' AND client_turn_id IS NULL
+`;
+
+// createMessage touched chats.updated_at, and listChatsLimited orders by it — without this
+// restore a REJECTED legacy request still promotes its chat to the top of history and can
+// become the session-resume candidate. The restored value is the pre-admission updatedAt or
+// any newer surviving message activity, whichever is later. The compare-and-set on the
+// admission-time touch value makes the rollback OWNED: a concurrent accepted update (for
+// example a rename while retrieval was in flight) advanced updated_at past our touch, the
+// CAS misses, and that newer recency survives. Runs only when the delete actually removed
+// the admitted row.
+const SQL_RESTORE_CHAT_RECENCY = `
+UPDATE chats
+SET updated_at = MAX(?, COALESCE((SELECT MAX(timestamp) FROM chat_messages WHERE chat_id = ?), 0))
+WHERE id = ? AND updated_at = ?
+`;
+
+export function discardLegacyTurnUserMessage(
+  db: DatabaseSync,
+  chatId: string,
+  id: string,
+  restoreUpdatedAtMs: number,
+  expectedTouchedUpdatedAtMs: number | undefined,
+): void {
+  const info = db.prepare(SQL_DISCARD_LEGACY_TURN_USER).run(id, chatId);
+  if (info.changes === 0 || expectedTouchedUpdatedAtMs === undefined) return;
+  db.prepare(SQL_RESTORE_CHAT_RECENCY).run(
+    restoreUpdatedAtMs,
+    chatId,
+    chatId,
+    expectedTouchedUpdatedAtMs,
+  );
+}
+
 export function updateMessage(
   db: DatabaseSync,
   id: string,

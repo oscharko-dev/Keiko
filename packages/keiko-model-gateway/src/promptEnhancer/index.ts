@@ -38,6 +38,9 @@ export { renderEnhancedPromptMessages, renderEnhancedPromptText } from "./render
 // ─── Candidate critic (#1312) ──────────────────────────────────────────────────
 export type { PromptCandidateScoringContext } from "./critic.js";
 export {
+  GROUNDING_READINESS_MIN_RULES,
+  OUTPUT_CONTROLLABILITY_CRITERION,
+  OUTPUT_CONTROLLABILITY_CRITERION_PREFIX,
   PROMPT_CRITIC_DIMENSION_WEIGHTS,
   estimatePromptTokens,
   scorePromptCandidate,

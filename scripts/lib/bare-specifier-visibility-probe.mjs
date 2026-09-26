@@ -6,6 +6,8 @@ export function normalizeDependencyCruiserPath(path) {
   return path.replaceAll("\\", "/");
 }
 
+import { resolveDependencyCruiserEntrypoint } from "./dependency-cruiser-cli.mjs";
+
 /**
  * Bare-specifier visibility probe (Wave-2 audit #2627).
  *
@@ -42,6 +44,9 @@ export function normalizeDependencyCruiserPath(path) {
  *   Injected file writer (defaults to `writeFileSync` when omitted).
  * @param {(path: string) => void} [options.removeProbeFile]
  *   Injected file remover (defaults to `rmSync` when omitted).
+ * @param {(repoRoot: string) => string} [options.resolveEntrypoint]
+ *   Injected dependency-cruiser CLI entry-point resolver (defaults to
+ *   `resolveDependencyCruiserEntrypoint` when omitted).
  * @returns {{ok: true} | {ok: false, reason: string, exitStatus?: number | null}}
  *   `{ok: true}` when the expected rule fired against the expected resolved edge.
  *   `{ok: false, reason}` otherwise; `reason` names the failure mode
@@ -60,18 +65,13 @@ function buildProbeSource(targetSpecifier) {
   );
 }
 
-function invokeDepcruise(runDepcruise, repoRoot, rulesFile, probePath) {
+function invokeDepcruise(runDepcruise, resolveEntrypoint, repoRoot, rulesFile, probePath) {
   try {
     return {
       ok: true,
       result: runDepcruise(
         process.execPath,
-        [
-          join(repoRoot, "node_modules", "dependency-cruiser", "bin", "dependency-cruise.mjs"),
-          "--validate",
-          rulesFile,
-          probePath,
-        ],
+        [resolveEntrypoint(repoRoot), "--validate", rulesFile, probePath],
         { encoding: "utf8" },
       ),
     };
@@ -104,6 +104,7 @@ export function runBareSpecifierVisibilityProbe({
   runDepcruise = defaultRunDepcruise,
   writeProbeFile = defaultWriteProbeFile,
   removeProbeFile = defaultRemoveProbeFile,
+  resolveEntrypoint = resolveDependencyCruiserEntrypoint,
 }) {
   const probePath = join(repoRoot, hostPackageSrc, probeFileBasename);
   try {
@@ -115,7 +116,13 @@ export function runBareSpecifierVisibilityProbe({
     } catch {
       return { ok: false, reason: "writer-failed" };
     }
-    const invocation = invokeDepcruise(runDepcruise, repoRoot, rulesFile, probePath);
+    const invocation = invokeDepcruise(
+      runDepcruise,
+      resolveEntrypoint,
+      repoRoot,
+      rulesFile,
+      probePath,
+    );
     if (!invocation.ok) return invocation;
     return evaluateDepcruiseResult(
       invocation.result,

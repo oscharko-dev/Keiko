@@ -2,7 +2,7 @@
 // @oscharko-dev/keiko-contracts (leaf package); SDK_VERSION is the SDK-facing alias kept
 // for backward compatibility. Bump KEIKO_PRODUCT_VERSION in lockstep with the root
 // package.json "version" field as part of every release.
-import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts";
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 export const SDK_VERSION: string = KEIKO_PRODUCT_VERSION;
 
 // The typed agent surface. AgentConfig, the session factory, the run result, and the
@@ -19,6 +19,14 @@ export {
 } from "@oscharko-dev/keiko-harness";
 
 export { runAgent, type SdkAgentConfig, type SdkEvidenceOptions } from "./run-agent.js";
+
+export {
+  probeVerificationCapabilities,
+  type NetworkIsolationCapability,
+  type VerificationCapabilities,
+  type VerificationCapabilityDenialReason,
+  type VerificationStepCapability,
+} from "./verification-capabilities.js";
 
 // Safe workspace context surface (ADR-0005). The only file-read path is the
 // boundary-checked one; no export returns raw arbitrary file content.
@@ -44,11 +52,13 @@ export {
   classifyOutcome,
   detectScripts,
   renderMarkdownSummary,
+  resolveStepNetwork,
   resolveTargetedTests,
   runVerification,
   summarizeForAudit as summarizeVerificationForAudit,
   DEFAULT_VERIFICATION_LIMITS,
   type ResourceLimitDecision,
+  type NetworkEnforcementMode,
   type VerificationAuditSummary,
   type VerificationDeps,
   type VerificationKind,

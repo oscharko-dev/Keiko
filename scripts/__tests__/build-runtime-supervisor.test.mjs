@@ -1,9 +1,14 @@
+import { readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { runRuntimeSupervisorBuild } from "../build-runtime-supervisor.mjs";
+
+const rootPackageVersion = JSON.parse(
+  readFileSync(resolve(import.meta.dirname, "..", "..", "package.json"), "utf8"),
+).version;
 
 const temporaryRoots = [];
 
@@ -34,7 +39,7 @@ describe("runtime supervisor build", () => {
     expect(spawnSyncImpl).not.toHaveBeenCalled();
   });
 
-  it("builds Windows with the bounded compiler environment and propagates failure", async () => {
+  it("builds Windows with the bounded compiler environment and hardened loader flags", async () => {
     const root = await temporaryRoot();
     const output = join(root, "keiko-runtime-supervisor.exe");
     const environment = {
@@ -50,11 +55,19 @@ describe("runtime supervisor build", () => {
         argv: ["node", "script", "windows-x64", output],
         environment,
         spawnSyncImpl: success,
+        resolveCompilerImpl: (_envPath, tool) => "C:\\Program Files\\MSVC\\bin\\" + tool,
       }),
     ).resolves.toBe(0);
+    // Absolute path, never a bare name: options.env.PATH is not reliably searched on Windows.
     expect(success).toHaveBeenCalledWith(
-      "cl",
-      expect.arrayContaining(["/std:c11", `/Fe:${output}`]),
+      "C:\\Program Files\\MSVC\\bin\\cl.exe",
+      expect.arrayContaining([
+        "/std:c11",
+        "/MT",
+        `/Fe:${output}`,
+        "/link",
+        "/DEPENDENTLOADFLAG:0x800",
+      ]),
       {
         env: {
           PATH: environment.PATH,
@@ -71,6 +84,7 @@ describe("runtime supervisor build", () => {
         argv: ["node", "script", "windows-x64", output],
         environment,
         spawnSyncImpl: () => ({ status: null }),
+        resolveCompilerImpl: (_envPath, tool) => "C:\\Program Files\\MSVC\\bin\\" + tool,
       }),
     ).resolves.toBe(1);
   });
@@ -119,7 +133,11 @@ describe("runtime supervisor build", () => {
       ),
       "utf8",
     );
-    expect(plist).toContain("<string>0.2.15</string>");
+    // The version comes from the root manifest the builder substitutes into the template. A
+    // literal here would have to be edited by hand at every release bump, and a bump that
+    // forgot it would fail a green suite for a reason that has nothing to do with the
+    // substitution this test exists to prove (AGENTS.md: derive from the producer's input).
+    expect(plist).toContain(`<string>${rootPackageVersion}</string>`);
     expect(plist).not.toContain("__KEIKO_VERSION__");
   });
 

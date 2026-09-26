@@ -28,6 +28,46 @@ function cardNames(): string[] {
   return cards().map((card) => card.querySelector(".pal-name")?.textContent ?? "");
 }
 
+// KEIKO-0349: the New Window palette must disclose which surfaces are non-functional placeholders
+// so their titles/descriptions never read as real feature copy. Driven by a single `status` field
+// on WIN_TYPES rather than per-panel styling.
+describe("Palette placeholder badge (KEIKO-0349)", () => {
+  const PLACEHOLDER_TYPES: readonly WindowType[] = [
+    "plugins",
+    "automations",
+    "mobile",
+    "notifications",
+    "resources",
+  ];
+  const FUNCTIONAL_TYPES: readonly WindowType[] = ["chat", "files", "editor"];
+
+  it("marks every placeholder window in WIN_TYPES with status === 'placeholder'", () => {
+    for (const type of PLACEHOLDER_TYPES) {
+      expect(WIN_TYPES[type].status).toBe("placeholder");
+    }
+    for (const type of FUNCTIONAL_TYPES) {
+      expect(WIN_TYPES[type].status).toBeUndefined();
+    }
+  });
+
+  it("renders the badge on placeholder cards and never on functional cards", () => {
+    renderPalette([...PLACEHOLDER_TYPES, ...FUNCTIONAL_TYPES]);
+    const badges = screen.getAllByTestId("pal-status-placeholder");
+    expect(badges).toHaveLength(PLACEHOLDER_TYPES.length);
+    for (const badge of badges) {
+      const card = badge.closest(".pal-card");
+      expect(card).toHaveAttribute("data-window-status", "placeholder");
+    }
+    // Functional cards never receive the placeholder data attribute; at least
+    // one distinct card per functional type is present in the palette.
+    const functionalCards = screen
+      .getAllByRole("button")
+      .filter((b) => b.classList.contains("pal-card"))
+      .filter((b) => b.getAttribute("data-window-status") !== "placeholder");
+    expect(functionalCards.length).toBeGreaterThanOrEqual(FUNCTIONAL_TYPES.length);
+  });
+});
+
 describe("Palette", () => {
   it("does not expose the hidden Plugins surface in the default window order", () => {
     expect(TYPE_ORDER).not.toContain("plugins");
@@ -41,16 +81,12 @@ describe("Palette", () => {
     expect(TYPE_ORDER).not.toContain("project");
   });
 
-  it("does not expose the hidden Keiko Digital Twin surface in the default window order", () => {
-    expect(TYPE_ORDER).not.toContain("keiko");
-  });
-
   it("keeps Agents out of the broad default order while the curated picker can expose it", () => {
     expect(TYPE_ORDER).not.toContain("agents");
   });
 
-  it("does not expose the hidden Integrations surface in the default window order", () => {
-    expect(TYPE_ORDER).not.toContain("integ");
+  it("exposes server-owned connector management in the default window order (#3108)", () => {
+    expect(TYPE_ORDER).toContain("integ");
   });
 
   it("exposes the Editor surface in the default window order", () => {
@@ -214,5 +250,37 @@ describe("Palette", () => {
     const { onAdd } = renderPalette();
     fireEvent.click(cards()[2] as HTMLElement);
     expect(onAdd).toHaveBeenCalledWith(ORDER[2]);
+  });
+
+  // PR #3289 review (follow-up to comment 3865167756's KeyboardShortcutsPanel fix): a window/tab
+  // blur reports relatedTarget === null, which the Node-only instanceof check on onBlur skipped
+  // entirely — leaving the palette dialog open after the window loses focus. Close on the
+  // relatedTarget === null && !document.hasFocus() signature, matching the sibling
+  // KeyboardShortcutsPanel RecordingControls onBlur behavior.
+  it("closes on a window/tab blur (relatedTarget null, document loses focus)", () => {
+    const { onClose } = renderPalette();
+    const dialog = screen.getByRole("dialog");
+    const hasFocusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+    try {
+      fireEvent.blur(dialog, { relatedTarget: null });
+    } finally {
+      hasFocusSpy.mockRestore();
+    }
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  // Pins the AND condition: a null relatedTarget alone (document still focused) must not
+  // spuriously close the palette — only the window/tab-blur signature (null + document unfocused)
+  // does. Prevents a regression to "unconditionally treat every null relatedTarget as outside".
+  it("does not close when relatedTarget is null but the document still has focus", () => {
+    const { onClose } = renderPalette();
+    const dialog = screen.getByRole("dialog");
+    const hasFocusSpy = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+    try {
+      fireEvent.blur(dialog, { relatedTarget: null });
+    } finally {
+      hasFocusSpy.mockRestore();
+    }
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

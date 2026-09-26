@@ -35,22 +35,26 @@
 
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import type {
+  AtlassianConnectorActionType,
+  AtlassianConnectorActivityReasonCode,
+  AtlassianConnectorProvider,
+  KnowledgeCapsuleId,
+} from "@oscharko-dev/keiko-contracts";
 import {
   ATLASSIAN_JQL_MAX_CHARS,
   ATLASSIAN_SYNC_SCOPE_MAX_KEYS,
+  hasBalancedJqlNesting,
   isAtlassianConnectorAuthRef,
   isSafeAtlassianDisplayName,
   isSafeAtlassianIdentifier,
   isSafeConfluenceSpaceKey,
   isSafeJiraProjectKey,
-  type AtlassianConnectorActionType,
-  type AtlassianConnectorActivityReasonCode,
-  type AtlassianConnectorProvider,
-  type KnowledgeCapsuleId,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import type { AtlassianCredentialMetadata } from "@oscharko-dev/keiko-connectors";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   createAtlassianPendingApprovalResult,
   deniedAtlassianActionResult,
@@ -64,27 +68,30 @@ import {
 import type { AtlassianConnectorCredentialDeps } from "./credentialRoutes.js";
 import {
   AtlassianSyncRequestError,
-  atlassianSyncJobRegistry,
   connectorIdForAuthRef,
+  resolveAtlassianSyncJobRegistry,
   startAtlassianSyncJob,
 } from "./syncService.js";
 
 const MAX_SYNC_BODY_BYTES = 16_000;
 
-function unavailable(): RouteResult {
+// KEIKO-0534: connector-guard helpers thread the request's correlation id into 503/4xx error
+// bodies, matching manual-pod-routes.ts's convention.
+function unavailable(correlationId?: string): RouteResult {
   return {
     status: 503,
     body: errorBody(
       "ATLASSIAN_CONNECTORS_UNAVAILABLE",
       "Atlassian connector credential custody is not configured for this BFF.",
+      correlationId,
     ),
   };
 }
 
 type DepsOrResult = AtlassianConnectorCredentialDeps | RouteResult;
 
-function requireConnectorDeps(deps: UiHandlerDeps): DepsOrResult {
-  return deps.atlassianConnectorCredentials ?? unavailable();
+function requireConnectorDeps(deps: UiHandlerDeps, correlationId?: string): DepsOrResult {
+  return deps.atlassianConnectorCredentials ?? unavailable(correlationId);
 }
 
 function isRouteResult(value: DepsOrResult): value is RouteResult {
@@ -146,18 +153,24 @@ async function readJsonObject(req: IncomingMessage): Promise<Record<string, unkn
   return parsed as Record<string, unknown>;
 }
 
-async function runHandler(work: () => Promise<RouteResult> | RouteResult): Promise<RouteResult> {
+async function runHandler(
+  work: () => Promise<RouteResult> | RouteResult,
+  correlationId?: string,
+): Promise<RouteResult> {
   try {
     return await work();
   } catch (error) {
     if (error instanceof BodyTooLargeError) {
       return {
         status: 413,
-        body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit."),
+        body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit.", correlationId),
       };
     }
     if (error instanceof AtlassianSyncRequestError) {
-      return { status: error.status, body: errorBody(error.code, error.message) };
+      return {
+        status: error.status,
+        body: errorBody(error.code, error.message, correlationId),
+      };
     }
     throw error;
   }
@@ -234,13 +247,26 @@ function validatedScopeKeys(
   return value as readonly string[];
 }
 
-// Opaque JQL: bounded and transported only (#2240) — no parsing, no evidence exposure.
+// Opaque JQL: bounded and transported only (#2240) — no parsing, no evidence exposure. The
+// structural nesting check is the one exception: the persisted scope executes as
+// `project IN (...) AND (<jql>)`, and this is the wire boundary that would otherwise let an
+// unbalanced clause reach startAtlassianSyncJob and get persisted before the background fetch's
+// own composeJiraScopeJql check ever runs (KEIKO-0026) — every subsequent re-sync then fails
+// closed forever, reading scope back from that same persisted, already-broken row.
 function validatedOptionalJql(value: unknown): string | undefined {
   if (value === undefined) return undefined;
-  if (typeof value !== "string" || value.length === 0 || value.length > ATLASSIAN_JQL_MAX_CHARS) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > ATLASSIAN_JQL_MAX_CHARS ||
+    value.trim().length === 0
+  ) {
     throw invalid(
       `jql must be a non-empty string of at most ${String(ATLASSIAN_JQL_MAX_CHARS)} characters`,
     );
+  }
+  if (!hasBalancedJqlNesting(value)) {
+    throw invalid("jql must have balanced parentheses and terminated string literals");
   }
   return value;
 }
@@ -344,6 +370,7 @@ async function startSyncAllowed(
   guard: AtlassianConnectorCredentialDeps,
   credential: AtlassianCredentialMetadata,
   body: StartSyncBody,
+  correlationId: string,
 ): Promise<RouteResult> {
   const { authority, ...scope } = body;
   const started = await startAtlassianSyncJob(
@@ -355,7 +382,7 @@ async function startSyncAllowed(
       // through the syncService default instead.
       ...(authority === undefined ? {} : { governance: { disposition: "allowed" } }),
     },
-    guard.httpBodyPortFactory(credential),
+    guard.httpBodyPortFactory(credential, correlationId),
   );
   return { status: 202, body: { job: started.job, capsuleId: started.capsuleId } };
 }
@@ -370,14 +397,20 @@ async function startSyncGoverned(
   credential: AtlassianCredentialMetadata,
   body: StartSyncBody,
   authority: AtlassianActionAuthorityContext,
+  correlationId: string,
 ): Promise<RouteResult> {
   const actionType = SYNC_ACTION_TYPE_FOR_PROVIDER[credential.provider];
   const connectorId = connectorIdForAuthRef(credential.authRef);
-  const correlationId = randomUUID();
   const targetRef = syncScopeTargetRef(body);
   const outcome = decideGovernedAtlassianAction(actionType, authority, deps);
   const denied = (reasonCode: AtlassianConnectorActivityReasonCode): RouteResult =>
-    deniedAtlassianActionResult({ connectorId, actionType, reasonCode, targetRef, correlationId });
+    deniedAtlassianActionResult(deps, {
+      connectorId,
+      actionType,
+      reasonCode,
+      targetRef,
+      correlationId,
+    });
   if (outcome.kind === "authority-denied") return denied(outcome.reason);
   if (outcome.kind === "policy-denied") {
     return denied(outcome.decision.denyReason ?? "connector-access-denied");
@@ -385,9 +418,8 @@ async function startSyncGoverned(
   if (outcome.kind === "review-required") {
     // The raw request `authority` is validated separately above and must not ride into the
     // pending-approval payload; peel it off and forward only the sync-start fields.
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- rest-sibling omit of body.authority
     const { authority: _authority, ...syncStart } = body;
-    return createAtlassianPendingApprovalResult({
+    return createAtlassianPendingApprovalResult(deps, {
       connectorId,
       actionType,
       reviewReason: outcome.decision.reviewReason ?? "mode-approval-required",
@@ -400,7 +432,7 @@ async function startSyncGoverned(
   }
   const reservation = reserveGovernedAtlassianAction(authority, deps);
   if (!reservation.ok) return denied(reservation.reason);
-  return startSyncAllowed(deps, guard, credential, body);
+  return startSyncAllowed(deps, guard, credential, body, correlationId);
 }
 
 // POST /api/atlassian-connectors/credentials/:authRef/sync-jobs
@@ -408,24 +440,43 @@ export function handleStartAtlassianConnectorSync(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> | RouteResult {
-  const guard = requireConnectorDeps(deps);
+  const guard = requireConnectorDeps(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
   return runHandler(async () => {
     const credential = requireAtlassianCredential(ctx, guard);
     const body = validateStartSyncBody(await readJsonObject(ctx.req), credential.provider);
     if (body.authority !== undefined) {
-      return startSyncGoverned(deps, guard, credential, body, body.authority);
+      // Threads the request's own correlation id (ADR-0173 D5 / g12) into the governed-start
+      // denial/pending-approval/allowed records instead of a disconnected mint.
+      return startSyncGoverned(
+        deps,
+        guard,
+        credential,
+        body,
+        body.authority,
+        ctx.correlationId ?? randomUUID(),
+      );
     }
     // Direct human-triggered start: human-approved by construction (ADR-0129; ADR-0128 D5) —
     // recorded as `allowed` + `human-initiated` on the run's activity record.
-    return startSyncAllowed(deps, guard, credential, body);
-  });
+    return startSyncAllowed(
+      deps,
+      guard,
+      credential,
+      body,
+      ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    );
+  }, ctx.correlationId);
 }
 
-function jobNotFound(): RouteResult {
+function jobNotFound(correlationId?: string): RouteResult {
   return {
     status: 404,
-    body: errorBody("SYNC_JOB_NOT_FOUND", "Atlassian connector sync job is not available."),
+    body: errorBody(
+      "SYNC_JOB_NOT_FOUND",
+      "Atlassian connector sync job is not available.",
+      correlationId,
+    ),
   };
 }
 
@@ -445,14 +496,14 @@ export function handleGetAtlassianConnectorSyncJob(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> | RouteResult {
-  const guard = requireConnectorDeps(deps);
+  const guard = requireConnectorDeps(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
   return runHandler(() => {
     const jobId = decodedJobIdParam(ctx);
-    const job = jobId === undefined ? undefined : atlassianSyncJobRegistry.get(jobId);
-    if (job === undefined) return jobNotFound();
+    const job = jobId === undefined ? undefined : resolveAtlassianSyncJobRegistry(deps).get(jobId);
+    if (job === undefined) return jobNotFound(ctx.correlationId);
     return { status: 200, body: { job: job.state } };
-  });
+  }, ctx.correlationId);
 }
 
 // POST /api/atlassian-connectors/sync-jobs/:jobId/cancel — aborts the run's signal; the job
@@ -462,14 +513,15 @@ export function handleCancelAtlassianConnectorSyncJob(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> | RouteResult {
-  const guard = requireConnectorDeps(deps);
+  const guard = requireConnectorDeps(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
   return runHandler(() => {
     const jobId = decodedJobIdParam(ctx);
-    const job = jobId === undefined ? undefined : atlassianSyncJobRegistry.cancel(jobId);
-    if (job === undefined) return jobNotFound();
+    const job =
+      jobId === undefined ? undefined : resolveAtlassianSyncJobRegistry(deps).cancel(jobId);
+    if (job === undefined) return jobNotFound(ctx.correlationId);
     return { status: 202, body: { job: job.state } };
-  });
+  }, ctx.correlationId);
 }
 
 // GET /api/atlassian-connectors/credentials/:authRef/activity — the bounded, content-free
@@ -478,13 +530,13 @@ export function handleListAtlassianConnectorActivity(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> | RouteResult {
-  const guard = requireConnectorDeps(deps);
+  const guard = requireConnectorDeps(deps, ctx.correlationId);
   if (isRouteResult(guard)) return guard;
   return runHandler(() => {
     const credential = requireAtlassianCredential(ctx, guard);
-    const activity = atlassianSyncJobRegistry.listActivity(
+    const activity = resolveAtlassianSyncJobRegistry(deps).listActivity(
       connectorIdForAuthRef(credential.authRef),
     );
     return { status: 200, body: { activity } };
-  });
+  }, ctx.correlationId);
 }

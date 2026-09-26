@@ -112,6 +112,19 @@ describe("mapPositionAfterEdit", () => {
     expect(mapPositionAfterEdit(pos(4, 9), edit)).toEqual(pos(2, 7));
     expect(mapPositionAfterEdit(pos(6, 0), edit)).toEqual(pos(4, 0));
   });
+
+  // KEIKO-0590: apply-text-edits.ts renders the same EditorTextEdit into a buffer through the
+  // shared CRLF/lone-CR-aware `computeLineStarts` primitive; measureNewText previously split only
+  // on "\n", so a lone-CR (old-Mac) inserted newText silently counted zero added lines. Delegating
+  // to the same primitive keeps both sides of the same edit in step.
+  it("counts a lone-CR (old-Mac) newline in an inserted newText (KEIKO-0590)", () => {
+    const edit: EditorTextEdit = { range: range(1, 2, 1, 5), newText: "aa\rbb" };
+    // A later-line position shifts by +1 line because the inserted newText adds one line via CR.
+    expect(mapPositionAfterEdit(pos(4, 7), edit)).toEqual(pos(5, 7));
+    // A same-line position after the edit end drops to the inserted last-line ("bb") column plus
+    // its distance past edit.end (both 0 here — column 5 is edit.end).
+    expect(mapPositionAfterEdit(pos(1, 9), edit)).toEqual(pos(2, 6));
+  });
 });
 
 describe("mapRangeAfterEdit", () => {

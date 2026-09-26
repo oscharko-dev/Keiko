@@ -4,8 +4,9 @@
 // idempotent safe retry (AC3), durable bindable instance (AC4), and the visible classified failure
 // states (SC4). The single governed spawn boundary is reused throughout; no generic git runner.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -24,7 +25,12 @@ import type {
   WorktreeOperationResult,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import type { WorkspaceInfo, WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
+import type {
+  WorkspaceInfo,
+  WorkspaceInstance,
+  WorkspaceLock,
+} from "@oscharko-dev/keiko-contracts";
+import { planWorkspaceRecoveryHints } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { runMigrations } from "../store/schema.js";
 import { buildWorkspaceInstanceStoreOverDatabase, type WorkspaceInstanceStore } from "./store.js";
 import { createWorkspaceProvisioningService } from "./provisioning.js";
@@ -35,8 +41,65 @@ import {
   deriveRepositoryId,
   deriveTaskBranchName,
   deriveWorkspaceId,
+  MANAGED_ROOT_MARKER_FILENAME,
 } from "./naming.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
+import {
+  inspectManagedGitdirIdentity,
+  inspectManagedGitdirIdentityOutcome,
+  liveManagedIdentityDrift,
+  RETIRED_IDENTITY_SCHEMA_MESSAGE,
+} from "./gitdir-identity.js";
+
+// An I/O failure inside the proof cannot be produced on a real filesystem from a test, so the one
+// identity classifier is wrapped (never replaced) and made to fail for ONE worktree path where a
+// pin needs it; every other call reaches the real proof.
+vi.mock("./gitdir-identity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./gitdir-identity.js")>();
+  return {
+    ...actual,
+    inspectManagedGitdirIdentityOutcome: vi.fn(actual.inspectManagedGitdirIdentityOutcome),
+    // Activation proves through this entry point, which calls the classifier module-internally, so
+    // it is wrapped too — the wrapped classifier alone would not reach it.
+    liveManagedIdentityDrift: vi.fn(actual.liveManagedIdentityDrift),
+  };
+});
+
+afterEach(() => {
+  vi.mocked(inspectManagedGitdirIdentityOutcome).mockReset();
+  vi.mocked(liveManagedIdentityDrift).mockReset();
+});
+
+function failProofFor(worktreePath: string, cause: Error): void {
+  const real = vi.mocked(inspectManagedGitdirIdentityOutcome).getMockImplementation();
+  const realLive = vi.mocked(liveManagedIdentityDrift).getMockImplementation();
+  if (real === undefined || realLive === undefined) {
+    throw new Error("classifier wrapper lost its implementation");
+  }
+  vi.mocked(inspectManagedGitdirIdentityOutcome).mockImplementation((candidate, ...rest) =>
+    candidate === worktreePath ? { kind: "failed", cause } : real(candidate, ...rest),
+  );
+  vi.mocked(liveManagedIdentityDrift).mockImplementation((candidate, ...rest) => {
+    if (candidate !== worktreePath) return realLive(candidate, ...rest);
+    throw new TaskWorkspaceError(
+      "IDENTITY_PROOF_FAILED",
+      "managed worktree identity proof failed",
+      [],
+      {
+        cause,
+      },
+    );
+  });
+}
+
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+  type ServerLogEvent,
+  type ServerLogSink,
+} from "../observability/index.js";
+import type { ProvenCreationTimeSupport } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -48,6 +111,8 @@ let db: DatabaseSync;
 let store: WorkspaceInstanceStore;
 let evidence: { id: string; json: string }[];
 let idCounter: number;
+
+type AdapterFactory = (workspace: WorkspaceInfo, correlationId: string) => GitWorktreeAdapter;
 
 function git(args: readonly string[]): string {
   return execFileSync("git", [...args], { cwd: repoRoot, encoding: "utf8" });
@@ -65,24 +130,175 @@ function capturingEvidence(): EvidenceStore {
   };
 }
 
+function realAdapter(workspace: WorkspaceInfo): GitWorktreeAdapter {
+  return createNodeGitWorktreeAdapter({ workspace, processEnv: { PATH: process.env.PATH ?? "" } });
+}
+
+function capturingAdapterFactory(received: string[]): AdapterFactory {
+  return (workspace, correlationId): GitWorktreeAdapter => {
+    received.push(correlationId);
+    return realAdapter(workspace);
+  };
+}
+
+function rejectingAdapterFactory(received: string[]): AdapterFactory {
+  return (_workspace, correlationId): GitWorktreeAdapter => {
+    received.push(correlationId);
+    throw new Error("captured adapter correlation");
+  };
+}
+
+function expectOnlyAdapterCorrelation(received: readonly string[], expected: string): void {
+  expect(received.length).toBeGreaterThan(0);
+  expect(new Set(received)).toEqual(new Set([expected]));
+}
+
+// The same service over a DIFFERENT instance store, so the activation's ownership write can be
+// observed — and denied — at the durable boundary that answers `lock-held-by-actor`.
+function makeServiceOver(
+  instanceStore: WorkspaceInstanceStore,
+  activityLog?: ServerLogSink,
+): WorkspaceProvisioningService {
+  return createWorkspaceProvisioningService({
+    store: instanceStore,
+    evidenceStore: capturingEvidence(),
+    managedRoot,
+    createAdapter: realAdapter,
+    redactString: (s: string): string => s,
+    now: (): number => FIXED_NOW,
+    newId: (): string => `id-${String(idCounter++)}`,
+    mutex: __twMutex,
+    ...(activityLog === undefined ? {} : { activityLog }),
+  });
+}
+
+// Records the lock every write carried, in order, and otherwise persists through the real store.
+function recordingStore(written: (WorkspaceLock | null)[]): WorkspaceInstanceStore {
+  return {
+    ...store,
+    upsert: (instance: WorkspaceInstance): WorkspaceInstance => {
+      written.push(instance.lock);
+      return store.upsert(instance);
+    },
+  };
+}
+
+// A durable store that cannot record ownership: it persists every write with `lock: null`. The
+// activation must observe that from the row the store returned and refuse, rather than proceed on
+// the lock it merely handed over.
+function lockDroppingStore(): WorkspaceInstanceStore {
+  return {
+    ...store,
+    upsert: (instance: WorkspaceInstance): WorkspaceInstance =>
+      store.upsert({ ...instance, lock: null }),
+  };
+}
+
+// The persisted shape of a workspace a drift refused: `recovery-required`, no lock, classified
+// markers and their hints — the row ADR-0088 lists as activatable under `lock-held-by-actor` +
+// `path-contained`.
+function driftedRecoveryRow(instance: WorkspaceInstance): void {
+  store.upsert({
+    ...instance,
+    lifecycleState: "recovery-required",
+    health: "drifted",
+    lock: null,
+    driftMarkers: ["pointer-stale"],
+    recoveryHints: planWorkspaceRecoveryHints(["pointer-stale"]),
+  });
+}
+
 function makeService(
-  adapterFactory?: (workspace: WorkspaceInfo) => GitWorktreeAdapter,
-  ensureManagedWorkspaceIdentity?: (instance: WorkspaceInstance, initializeTrust: boolean) => void,
+  adapterFactory?: AdapterFactory,
+  ensureManagedWorkspaceIdentity?: (instance: WorkspaceInstance) => void,
+  activityLog?: ServerLogSink,
+  proveCreationTimeSupport?: (
+    managedRoot: string,
+    repositoryCommonDirectory: string,
+  ) => ProvenCreationTimeSupport,
+  // The clock. Fixed by default so every timestamp assertion stays deterministic; an ADVANCING one
+  // is what makes the evidence line's `durationMs` falsifiable at all — under the fixed clock the
+  // measurement is always `0`, so a regression back to the placeholder zero it replaced (audit
+  // finding, 2026-09-03) could not turn a single test red (PR #3381 review).
+  now: () => number = (): number => FIXED_NOW,
 ): WorkspaceProvisioningService {
   return createWorkspaceProvisioningService({
     store,
     evidenceStore: capturingEvidence(),
     managedRoot,
-    createAdapter:
-      adapterFactory ??
-      ((workspace: WorkspaceInfo): GitWorktreeAdapter =>
-        createNodeGitWorktreeAdapter({ workspace, processEnv: { PATH: process.env.PATH ?? "" } })),
+    createAdapter: adapterFactory ?? realAdapter,
     redactString: (s: string): string => s,
-    now: (): number => FIXED_NOW,
+    now,
     newId: (): string => `id-${String(idCounter++)}`,
     ...(ensureManagedWorkspaceIdentity === undefined ? {} : { ensureManagedWorkspaceIdentity }),
     mutex: __twMutex,
+    ...(activityLog === undefined ? {} : { activityLog }),
+    ...(proveCreationTimeSupport === undefined ? {} : { proveCreationTimeSupport }),
   });
+}
+
+// A clock that moves one millisecond per read, so an operation's start and end are distinguishable.
+function advancingClock(startMs: number = FIXED_NOW): () => number {
+  let current = startMs;
+  return (): number => {
+    current += 1;
+    return current;
+  };
+}
+
+// The last evidence record whose event type matches, parsed from the SAME persisted JSON
+// `evidence.ts` writes.
+function lastEvidenceOfType(type: string): {
+  readonly durationMs: number;
+  readonly worktreeCount: number;
+} {
+  for (const entry of [...evidence].reverse()) {
+    const parsed = JSON.parse(entry.json) as {
+      readonly durationMs: number;
+      readonly worktreeCount: number;
+      readonly event: { readonly type: string };
+    };
+    if (parsed.event.type === type) return parsed;
+  }
+  throw new Error(`no evidence record of type ${type}`);
+}
+
+// The last-appended evidence record's WorkspaceEvent.correlationId — the join key an operator's
+// `keiko support analyze` uses to tie this lifecycle line back to the HTTP request that produced it
+// (AGENTS.md §8). Parses the SAME persisted JSON `evidence.ts` writes, never a re-derived shape.
+// Single narrowing point for a captured activity-log line, so a chain of `expect(line?.field)`
+// assertions (each `?.` its own branch to ESLint's `complexity` rule) does not push an otherwise
+// linear assertion test over the repo's complexity ceiling (AGENTS.md §6).
+function lastActivityLogEvent(sink: BufferedServerLogSink): ServerLogEvent {
+  const line = sink.events.at(-1);
+  if (line === undefined) throw new Error("no activity-log event recorded");
+  return line;
+}
+
+function expectLoggedRejection(
+  sink: BufferedServerLogSink,
+  operation: "provision" | "activate",
+  failureKind: TaskWorkspaceErrorCode,
+  errorKind: "invalid-request" | "unavailable",
+  rawIdentitySeed: string,
+): void {
+  expect(sink.events).toHaveLength(1);
+  const line = lastActivityLogEvent(sink);
+  expect(line).toMatchObject({
+    op: "task-workspace.lifecycle",
+    category: "diagnostic",
+    errorKind,
+    extra: { operation, failureKind },
+  });
+  expect(line.extra?.workspaceIdentity).toMatch(/^wsref_[a-f0-9]{24}$/u);
+  expect(sink.lines().join("\n")).not.toContain(rawIdentitySeed);
+}
+
+function lastEventCorrelationId(): string {
+  const last = evidence.at(-1);
+  if (last === undefined) throw new Error("no evidence recorded");
+  const parsed = JSON.parse(last.json) as { readonly event: { readonly correlationId: string } };
+  return parsed.event.correlationId;
 }
 
 async function rejectsWithCode(
@@ -178,11 +394,148 @@ describe("provision success (AC1, AC4)", () => {
     expect(evidence.length).toBeGreaterThan(0);
   });
 
+  // F1: the evidence's correlationId must be the triggering request's own id, not the workspace's own
+  // persisted identity (workspaceId) reused for every operation across the workspace's whole life.
+  // Reusing the workspace identity collapses every distinct HTTP request's evidence onto ONE
+  // correlationId, so the timeline can no longer be joined back to the specific request that produced
+  // it (AGENTS.md §8) — the exact failure this pin proves fixed.
+  it("threads the request's own correlationId into provision evidence, not the workspaceId", async () => {
+    const service = makeService();
+    const result = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-corr",
+      baseBranch: "main",
+      requestedBy: "u",
+      correlationId: "req-corr-abc123",
+    });
+    expect(lastEventCorrelationId()).toBe("req-corr-abc123");
+    expect(lastEventCorrelationId()).not.toBe(result.instance.workspaceId);
+  });
+
+  it("falls back to UNKNOWN_CORRELATION_ID (never the workspaceId) when no request scope exists", async () => {
+    const received: string[] = [];
+    const service = makeService(capturingAdapterFactory(received));
+    const result = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-nocorr",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    expectOnlyAdapterCorrelation(received, UNKNOWN_CORRELATION_ID);
+    expect(lastEventCorrelationId()).toBe(UNKNOWN_CORRELATION_ID);
+    expect(lastEventCorrelationId()).not.toBe(result.instance.workspaceId);
+  });
+
+  describe("adapter correlation-ID boundary", () => {
+    it.each([
+      ["empty", ""],
+      ["malformed", "req corr\ncontrol"],
+      ["hostile", `req-corr-${"a".repeat(4000)}`],
+      ["below the HTTP boundary", "x"],
+    ] as const)(
+      "normalizes a supplied %s ID before adapter construction",
+      async (_label, input) => {
+        const received: string[] = [];
+        const service = makeService(rejectingAdapterFactory(received));
+        await expect(
+          service.provision({
+            repositoryRequestPath: repoRoot,
+            taskId: `t-adapter-${_label.replaceAll(" ", "-")}`,
+            baseBranch: "main",
+            requestedBy: "u",
+            correlationId: input,
+          }),
+        ).rejects.toThrow("captured adapter correlation");
+        expectOnlyAdapterCorrelation(received, UNKNOWN_CORRELATION_ID);
+      },
+    );
+  });
+
+  // IDX51: the service owns one correlation-id normalization step before either the adapter's
+  // termination-evidence callback or the lifecycle EvidenceStore can observe the value. This is the
+  // same SAFE_CORRELATION_ID contract used by the HTTP boundary, imported by production rather than
+  // re-derived here; every unshaped supplied value joins the explicit omitted-id fallback.
+  describe("correlation-ID normalization", () => {
+    it.each([
+      ["empty", ""],
+      ["malformed", "req corr\ncontrol"],
+      ["hostile", `req-corr-${"a".repeat(4000)}`],
+      ["below the HTTP boundary", "x"],
+    ] as const)("normalizes a supplied %s ID in lifecycle evidence", async (_label, input) => {
+      const service = makeService();
+      await service.provision({
+        repositoryRequestPath: repoRoot,
+        taskId: `t-corr-${_label.replaceAll(" ", "-")}`,
+        baseBranch: "main",
+        requestedBy: "u",
+        correlationId: input,
+      });
+      expect(lastEventCorrelationId()).toBe(UNKNOWN_CORRELATION_ID);
+    });
+  });
+
+  // IDX61: the EvidenceStore ledger above is a SEPARATE audit surface from `<stateDir>/logs/
+  // server.log` — this proves the SAME provision outcome also reaches the server activity log
+  // (AGENTS.md §8), carrying the SAME correlationId the evidence assertions above just proved.
+  it("emits a task-workspace.lifecycle activity-log line alongside the evidence, same correlationId", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const received: string[] = [];
+    const service = makeService(capturingAdapterFactory(received), undefined, activityLog);
+    const result = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-activity-log",
+      baseBranch: "main",
+      requestedBy: "u",
+      correlationId: "req-corr-activity-1",
+    });
+    expectOnlyAdapterCorrelation(received, "req-corr-activity-1");
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.category).toBe("diagnostic");
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.correlationId).toBe("req-corr-activity-1");
+    expect(line.level).toBe("info");
+    expect(line.errorKind).toBeUndefined();
+    const extra = line.extra ?? {};
+    expect(extra.operation).toBe("provision");
+    expect(extra.outcome).toBe("provisioned");
+    expect(extra.workspaceId).toBe(result.instance.workspaceId);
+    expect(extra.taskId).toBeUndefined();
+  });
+
+  // A failure path carries a global `errorKind` plus the exact TaskWorkspaceError code in
+  // `extra.failureKind`, so an agent can tell INVALID_BASE_BRANCH from other internal failures.
+  it("classifies a blocked provision and preserves its TaskWorkspaceError code", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const service = makeService(undefined, undefined, activityLog);
+    await expect(
+      service.provision({
+        repositoryRequestPath: repoRoot,
+        taskId: "t-activity-log-blocked",
+        baseBranch: "does-not-exist",
+        requestedBy: "u",
+      }),
+    ).rejects.toBeInstanceOf(TaskWorkspaceError);
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.level).toBe("warn");
+    expect(line.errorKind).toBe("validation-failed");
+    expect(line.extra?.failureKind).toBe("INVALID_BASE_BRANCH");
+    expect(line.extra?.outcome).toBe("blocked");
+    expect(activityLog.events).toHaveLength(1);
+  });
+
+  // The `initializeTrust` flag this used to assert (`[true, true, false]`) is gone with #3382/L-3:
+  // it made an explicit provision the ONLY call that could derive the worktree's script-trust record
+  // from its repository, so a worktree provisioned before its repository was granted stayed
+  // restricted for good. The invariant that assertion stood for — activation must never INFER or
+  // RENEW execution trust — is unchanged and is now pinned where the guards that carry it actually
+  // live, in deps.test.ts ("derives managed trust on activation…" / "…never overwrites an existing
+  // record" / "…never derives from an untrusted repository"). What this test owns is the other half:
+  // the identity port is called, with the right row, before EVERY active exposure.
   it("establishes the managed workspace identity before every active exposure", async () => {
-    const observed: { readonly instance: WorkspaceInstance; readonly initializeTrust: boolean }[] =
-      [];
-    const service = makeService(undefined, (instance, initializeTrust) => {
-      observed.push({ instance, initializeTrust });
+    const observed: WorkspaceInstance[] = [];
+    const service = makeService(undefined, (instance) => {
+      observed.push(instance);
     });
     const request = {
       repositoryRequestPath: repoRoot,
@@ -200,17 +553,16 @@ describe("provision success (AC1, AC4)", () => {
       acquireLock: false,
     });
 
-    expect(observed.map(({ instance }) => instance.managedWorktreePath)).toEqual([
+    expect(observed.map((instance) => instance.managedWorktreePath)).toEqual([
       provisioned.instance.managedWorktreePath,
       provisioned.instance.managedWorktreePath,
       provisioned.instance.managedWorktreePath,
     ]);
-    expect(observed.map(({ instance }) => instance.lifecycleState)).toEqual([
+    expect(observed.map((instance) => instance.lifecycleState)).toEqual([
       "provisioning",
       "active",
       "active",
     ]);
-    expect(observed.map(({ initializeTrust }) => initializeTrust)).toEqual([true, true, false]);
   });
 });
 
@@ -234,12 +586,270 @@ describe("idempotent safe retry (AC3)", () => {
     expect(store.listByRepository(first.instance.repositoryId)).toHaveLength(1);
   });
 
-  // Regression for S8786: gitdirIdentity's `.git` pointer parse used to be
+  // Relocated pin (was `pointer-stale`): the pointer is readable and reciprocal, so the refusal
+  // persists the readable-mismatch marker reconciliation records for the same fact.
+  it("fails closed instead of refreshing a mismatched persisted Git identity", async () => {
+    const service = makeService();
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-identity-drift",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    store.upsert({ ...first.instance, gitdirIdentity: "mismatched-gitdir-identity" });
+
+    await rejectsWithCode(
+      () =>
+        service.provision({
+          repositoryRequestPath: repoRoot,
+          taskId: "t-identity-drift",
+          baseBranch: "main",
+          requestedBy: "u",
+        }),
+      "POINTER_DRIFT",
+    );
+
+    const persisted = store.getById(first.instance.workspaceId);
+    expect(persisted?.lifecycleState).toBe("recovery-required");
+    expect(persisted?.health).toBe("drifted");
+    expect(persisted?.gitdirIdentity).toBe("mismatched-gitdir-identity");
+    expect(persisted?.driftMarkers).toContain("gitdir-mismatch");
+  });
+
+  // A workspace registered before the identity bound its pointer stamps is refused exactly like any
+  // other mismatch — accepting the retired proof even once would reissue a replaced worktree as a
+  // trusted one. What must differ is the sentence: telling an operator the Git identity CHANGED is a
+  // false statement about their disk and sends them hunting a replacement that never happened.
+  it("names the retired identity rule instead of claiming the Git identity changed", async () => {
+    const service = makeService();
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-identity-schema",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    const inspection = inspectManagedGitdirIdentity(first.instance.managedWorktreePath, repoRoot);
+    if (inspection === undefined) throw new Error("real linked-worktree identity was not resolved");
+    store.upsert({ ...first.instance, gitdirIdentity: inspection.legacyIdentity });
+
+    const failure = await service
+      .provision({
+        repositoryRequestPath: repoRoot,
+        taskId: "t-identity-schema",
+        baseBranch: "main",
+        requestedBy: "u",
+      })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain("predates the current identity rule");
+    expect((failure as Error).message).not.toContain("git identity changed");
+    const persisted = store.getById(first.instance.workspaceId);
+    expect(persisted?.lifecycleState).toBe("recovery-required");
+    // A closed, body-free marker, so a support export can separate this migration from a real
+    // pointer change without reading the thrown message.
+    expect(persisted?.driftMarkers).toEqual(["identity-schema-retired"]);
+    expect(persisted?.driftMarkers).not.toContain("pointer-stale");
+    // The retired value is never promoted into a current one.
+    expect(persisted?.gitdirIdentity).toBe(inspection.legacyIdentity);
+  });
+
+  // The refusal above persists `recovery-required`, which is in COMPLETABLE_STATES. Without an
+  // explicit guard the NEXT identical request falls through to the completion path, recomputes a
+  // current identity and finalizes it — reissuing the proof the refusal withheld, with no operator
+  // approval anywhere.
+  it("keeps refusing a retired identity on every retry instead of completing it", async () => {
+    const service = makeService();
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-identity-retry",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    const inspection = inspectManagedGitdirIdentity(first.instance.managedWorktreePath, repoRoot);
+    if (inspection === undefined) throw new Error("real linked-worktree identity was not resolved");
+    store.upsert({ ...first.instance, gitdirIdentity: inspection.legacyIdentity });
+
+    const request = {
+      repositoryRequestPath: repoRoot,
+      taskId: "t-identity-retry",
+      baseBranch: "main",
+      requestedBy: "u",
+    };
+    await rejectsWithCode(() => service.provision(request), "POINTER_DRIFT");
+    await rejectsWithCode(() => service.provision(request), "POINTER_DRIFT");
+
+    const persisted = store.getById(first.instance.workspaceId);
+    expect(persisted?.lifecycleState).toBe("recovery-required");
+    expect(persisted?.driftMarkers).toEqual(["identity-schema-retired"]);
+    // The retired value is never promoted into a current one, on any attempt.
+    expect(persisted?.gitdirIdentity).toBe(inspection.legacyIdentity);
+  });
+
+  // Every workspace provisioned before #3367 carries the pointer-text identity provisioning.ts
+  // minted itself (the SHA-256 of the `.git` pointer's target). Two such rows, registered on
+  // 2026-08-23, were reported after the upgrade as REPLACED worktrees (`pointer-stale`, an
+  // operator-repair hint that no strategy executes) on every start and every bind attempt — a
+  // false statement about the customer's disk with no product exit. The registration is retired,
+  // not replaced: same refusal, the migration sentence, the executable re-registration hint.
+  it("names the retired identity rule for a workspace registered before the rule existed", async () => {
+    const service = makeService();
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-identity-pointer-text",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    const pointerText = readFileSync(join(first.instance.managedWorktreePath, ".git"), "utf8")
+      .replace(/^gitdir:/u, "")
+      .trim();
+    const retired = createHash("sha256").update(pointerText, "utf8").digest("hex").slice(0, 32);
+    store.upsert({ ...first.instance, gitdirIdentity: retired });
+    const request = {
+      repositoryRequestPath: repoRoot,
+      taskId: "t-identity-pointer-text",
+      baseBranch: "main",
+      requestedBy: "u",
+    };
+
+    const failure = await service.provision(request).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toMatchObject({ code: "POINTER_DRIFT" });
+    expect((failure as Error).message).toContain("predates the current identity rule");
+    expect((failure as Error).message).not.toContain("git identity changed");
+    const persisted = store.getById(first.instance.workspaceId);
+    expect(persisted?.lifecycleState).toBe("recovery-required");
+    expect(persisted?.driftMarkers).toEqual(["identity-schema-retired"]);
+    expect(persisted?.recoveryHints).toEqual([
+      {
+        marker: "identity-schema-retired",
+        strategy: "reconcile-pointer",
+        operatorActionRequired: false,
+      },
+    ]);
+    // Never promoted without approval, on any attempt.
+    await rejectsWithCode(() => service.provision(request), "POINTER_DRIFT");
+    expect(store.getById(first.instance.workspaceId)?.gitdirIdentity).toBe(retired);
+
+    // The operator-approved re-registration reissues the current identity for the SAME worktree —
+    // no recreate, no data loss — and the row is operational again.
+    const repaired = await service.provision({ ...request, operatorApprovedRepair: true });
+    expect(repaired.created).toBe(false);
+    expect(repaired.instance.lifecycleState).toBe("active");
+    expect(repaired.instance.gitdirIdentity).toBe(first.instance.gitdirIdentity);
+    expect(repaired.instance.driftMarkers).toEqual([]);
+  });
+
+  // The completion path is what reissues an identity, and `recovery-required` is completable — so a
+  // refused row would otherwise be upgraded by the very next identical request. The guard is on the
+  // LIVE verdict, not on a persisted marker, so a genuinely changed v3 identity is refused too.
+  it("refuses to reissue a changed identity for an existing worktree without operator approval", async () => {
+    const service = makeService();
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-no-silent-reissue",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    store.upsert({
+      ...first.instance,
+      gitdirIdentity: "0000000000000000deadbeefdeadbeef",
+      lifecycleState: "recovery-required",
+    });
+    const request = {
+      repositoryRequestPath: repoRoot,
+      taskId: "t-no-silent-reissue",
+      baseBranch: "main",
+      requestedBy: "u",
+    };
+
+    await rejectsWithCode(() => service.provision(request), "POINTER_DRIFT");
+    await rejectsWithCode(() => service.provision(request), "POINTER_DRIFT");
+    expect(store.getById(first.instance.workspaceId)?.gitdirIdentity).toBe(
+      "0000000000000000deadbeefdeadbeef",
+    );
+
+    // The operator-approved repair is the one path that MAY reissue it — otherwise the refusal
+    // would have no exit and the workspace would be stranded.
+    const repaired = await service.provision({ ...request, operatorApprovedRepair: true });
+    expect(repaired.instance.gitdirIdentity).not.toBe("0000000000000000deadbeefdeadbeef");
+  });
+
+  // The persisted value is untrusted input to the verdict. An EMPTY identity cannot even be
+  // persisted — the store refuses it at the write boundary — and anything else that is not the
+  // live identity is "changed" like any other non-match: refused on every retry, reissued only
+  // under approval, and marked with the provisioning path's pointer-drift marker.
+  it("refuses to persist an empty identity at the store boundary", async () => {
+    const first = await makeService().provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-empty-identity",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+
+    expect(() => store.upsert({ ...first.instance, gitdirIdentity: "" })).toThrow(
+      /gitdirIdentity must be a non-empty string/,
+    );
+    expect(store.getById(first.instance.workspaceId)?.gitdirIdentity).toBe(
+      first.instance.gitdirIdentity,
+    );
+  });
+
+  it.each([
+    { label: "a malformed", persisted: "not-a-digest" },
+    { label: "a whitespace-only", persisted: " \t\n" },
+    { label: "a single-character", persisted: "0" },
+  ])(
+    "keeps refusing $label persisted identity until an operator-approved repair",
+    async ({ persisted }) => {
+      const service = makeService();
+      const first = await service.provision({
+        repositoryRequestPath: repoRoot,
+        taskId: "t-bad-identity",
+        baseBranch: "main",
+        requestedBy: "u",
+      });
+      store.upsert({
+        ...first.instance,
+        gitdirIdentity: persisted,
+        lifecycleState: "recovery-required",
+      });
+      const request = {
+        repositoryRequestPath: repoRoot,
+        taskId: "t-bad-identity",
+        baseBranch: "main",
+        requestedBy: "u",
+      };
+
+      await rejectsWithCode(() => service.provision(request), "POINTER_DRIFT");
+      await rejectsWithCode(() => service.provision(request), "POINTER_DRIFT");
+      expect(store.getById(first.instance.workspaceId)?.gitdirIdentity).toBe(persisted);
+      // Relocated pin (was `pointer-stale`): the worktree's pointer is readable and reciprocal, so
+      // this is the readable-mismatch fact reconciliation records as `gitdir-mismatch`, whose
+      // `reconcile-pointer` hint is the executable exit the approval below takes.
+      expect(store.getById(first.instance.workspaceId)?.driftMarkers).toEqual(["gitdir-mismatch"]);
+      expect(store.getById(first.instance.workspaceId)?.recoveryHints).toContainEqual({
+        marker: "gitdir-mismatch",
+        strategy: "reconcile-pointer",
+        operatorActionRequired: false,
+      });
+
+      const repaired = await service.provision({ ...request, operatorApprovedRepair: true });
+      expect(repaired.instance.gitdirIdentity).toBe(first.instance.gitdirIdentity);
+    },
+  );
+
+  // Regression for S8786: the formerly duplicated `.git` pointer parse used to be
   // `/^gitdir:\s*(.+)\s*$/mu`, whose leading/trailing `\s*` overlapped with `(.+)` and, under the
-  // multiline flag, made the parse quadratic on adversarial pointer content. It is now
-  // `/^gitdir:(.+)$/mu`, relying on the pre-existing `.trim()` to strip the same whitespace. This
-  // pads the real `.git` pointer with a huge, otherwise-meaningless whitespace run around the
-  // actual target and asserts the idempotent retry still resumes quickly with the SAME identity.
+  // multiline flag, made the parse quadratic on adversarial pointer content. The shared production
+  // parser now uses a literal prefix plus a bounded complete descriptor read. This pads the real
+  // pointer and asserts the idempotent retry still resumes with the SAME identity.
   it("resumes with an unchanged identity when the .git pointer is padded with adversarial whitespace", async () => {
     const service = makeService();
     const first = await service.provision({
@@ -447,6 +1057,152 @@ describe("pre-write rejections (AC2)", () => {
   });
 });
 
+// The settled provision failure line used to carry only a classification: the cause the
+// operation-local tracker then suppressed on the rethrow path was lost for good, so a bind that
+// failed after `git worktree add` had succeeded (a refused identity registration, 2026-09-10) left
+// `PROVISIONING_FAILED` in the log and nothing an agent could reconstruct the cause from (ADR-0173,
+// AGENTS.md §8). The line now carries the failure's own content-free cause chain and Keiko frames.
+describe("settled failure trace", () => {
+  it("carries the classified cause chain on the persisted provision failure line, body-free", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const service = makeService(
+      undefined,
+      (): void => {
+        throw new Error("identity registration exploded: /Users/someone/secret-project");
+      },
+      activityLog,
+    );
+
+    await rejectsWithCode(
+      () =>
+        service.provision({
+          repositoryRequestPath: repoRoot,
+          taskId: "trace-task",
+          baseBranch: "main",
+          requestedBy: "operator",
+          correlationId: "provision-trace-1",
+        }),
+      "PROVISIONING_FAILED",
+    );
+
+    const failed = activityLog.events.find(
+      (event) =>
+        event.extra?.failureKind === "PROVISIONING_FAILED" && event.extra.outcome === "failed",
+    );
+    expect(failed).toBeDefined();
+    expect(failed?.errorKind).toBe("write-failed");
+    expect(failed?.correlationId).toBe("provision-trace-1");
+    expect(failed?.extra?.causeChain).toEqual([expect.stringMatching(/^Error/u)]);
+    expect(activityLog.lines().join("\n")).not.toContain("identity registration exploded");
+    expect(activityLog.lines().join("\n")).not.toContain("secret-project");
+  });
+});
+
+describe("early rejection activity logging", () => {
+  it("logs an invalid provision request without exposing its free-form task identity", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const service = makeService(undefined, undefined, activityLog);
+    const taskId = `Patient-Jane-cancer${String.fromCodePoint(0x200b)}`;
+
+    await rejectsWithCode(
+      () =>
+        service.provision({
+          repositoryRequestPath: repoRoot,
+          taskId,
+          baseBranch: "main",
+          requestedBy: "operator",
+          correlationId: "provision-invalid-request-1",
+        }),
+      "INVALID_REQUEST",
+    );
+
+    expectLoggedRejection(activityLog, "provision", "INVALID_REQUEST", "invalid-request", taskId);
+    expect(lastActivityLogEvent(activityLog).correlationId).toBe("provision-invalid-request-1");
+  });
+
+  it("logs a missing repository before any managed-workspace row exists", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const taskId = "missing-repository-task";
+    const service = makeService(
+      (workspace): GitWorktreeAdapter => ({
+        ...realAdapter(workspace),
+        resolveRepositoryRoot: (): Promise<string | undefined> => Promise.resolve(undefined),
+      }),
+      undefined,
+      activityLog,
+    );
+
+    await rejectsWithCode(
+      () =>
+        service.provision({
+          repositoryRequestPath: repoRoot,
+          taskId,
+          baseBranch: "main",
+          requestedBy: "operator",
+          correlationId: "provision-missing-repository-1",
+        }),
+      "MISSING_REPOSITORY",
+    );
+
+    expectLoggedRejection(activityLog, "provision", "MISSING_REPOSITORY", "unavailable", taskId);
+    expect(lastActivityLogEvent(activityLog).correlationId).toBe("provision-missing-repository-1");
+  });
+
+  it("logs an invalid activation before acquiring the workspace mutex", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const workspaceId = "ws_invalid_activation_private_seed";
+    const service = makeService(undefined, undefined, activityLog);
+
+    await rejectsWithCode(
+      () =>
+        service.activate({
+          workspaceId,
+          taskId: "task",
+          requestedBy: "",
+          acquireLock: false,
+          correlationId: "activate-invalid-request-1",
+        }),
+      "INVALID_REQUEST",
+    );
+
+    expectLoggedRejection(
+      activityLog,
+      "activate",
+      "INVALID_REQUEST",
+      "invalid-request",
+      workspaceId,
+    );
+    expect(lastActivityLogEvent(activityLog).correlationId).toBe("activate-invalid-request-1");
+  });
+
+  it("logs an unknown activation target without exposing the supplied workspace value", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const workspaceId = "Patient Jane cancer workspace";
+    const service = makeService(undefined, undefined, activityLog);
+
+    await rejectsWithCode(
+      () =>
+        service.activate({
+          workspaceId,
+          taskId: "task",
+          requestedBy: "operator",
+          acquireLock: false,
+          correlationId: "activate-missing-workspace-1",
+        }),
+      "WORKSPACE_NOT_FOUND",
+    );
+
+    expectLoggedRejection(
+      activityLog,
+      "activate",
+      "WORKSPACE_NOT_FOUND",
+      "unavailable",
+      workspaceId,
+    );
+    expect(lastActivityLogEvent(activityLog).correlationId).toBe("activate-missing-workspace-1");
+  });
+});
+
 describe("drift + partial failure leave a visible classified state (SC4)", () => {
   it("rolls back and classifies a managed workspace identity failure", async () => {
     const identityFailure = new Error("identity store unavailable");
@@ -540,6 +1296,108 @@ describe("drift + partial failure leave a visible classified state (SC4)", () =>
     expect(failed?.lifecycleState).toBe("failed");
     expect(failed?.lock).toBeNull();
   });
+
+  // A `git worktree add` that fails halfway leaves a partial target directory git never registered.
+  // The rollback covers everything this call set out to create — decided before the add, not after
+  // it returned — so the next provision does not resume over a partial tree or reject it as an
+  // unmanaged path (#3376 review).
+  it("rolls back the partial tree a failed `git worktree add` leaves behind", async () => {
+    const attempted: string[] = [];
+    const partialAdd: AdapterFactory = (workspace) => {
+      const real = realAdapter(workspace);
+      const partial = (worktreePath: string): Promise<WorktreeOperationResult> => {
+        attempted.push(worktreePath);
+        mkdirSync(worktreePath, { recursive: true });
+        writeFileSync(join(worktreePath, "partial.txt"), "left behind by a failed add\n");
+        return Promise.resolve({
+          ok: false,
+          exitCode: 128,
+          durationMs: 0,
+          timedOut: false,
+          truncated: false,
+        });
+      };
+      return {
+        ...real,
+        addWorktree: (input): Promise<WorktreeOperationResult> => partial(input.worktreePath),
+        addWorktreeForExistingBranch: (input): Promise<WorktreeOperationResult> =>
+          partial(input.worktreePath),
+      };
+    };
+
+    await rejectsWithCode(
+      () =>
+        makeService(partialAdd).provision({
+          repositoryRequestPath: repoRoot,
+          taskId: "t-partial-add",
+          baseBranch: "main",
+          requestedBy: "u",
+        }),
+      "PROVISIONING_FAILED",
+    );
+
+    expect(attempted).toHaveLength(1);
+    expect(existsSync(attempted[0] ?? "")).toBe(false);
+    expect(git(["worktree", "list", "--porcelain"])).not.toContain(attempted[0] ?? "\u0000");
+    const row = store.getById(
+      deriveWorkspaceId({ repositoryId: deriveRepositoryId(repoRoot), taskId: "t-partial-add" }),
+    );
+    expect(row?.lifecycleState).toBe("failed");
+    expect(row?.lock).toBeNull();
+  });
+
+  // The rollback is best-effort all the way down: when the SC1 choke point refuses the leftover
+  // directory (here: the managed-root ownership marker vanished during the add), the classified
+  // provisioning error still surfaces, the row is still persisted as failed with the lock released,
+  // and nothing is deleted (#3376 review).
+  it("keeps the classified error and the failed row when the leftover-directory rollback is refused", async () => {
+    const attempted: string[] = [];
+    const partialAddWithoutMarker: AdapterFactory = (workspace) => {
+      const real = realAdapter(workspace);
+      const partial = (worktreePath: string): Promise<WorktreeOperationResult> => {
+        attempted.push(worktreePath);
+        mkdirSync(worktreePath, { recursive: true });
+        writeFileSync(join(worktreePath, "partial.txt"), "left behind by a failed add\n");
+        rmSync(join(managedRoot, MANAGED_ROOT_MARKER_FILENAME));
+        return Promise.resolve({
+          ok: false,
+          exitCode: 128,
+          durationMs: 0,
+          timedOut: false,
+          truncated: false,
+        });
+      };
+      return {
+        ...real,
+        addWorktree: (input): Promise<WorktreeOperationResult> => partial(input.worktreePath),
+        addWorktreeForExistingBranch: (input): Promise<WorktreeOperationResult> =>
+          partial(input.worktreePath),
+      };
+    };
+
+    await rejectsWithCode(
+      () =>
+        makeService(partialAddWithoutMarker).provision({
+          repositoryRequestPath: repoRoot,
+          taskId: "t-partial-add-unowned",
+          baseBranch: "main",
+          requestedBy: "u",
+        }),
+      "PROVISIONING_FAILED",
+    );
+
+    expect(attempted).toHaveLength(1);
+    // Refused by the choke point, so the leftover survives — and that refusal displaced nothing.
+    expect(existsSync(join(attempted[0] ?? "", "partial.txt"))).toBe(true);
+    const row = store.getById(
+      deriveWorkspaceId({
+        repositoryId: deriveRepositoryId(repoRoot),
+        taskId: "t-partial-add-unowned",
+      }),
+    );
+    expect(row?.lifecycleState).toBe("failed");
+    expect(row?.lock).toBeNull();
+  });
 });
 
 describe("activate", () => {
@@ -603,6 +1461,328 @@ describe("activate", () => {
     expect(activated.binding.activeRoot).toBe(provisioned.instance.managedWorktreePath);
   });
 
+  // The contract lists recovery-required -> active (lock-held-by-actor + path-contained), and
+  // activation re-proves exactly those facts live. A flag left behind by a drift that has since
+  // been resolved is cleared by the proof, not by a second operator action; the switcher offered
+  // this action and the server answered ILLEGAL_TRANSITION (2026-09-03 dev log).
+  it("activates a recovery-required workspace whose drift has been resolved and drops the refuted markers", async () => {
+    const service = makeService();
+    const provisioned = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "act-recovered",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    store.upsert({
+      ...provisioned.instance,
+      lifecycleState: "recovery-required",
+      health: "drifted",
+      lock: null,
+      driftMarkers: ["pointer-stale", "lock-stale"],
+      recoveryHints: planWorkspaceRecoveryHints(["pointer-stale", "lock-stale"]),
+    });
+
+    const activated = await service.activate({
+      workspaceId: provisioned.instance.workspaceId,
+      taskId: "act-recovered",
+      requestedBy: "u",
+      acquireLock: false,
+    });
+
+    expect(activated.instance.lifecycleState).toBe("active");
+    expect(activated.instance.health).toBe("healthy");
+    expect(activated.instance.driftMarkers).toEqual([]);
+    expect(activated.instance.recoveryHints).toEqual([]);
+    expect(activated.binding.activeRoot).toBe(provisioned.instance.managedWorktreePath);
+    expect(
+      evidence.some(
+        (e) => e.json.includes('"type": "resumed"') || e.json.includes('"type":"resumed"'),
+      ),
+    ).toBe(true);
+  });
+
+  // ADR-0088 gates every activation transition — `paused`/`handoff-ready`/`recovery-required` →
+  // `active` — on `lock-held-by-actor`, and that fact used to be hard-coded `true`. The `ws:` mutex
+  // cannot stand in for it (mutex.ts: it grants TURN ORDER, never OWNERSHIP), so with
+  // `recovery-required` activatable the precondition was fabricated: any actor could promote a
+  // drifted, unowned row while the settled write persisted `lock: null` (PR #3381 review P1).
+  // The activation now ACQUIRES the actor's advisory lock and validates the transition against the
+  // durable row that carries it.
+  it("acquires the actor's advisory lock before it resumes a recovery-required workspace", async () => {
+    const service = makeService();
+    const provisioned = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "act-lock-owned",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    driftedRecoveryRow(provisioned.instance);
+    const written: (WorkspaceLock | null)[] = [];
+
+    const activated = await makeServiceOver(recordingStore(written)).activate({
+      workspaceId: provisioned.instance.workspaceId,
+      taskId: "act-lock-owned",
+      requestedBy: "u",
+      acquireLock: false,
+    });
+
+    expect(activated.instance.lifecycleState).toBe("active");
+    // The transition was validated against a DURABLE row carrying THIS actor's activation lock.
+    expect(written[0]).toMatchObject({ owner: "u", reason: "activation" });
+    // `acquireLock` still decides RETENTION only, so an ordinary switch persists no lingering lock
+    // and the settled row is exactly what it was before.
+    expect(activated.instance.lock).toBeNull();
+    expect(store.getById(provisioned.instance.workspaceId)?.lock).toBeNull();
+  });
+
+  // The other half: ownership is read back from the persisted record, so an activation whose
+  // ownership the durable store did not record REFUSES instead of asserting a precondition nothing
+  // supports. The row stays `recovery-required` and the refusal is classified and logged.
+  it("refuses the recovery-required activation when the durable row records no actor lock", async () => {
+    const service = makeService();
+    const provisioned = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "act-lock-unrecorded",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    driftedRecoveryRow(provisioned.instance);
+    const activityLog = createBufferedServerLogSink();
+
+    await expect(
+      makeServiceOver(lockDroppingStore(), activityLog).activate({
+        workspaceId: provisioned.instance.workspaceId,
+        taskId: "act-lock-unrecorded",
+        requestedBy: "u",
+        acquireLock: false,
+      }),
+    ).rejects.toMatchObject({ code: "LOCK_CONTENTION" });
+
+    expect(store.getById(provisioned.instance.workspaceId)?.lifecycleState).toBe(
+      "recovery-required",
+    );
+    expect(activityLog.events.some((event) => event.extra?.failureKind === "LOCK_CONTENTION")).toBe(
+      true,
+    );
+  });
+
+  // Both measurements on the resumed activation's evidence line were placeholder zeros before the
+  // 2026-09-03 audit. `worktreeCount` is pinned here, and `durationMs` needs a clock that MOVES:
+  // under the suite's fixed clock the subtraction is always `0`, so a regression to a hard-coded
+  // zero could not fail a single test (PR #3381 review).
+  it("measures the resumed activation instead of persisting placeholder zeros", async () => {
+    const service = makeService(undefined, undefined, undefined, undefined, advancingClock());
+    const provisioned = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "act-measured",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    store.upsert({ ...provisioned.instance, lifecycleState: "paused", lock: null });
+
+    await service.activate({
+      workspaceId: provisioned.instance.workspaceId,
+      taskId: "act-measured",
+      requestedBy: "u",
+      acquireLock: false,
+    });
+
+    const measured = lastEvidenceOfType("resumed");
+    expect(measured.durationMs).toBeGreaterThan(0);
+    expect(measured.worktreeCount).toBe(1);
+  });
+
+  // The idempotent resume (re-provisioning an already-active pair) performs the same live proof and
+  // the same write as activation, so it drops the same refuted markers — a reconcile that had
+  // recorded `gitdir-mismatch` on a since-repaired pointer must not survive next to the health the
+  // row the bind hands back reports (audit finding, 2026-09-03).
+  //
+  // And the persisted health is DERIVED from the markers that survive, never a flat "healthy": the
+  // proof refutes the identity and path findings, not a dirty tree or a stale lock, so the row used
+  // to be handed back claiming healthy WHILE carrying drift. The health report copies that value
+  // onto its live classification and the workbench renders both (PR #3381 review).
+  it("drops the refuted identity markers on an idempotent resume and derives the health that remains", async () => {
+    const service = makeService();
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "resume-markers",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    const seeded = ["gitdir-mismatch", "uncommitted-changes", "lock-stale"] as const;
+    store.upsert({
+      ...first.instance,
+      health: "drifted",
+      driftMarkers: [...seeded],
+      recoveryHints: planWorkspaceRecoveryHints([...seeded]),
+    });
+
+    const resumed = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "resume-markers",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+
+    expect(resumed.created).toBe(false);
+    // `uncommitted-changes` survived the proof, so the row says `drifted` — the same status the
+    // read-only report reconstructs from these very markers.
+    expect(resumed.instance.health).toBe("drifted");
+    // A resume leaves the lock field as it found it, so it cannot refute `lock-stale`; only the
+    // activation write, which replaces the lock, drops that marker (review of ec04288dc).
+    expect(resumed.instance.driftMarkers).toEqual(["uncommitted-changes", "lock-stale"]);
+    // Literal contract values, not a second call to the production planner: calling it would move
+    // the expected and the actual together and leave a changed recovery table green (AGENTS.md §7).
+    expect(resumed.instance.recoveryHints).toEqual([
+      {
+        marker: "uncommitted-changes",
+        strategy: "commit-or-stash-required",
+        operatorActionRequired: true,
+      },
+      { marker: "lock-stale", strategy: "release-stale-lock", operatorActionRequired: false },
+    ]);
+    expect(store.getById(first.instance.workspaceId)?.driftMarkers).toEqual([
+      "uncommitted-changes",
+      "lock-stale",
+    ]);
+    expect(store.getById(first.instance.workspaceId)?.health).toBe("drifted");
+  });
+
+  // The other half of the same rule: with nothing left to carry, the derivation says `healthy`.
+  it("derives healthy on a resume that refutes every marker", async () => {
+    const service = makeService();
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "resume-clean",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    store.upsert({
+      ...first.instance,
+      health: "drifted",
+      driftMarkers: ["gitdir-mismatch"],
+      recoveryHints: planWorkspaceRecoveryHints(["gitdir-mismatch"]),
+    });
+
+    const resumed = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "resume-clean",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+
+    expect(resumed.instance.health).toBe("healthy");
+    expect(resumed.instance.driftMarkers).toEqual([]);
+  });
+
+  // Only the findings activation has just refuted are dropped; a marker it does not prove (dirty
+  // tree, moved HEAD, deleted branch) is carried forward for the next reconcile.
+  it("keeps the markers activation does not re-prove", async () => {
+    const service = makeService();
+    const provisioned = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "act-partial",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    store.upsert({
+      ...provisioned.instance,
+      lifecycleState: "recovery-required",
+      health: "drifted",
+      lock: null,
+      driftMarkers: ["gitdir-mismatch", "uncommitted-changes"],
+      recoveryHints: planWorkspaceRecoveryHints(["gitdir-mismatch", "uncommitted-changes"]),
+    });
+
+    const activated = await service.activate({
+      workspaceId: provisioned.instance.workspaceId,
+      taskId: "act-partial",
+      requestedBy: "u",
+      acquireLock: false,
+    });
+
+    expect(activated.instance.lifecycleState).toBe("active");
+    expect(activated.instance.driftMarkers).toEqual(["uncommitted-changes"]);
+    // Literal contract values, not a second call to the production planner (AGENTS.md §7).
+    expect(activated.instance.recoveryHints).toEqual([
+      {
+        marker: "uncommitted-changes",
+        strategy: "commit-or-stash-required",
+        operatorActionRequired: true,
+      },
+    ]);
+    // The surviving marker decides the persisted health; an activation that carries drift forward
+    // may not hand back a row claiming `healthy` (PR #3381 review).
+    expect(activated.instance.health).toBe("drifted");
+  });
+
+  // Widening the entry set widens no trust boundary: the live proofs still refuse a row whose
+  // drift persists, and the row stays flagged.
+  it("still refuses a recovery-required workspace whose worktree is gone", async () => {
+    const service = makeService();
+    const provisioned = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "act-still-gone",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    store.upsert({
+      ...provisioned.instance,
+      lifecycleState: "recovery-required",
+      health: "missing",
+      lock: null,
+      driftMarkers: ["worktree-missing"],
+      recoveryHints: planWorkspaceRecoveryHints(["worktree-missing"]),
+    });
+    rmSync(provisioned.instance.managedWorktreePath, { recursive: true, force: true });
+
+    await rejectsWithCode(
+      () =>
+        service.activate({
+          workspaceId: provisioned.instance.workspaceId,
+          taskId: "act-still-gone",
+          requestedBy: "u",
+          acquireLock: false,
+        }),
+      "POINTER_DRIFT",
+    );
+    const after = store.getById(provisioned.instance.workspaceId);
+    expect(after?.lifecycleState).toBe("recovery-required");
+    expect(after?.driftMarkers).toEqual(["worktree-missing"]);
+  });
+
+  it("still refuses a recovery-required workspace whose identity is not current", async () => {
+    const service = makeService();
+    const provisioned = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "act-still-drifted",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    store.upsert({
+      ...provisioned.instance,
+      gitdirIdentity: "0000000000000000deadbeefdeadbeef",
+      lifecycleState: "recovery-required",
+      health: "drifted",
+      lock: null,
+    });
+
+    await rejectsWithCode(
+      () =>
+        service.activate({
+          workspaceId: provisioned.instance.workspaceId,
+          taskId: "act-still-drifted",
+          requestedBy: "u",
+          acquireLock: false,
+        }),
+      "POINTER_DRIFT",
+    );
+    const after = store.getById(provisioned.instance.workspaceId);
+    expect(after?.lifecycleState).toBe("recovery-required");
+    expect(after?.driftMarkers).toEqual(["gitdir-mismatch"]);
+    expect(after?.gitdirIdentity).toBe("0000000000000000deadbeefdeadbeef");
+  });
+
   it("rejects activation from an archived lifecycle state", async (): Promise<void> => {
     const service = makeService();
     const provisioned = await service.provision({
@@ -657,13 +1837,15 @@ describe("activate", () => {
   });
 
   it("flags drift (recovery-required) when activating a workspace whose worktree vanished", async () => {
-    const service = makeService();
+    const activityLog = createBufferedServerLogSink();
+    const service = makeService(undefined, undefined, activityLog);
     const provisioned = await service.provision({
       repositoryRequestPath: repoRoot,
       taskId: "act-drift",
       baseBranch: "main",
       requestedBy: "u",
     });
+    activityLog.clear();
     rmSync(provisioned.instance.managedWorktreePath, { recursive: true, force: true });
     await rejectsWithCode(
       () =>
@@ -678,6 +1860,21 @@ describe("activate", () => {
     const after = store.getById(provisioned.instance.workspaceId);
     expect(after?.lifecycleState).toBe("recovery-required");
     expect(after?.driftMarkers).toContain("worktree-missing");
+    expect(activityLog.events).toHaveLength(1);
+    expect(lastActivityLogEvent(activityLog)).toMatchObject({
+      errorKind: "target-mutated",
+      extra: {
+        operation: "activate",
+        outcome: "retry-required",
+        failureKind: "POINTER_DRIFT",
+      },
+    });
+    // The one line this path leaves carries the classified error's Keiko frames, like every other
+    // settled failure line (review of PR #3452): the rethrow path's second, trace-carrying line is
+    // suppressed once `errorCode` is recorded, so without this the drift left no frames at all.
+    const frames = lastActivityLogEvent(activityLog).extra?.frames;
+    expect(Array.isArray(frames) && frames.length > 0).toBe(true);
+    expect(String(frames)).toContain("task-workspace/provisioning");
   });
 
   it("rejects activation of an unknown workspace", async () => {
@@ -713,5 +1910,394 @@ describe("activate", () => {
         }),
       "LOCK_CONTENTION",
     );
+  });
+});
+
+// Activation exposes an operational binding, so it runs the same live four-way proof as resume. Before
+// this it marked a row healthy on path existence alone, so a persisted v2 registration — or a replaced
+// tree — became the active workspace without ever being proven (#3376 review P1).
+describe("activation re-proves the managed identity", () => {
+  async function activate(
+    service: WorkspaceProvisioningService,
+    workspaceId: string,
+    correlationId: string,
+  ): Promise<unknown> {
+    return service.activate({
+      workspaceId,
+      taskId: "",
+      requestedBy: "u",
+      acquireLock: false,
+      correlationId,
+    });
+  }
+
+  it("refuses a retired-schema identity, flags the row with its own marker and hint, and logs the marker", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const service = makeService(undefined, undefined, activityLog);
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-activate-retired",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    const inspection = inspectManagedGitdirIdentity(first.instance.managedWorktreePath, repoRoot);
+    if (inspection === undefined) throw new Error("real linked-worktree identity was not resolved");
+    store.upsert({ ...first.instance, gitdirIdentity: inspection.legacyIdentity });
+
+    await expect(
+      activate(service, first.instance.workspaceId, "activate-retired-0001"),
+    ).rejects.toMatchObject({ code: "POINTER_DRIFT", message: RETIRED_IDENTITY_SCHEMA_MESSAGE });
+
+    const persisted = store.getById(first.instance.workspaceId);
+    expect(persisted?.lifecycleState).toBe("recovery-required");
+    expect(persisted?.driftMarkers).toEqual(["identity-schema-retired"]);
+    expect(persisted?.recoveryHints).toContainEqual(
+      expect.objectContaining({ strategy: "reconcile-pointer", operatorActionRequired: false }),
+    );
+    // The retired value is never promoted by an activation either.
+    expect(persisted?.gitdirIdentity).toBe(inspection.legacyIdentity);
+    const line = activityLog.events.find(
+      (event) =>
+        event.correlationId === "activate-retired-0001" &&
+        event.extra?.failureKind === "POINTER_DRIFT",
+    );
+    expect(line?.errorKind).toBe("target-mutated");
+    expect(line?.extra).toMatchObject({
+      operation: "activate",
+      outcome: "retry-required",
+      driftMarker: "identity-schema-retired",
+    });
+  });
+
+  // Relocated pin (was `pointer-stale`): a readable pointer proving another identity carries the
+  // contract's `gitdir-mismatch` marker, whose `reconcile-pointer` hint is the executable exit.
+  it("refuses a changed identity with the readable-mismatch marker, and logs that marker", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const service = makeService(undefined, undefined, activityLog);
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-activate-changed",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    store.upsert({ ...first.instance, gitdirIdentity: "0000000000000000deadbeefdeadbeef" });
+
+    await expect(
+      activate(service, first.instance.workspaceId, "activate-changed-0001"),
+    ).rejects.toMatchObject({
+      code: "POINTER_DRIFT",
+      message: "managed worktree git identity changed",
+    });
+    expect(store.getById(first.instance.workspaceId)?.driftMarkers).toEqual(["gitdir-mismatch"]);
+    // The persisted row alone is not the pin: the marker the refusal EMITS is what tells an operator
+    // reading `server.log` that a readable pointer proved another identity (executable exit:
+    // `reconcile-pointer`) rather than that the pointer is unreadable. A marker dropped on the emit
+    // path while the row keeps it would otherwise stay invisible (PR #3381 review).
+    const line = activityLog.events.find(
+      (event) =>
+        event.correlationId === "activate-changed-0001" &&
+        event.extra?.failureKind === "POINTER_DRIFT",
+    );
+    expect(line?.errorKind).toBe("target-mutated");
+    expect(line?.extra).toMatchObject({
+      operation: "activate",
+      outcome: "retry-required",
+      driftMarker: "gitdir-mismatch",
+    });
+  });
+
+  it("activates an authentic workspace as before", async () => {
+    const service = makeService();
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-activate-ok",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+
+    await expect(
+      activate(service, first.instance.workspaceId, "activate-ok-0001"),
+    ).resolves.toMatchObject({
+      instance: { lifecycleState: "active", health: "healthy" },
+    });
+  });
+});
+
+// A nonzero birthtime is not proof of a kept creation time: where Node reports the ctime under that
+// name, an identity minted from it would read as a replaced worktree after the first metadata write.
+// The mint probes the managed root first and refuses with the platform's own marker (#3376 review P2).
+describe("mint-time creation-time probe", () => {
+  it.each(["aliased", "absent", "inconclusive"] as const)(
+    "refuses to mint an identity when the managed root's creation time is %s",
+    async (support) => {
+      const activityLog = createBufferedServerLogSink();
+      const service = makeService(undefined, undefined, activityLog, () => ({
+        managedRoot: support,
+        repository: "same-volume",
+      }));
+
+      await rejectsWithCode(
+        () =>
+          service.provision({
+            repositoryRequestPath: repoRoot,
+            taskId: "t-mint-unsupported",
+            baseBranch: "main",
+            requestedBy: "u",
+            correlationId: "mint-probe-0001",
+          }),
+        "POINTER_DRIFT",
+      );
+
+      const rows = store.listByRepository(deriveRepositoryId(repoRoot));
+      const row = rows.find((candidate) => candidate.taskId === "t-mint-unsupported");
+      expect(row?.lifecycleState).toBe("recovery-required");
+      expect(row?.driftMarkers).toEqual(["identity-unsupported"]);
+      expect(row?.recoveryHints).toContainEqual(
+        expect.objectContaining({ strategy: "operator-repair", operatorActionRequired: true }),
+      );
+      // The partial worktree is rolled back, and the probe verdict is on the activity log.
+      expect(existsSync(row?.managedWorktreePath ?? "")).toBe(false);
+      const probeLine = activityLog.events.find(
+        (event) => event.op === "task-workspace.identity.creation-time-probe",
+      );
+      expect(probeLine).toMatchObject({
+        level: "warn",
+        correlationId: "mint-probe-0001",
+        extra: { managedRoot: support, repository: "same-volume" },
+      });
+    },
+  );
+
+  it.each(["aliased", "absent", "inconclusive"] as const)(
+    "refuses to mint when the repository volume's creation time is %s",
+    async (repository) => {
+      const activityLog = createBufferedServerLogSink();
+      const service = makeService(undefined, undefined, activityLog, () => ({
+        managedRoot: "durable",
+        repository,
+      }));
+
+      await rejectsWithCode(
+        () =>
+          service.provision({
+            repositoryRequestPath: repoRoot,
+            taskId: "t-mint-repo-volume",
+            baseBranch: "main",
+            requestedBy: "u",
+            correlationId: "mint-probe-0003",
+          }),
+        "POINTER_DRIFT",
+      );
+
+      const row = store
+        .listByRepository(deriveRepositoryId(repoRoot))
+        .find((candidate) => candidate.taskId === "t-mint-repo-volume");
+      expect(row?.driftMarkers).toEqual(["identity-unsupported"]);
+      expect(existsSync(row?.managedWorktreePath ?? "")).toBe(false);
+      const probeLine = activityLog.events.find(
+        (event) => event.op === "task-workspace.identity.creation-time-probe",
+      );
+      expect(probeLine).toMatchObject({
+        level: "warn",
+        correlationId: "mint-probe-0003",
+        extra: { managedRoot: "durable", repository },
+      });
+    },
+  );
+
+  // The repository volume is proven at the common git directory the identity hashes — never at the
+  // repository root or its `.git` pointer, which a linked worktree or a separate-git-dir layout may
+  // keep on a different volume from the gitdir (#3376 review).
+  it("proves the repository at the resolved common git directory, not at the root's pointer", async () => {
+    const proven: { managedRoot: string; repositoryCommonDirectory: string }[] = [];
+    const service = makeService(undefined, undefined, undefined, (root, commonDirectory) => {
+      proven.push({ managedRoot: root, repositoryCommonDirectory: commonDirectory });
+      return { managedRoot: "durable", repository: "same-volume" };
+    });
+
+    const result = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-mint-common-dir",
+      baseBranch: "main",
+      requestedBy: "u",
+      correlationId: "mint-probe-0004",
+    });
+
+    expect(result.instance.lifecycleState).toBe("active");
+    expect(proven).toEqual([
+      { managedRoot, repositoryCommonDirectory: realpathSync(join(repoRoot, ".git")) },
+    ]);
+  });
+
+  // An I/O failure inside the probe is the retryable IDENTITY_PROOF_FAILED, like every other proof
+  // that could not run: the row is recovery-required with health unknown and no drift marker, and
+  // the worktree this call created is rolled back (#3376 review).
+  it("classifies a probe I/O failure as IDENTITY_PROOF_FAILED and rolls the mint back", async () => {
+    const probeFailure = new Error("EIO: input/output error");
+    const service = makeService(undefined, undefined, undefined, () => {
+      throw probeFailure;
+    });
+
+    await expect(
+      service.provision({
+        repositoryRequestPath: repoRoot,
+        taskId: "t-mint-probe-io",
+        baseBranch: "main",
+        requestedBy: "u",
+        correlationId: "mint-probe-0005",
+      }),
+    ).rejects.toMatchObject({ code: "IDENTITY_PROOF_FAILED", cause: probeFailure });
+
+    const row = store
+      .listByRepository(deriveRepositoryId(repoRoot))
+      .find((candidate) => candidate.taskId === "t-mint-probe-io");
+    expect(row).toMatchObject({
+      lifecycleState: "recovery-required",
+      health: "unknown",
+      driftMarkers: [],
+      lock: null,
+    });
+    expect(existsSync(row?.managedWorktreePath ?? "")).toBe(false);
+  });
+
+  it("mints on a durable root and records the probe verdict", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const service = makeService(undefined, undefined, activityLog);
+
+    const result = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-mint-durable",
+      baseBranch: "main",
+      requestedBy: "u",
+      correlationId: "mint-probe-0002",
+    });
+
+    expect(result.instance.lifecycleState).toBe("active");
+    const probeLine = activityLog.events.find(
+      (event) => event.op === "task-workspace.identity.creation-time-probe",
+    );
+    expect(probeLine).toMatchObject({
+      level: "info",
+      correlationId: "mint-probe-0002",
+      extra: { managedRoot: "durable", repository: "same-volume" },
+    });
+  });
+});
+
+// A proof that could not run is answered as the classified, retryable IDENTITY_PROOF_FAILED on
+// every provisioning path — resume, the completion guard, activation — and never persisted as a
+// drift or, at mint time, allowed to delete a worktree this call did not create (#3376 review).
+describe("proof failures on the provisioning paths", () => {
+  it("answers a failed proof on resume without flagging the row", async () => {
+    const service = makeService();
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-proof-resume",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    failProofFor(first.instance.managedWorktreePath, new Error("EIO: input/output error"));
+
+    await rejectsWithCode(
+      () =>
+        service.provision({
+          repositoryRequestPath: repoRoot,
+          taskId: "t-proof-resume",
+          baseBranch: "main",
+          requestedBy: "u",
+        }),
+      "IDENTITY_PROOF_FAILED",
+    );
+
+    const persisted = store.getById(first.instance.workspaceId);
+    expect(persisted?.lifecycleState).toBe("active");
+    expect(persisted?.driftMarkers).toEqual([]);
+  });
+
+  it("answers a failed proof on the completion guard without reissuing or flagging", async () => {
+    const service = makeService();
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-proof-complete",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    store.upsert({ ...first.instance, lifecycleState: "recovery-required" });
+    failProofFor(first.instance.managedWorktreePath, new Error("EACCES: permission denied"));
+
+    await rejectsWithCode(
+      () =>
+        service.provision({
+          repositoryRequestPath: repoRoot,
+          taskId: "t-proof-complete",
+          baseBranch: "main",
+          requestedBy: "u",
+        }),
+      "IDENTITY_PROOF_FAILED",
+    );
+
+    const persisted = store.getById(first.instance.workspaceId);
+    expect(persisted?.lifecycleState).toBe("recovery-required");
+    expect(persisted?.gitdirIdentity).toBe(first.instance.gitdirIdentity);
+  });
+
+  it("answers a failed proof on activation without flagging the row", async () => {
+    const service = makeService();
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-proof-activate",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    failProofFor(first.instance.managedWorktreePath, new Error("EIO: input/output error"));
+
+    await rejectsWithCode(
+      () =>
+        service.activate({
+          workspaceId: first.instance.workspaceId,
+          taskId: "",
+          requestedBy: "u",
+          acquireLock: false,
+        }),
+      "IDENTITY_PROOF_FAILED",
+    );
+
+    const persisted = store.getById(first.instance.workspaceId);
+    expect(persisted?.lifecycleState).toBe("active");
+    expect(persisted?.driftMarkers).toEqual([]);
+  });
+
+  // The mint over an EXISTING worktree (the operator-approved repair path): a transient proof failure
+  // is retryable, the worktree this call did not create stays, and the row says the proof could not
+  // run — never that the tree drifted.
+  it("keeps an existing worktree when the mint's proof fails under an approved repair", async () => {
+    const service = makeService();
+    const first = await service.provision({
+      repositoryRequestPath: repoRoot,
+      taskId: "t-proof-mint-existing",
+      baseBranch: "main",
+      requestedBy: "u",
+    });
+    store.upsert({ ...first.instance, lifecycleState: "recovery-required" });
+    failProofFor(first.instance.managedWorktreePath, new Error("EIO: input/output error"));
+
+    await rejectsWithCode(
+      () =>
+        service.provision({
+          repositoryRequestPath: repoRoot,
+          taskId: "t-proof-mint-existing",
+          baseBranch: "main",
+          requestedBy: "u",
+          operatorApprovedRepair: true,
+        }),
+      "IDENTITY_PROOF_FAILED",
+    );
+
+    expect(existsSync(first.instance.managedWorktreePath)).toBe(true);
+    const persisted = store.getById(first.instance.workspaceId);
+    expect(persisted?.lifecycleState).toBe("recovery-required");
+    expect(persisted?.health).toBe("unknown");
+    expect(persisted?.driftMarkers).toEqual([]);
+    expect(persisted?.gitdirIdentity).toBe(first.instance.gitdirIdentity);
   });
 });

@@ -1,35 +1,128 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { CodingWorkbenchRuntimeStateName } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchRuntimeStateName,
+  ModelCapability,
+} from "@oscharko-dev/keiko-contracts";
+import { I18N_STORAGE_KEY, resetLoadedMessageCatalogs } from "@/lib/i18n";
 
 import { TaskStartSection, type TaskComposerActions } from "./CodingWorkbenchSections";
+import { operatorResumeAvailable } from "./CodingWorkbenchWindow";
 
 function composerActions(): TaskComposerActions {
-  return { onStart: vi.fn(), onPause: vi.fn(), onResume: vi.fn(), onSend: vi.fn() };
+  return {
+    onStart: vi.fn(),
+    onPause: vi.fn(),
+    onResume: vi.fn(),
+    onSend: vi.fn(),
+    onStop: vi.fn(),
+  };
+}
+
+const CODING_MODEL: ModelCapability = {
+  id: "gpt-5.4",
+  kind: "chat",
+  contextWindow: 128_000,
+  maxOutputTokens: 16_384,
+  toolCalling: true,
+  structuredOutput: true,
+  streaming: true,
+  supportsImageInput: false,
+  supportsDocumentInput: false,
+  workflowEligible: true,
+  costClass: "medium",
+  latencyClass: "standard",
+  throughputHint: "standard",
+  preferredUseCases: ["Coding"],
+  knownLimitations: [],
+  reasoningEfforts: ["low", "medium", "high"],
+};
+
+const ALTERNATE_MODEL: ModelCapability = {
+  ...CODING_MODEL,
+  id: "gpt-5.5",
+  reasoningEfforts: ["medium"],
+};
+
+type ComposerProps = Parameters<typeof TaskStartSection>[0];
+
+function composerProps(
+  runState: CodingWorkbenchRuntimeStateName,
+  actions: TaskComposerActions,
+  taskIntent = "Investigate the failing test",
+  onReasoningEffortChange = vi.fn(),
+): ComposerProps {
+  return {
+    taskIntent,
+    onTaskIntentChange: vi.fn(),
+    actions,
+    canStart: true,
+    canResume: true,
+    runState,
+    mutationPending: false,
+    startBusy: false,
+    startBlockedReason: null,
+    projectMemoryEnabled: true,
+    onProjectMemoryEnabledChange: vi.fn(),
+    autonomyMode: "supervised-coding",
+    autonomyLabel: "Supervised workspace",
+    requestedMode: "supervised-coding",
+    runtimePreference: "managed-gateway",
+    configurationLocked: runState !== "idle",
+    onRequestedModeChange: vi.fn(),
+    onRuntimePreferenceChange: vi.fn(),
+    models: [CODING_MODEL],
+    selectedModelId: CODING_MODEL.id,
+    reasoningEffort: null,
+    onSelectedModelChange: vi.fn(),
+    onReasoningEffortChange,
+  };
 }
 
 function renderComposer(
   runState: CodingWorkbenchRuntimeStateName,
   actions: TaskComposerActions,
   taskIntent = "Investigate the failing test",
+  onReasoningEffortChange = vi.fn(),
 ): void {
   render(
-    <TaskStartSection
-      taskIntent={taskIntent}
-      onTaskIntentChange={vi.fn()}
-      actions={actions}
-      canStart
-      canResume
-      runState={runState}
-      mutationPending={false}
-      startBusy={false}
-    />,
+    <TaskStartSection {...composerProps(runState, actions, taskIntent, onReasoningEffortChange)} />,
   );
 }
 
+function renderComposerWithOverrides(overrides: Partial<ComposerProps>): ComposerProps {
+  const props = { ...composerProps("idle", composerActions()), ...overrides };
+  render(<TaskStartSection {...props} />);
+  return props;
+}
+
 describe("Coding Workbench composer", () => {
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+    window.localStorage.removeItem(I18N_STORAGE_KEY);
+    resetLoadedMessageCatalogs();
+  });
+
+  it("uses the dedicated governed-coding glyph for the run-authority mode label (#2694)", () => {
+    renderComposer("idle", composerActions());
+    const authority = screen.getByRole("combobox", { name: "Run authority" });
+    expect(authority.querySelector('path[d*="M16.4 6.5"]')).toBeInTheDocument();
+    expect(authority.querySelector('path[d*="M13.5 5.5"]')).not.toBeInTheDocument();
+  });
+
+  // #3563 owner directive: the composer no longer renders its own repository chooser, branch chip
+  // or MemoriaViva toggle. The header-wide RepositoryFolderSwitcher is the single source of
+  // workspace-context truth. This pin makes sure the context row does NOT reappear: no combobox
+  // labelled "Choose repository", no "Manage branch" button, no MemoriaViva toggle, no aria-label
+  // "Coding context" region. When MemoriaViva returns, replace this pin with the toggle's own tests.
+  it("does not render the repository, branch or MemoriaViva chips in the composer", () => {
+    renderComposer("idle", composerActions());
+    expect(screen.queryByLabelText("Coding context")).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Choose repository" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Manage branch/u })).toBeNull();
+    expect(screen.queryByText("MemoriaViva")).toBeNull();
+  });
 
   it("shows Start while idle and calls the start handler", async () => {
     const user = userEvent.setup();
@@ -40,13 +133,15 @@ describe("Coding Workbench composer", () => {
     expect(actions.onStart).toHaveBeenCalledOnce();
   });
 
-  it("replaces Send with Pause while the run is active", async () => {
+  it("offers pause and stop in the composer while the run is active", async () => {
     const user = userEvent.setup();
     const actions = composerActions();
     renderComposer("running", actions);
     expect(screen.queryByRole("button", { name: "Send follow-up" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Pause run" }));
     expect(actions.onPause).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "Stop run" }));
+    expect(actions.onStop).toHaveBeenCalledOnce();
   });
 
   it("admits a follow-up only while paused and offers a resume control", async () => {
@@ -59,11 +154,172 @@ describe("Coding Workbench composer", () => {
     expect(actions.onResume).toHaveBeenCalledOnce();
   });
 
+  // A run paused because a governed tool is waiting on the operator's decision resumes itself when
+  // that decision lands, and the server refuses an operator resume while the reason stands. The
+  // control must not offer a second exit that does not exist.
+  it.each([
+    ["an operator's own pause", undefined, true],
+    ["a run waiting on a package-script trust decision", "workspace-script-trust" as const, false],
+  ] as const)("withholds the resume control for %s", (_label, pauseReason, expected) => {
+    expect(operatorResumeAvailable("supervised-coding", pauseReason)).toBe(expected);
+  });
+
+  it("has no resume control to offer without a resolved mode", () => {
+    expect(operatorResumeAvailable(null, undefined)).toBe(false);
+  });
+
+  it("disables the resume control when the run may not be resumed by the operator", () => {
+    renderComposerWithOverrides({ runState: "paused", canResume: false });
+    expect(screen.getByRole("button", { name: "Resume run" })).toBeDisabled();
+  });
+
+  // #3452: the follow-up resumes the run before replacing its task, through the same one exit a
+  // decision-paused run keeps for the operator's decision. When the operator may not resume it
+  // themselves, sending a follow-up must not submit either -- it stays a plain, non-submitting
+  // button, exactly like the resume control above.
+  it("keeps the follow-up Send button a non-submitting button when the run may not be resumed", () => {
+    renderComposerWithOverrides({ runState: "paused", canResume: false });
+    const send = screen.getByRole("button", { name: "Send follow-up" });
+    expect(send).toHaveAttribute("aria-disabled", "true");
+    expect(send).toHaveAttribute("type", "button");
+  });
+
+  it("submits the follow-up Send button once the run may be resumed and nothing else blocks it", () => {
+    renderComposerWithOverrides({ runState: "paused", canResume: true });
+    const send = screen.getByRole("button", { name: "Send follow-up" });
+    expect(send).toHaveAttribute("aria-disabled", "false");
+    expect(send).toHaveAttribute("type", "submit");
+  });
+
   it("disables the follow-up Send button when the draft is empty", () => {
     renderComposer("paused", composerActions(), "   ");
     expect(screen.getByRole("button", { name: "Send follow-up" })).toHaveAttribute(
       "aria-disabled",
       "true",
     );
+  });
+
+  it("offers only the reasoning levels declared by the selected model", async () => {
+    const user = userEvent.setup();
+    const selectReasoningEffort = vi.fn();
+    renderComposer("idle", composerActions(), "Investigate", selectReasoningEffort);
+
+    await user.click(screen.getByRole("combobox", { name: "Reasoning effort" }));
+    await user.click(screen.getByRole("option", { name: "High" }));
+
+    expect(selectReasoningEffort).toHaveBeenCalledWith("high");
+    expect(screen.queryByRole("option", { name: "Extra high" })).toBeNull();
+  });
+
+  // #3563 owner directive: only Keiko Gateway ships today; the Model source dropdown is hidden
+  // (SourceControl component kept for a one-line re-enable once a second source is decided).
+  it("changes the coding model and run authority without exposing a Model source dropdown", async () => {
+    const user = userEvent.setup();
+    const onSelectedModelChange = vi.fn();
+    const onRequestedModeChange = vi.fn();
+    renderComposerWithOverrides({
+      models: [CODING_MODEL, ALTERNATE_MODEL],
+      onSelectedModelChange,
+      onRequestedModeChange,
+    });
+
+    expect(screen.queryByRole("combobox", { name: "Model source" })).toBeNull();
+
+    await user.click(screen.getByRole("combobox", { name: "Coding model" }));
+    await user.click(screen.getByRole("option", { name: "gpt-5.5" }));
+    await user.click(screen.getByRole("combobox", { name: "Run authority" }));
+    await user.click(screen.getByRole("option", { name: "Full access" }));
+
+    expect(onSelectedModelChange).toHaveBeenCalledWith("gpt-5.5");
+    expect(onRequestedModeChange).toHaveBeenCalledWith("autonomous-delivery");
+  });
+
+  // Same hiding rule applies regardless of the runtimePreference the state carries; the operator
+  // never sees the Codex option, so the choice cannot be made from this surface.
+  it("still hides the Model source dropdown when the state carries a codex-subscription runtime", () => {
+    renderComposerWithOverrides({
+      runtimePreference: "codex-subscription",
+      models: [ALTERNATE_MODEL],
+      selectedModelId: ALTERNATE_MODEL.id,
+    });
+
+    expect(screen.queryByRole("combobox", { name: "Model source" })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Reasoning effort" })).toBeNull();
+  });
+
+  it("keeps an unresolved empty composer blocked and accepts task text changes", async () => {
+    const user = userEvent.setup();
+    const actions = composerActions();
+    const onTaskIntentChange = vi.fn();
+    renderComposerWithOverrides({
+      actions,
+      taskIntent: "",
+      canStart: false,
+      autonomyMode: null,
+      onTaskIntentChange,
+    });
+    const textbox = screen.getByRole("textbox", { name: "Task instructions" });
+    const form = textbox.closest("form");
+    if (form === null) throw new Error("Task composer form was not rendered");
+
+    fireEvent.submit(form);
+    await user.type(textbox, "Inspect the repository");
+
+    expect(actions.onStart).not.toHaveBeenCalled();
+    expect(onTaskIntentChange).toHaveBeenCalled();
+    expect(screen.queryByLabelText("Coding context")).toBeNull();
+    expect(screen.getByRole("combobox", { name: "Run authority" })).not.toHaveAttribute(
+      "aria-describedby",
+    );
+  });
+
+  it("explains why a typed start request is blocked instead of swallowing the click", async () => {
+    const user = userEvent.setup();
+    const actions = composerActions();
+    renderComposerWithOverrides({
+      actions,
+      canStart: false,
+      startBlockedReason: "This browser session is not paired.",
+      taskIntent: "Can you answer a normal question?",
+    });
+
+    const start = screen.getByRole("button", { name: "Start coding run" });
+    await user.click(start);
+
+    const notice = screen.getByRole("alert");
+    expect(notice).toHaveTextContent("This browser session is not paired.");
+    expect(start).toHaveAttribute("aria-describedby", notice.id);
+    expect(actions.onStart).not.toHaveBeenCalled();
+  });
+
+  it("explains a decision-paused run when Enter cannot send a follow-up", () => {
+    const actions = composerActions();
+    renderComposerWithOverrides({
+      actions,
+      runState: "paused",
+      canResume: false,
+      taskIntent: "Please continue differently.",
+    });
+
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Task instructions" }), {
+      key: "Enter",
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "This paused run is waiting for a required decision.",
+    );
+    expect(actions.onSend).not.toHaveBeenCalled();
+  });
+
+  it("marks only confirmed full access on the authority control", () => {
+    renderComposerWithOverrides({
+      autonomyMode: "autonomous-delivery",
+      autonomyLabel: "Full access",
+      requestedMode: "autonomous-delivery",
+    });
+
+    const authority = screen.getByRole("combobox", { name: "Run authority" });
+    expect(authority).toHaveAttribute("aria-describedby");
+    expect(authority.closest("[data-full-access='true']")).not.toBeNull();
   });
 });

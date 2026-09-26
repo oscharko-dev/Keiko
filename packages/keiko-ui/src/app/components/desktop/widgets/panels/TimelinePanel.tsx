@@ -1,59 +1,96 @@
 "use client";
 
-import type { ReactNode } from "react";
-import { useActivitySubscription } from "../shared/activityBus";
-import type { ActivityEvent } from "../shared/activityBus";
+import type { CSSProperties, ReactElement } from "react";
+
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import type { MessageKey } from "@/lib/i18n-messages.en";
+
+import { useActivitySubscription, type ActivityEvent } from "../shared/activityBus";
 import styles from "./TimelinePanel.module.css";
 
 const KIND_COLOR: Record<ActivityEvent["type"], string> = {
-  step: "var(--fg-dim)",
-  approval: "var(--warn)",
-  approved: "var(--accent)",
-  rejected: "var(--danger)",
-  stopped: "var(--danger)",
-  open: "var(--info)",
-  "twin-approved": "var(--accent)",
-  "twin-denied": "var(--danger)",
+  step: "var(--accent-cyan, #4fd1e5)",
+  approval: "var(--accent-amber, #e7b84b)",
+  approved: "var(--state-success, #55c68b)",
+  rejected: "var(--state-danger, #e46b6b)",
+  stopped: "var(--text-tertiary)",
+  open: "var(--accent-violet, #9b8cf0)",
+  run: "var(--accent-cyan, #4fd1e5)",
+  delivery: "var(--state-success, #55c68b)",
 };
 
-function formatTime(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
+const KIND_LABEL_KEYS: Record<ActivityEvent["type"], MessageKey> = {
+  step: "activity.kind.step",
+  approval: "activity.kind.approval",
+  approved: "activity.kind.approved",
+  rejected: "activity.kind.rejected",
+  stopped: "activity.kind.stopped",
+  open: "activity.kind.open",
+  run: "activity.kind.run",
+  delivery: "activity.kind.delivery",
+};
+
+function eventText(event: ActivityEvent, translate: I18nTranslate): string {
+  if (event.labelKey !== undefined) return translate(event.labelKey);
+  return event.text ?? translate("activity.event.unknown");
 }
 
-export function TimelinePanel(): ReactNode {
-  const items = useActivitySubscription();
+function eventTime(time: number): string {
+  return new Date(time).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function TimelineEvent({
+  event,
+  translate,
+}: {
+  readonly event: ActivityEvent;
+  readonly translate: I18nTranslate;
+}): ReactElement {
+  const style = { "--activity-color": KIND_COLOR[event.type] } as CSSProperties;
+  return (
+    <li className="tl-row" style={style}>
+      <span className="tl-dot" aria-hidden="true" />
+      <div className="tl-body">
+        <span className={`visually-hidden ${styles.kind}`}>
+          {translate(KIND_LABEL_KEYS[event.type])}
+        </span>
+        <span className="tl-text">{eventText(event, translate)}</span>
+        <span className="tl-meta">
+          {event.agent ?? event.tool ?? translate("activity.actor.workspace")}
+          {" · "}
+          <time dateTime={new Date(event.time).toISOString()}>{eventTime(event.time)}</time>
+        </span>
+      </div>
+    </li>
+  );
+}
+
+export function TimelinePanel(): ReactElement {
+  const events = useActivitySubscription();
+  const translate = useTranslate();
 
   return (
-    // role="log" implies aria-live="polite": streamed entries are announced to assistive tech.
-    <div className={`tl ${styles.lazyWidgetScope}`} role="log" aria-label="Activity timeline">
-      {items.length === 0 && (
+    <section
+      className={`${styles.lazyWidgetScope} tl`}
+      role="log"
+      aria-label={translate("activity.timeline.label")}
+    >
+      {events.length === 0 ? (
         <div className="tl-empty">
-          No activity yet.
-          <br />
-          Start an agent to see its actions stream here.
+          <strong>{translate("activity.empty.title")}</strong>
+          <span>{translate("activity.empty.description")}</span>
         </div>
+      ) : (
+        <ol className={styles.timeline}>
+          {events.map((event, index) => (
+            <TimelineEvent
+              key={event.id ?? `${event.time}-${index}`}
+              event={event}
+              translate={translate}
+            />
+          ))}
+        </ol>
       )}
-      {items.map((e) => (
-        <div className="tl-row" key={`${String(e.time)}-${e.text}`}>
-          <span
-            className="tl-dot"
-            aria-hidden="true"
-            style={{ background: KIND_COLOR[e.type] ?? "var(--fg-faint)" }}
-          />
-          <div className="tl-body">
-            {/* The event kind is otherwise only colour-coded via the dot (WCAG 1.4.1). */}
-            <span className="visually-hidden">{e.type}</span>
-            <span className="tl-text">{e.text}</span>
-            <span className="tl-meta mono">
-              {e.agent ?? "workspace"} · {formatTime(e.time)}
-            </span>
-          </div>
-        </div>
-      ))}
-    </div>
+    </section>
   );
 }

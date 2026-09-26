@@ -7,11 +7,9 @@
 // child that itself asks for a child is rejected by `assertChildCannotSpawnChild`. Both functions
 // are pure and total; a malformed or over-broad parent fails closed (an explicit error, or the
 // narrowest possible envelope). Nothing here carries raw prompts, queries, scratch, or secrets.
-import {
-  CODING_WORKBENCH_ACTION_CLASSES,
-  isCodeTaskChildRunId,
-  validateCodingWorkbenchAuthorityEnvelope,
-} from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_ACTION_CLASSES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { isCodeTaskChildRunId } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
+import { validateCodingWorkbenchAuthorityEnvelope } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type {
   AuxiliaryCapabilityRequestV1,
   AuxiliaryResearchScopeV1,

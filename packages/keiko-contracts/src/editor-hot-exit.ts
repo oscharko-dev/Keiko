@@ -26,9 +26,26 @@ export interface EditorHotExitIndexRecordV2 {
   readonly savedContentHash: string | null;
   readonly contentSizeBytes: number;
   readonly updatedAt: number;
+  readonly serverReceivedAt?: number;
   readonly paneId: string;
   readonly windowId: string;
 }
+
+export interface EditorHotExitWriteStoredResponse {
+  readonly snapshotRef: string;
+  readonly contentSizeBytes: number;
+  readonly serverReceivedAt: number;
+  readonly suppressed?: false;
+}
+
+export interface EditorHotExitWriteSuppressedResponse {
+  readonly snapshotRef: string;
+  readonly contentSizeBytes: 0;
+  readonly suppressed: true;
+}
+
+export type EditorHotExitWriteResponse =
+  EditorHotExitWriteStoredResponse | EditorHotExitWriteSuppressedResponse;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -86,6 +103,7 @@ export function isEditorHotExitIndexRecordV2(value: unknown): value is EditorHot
     isNullOr(value.savedContentHash, isSha256Hex),
     isNonNegativeFiniteNumber(value.contentSizeBytes),
     isNonNegativeFiniteNumber(value.updatedAt),
+    value.serverReceivedAt === undefined || isNonNegativeFiniteNumber(value.serverReceivedAt),
     isNonEmptyString(value.paneId),
     isNonEmptyString(value.windowId),
   ].every(Boolean);

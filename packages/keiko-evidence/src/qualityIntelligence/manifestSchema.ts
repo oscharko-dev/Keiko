@@ -67,6 +67,11 @@ export interface QualityIntelligenceIntegrityHashes {
 // Counts-only summary of what redaction did during build. We deliberately do NOT carry the
 // matched text — only the per-pattern hit counts, so future audits can detect drift in noisy
 // pipelines without leaking the matched secret.
+//
+// UNIT NOTE: patternsMatched["security-package"] is a per-STRING-touched count (0 or 1 per
+// string scanned, regardless of how many secrets the shared `redact()` scrubbed out of that one
+// string). Every other key (jwt, password-assignment, token-assignment) is a true per-MATCH
+// count. Do not compare the two as if they were the same unit.
 export interface QualityIntelligenceRedactionSummary {
   readonly totalStringsScanned: number;
   readonly stringsRedacted: number;

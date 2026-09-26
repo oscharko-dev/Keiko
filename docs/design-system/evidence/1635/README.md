@@ -38,8 +38,8 @@ Focused issue #1635 verification: `PASS`.
 - `docs/design-system/evidence/1635/a11y-proof.json`: PASS.
 - `docs/design-system/evidence/1635/citation-entrypoints-fidelity-proof.json`: PASS.
 
-Full `.keiko-scripts/verify.sh` was rerun on 2026-06-28: PASS, 849 test files, 14,550 tests passed,
-and 2 skipped.
+Full local verification (`npm run typecheck && npm run lint && npm run format:check && npm test`)
+was rerun on 2026-06-28: PASS, 849 test files, 14,550 tests passed, and 2 skipped.
 
 ## Test Coverage Map
 

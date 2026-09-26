@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 
-import { DEFAULT_DEBUG_PAYLOAD_LIMITS } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_DEBUG_PAYLOAD_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/dap-debug";
 
 // Ownership note (ADR-0136 "Child ownership and implementation order"): the ADR's child-ownership
 // table lists "pause references" under #2345 (contracts and routes), while this module lives in

@@ -1,20 +1,27 @@
 import { createHash } from "node:crypto";
 
-import {
-  CODE_TASK_AUXILIARY_SCHEMA_VERSION,
-  type AuxiliaryCapabilityOutcomeV1,
-  type AuxiliaryCapabilityRequestV1,
-  type AuxiliaryCapabilityTarget,
-  type AuxiliaryResearchScopeV1,
-  type CodeTaskChildRunId,
-  type CodeTaskGrantId,
-  type CodeTaskIdempotencyKey,
-  type CodeTaskRunId,
-  type CodeTaskSha256Digest,
-  type CodeTaskTaskId,
-  type CodeTaskWorkspaceId,
-  type CodingWorkbenchRuntimeEvent,
+import type {
+  AuxiliaryCapabilityOutcomeV1,
+  AuxiliaryCapabilityRequestV1,
+  AuxiliaryCapabilityTarget,
+  AuxiliaryResearchScopeV1,
+  CodeTaskChildRunId,
+  CodeTaskGrantId,
+  CodeTaskIdempotencyKey,
+  CodeTaskRunId,
+  CodeTaskSha256Digest,
+  CodeTaskTaskId,
+  CodeTaskWorkspaceId,
+  CodingWorkbenchRuntimeEvent,
+  SkillCategory,
+  SkillDiscoveryResultV1,
+  SkillUnavailableReason,
 } from "@oscharko-dev/keiko-contracts";
+import { CODE_TASK_AUXILIARY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 
 import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";
@@ -28,11 +35,65 @@ import {
 import type { ResearchGrantRegistry, ResolvedResearchGrant } from "./researchGrantRegistry.js";
 import type { CodingRuntimeAuthorityService } from "./runtimeAuthorityService.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
-import type { SkillCatalog } from "./skillCatalog.js";
+import {
+  OPENCODE_SKILL_PROFILE,
+  type SkillCatalog,
+  type SkillCatalogEntry,
+} from "./skillCatalog.js";
+import {
+  approvedSkillProjection,
+  invocableSkillDiscovery,
+  skillReadiness,
+  unavailableSkillCounts,
+  type SkillReadinessFacts,
+  type SkillStaticFacts,
+} from "./skillDiscovery.js";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import {
   createSkillInvocationPort,
   type SkillReevaluationDecision,
 } from "./skillInvocationPort.js";
+
+/** The skill categories this port has a handler for; a skill of any other category cannot run. */
+export const SKILL_HANDLER_CATEGORIES: ReadonlySet<SkillCategory> = new Set([
+  "repository-analysis",
+]);
+
+/** What a production run knows of a skill before authority and budget: its profile and handlers. */
+export const PRODUCTION_SKILL_STATIC_FACTS: SkillStaticFacts = Object.freeze({
+  profile: OPENCODE_SKILL_PROFILE,
+  handlerMounted: (category: SkillCategory): boolean => SKILL_HANDLER_CATEGORIES.has(category),
+});
+
+const CODING_RUNTIME_SKILL_DISCOVERY_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.skill-discovery",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.productionAuxiliaryPorts.skillDiscoveryPort",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    catalogRevision: { type: "integer", dataClass: "count", required: true },
+    // Not `catalogDigest`: that name is the sink-stamped Activity Log catalog digest, and redaction
+    // dropped this producer value under it, so every line carried the log format's digest instead.
+    skillCatalogDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    approvedCount: { type: "integer", dataClass: "count", required: true },
+    listedCount: { type: "integer", dataClass: "count", required: true },
+    disabledCount: { type: "integer", dataClass: "count", required: true },
+    incompatibleCount: { type: "integer", dataClass: "count", required: true },
+    handlerUnavailableCount: { type: "integer", dataClass: "count", required: true },
+    authorityDeniedCount: { type: "integer", dataClass: "count", required: true },
+    budgetExhaustedCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "capability",
+  failureClasses: ["coding-runtime-skill-discovery"],
+  proofIds: ["coding-runtime.skill-discovery.emitted-line"],
+  releaseImpact: "patch",
+});
 
 export interface ProductionAuxiliaryPortInput {
   readonly authority: Pick<CodingRuntimeAuthorityService, "state">;
@@ -41,6 +102,7 @@ export interface ProductionAuxiliaryPortInput {
   readonly runId: string;
   readonly workspaceId: () => string;
   readonly workspaceRoot: string;
+  readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
   readonly modelId: string;
   readonly authorityExpiresAt: string;
   readonly catalog: SkillCatalog;
@@ -49,10 +111,12 @@ export interface ProductionAuxiliaryPortInput {
   readonly secureWorkspaceTextRead: SecureWorkspaceTextReadPort;
   readonly researchGrantRegistry?: ResearchGrantRegistry | undefined;
   readonly emit: (event: CodingWorkbenchRuntimeEvent) => void;
+  readonly activityLog: ServerLogSink;
 }
 
 export interface ProductionAuxiliaryPorts {
   readonly skillAuthority: GovernedCodingToolPort<"skill">;
+  readonly skillDiscovery: GovernedCodingToolPort<"skill-discover">;
   /** Absent when no coding-safe provider model is configured; the delegate then fails closed. */
   readonly childAgentAuthority?: GovernedCodingToolPort<"child-agent"> | undefined;
 }
@@ -60,26 +124,103 @@ export interface ProductionAuxiliaryPorts {
 export function createProductionAuxiliaryPorts(
   input: ProductionAuxiliaryPortInput,
 ): ProductionAuxiliaryPorts {
+  const authorizedInput = {
+    ...input,
+    secureWorkspaceTextRead: workspaceAuthorityCheckedRead(input),
+  };
   const runner = createProductionReadOnlyChildRunner({
     modelPortFactory: input.modelPortFactory,
-    secureWorkspaceTextRead: input.secureWorkspaceTextRead,
+    secureWorkspaceTextRead: authorizedInput.secureWorkspaceTextRead,
     reservePromptTokens: input.reservePromptTokens,
   });
+  const discovery: SkillDiscoveryBinding = { catalogDigest: undefined };
   return {
-    skillAuthority: skillPort(input),
+    skillAuthority: skillPort(authorizedInput, discovery),
+    skillDiscovery: skillDiscoveryPort(authorizedInput, discovery),
     // A child agent needs a resolvable PROVIDER model id. When the deployment has no coding-safe
     // model configured, the port is not mounted at all and the governed delegate answers "failed"
     // — a child must never be launched against a placeholder or a launch-profile identifier the
     // gateway cannot resolve.
-    ...(input.modelId === "" ? {} : { childAgentAuthority: childPort(input, runner) }),
+    ...(input.modelId === "" ? {} : { childAgentAuthority: childPort(authorizedInput, runner) }),
   };
 }
 
-function skillPort(input: ProductionAuxiliaryPortInput): GovernedCodingToolPort<"skill"> {
+type WorkspaceBoundReadInput = Pick<
+  ProductionAuxiliaryPortInput,
+  "workspaceRoot" | "resolveWorkspaceRootAccess" | "secureWorkspaceTextRead"
+>;
+
+/** The secure read, answered only while the run's exact managed workspace is the active one. */
+export function workspaceAuthorityCheckedRead(
+  input: WorkspaceBoundReadInput,
+): SecureWorkspaceTextReadPort {
+  return {
+    readText: async (request): ReturnType<SecureWorkspaceTextReadPort["readText"]> => {
+      if (!hasExactWorkspaceAccess(input)) return { ok: false, reason: "denied" };
+      const result = await input.secureWorkspaceTextRead.readText(request);
+      return hasExactWorkspaceAccess(input) ? result : { ok: false, reason: "denied" };
+    },
+  };
+}
+
+/** Whether the run's exact managed workspace is still the one its root access resolves to. */
+export function hasExactWorkspaceAccess(input: WorkspaceBoundReadInput): boolean {
+  try {
+    const access = input.resolveWorkspaceRootAccess();
+    return access?.kind === "managed-task" && access.canonicalRoot === input.workspaceRoot;
+  } catch {
+    return false;
+  }
+}
+
+// The digest of the catalog as this run's model last discovered it. A skill invocation after the
+// catalog changed is refused until the model discovers again (#3417), so the listing the model acts
+// on is always the one the catalog holds now. Absent until the first discovery: an explicit
+// `$skill` request from the task needs none.
+interface SkillDiscoveryBinding {
+  catalogDigest: CodeTaskSha256Digest | undefined;
+}
+
+// A skill that is not ready is refused with the closed reason its readiness names. A missing handler
+// keeps the reason code this port has always used, an exhausted budget the one its charge uses.
+const READINESS_DECISIONS: Readonly<Record<SkillUnavailableReason, SkillReevaluationDecision>> = {
+  disabled: { decision: "denied", reasonCode: "skill-disabled" },
+  incompatible: { decision: "denied", reasonCode: "skill-incompatible" },
+  "handler-unavailable": { decision: "unavailable", reasonCode: "skill-handler-unavailable" },
+  "authority-denied": { decision: "denied", reasonCode: "skill-authority-denied" },
+  "budget-exhausted": { decision: "denied", reasonCode: "authority-budget-exceeded" },
+};
+
+// The live facts of one readiness decision: the exact managed workspace with a parent authority
+// that still allows the workspace read, and budget for the one delegated read a skill performs.
+function liveSkillFacts(
+  input: ProductionAuxiliaryPortInput,
+  guard: CodingToolMutationGuard,
+): SkillReadinessFacts {
+  return {
+    ...PRODUCTION_SKILL_STATIC_FACTS,
+    authorityAllowsRead: (): boolean =>
+      hasExactWorkspaceAccess(input) &&
+      guard.resolveParentAuthority?.()?.actionClasses.includes("workspace-read") === true,
+    delegatedReadFits: (): boolean => guard.canChargeDelegatedRead?.() === true,
+  };
+}
+
+function skillPort(
+  input: ProductionAuxiliaryPortInput,
+  binding: SkillDiscoveryBinding,
+): GovernedCodingToolPort<"skill"> {
   return {
     execute: async (request, signal, guard): Promise<AuxiliaryPortResult> => {
       const invocation = input.explicitSkills.consume(request.skillId) ? "explicit" : "implicit";
-      const decision = await executeApprovedSkill(input, request, invocation, signal, guard);
+      const decision = await executeApprovedSkill(
+        input,
+        request,
+        invocation,
+        signal,
+        guard,
+        binding,
+      );
       const port = createSkillInvocationPort({
         catalog: input.catalog,
         reevaluator: { reevaluate: () => decision },
@@ -92,21 +233,92 @@ function skillPort(input: ProductionAuxiliaryPortInput): GovernedCodingToolPort<
   };
 }
 
+interface SkillDiscoveryPortResult {
+  readonly status: "completed";
+  readonly skills: SkillDiscoveryResultV1;
+}
+
+// Discovery lists the ready skills the model may invoke now, binds the run to the catalog digest it
+// listed, and records one body-free line: counts, the digest, the revision and the duration.
+function skillDiscoveryPort(
+  input: ProductionAuxiliaryPortInput,
+  binding: SkillDiscoveryBinding,
+): GovernedCodingToolPort<"skill-discover"> {
+  return {
+    execute: (_request, _signal, guard): Promise<SkillDiscoveryPortResult> => {
+      const startedAt = Date.now();
+      const projection = approvedSkillProjection(input.catalog, liveSkillFacts(input, guard));
+      const skills = invocableSkillDiscovery(
+        projection,
+        (skillId) =>
+          input.catalog.isImplicitAllowed(skillId) || input.explicitSkills.isPending(skillId),
+      );
+      binding.catalogDigest = skills.catalogDigest;
+      const unavailable = unavailableSkillCounts(projection);
+      input.activityLog.write(
+        activityLogEvent(
+          CODING_RUNTIME_SKILL_DISCOVERY_OPERATION,
+          { correlationId: input.runId, durationMs: Date.now() - startedAt },
+          {
+            runId: input.runId,
+            catalogRevision: input.catalog.revision(),
+            skillCatalogDigest: skills.catalogDigest,
+            approvedCount: projection.skills.length,
+            listedCount: skills.skills.length,
+            disabledCount: unavailable.disabled ?? 0,
+            incompatibleCount: unavailable.incompatible ?? 0,
+            handlerUnavailableCount: unavailable["handler-unavailable"] ?? 0,
+            authorityDeniedCount: unavailable["authority-denied"] ?? 0,
+            budgetExhaustedCount: unavailable["budget-exhausted"] ?? 0,
+          },
+        ),
+      );
+      return Promise.resolve({ status: "completed", skills });
+    },
+  };
+}
+
+type SkillAdmission =
+  | { readonly admitted: true; readonly entry: SkillCatalogEntry }
+  | { readonly admitted: false; readonly decision: SkillReevaluationDecision };
+
+// Every check that must hold before a skill's effect, in order: approval, a discovery that is still
+// current, implicit permission, and the readiness decision discovery itself applies.
+function admitSkill(
+  input: ProductionAuxiliaryPortInput,
+  request: CodingToolActionOf<"skill">,
+  invocation: "explicit" | "implicit",
+  guard: CodingToolMutationGuard,
+  binding: SkillDiscoveryBinding,
+): SkillAdmission {
+  const entry = input.catalog.get(request.skillId);
+  if (entry === undefined) return refusedSkill("skill-not-approved");
+  if (binding.catalogDigest !== undefined && binding.catalogDigest !== input.catalog.digest()) {
+    return refusedSkill("skill-discovery-stale");
+  }
+  if (invocation === "implicit" && !entry.implicitAllowed) {
+    return refusedSkill("implicit-not-permitted");
+  }
+  const readiness = skillReadiness(entry, liveSkillFacts(input, guard));
+  return readiness.state === "ready"
+    ? { admitted: true, entry }
+    : { admitted: false, decision: READINESS_DECISIONS[readiness.reason] };
+}
+
+function refusedSkill(reasonCode: string): SkillAdmission {
+  return { admitted: false, decision: { decision: "denied", reasonCode } };
+}
+
 async function executeApprovedSkill(
   input: ProductionAuxiliaryPortInput,
   request: CodingToolActionOf<"skill">,
   invocation: "explicit" | "implicit",
   signal: AbortSignal | undefined,
   guard: CodingToolMutationGuard,
+  binding: SkillDiscoveryBinding,
 ): Promise<SkillReevaluationDecision> {
-  const entry = input.catalog.get(request.skillId);
-  if (entry === undefined) return { decision: "denied", reasonCode: "skill-not-approved" };
-  if (invocation === "implicit" && !entry.implicitAllowed) {
-    return { decision: "denied", reasonCode: "implicit-not-permitted" };
-  }
-  if (entry.category !== "repository-analysis") {
-    return { decision: "unavailable", reasonCode: "skill-handler-unavailable" };
-  }
+  const admission = admitSkill(input, request, invocation, guard, binding);
+  if (!admission.admitted) return admission.decision;
   if (
     guard.chargeDelegatedRead?.(
       `${request.actionId}:skill-read`,
@@ -120,6 +332,10 @@ async function executeApprovedSkill(
     ...(signal === undefined ? {} : { signal }),
   });
   if (!read.ok) return { decision: "unavailable", reasonCode: "skill-source-unavailable" };
+  // A catalog change while the read ran leaves its result bound to a definition no longer approved.
+  if (input.catalog.get(request.skillId) !== admission.entry) {
+    return { decision: "denied", reasonCode: "skill-changed" };
+  }
   return { decision: "allowed", resultDigest: packageScriptDigest(read.text) };
 }
 
@@ -194,6 +410,7 @@ function childPort(
         },
         cancellation: { stopReason: () => stopReason(guard, signal) },
         emit: input.emit,
+        activityLog: input.activityLog,
         clock: { now: () => Date.now() },
         newEventId: (): string => {
           eventSequence += 1;

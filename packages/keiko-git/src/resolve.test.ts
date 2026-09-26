@@ -135,6 +135,42 @@ describe("containsPath", () => {
     expect(containsPath(rootNfc, join(rootNfd, "child"))).toBe(expected);
     expect(containsPath(rootNfc, join(rootNfc, "child"))).toBe(true);
   });
+
+  // KEIKO-0315: the ambient-platform tests above only ever exercise the linux branch of
+  // comparablePath's ternary on CI (identity comparison, verbatim return). A regression that
+  // removes .normalize('NFC').toLowerCase() from the darwin/win32 consequent would go undetected
+  // there \u2014 every assertion just checks the negative on linux. These force process.platform to
+  // 'darwin' inside a try/finally so the case-fold + Unicode-normalize branch is genuinely run.
+  describe("forced platform=darwin (case-fold + Unicode-normalize branch)", () => {
+    let originalDescriptor: PropertyDescriptor | undefined;
+
+    beforeEach(() => {
+      originalDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+      Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+    });
+
+    afterEach(() => {
+      if (originalDescriptor !== undefined) {
+        Object.defineProperty(process, "platform", originalDescriptor);
+      }
+    });
+
+    it("case-folds path components (uppercase repo is contained by its lowercase form)", () => {
+      // On the real linux CI, .toUpperCase() would fail this test. Forcing darwin runs the
+      // consequent, which lowercases both sides before comparing.
+      expect(containsPath(repo, join(repo.toUpperCase(), "child"))).toBe(true);
+    });
+
+    it("NFC-normalizes so NFD and NFC spellings resolve to the same identity", () => {
+      const rootNfc = join(repo, "b\u00e4r");
+      const rootNfd = join(repo, "ba\u0308r");
+      expect(rootNfc).not.toBe(rootNfd);
+      // Both under the forced darwin branch: the child under the NFD spelling must be contained
+      // by the NFC-spelled root because .normalize('NFC') collapses the two spellings before
+      // relative().
+      expect(containsPath(rootNfc, join(rootNfd, "child"))).toBe(true);
+    });
+  });
 });
 
 describe("isSafeGitPositional", () => {

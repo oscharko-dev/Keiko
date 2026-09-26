@@ -5,11 +5,19 @@
 // a downstream caller.
 
 import { describe, expect, it } from "vitest";
+
+import { createRequire } from "node:module";
 import * as workspace from "./index.js";
+
+// The packaged manifest owns the version; a literal here re-states it and goes
+// stale on every release cut (KfQ findings on #3055).
+const { version: packageVersion } = createRequire(import.meta.url)("../package.json") as {
+  version: string;
+};
 
 describe("keiko-workspace public surface", () => {
   it("exposes the documented barrel members", () => {
-    expect(workspace.KEIKO_WORKSPACE_VERSION).toBe("0.2.15");
+    expect(workspace.KEIKO_WORKSPACE_VERSION).toBe(packageVersion);
     expect(typeof workspace.detectWorkspace).toBe("function");
     expect(typeof workspace.discoverFiles).toBe("function");
     expect(typeof workspace.discoverWithStats).toBe("function");
@@ -57,7 +65,7 @@ describe("keiko-workspace public surface", () => {
     expect(workspace.DEFAULT_CONTEXT_REQUEST).toBeDefined();
     expect(workspace.DEFAULT_DISCOVERY_OPTIONS).toBeDefined();
     expect(workspace.DEFAULT_READ_OPTIONS).toBeDefined();
-    expect(workspace.WORKSPACE_INDEX_SNAPSHOT_VERSION).toBe(4);
+    expect(workspace.WORKSPACE_INDEX_SNAPSHOT_VERSION).toBe(5);
     expect(workspace.SELECTION_REASON_PRIORITY).toBeDefined();
     expect(workspace.WORKSPACE_CODES).toBeDefined();
     expect(workspace.WorkspaceError).toBeDefined();

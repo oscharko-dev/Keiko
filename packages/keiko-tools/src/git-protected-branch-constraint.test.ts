@@ -32,6 +32,7 @@ const CONSTRAINED: GitDeliveryPolicyDecision = {
 
 const PUSH_INPUTS: GitDeliveryPushInputs = {
   kind: "push",
+  verifiedCommitSha: "a".repeat(40),
   sourceBranchName: "my-work",
   remoteAlias: "origin",
   remoteBranchName: "my-work",

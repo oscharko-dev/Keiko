@@ -1,6 +1,14 @@
 "use client";
 
-import { useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FocusEvent,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 
 import type {
   EditorM7CommandDefinition,
@@ -308,7 +316,11 @@ function ShortcutSummary({
       </div>
       <div className={styles.help}>{commandDescription(entry.command, t)}</div>
       <div className={styles.meta}>
-        <kbd className={styles.kbd}>{shortcutLabel(entry.binding, platform)}</kbd>
+        <kbd className={styles.kbd}>
+          {entry.binding === null
+            ? t("settings.keyboard.unbound")
+            : shortcutLabel(entry.binding, platform)}
+        </kbd>
         {" · "}
         {scopeLabel(entry.command, t)}
         {" · "}
@@ -344,16 +356,7 @@ function ShortcutActions({
   readonly onRemove: () => void;
 }): ReactNode {
   if (recording) {
-    return (
-      <div className={styles.control}>
-        <button type="button" className={styles.button} onKeyDown={onCapture}>
-          {t("settings.keyboard.pressShortcut")}
-        </button>
-        <button type="button" className={styles.button} onClick={onCancel}>
-          {t("settings.keyboard.cancel")}
-        </button>
-      </div>
-    );
+    return <RecordingControls t={t} onCancel={onCancel} onCapture={onCapture} />;
   }
   return (
     <div className={styles.control}>
@@ -377,6 +380,61 @@ function ShortcutActions({
         {t("settings.keyboard.remove")}
       </button>
     </div>
+  );
+}
+
+// Own component so its mount effect fires once when recording starts and never again on
+// unrelated re-renders of the row (KEIKO-0472). Safari does not focus a <button> on click, so
+// relying on ambient click-to-focus loses the keystroke on that platform.
+function RecordingControls({
+  t,
+  onCancel,
+  onCapture,
+}: {
+  readonly t: I18nTranslate;
+  readonly onCancel: () => void;
+  readonly onCapture: (event: KeyboardEvent<HTMLButtonElement>) => void;
+}): ReactNode {
+  const pressButtonRef = useRef<HTMLButtonElement | null>(null);
+  const controlRef = useRef<HTMLFieldSetElement | null>(null);
+  useEffect(() => {
+    const handle = requestAnimationFrame((): void => pressButtonRef.current?.focus());
+    return (): void => cancelAnimationFrame(handle);
+  }, []);
+  // KEIKO-0757: focus leaving the recording row by any means other than the explicit Cancel
+  // click or a successful capture (clicking elsewhere, Tab out, the window losing focus) must
+  // still cancel recording — otherwise recordingId stays stuck and the row is left announcing
+  // "Recording keyboard shortcut." with no way to dismiss it but a full keystroke capture.
+  // controlRef.contains() distinguishes moving between the two buttons IN this row (no cancel)
+  // from focus leaving it entirely (cancel). A window/tab blur reports relatedTarget === null
+  // with no Node to check containment against -- the Node-only check alone skips that case, so it
+  // is handled separately: null relatedTarget cancels only when the document itself has also lost
+  // focus (PR #3289 review, comment 3865167756), the window/tab-blur signature, not every
+  // null-relatedTarget blur.
+  const onBlur = (event: FocusEvent<HTMLFieldSetElement>): void => {
+    if (event.relatedTarget instanceof Node) {
+      if (controlRef.current?.contains(event.relatedTarget) !== true) onCancel();
+      return;
+    }
+    if (event.relatedTarget === null && !document.hasFocus()) {
+      onCancel();
+    }
+  };
+  // Focus-out on the group container mirrors the Cancel button for keyboard/mouse users leaving
+  // the row by any other means; the two buttons inside remain the actual interactive targets.
+  return (
+    // Sonar S6819 prefers a native <fieldset> over role="group" on a <div> so screen readers get
+    // the semantics without an ARIA override. We suppress <fieldset>'s default UA border via the
+    // existing styles.control class (see KeyboardShortcutsPanel.module.css); no visual change.
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- see comment above
+    <fieldset className={styles.control} ref={controlRef} onBlur={onBlur}>
+      <button ref={pressButtonRef} type="button" className={styles.button} onKeyDown={onCapture}>
+        {t("settings.keyboard.pressShortcut")}
+      </button>
+      <button type="button" className={styles.button} onClick={onCancel}>
+        {t("settings.keyboard.cancel")}
+      </button>
+    </fieldset>
   );
 }
 
@@ -435,6 +493,12 @@ function handleCapture(args: {
 }): void {
   args.event.preventDefault();
   args.event.stopPropagation();
+  // Escape must cancel recording; capturing it as an 'Esc' override would trap the panel-wide
+  // Escape-to-close affordance behind whatever the last user pressed while a row was live (#2894).
+  if (args.event.key === "Escape") {
+    args.setRecordingId(null);
+    return;
+  }
   const binding = bindingFromKeyboardEvent(args.event.nativeEvent);
   if (binding === null) {
     args.setIssue("INVALID_INPUT");
@@ -481,8 +545,6 @@ function commandDescription(command: EditorM7CommandDefinition, t: I18nTranslate
 function scopeLabel(command: EditorM7CommandDefinition, t: I18nTranslate): string {
   if (command.scope === "editor") return t("settings.keyboard.scopeEditor");
   if (command.scope === "settings") return t("settings.keyboard.scopeSettings");
-  if (command.scope === "explorer") return t("settings.keyboard.scopeExplorer");
-  if (command.scope === "git") return t("settings.keyboard.scopeGit");
   return t("settings.keyboard.scopeGlobal");
 }
 

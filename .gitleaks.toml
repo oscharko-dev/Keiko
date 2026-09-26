@@ -1,0 +1,82 @@
+# Gitleaks configuration for the `Secret scan` CI job (`gitleaks git --log-opts=<base>..<head>`).
+#
+# The scan stays fail-closed with the default rule set. Each allowlist below exempts secret-SHAPED
+# test fixtures or evidence values only, and combines its criteria with `condition = "AND"`: the
+# gitleaks default is OR, which suppresses each criterion on its own (every finding in a listed
+# commit, and every finding in a listed file in every later commit). gitleaks drops an unknown key
+# silently, so `scripts/__tests__/gitleaks-config.test.mjs` pins the key vocabulary.
+#
+# The two epic #3384 history commits carried a synthetic `api_key=` title the PR-template
+# validator must refuse and a synthetic private-key block the search redaction lane must strip. No
+# real credential was involved; the fixtures were rewritten to be assembled at runtime so later
+# commits carry no literal, and `dev` branch protection forbids rewriting the two commits. Every
+# other commit is scanned unchanged.
+
+title = "Keiko secret scan"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Epic #3384: synthetic secret-shaped test fixtures in two immutable history commits (draftDeliveryTemplate.test.ts, codingRepositorySearch.test.ts); rewritten at runtime afterwards"
+condition = "AND"
+commits = [
+  "93a328952b5507fd63cd7c542ec730f0b1828b6d",
+  "1fbd1173f3db50faf1988ad0e17a72b00e5f0273",
+]
+paths = [
+  '''packages/keiko-server/src/gitDelivery/draftDeliveryTemplate\.test\.ts''',
+  '''packages/keiko-workspace/src/codingRepositorySearch\.test\.ts''',
+]
+
+[[allowlists]]
+description = "Epic #3384 / PR #3506: design-system evidence proofs pin the SHA-256 of `packages/keiko-ui/src/lib/api.ts`; the key name ends in `api` and the value is a 64-hex digest, which the generic-api-key rule mistakes for a credential. Scoped to the tracked evidence proof JSONs and to 64-hex values only; a real key never matches this shape. The path list covers every proof/manifest JSON that carries the source SHA map: `journey-proof.json`, `visual-proof.json`, `manifest.json`, `a11y-proof.json`, `update-experience-fidelity-proof.json`."
+condition = "AND"
+paths = [
+  '''docs/design-system/evidence/[^/]+/(journey|visual|a11y|update-experience-fidelity)-proof\.json''',
+  '''docs/design-system/evidence/[^/]+/manifest\.json''',
+]
+regexTarget = "line"
+regexes = [
+  '''"packages/keiko-ui/src/lib/api\.ts": "[0-9a-f]{64}"''',
+]
+
+[[allowlists]]
+description = "PR #3452: the synthetic key fixture the stream-read test copied from openai-adapter.test.ts (#855, on dev before every scanned range) in one immutable history commit. The generic-api-key rule reads `token-\", \"1234567890abcd` as a key whose value has entropy 3.81, above the rule's 3.5. No real credential was involved; the file uses a literal the rule cannot read as a key afterwards, and `dev` branch protection forbids rewriting the commit. Scoped to that one line of that file in that commit; every other commit is scanned unchanged."
+condition = "AND"
+commits = [
+  "aed6c73e1b4b952101ec2887bcaa5334940f6efd",
+]
+paths = [
+  '''packages/keiko-model-gateway/src/openai-adapter\.stream-read\.test\.ts''',
+]
+regexTarget = "line"
+regexes = [
+  '''apiKey: \["example-test-token-", "1234567890abcd"\]\.join\(""\),''',
+]
+
+[[allowlists]]
+description = "PR #3542: two synthetic credential-shaped Activity Log rejection fixtures in immutable checkpoint 5e556765; both are assembled from fragments afterwards. Scoped to the exact commit, file, and two fixture lines so every other finding remains enforced."
+condition = "AND"
+commits = [
+  "5e556765f6f9ba13bc5cb0ab353a15d2acfcd2c0",
+]
+paths = [
+  '''scripts/__tests__/op-catalog-drift\.test\.mjs''',
+]
+regexTarget = "line"
+regexes = [
+  '''\["credential-like token", "sk-proj-abcdef0123456789"\],''',
+  '''\["authorization-shaped token", "Bearer-abcdef0123456789xyz"\],''',
+]
+
+[[allowlists]]
+description = "PR #3554: the RFC 6455 section 1.2 example Sec-WebSocket-Key (base64 of the public string `the sample nonce`) as a literal in the history of the live-dictation proof test. The generic-api-key rule reads `TEST_WS_KEY = ...` as a key. No credential was involved, and the fixture now derives the value from the RFC's nonce at runtime, so the squash-merged tree carries no literal. Scoped by content, not by commit, so it holds for any history shape: only that exact public test-vector line in that one file is exempt, and every other finding in the file remains enforced."
+condition = "AND"
+paths = [
+  '''packages/keiko-server/src/voice-live-dictation\.test\.ts''',
+]
+regexTarget = "line"
+regexes = [
+  '''const TEST_WS_KEY = "dGhlIHNhbXBsZSBub25jZQ=="; // RFC 6455 §1\.2 example Sec-WebSocket-Key\.''',
+]

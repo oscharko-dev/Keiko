@@ -19,6 +19,7 @@ export interface StatusViewModelArgs {
   readonly saveError?: string | undefined;
   readonly dirty: boolean;
   readonly truncated: boolean;
+  readonly overLimit: boolean;
   readonly modifiedAt?: number | undefined;
 }
 
@@ -34,8 +35,22 @@ function ariaLiveForRole(role: EditorStatusRole): EditorStatusAriaLive {
   return role === "alert" ? "assertive" : "polite";
 }
 
+// The largest timestamp magnitude ECMAScript's Date can represent (+/-100,000,000 days from the
+// epoch, per the spec's "time value" range). A value beyond this is still a finite `number` but
+// `new Date(value)` produces an Invalid Date whose `toISOString()` throws `RangeError`.
+const ECMA_DATE_RANGE_LIMIT_MS = 8_640_000_000_000_000;
+
 function formatModifiedAt(modifiedAt: number | undefined): string {
-  if (modifiedAt === undefined) {
+  // PR #3289 review (comment 3865167748): `Number.isFinite` alone does not guarantee
+  // `new Date(value).toISOString()` succeeds -- a finite value outside the ECMA Date range (e.g.
+  // 8_640_000_000_000_001 or Number.MAX_VALUE) still throws `RangeError: Invalid time value`.
+  // KEIKO-0721: the ORIGINAL undefined-only guard let a non-finite timestamp (NaN, +/-Infinity)
+  // throw out of the render path; both classes fail safe with the same "Saved" fallback.
+  if (
+    modifiedAt === undefined ||
+    !Number.isFinite(modifiedAt) ||
+    Math.abs(modifiedAt) > ECMA_DATE_RANGE_LIMIT_MS
+  ) {
     return "Saved";
   }
   return `Saved at ${new Date(modifiedAt).toISOString()}`;
@@ -62,9 +77,23 @@ function saveMessage(args: StatusViewModelArgs): string {
   }
 }
 
+/** The persistent read-only notice appended to the base status, if any (Issue #2898/KEIKO-0259).
+ * `overLimit` and `truncated` are independent, equally-weighted read-only triggers (see
+ * `effectiveReadOnly` in save-state.ts); both are composed into the message when both are true so
+ * an AT user is never left unaware of the truncation just because the file also exceeds the size
+ * limit. */
+function readOnlyNotice(args: StatusViewModelArgs): string {
+  const overLimitNotice = args.overLimit ? " File exceeds the size limit and is read-only." : "";
+  const truncatedNotice = args.truncated
+    ? " File is truncated (read-only): it exceeds the display limit."
+    : "";
+  return `${overLimitNotice}${truncatedNotice}`;
+}
+
 /**
  * Derive the status region role and message. Error/conflict/load-error are assertive (`alert`);
- * everything else is polite (`status`). Truncation is appended as a persistent notice.
+ * everything else is polite (`status`). Truncation and the size limit are appended as persistent
+ * notices.
  */
 export function deriveStatusViewModel(args: StatusViewModelArgs): EditorStatusViewModel {
   if (args.loadState.status !== "ready") {
@@ -73,9 +102,6 @@ export function deriveStatusViewModel(args: StatusViewModelArgs): EditorStatusVi
   }
   const isAlert = args.saveStatus === "error" || args.saveStatus === "conflict";
   const role: EditorStatusRole = isAlert ? "alert" : "status";
-  const base = saveMessage(args);
-  const message = args.truncated
-    ? `${base} File is truncated (read-only): it exceeds the display limit.`
-    : base;
+  const message = `${saveMessage(args)}${readOnlyNotice(args)}`;
   return { role, ariaLive: ariaLiveForRole(role), message };
 }

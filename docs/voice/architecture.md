@@ -64,10 +64,12 @@ Carries: session lifecycle, capability gating, SDP offer/answer and ICE candidat
 audit events, interruption/floor-control state, and replay metadata. The control plane is the system of
 record for everything except the live media stream.
 
-The BFF binds loopback and accepts a WebSocket upgrade only for `/api/voice/control`, only from the
-approved loopback `Host`/`Origin`, and only when a complete Realtime deployment is available. All other
-upgrade paths retain the hard rejection. The productive V1 wire constant is
-`loopback-websocket`; ordinary product events continue to use their existing HTTP/SSE seams.
+The BFF binds loopback and accepts a WebSocket upgrade only for two capability-gated paths — the
+control plane at `/api/voice/control` (accepted only when a complete Realtime deployment is available)
+and the live-dictation transcript stream at `/api/voice/transcribe/live` (accepted only when the
+transcription capability is provisioned) — and only from the approved loopback `Host`/`Origin`. Every
+other upgrade path retains the hard rejection. The productive V1 wire constant is `loopback-websocket`;
+ordinary product events continue to use their existing HTTP/SSE seams.
 
 ### 4.2 Media plane (preferred, optional)
 
@@ -128,18 +130,18 @@ Deterministic verification stays model-free.
 
 ## 7. What is greenfield vs. reused
 
-| Concern                       | Status      | Basis                                                                        |
-| ----------------------------- | ----------- | ---------------------------------------------------------------------------- |
-| Capability advertisement      | Reused      | `ModelCapability` metadata + selection seam (additive extension).            |
-| Outbound model transport      | Reused      | `gatewayFetch` (ADR-0038).                                                   |
-| Local control plane           | Implemented | One capability-gated loopback WebSocket; every other upgrade remains denied. |
-| Enforced egress for untrusted | Reused      | `keiko-sandbox` `network: "none"` (ADR-0043).                                |
-| Local-first confidentiality   | Reused      | AES-256-GCM, key ladder, redaction, hashing (ADR-0035/0046/0047/0048).       |
-| Workflow authority            | Reused      | Governed handoff, single apply path, scoped writer.                          |
-| Audio capture / media plane   | Implemented | Native send-only browser WebRTC; no provider output track.                   |
-| "Never persist raw audio"     | Implemented | Media and SDP are excluded from persistence and body-free diagnostics.       |
-| Destination host allowlist    | Reused      | Model Gateway egress policy restricts the configured provider destination.   |
-| WebSocket upgrade on the BFF  | Implemented | Only `/api/voice/control` is reopened behind origin and capability gates.    |
+| Concern                       | Status      | Basis                                                                                                                               |
+| ----------------------------- | ----------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Capability advertisement      | Reused      | `ModelCapability` metadata + selection seam (additive extension).                                                                   |
+| Outbound model transport      | Reused      | `gatewayFetch` (ADR-0038).                                                                                                          |
+| Local control plane           | Implemented | Two capability-gated loopback WebSocket paths (control + live dictation); every other upgrade remains denied.                       |
+| Enforced egress for untrusted | Reused      | `keiko-sandbox` `network: "none"` (ADR-0043).                                                                                       |
+| Local-first confidentiality   | Reused      | AES-256-GCM, key ladder, redaction, hashing (ADR-0035/0046/0047/0048).                                                              |
+| Workflow authority            | Reused      | Governed handoff, single apply path, scoped writer.                                                                                 |
+| Audio capture / media plane   | Implemented | Native send-only browser WebRTC; no provider output track.                                                                          |
+| "Never persist raw audio"     | Implemented | Media and SDP are excluded from persistence and body-free diagnostics.                                                              |
+| Destination host allowlist    | Reused      | Model Gateway egress policy restricts the configured provider destination.                                                          |
+| WebSocket upgrade on the BFF  | Implemented | `/api/voice/control` and `/api/voice/transcribe/live` are the only accepted upgrade paths, both behind origin and capability gates. |
 
 ## 8. References
 

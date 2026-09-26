@@ -118,7 +118,12 @@ function readBrowserLocale(): string | undefined {
   }
 }
 
-function readStoredLocale(): Locale {
+/**
+ * The locale the person selected (or the browser's), read without a hook. For the few pure
+ * modules that format user-facing text outside a component (`desktop/format-error.ts`); a
+ * component keeps using `useTranslate`.
+ */
+export function readStoredLocale(): Locale {
   if (typeof window === "undefined") return DEFAULT_LOCALE;
   const browserLocale = readBrowserLocale();
   try {

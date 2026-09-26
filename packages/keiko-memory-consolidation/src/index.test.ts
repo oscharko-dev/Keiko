@@ -8,6 +8,8 @@
 
 import { describe, expect, it } from "vitest";
 
+import { createRequire } from "node:module";
+
 import * as Barrel from "./index.js";
 import type {
   ConsolidationJob,
@@ -16,6 +18,10 @@ import type {
   ConsolidationEmbedding,
   ConsolidationEvidence,
   ConsolidationEvidenceKind,
+  ConsolidationLogCategory,
+  ConsolidationLogEvent,
+  ConsolidationLogLevel,
+  ConsolidationLogSink,
   ConsolidationOptions,
   ConsolidationResult,
   ConsolidationSummaryGenerator,
@@ -27,15 +33,23 @@ import type {
   ReviewReason,
   StaleFlag,
   StaleReason,
+  SummaryFallbackReason,
 } from "./index.js";
 import {
   buildConsolidationJob,
   ConsolidationJobError,
   KEIKO_MEMORY_CONSOLIDATION_VERSION,
+  nullConsolidationLogSink,
   runConsolidation,
   transitionJob,
   type ConsolidationJobErrorCode,
 } from "./index.js";
+
+// The packaged manifest owns the version; a literal here re-states it and goes
+// stale on every release cut (KfQ findings on #3055).
+const { version: packageVersion } = createRequire(import.meta.url)("../package.json") as {
+  version: string;
+};
 
 function pin<T>(_value?: T): T | undefined {
   return undefined;
@@ -43,7 +57,7 @@ function pin<T>(_value?: T): T | undefined {
 
 describe("public barrel", () => {
   it("exports the version constant", () => {
-    expect(KEIKO_MEMORY_CONSOLIDATION_VERSION).toBe("0.2.15");
+    expect(KEIKO_MEMORY_CONSOLIDATION_VERSION).toBe(packageVersion);
   });
 
   it("exports runConsolidation as a function", () => {
@@ -65,6 +79,14 @@ describe("public barrel", () => {
     );
   });
 
+  it("exports nullConsolidationLogSink as a function returning a shared inert sink", () => {
+    expect(typeof nullConsolidationLogSink).toBe("function");
+    const sink = nullConsolidationLogSink();
+    expect(() => {
+      sink.write({ category: "consolidation", op: "test.op" });
+    }).not.toThrow();
+  });
+
   it("does not expose any unexpected runtime exports", () => {
     // Pin the full set of runtime (non-type) exports. Adding a runtime export requires
     // updating this list, which puts the change in the review diff.
@@ -73,6 +95,7 @@ describe("public barrel", () => {
         "ConsolidationJobError",
         "KEIKO_MEMORY_CONSOLIDATION_VERSION",
         "buildConsolidationJob",
+        "nullConsolidationLogSink",
         "runConsolidation",
         "transitionJob",
       ].sort(),
@@ -98,6 +121,11 @@ describe("public barrel", () => {
     pin<StaleFlag>();
     pin<StaleReason>();
     pin<ConsolidationJobErrorCode>();
+    pin<SummaryFallbackReason>();
+    pin<ConsolidationLogCategory>();
+    pin<ConsolidationLogEvent>();
+    pin<ConsolidationLogLevel>();
+    pin<ConsolidationLogSink>();
     // The pins above are compile-time only: `pin<T>()` is erased, so the real check is that
     // `tsc` can resolve each re-export. What IS observable at runtime is whether the barrel
     // loads at all — a circular or broken re-export throws here. The previous

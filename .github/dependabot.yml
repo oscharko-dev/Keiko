@@ -15,6 +15,22 @@ updates:
         applies-to: security-updates
         patterns:
           - "*"
+      # One pull request per day for every npm version update (owner decision, 2026-09-25): thirteen
+      # single-bump pull requests each ran a full required-check matrix and filled the free plan's
+      # 20-job hosted-runner queue ahead of a release publish. Security updates keep their own group.
+      npm-version-updates:
+        applies-to: version-updates
+        patterns:
+          - "*"
+    ignore:
+      # The Vitest 5 major is deferred by a reviewed disposition (docs/release/2296-dependency-security-
+      # closeout.md, "major-deferred", #3474): Stryker 10 with Vitest 5 reports zero killed mutants, so
+      # the security mutation evidence would be meaningless. Dependabot must stop reopening it until
+      # that lane proves non-zero kills; minor and patch updates on the 4.x line stay proposed.
+      - dependency-name: vitest
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@vitest/coverage-v8"
+        update-types: ["version-update:semver-major"]
     cooldown:
       default-days: 7
 
@@ -28,5 +44,13 @@ updates:
     commit-message:
       prefix: ci
       include: scope
+    groups:
+      # Same owner decision for pinned actions: one pull request per day carrying every action bump,
+      # which also keeps `github/codeql-action/init` and `/analyze` moving together (the closeout
+      # document records why a one-sided CodeQL bump is a problem).
+      actions-version-updates:
+        applies-to: version-updates
+        patterns:
+          - "*"
     cooldown:
       default-days: 7

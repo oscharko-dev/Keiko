@@ -91,6 +91,19 @@ export interface LspLifecycleEvent {
   readonly pendingRequestCount: number;
   readonly restartCount: number;
   readonly stderrBytesSeen: number;
+  // OS process id of the manager's current child, when one is running. Content-free (a number),
+  // and the JOIN key that lets support correlate a lifecycle transition (which carries the REASON:
+  // SHUTDOWN, CRASHED + errorCode, RESTART_THROTTLED, …) with the spawn adapter's per-kill
+  // `lsp.process.terminated` activity line (which carries the SIGNAL and the verified Windows
+  // tree-kill disposition for the same childPid). Absent before the first spawn and after ownership
+  // is safely released. Forced termination requires BOTH an observed immediate-child exit and a
+  // verified bounded-tree disposition; a failed/refused/unknown Windows tree kill therefore retains
+  // this last-known root pid even after the cmd.exe wrapper exits, because its LSP grandchild may
+  // still be live. An unsolicited immediate-child exit likewise retains ownership and suppresses a
+  // replacement because it carries no descendant-containment proof. The retained number is an
+  // evidence join key, never authority to signal a raw pid again. Only an asynchronous pre-spawn
+  // error whose handle never acquired a pid is confirmed not-spawned.
+  readonly childPid?: number;
 }
 
 export interface LspLatencyHistogram {

@@ -1,0 +1,1266 @@
+#!/usr/bin/env node
+
+/**
+ * Publishes a portable EVALUATION prerelease (ADR-0163 D9) end to end, encoding every lesson the
+ * 0.3.0-beta.0 → beta.1 cycle taught so none of them has to be relearned:
+ *
+ * 1. Assets come only from a `portable-assets.yml` workflow_dispatch with `evaluation_build=true`
+ *    on the requested ref. A run with any failed staging job is refused — never publish a partial
+ *    target set.
+ * 2. The publish set is EXACTLY four assets — three target ZIPs plus the Windows setup companion.
+ *    Stray loose binaries inside artifacts are never published.
+ * 3. SHA-256 checksums for all four assets are computed locally and embedded in the release body.
+ * 4. On a darwin host BOTH macOS bundles (arm64 and x64) are verified the way Gatekeeper judges
+ *    them before anything is published: `codesign --verify --deep --strict` must pass for each,
+ *    and the historical "code has no resources but signature indicates they must be present"
+ *    (beta.0's "damaged" dead end) must not appear. codesign verifies the x64 seal statically on
+ *    an arm64 host — no execution involved. On a non-darwin host the script says the verification
+ *    did not run — a skipped check is reported, never silently dropped.
+ * 5. The release is created as a DRAFT PRERELEASE with provenance (source commit + workflow run
+ *    id) in the body; the previous beta of the same version gets a superseded pointer prepended,
+ *    and only then does the draft go public — an interrupted run leaves a resumable draft that
+ *    the next PUBLISHING run deletes and recreates (a plan-only run only reports the pending
+ *    recovery), never a live release missing its superseded pointer. Before creating, the tag is
+ *    bound to the built commit ATOMICALLY (a git/refs POST that fails on an existing ref; an
+ *    existing ref must already point at the built commit) and the create runs with --verify-tag,
+ *    so a tag that moves or vanishes in between fails closed instead of re-binding the assets.
+ *
+ * `--public-release` publishes the SAME verified four-asset set at the exact stable tag
+ * `v<version>` as an ordinary release carrying the Latest badge, instead of a beta prerelease.
+ * Every check above applies unchanged — same lane, same artifacts, same seal verification, same
+ * atomic tag binding, same draft-first flow; what differs is the tag, the Latest/prerelease flag,
+ * and notes that state the unsigned evaluation status to a customer rather than to a tester. This
+ * is the release owner's scope decision for Keiko's first public download release, bounded by
+ * ADR-0121 D1 (the reviewed release-impact entry records the `evaluation` signing status).
+ *
+ * This script still owns only the GitHub Release surface; `release:publish` owns npm. Running it
+ * with `--public-release` is what puts the downloads on the tag that `release:publish` then
+ * verifies before it promotes the `latest` dist-tag.
+ */
+
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+
+import { HOST_COMMAND_MAX_BUFFER_BYTES } from "./lib/host-command.mjs";
+import { resolveHostExecutable } from "./lib/host-executable.mjs";
+// The tag shape lives in ONE place, shared with the Release verification workflow that
+// validates the pushed tag — restating it here would let this lane mint a tag the workflow
+// then rejects (review finding on #3043).
+import { BETA_INDEX, GOVERNED_BETA_TAG_RE, isExactReleaseTag } from "./release-tag-contract.mjs";
+import { resolveReleaseOwnerAllowlist } from "./lib/release-owner-allowlist.mjs";
+import {
+  buildPortableEvaluationManifest,
+  PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
+} from "./lib/portable-evaluation-manifest.mjs";
+// release.yml owns the required-check list and check:release-required-workflows validates it —
+// this reader is the existing accessor, so the local lane cannot drift from the workflow.
+import { envValue, releaseRequiredChecks } from "./check-release-required-workflow-names.mjs";
+// The governed release notes have ONE producer. A public release must carry them as well as the
+// install instructions; rendering a second set here would let the two drift (Codex finding on
+// #3054).
+import { renderReleaseImpactNotesFromRoot } from "./release-impact-notes.mjs";
+
+const RELEASE_WORKFLOW_PATH = ".github/workflows/release.yml";
+
+const repoRoot = resolve(import.meta.dirname, "..");
+const WORKFLOW_PATH = ".github/workflows/portable-assets.yml";
+const EVALUATION_ARTIFACTS = [
+  "portable-stage-macos-arm64-evaluation-unsigned",
+  "portable-stage-macos-x64-evaluation-unsigned",
+  "portable-stage-windows-x64-evaluation-unsigned",
+];
+const PUBLISH_ASSETS = [
+  { artifact: EVALUATION_ARTIFACTS[0], file: "keiko-macos-arm64.zip" },
+  { artifact: EVALUATION_ARTIFACTS[1], file: "keiko-macos-x64.zip" },
+  { artifact: EVALUATION_ARTIFACTS[2], file: "keiko-windows-x64.zip" },
+  { artifact: EVALUATION_ARTIFACTS[2], file: "keiko-windows-x64-setup.exe" },
+];
+const MACOS_SEALED_ASSETS = PUBLISH_ASSETS.filter((asset) =>
+  asset.file.startsWith("keiko-macos-"),
+).map((asset) => asset.file);
+const DAMAGED_SIGNATURE_TEXT = "code has no resources but signature indicates they must be present";
+const POLL_INTERVAL_MS = 30_000;
+const MAX_WAIT_MS = 60 * 60 * 1000;
+const DISPATCH_FIND_INTERVAL_MS = 10_000;
+const DISPATCH_FIND_ATTEMPTS = 30;
+
+class PrereleaseFailure extends Error {}
+
+function fail(message) {
+  throw new PrereleaseFailure(`release-portable-prerelease: FAIL - ${message}`);
+}
+
+function log(message) {
+  process.stdout.write(`release-portable-prerelease: ${message}\n`);
+}
+
+const VALUE_FLAGS = new Map([
+  ["--ref", "ref"],
+  ["--tag", "tag"],
+  ["--run-id", "runId"],
+]);
+
+const BOOLEAN_FLAGS = new Map([
+  ["--plan-only", "planOnly"],
+  ["--public-release", "publicRelease"],
+]);
+
+export function parseArgs(argv) {
+  const options = {
+    ref: "dev",
+    tag: undefined,
+    runId: undefined,
+    planOnly: false,
+    publicRelease: false,
+  };
+  let index = 0;
+  while (index < argv.length) {
+    const value = argv[index];
+    const field = VALUE_FLAGS.get(value);
+    const flag = BOOLEAN_FLAGS.get(value);
+    if (flag !== undefined) {
+      options[flag] = true;
+      index += 1;
+    } else if (field !== undefined && argv[index + 1] !== undefined) {
+      options[field] = argv[index + 1];
+      index += 2;
+    } else {
+      return undefined;
+    }
+  }
+  // In public-release mode this lane owns the tag: it is the exact stable tag of the built
+  // version, so a --tag override could only ever name a different release than the one being
+  // published. Refused rather than silently ignored.
+  if (options.publicRelease && options.tag !== undefined) return undefined;
+  return options;
+}
+
+let processRunner = spawnSyncRunner;
+let executableResolver = resolveHostExecutable;
+let hostPlatform = process.platform;
+let sleeper = atomicsSleep;
+let assetCopier = fsAssetCopier;
+
+/** Test seam: pretend to run on another platform for a callback's duration. */
+export function withHostPlatform(platform, callback) {
+  const previous = hostPlatform;
+  hostPlatform = platform;
+  try {
+    return callback();
+  } finally {
+    hostPlatform = previous;
+  }
+}
+
+/** Test seam: swap the process runner for a callback's duration, always restoring it. */
+export function withProcessRunner(runner, callback) {
+  const previousRunner = processRunner;
+  const previousResolver = executableResolver;
+  processRunner = runner;
+  executableResolver = (command) => command;
+  try {
+    return callback();
+  } finally {
+    processRunner = previousRunner;
+    executableResolver = previousResolver;
+  }
+}
+
+/** Test seam: replace the blocking sleeper so polling paths run hermetically without waiting. */
+export function withSleeper(replacement, callback) {
+  const previous = sleeper;
+  sleeper = replacement;
+  try {
+    return callback();
+  } finally {
+    sleeper = previous;
+  }
+}
+
+/**
+ * Test seam: swap the publish-set asset copier for a callback's duration, always restoring it.
+ * The hermetic suite injects a corrupted copier here to prove the publish-set guard catches a
+ * stray file dropped next to a target (review finding on #3037).
+ */
+export function withAssetCopier(copier, callback) {
+  const previous = assetCopier;
+  assetCopier = copier;
+  try {
+    return callback();
+  } finally {
+    assetCopier = previous;
+  }
+}
+
+function fsAssetCopier(source, destination) {
+  copyFileSync(source, destination);
+}
+
+function spawnSyncRunner(command, args, options = {}) {
+  return spawnSync(command, args, {
+    cwd: repoRoot,
+    encoding: "utf8",
+    maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES,
+    ...options,
+  });
+}
+
+/** Exported for the hermetic suite: the spawn/exit failure paths must stay provable. */
+export function run(command, args, options = {}) {
+  const result = processRunner(command, args, options);
+  if (result.error !== undefined) fail(`${command} could not spawn: ${result.error.message}`);
+  if (result.status !== 0) {
+    fail(`${command} ${args.join(" ")} exited ${String(result.status)}: ${result.stderr}`);
+  }
+  return result.stdout ?? "";
+}
+
+function gh(args, options = {}) {
+  return run(executableResolver("gh"), args, options);
+}
+
+function ghJson(args) {
+  return JSON.parse(gh(args));
+}
+
+/** The next free beta number for the version: v<version>-beta.<n>. */
+export function nextBetaTag(version, existingTags) {
+  const prefix = `v${version}-beta.`;
+  const used = existingTags
+    .filter((tag) => tag.startsWith(prefix))
+    .map((tag) => Number.parseInt(tag.slice(prefix.length), 10))
+    .filter((value) => Number.isInteger(value) && value >= 0);
+  const next = used.length === 0 ? 0 : Math.max(...used) + 1;
+  return `${prefix}${String(next)}`;
+}
+
+/**
+ * A --tag override must not publish BELOW an existing higher beta: the newest GitHub release
+ * would then be an older number, and the actual highest beta would never receive a superseded
+ * pointer — the prerelease lineage must stay monotonic (review finding on #3037). Resuming the
+ * highest beta's own interrupted draft stays allowed (equal is not below).
+ */
+/**
+ * An ordinary retry after a crash between create and publish must RESUME the interrupted draft,
+ * not allocate the next number: the draft counts as an existing tag, so nextBetaTag would skip
+ * to N+1, pick the still-private N as predecessor, and leave the live N-1 unsuperseded (review
+ * finding on #3037). Only when the highest existing beta is a PUBLISHED release does the default
+ * advance past it.
+ */
+function defaultTagWithDraftResume(version, tags) {
+  const next = nextBetaTag(version, tags);
+  const highest = previousBetaTag(next, tags);
+  if (highest !== undefined && releaseIsDraft(highest)) {
+    log(`resuming the interrupted draft ${highest} instead of allocating ${next}.`);
+    return highest;
+  }
+  return next;
+}
+
+function releaseIsDraft(tag) {
+  const { isDraft } = ghJson(["release", "view", tag, "--json", "isDraft"]);
+  return isDraft === true;
+}
+
+export function assertTagKeepsBetaSequenceMonotonic(tag, existingTags) {
+  const match = new RegExp(String.raw`^(?<prefix>v.+-beta\.)(?<index>${BETA_INDEX})$`, "u").exec(
+    tag,
+  );
+  if (match?.groups === undefined) return;
+  const { prefix } = match.groups;
+  const current = Number.parseInt(match.groups.index, 10);
+  const higher = existingTags
+    .filter((candidate) => candidate.startsWith(prefix))
+    .map((candidate) => Number.parseInt(candidate.slice(prefix.length), 10))
+    .filter((index) => Number.isInteger(index) && index > current);
+  if (higher.length > 0) {
+    fail(
+      `tag ${tag} is below the existing ${prefix}${String(Math.max(...higher))} — publishing a lower beta would leave the highest release unsuperseded.`,
+    );
+  }
+}
+
+/**
+ * The GREATEST existing beta below the tag being published — not merely index minus one: a
+ * --tag override may skip numbers (beta.9 after beta.1), and the still-live latest beta must
+ * carry the superseded pointer regardless of the gap (review finding on #3037). The stable
+ * public tag supersedes every evaluation beta of its version, so for `v<version>` the answer
+ * is the greatest existing `v<version>-beta.<n>` — otherwise the last beta would keep
+ * presenting itself with no pointer to the stable Latest release (Codex finding on #3054).
+ */
+export function previousBetaTag(tag, existingTags) {
+  const match = new RegExp(String.raw`^(?<prefix>v.+-beta\.)(?<index>${BETA_INDEX})$`, "u").exec(
+    tag,
+  );
+  const prefix = match?.groups === undefined ? `${tag}-beta.` : match.groups.prefix;
+  const bound = match?.groups === undefined ? Infinity : Number.parseInt(match.groups.index, 10);
+  const lower = existingTags
+    .filter((candidate) => candidate.startsWith(prefix))
+    .map((candidate) => Number.parseInt(candidate.slice(prefix.length), 10))
+    .filter((index) => Number.isInteger(index) && index >= 0 && index < bound);
+  if (lower.length === 0) return undefined;
+  return `${prefix}${String(Math.max(...lower))}`;
+}
+
+function rootVersion() {
+  return JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).version;
+}
+
+function repositorySlug() {
+  return ghJson(["repo", "view", "--json", "nameWithOwner"]).nameWithOwner;
+}
+
+function existingReleaseTags() {
+  // --paginate fetches EVERY page: with more than 100 releases, a first-page snapshot could
+  // omit the selected version's betas and re-issue an old number or skip the supersede pointer
+  // (review finding on #3037). --slurp wraps the pages into one array of arrays.
+  const pages = ghJson([
+    "api",
+    "--paginate",
+    "--slurp",
+    "repos/{owner}/{repo}/releases?per_page=100",
+  ]);
+  return pages.flat().map((entry) => entry.tag_name);
+}
+
+function listWorkflowRunIds(ref) {
+  const runs = ghJson([
+    "run",
+    "list",
+    "--workflow",
+    WORKFLOW_PATH,
+    "--branch",
+    ref,
+    // Only a dispatch-created run can be the one THIS dispatch created — a push- or
+    // schedule-triggered run appearing mid-poll must neither be selected nor manufacture a
+    // false ambiguity (review finding on #3037).
+    "--event",
+    "workflow_dispatch",
+    "--limit",
+    "50",
+    "--json",
+    "databaseId",
+  ]);
+  return runs.map((run) => String(run.databaseId));
+}
+
+/**
+ * The newest list entry is NOT necessarily the run this dispatch created — a previous or
+ * concurrent run can sit at the top of the list. Only a run id that did not exist BEFORE the
+ * dispatch can be the one just created, so the pre-dispatch id set is captured first and the
+ * poll waits for an id outside it (review finding on #3037). gh cannot return the created run
+ * id, so when TWO operators dispatch concurrently BOTH new ids are unseen and indistinguishable
+ * — selecting one could publish the competing operator's assets. The binding therefore fails
+ * closed on ambiguity: exactly one unseen run binds, more than one refuses (review finding on
+ * #3037).
+ */
+function dispatchWorkflow(ref) {
+  const before = new Set(listWorkflowRunIds(ref));
+  gh(["workflow", "run", WORKFLOW_PATH, "--ref", ref, "-f", "evaluation_build=true"]);
+  log(`dispatched ${WORKFLOW_PATH} on ${ref} (evaluation_build=true)`);
+  for (let attempt = 0; attempt < DISPATCH_FIND_ATTEMPTS; attempt += 1) {
+    // The freshly dispatched run needs a moment to exist before it can be found.
+    sleep(DISPATCH_FIND_INTERVAL_MS);
+    const unseen = listWorkflowRunIds(ref).filter((id) => !before.has(id));
+    if (unseen.length === 1) return unseen[0];
+    if (unseen.length > 1) {
+      fail(
+        `${String(unseen.length)} unseen workflow_dispatch runs (${unseen.join(", ")}) appeared on ${ref} — a concurrent dispatch by another operator is indistinguishable from this one; refusing to bind to either run.`,
+      );
+    }
+  }
+  fail(
+    `the dispatched workflow run did not appear within ${String(DISPATCH_FIND_ATTEMPTS)} polls; refusing to guess at an existing run.`,
+  );
+  return "";
+}
+
+function atomicsSleep(milliseconds) {
+  const shared = new SharedArrayBuffer(4);
+  Atomics.wait(new Int32Array(shared), 0, 0, milliseconds);
+}
+
+function sleep(milliseconds) {
+  sleeper(milliseconds);
+}
+
+/**
+ * A supplied --run-id may name ANY historical run — including a successful evaluation build of
+ * an unmerged feature branch whose package version happens to match the local checkout, which
+ * would pass every downstream check and publish fresh branch bytes publicly. The run must be a
+ * workflow_dispatch on exactly the requested ref AND a run of the portable-assets workflow
+ * itself — another workflow_dispatch workflow on the same branch can expose identically named
+ * staging jobs and artifacts, and its bytes must never bind (review findings on #3037). The
+ * workflow is compared by database id resolved from WORKFLOW_PATH, not by display name, so a
+ * renamed or impostor workflow cannot satisfy the check. The dispatch path satisfies all of
+ * this by construction.
+ */
+function portableWorkflowDatabaseId() {
+  const workflowFile = WORKFLOW_PATH.split("/").at(-1);
+  const workflow = ghJson(["api", `repos/{owner}/{repo}/actions/workflows/${workflowFile}`]);
+  return workflow.id;
+}
+
+function assertRunBelongsToRequestedRef(view, runId, ref) {
+  if (view.event !== "workflow_dispatch") {
+    fail(`run ${runId} is a ${view.event} run, not the workflow_dispatch this script requires.`);
+  }
+  if (view.headBranch !== ref) {
+    fail(`run ${runId} built branch ${view.headBranch}, not the requested ref ${ref}.`);
+  }
+  const workflowId = portableWorkflowDatabaseId();
+  if (view.workflowDatabaseId !== workflowId) {
+    fail(
+      `run ${runId} belongs to workflow ${String(view.workflowDatabaseId)}, not ${WORKFLOW_PATH} (${String(workflowId)}); refusing to publish another workflow's assets.`,
+    );
+  }
+}
+
+function waitForRun(runId, ref) {
+  const startedAt = Date.now();
+  for (;;) {
+    const view = ghJson([
+      "run",
+      "view",
+      runId,
+      "--json",
+      "status,conclusion,headSha,event,headBranch,workflowDatabaseId,attempt",
+    ]);
+    if (view.status === "completed") {
+      assertRunBelongsToRequestedRef(view, runId, ref);
+      return view;
+    }
+    if (Date.now() - startedAt > MAX_WAIT_MS) fail(`run ${runId} did not complete within an hour.`);
+    sleep(POLL_INTERVAL_MS);
+  }
+}
+
+/** The package version at the exact commit the workflow built, read through the GitHub API. */
+function builtVersion(commitSha) {
+  const manifest = ghJson([
+    "api",
+    `repos/{owner}/{repo}/contents/package.json?ref=${commitSha}`,
+    "-H",
+    "Accept: application/vnd.github.raw+json",
+  ]);
+  return String(manifest.version);
+}
+
+/**
+ * The release is bound to the BUILT commit, not the local checkout: with --run-id an operator can
+ * point at any older run, so a v<version>-beta.N release could otherwise carry another package
+ * version's assets. The version at the run's head commit must match the local checkout, and the
+ * selected tag must name exactly that version (review finding on #3037).
+ */
+function assertRunMatchesRelease(commitSha, version, tag, publicRelease) {
+  const built = builtVersion(commitSha);
+  if (built !== version) {
+    fail(
+      `the workflow head commit ${commitSha} builds version ${built} but the local checkout is ${version}; refusing to publish another version's assets.`,
+    );
+  }
+  if (publicRelease) {
+    // The public release names the built version exactly — same binding, stable tag shape.
+    if (!isExactReleaseTag(tag, built)) {
+      fail(`tag ${tag} does not name the built version ${built} (expected v${built}).`);
+    }
+    return;
+  }
+  const match = new RegExp(String.raw`^v(?<version>.+)-beta\.${BETA_INDEX}$`, "u").exec(tag);
+  if (match?.groups?.version !== built) {
+    fail(`tag ${tag} does not name the built version ${built} (expected v${built}-beta.<n>).`);
+  }
+}
+
+/**
+ * A completed run is not enough: the production-signing jobs skip by design, so the check is that
+ * every evaluation STAGING job succeeded — a partial target set must never publish.
+ */
+function assertStagingJobsSucceeded(runId) {
+  const { jobs } = ghJson(["run", "view", runId, "--json", "jobs"]);
+  const staging = jobs.filter((job) => job.name.startsWith("Stage portable asset"));
+  if (staging.length !== 3) {
+    fail(`expected 3 staging jobs, found ${String(staging.length)} — refusing to publish.`);
+  }
+  const failed = staging.filter((job) => job.conclusion !== "success");
+  if (failed.length > 0) {
+    fail(`staging jobs failed: ${failed.map((job) => job.name).join(", ")}`);
+  }
+}
+
+function downloadAssets(runId) {
+  const workDir = mkdtempSync(join(tmpdir(), "keiko-prerelease-"));
+  try {
+    return assembleDownloadedAssets(runId, workDir);
+  } catch (error) {
+    // A refusal INSIDE assembly (missing artifact, drifting publish set) throws before the
+    // caller's finally exists — the temp directory must not survive it (review finding on #3037).
+    rmSync(workDir, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+function assembleDownloadedAssets(runId, workDir) {
+  for (const artifact of EVALUATION_ARTIFACTS) {
+    gh(["run", "download", runId, "--name", artifact, "--dir", join(workDir, artifact)]);
+  }
+  const publishDir = join(workDir, "publish");
+  mkdirSync(publishDir, { recursive: true });
+  for (const asset of PUBLISH_ASSETS) {
+    const source = findAssetFile(join(workDir, asset.artifact), asset.file);
+    assetCopier(source, join(publishDir, asset.file));
+  }
+  const byName = (left, right) => left.localeCompare(right);
+  const names = readdirSync(publishDir).sort(byName);
+  const expected = PUBLISH_ASSETS.map((asset) => asset.file).sort(byName);
+  if (JSON.stringify(names) !== JSON.stringify(expected)) {
+    fail(`publish set must be exactly [${expected.join(", ")}], found [${names.join(", ")}].`);
+  }
+  return { workDir, publishDir };
+}
+
+function findAssetFile(root, name) {
+  const direct = join(root, name);
+  if (existsSync(direct)) return direct;
+  for (const entry of readdirSync(root)) {
+    const candidate = join(root, entry, name);
+    if (existsSync(candidate)) return candidate;
+  }
+  fail(`artifact is missing the expected asset ${name}.`);
+  return name;
+}
+
+/** Name, size and SHA-256 of every published asset, measured from the verified local bytes. */
+function publishedAssetDigests(publishDir) {
+  return PUBLISH_ASSETS.map((asset) => {
+    const path = join(publishDir, asset.file);
+    const digest = createHash("sha256").update(readFileSync(path)).digest("hex");
+    const size = statSync(path).size;
+    log(`${asset.file}: sha256 ${digest} (${String(size)} bytes)`);
+    return { assetName: asset.file, sha256: digest, sizeBytes: size };
+  });
+}
+
+function checksumLines(digests) {
+  return digests.map((asset) => `${asset.sha256}  ${asset.assetName}`);
+}
+
+/**
+ * The evidence a public release needs and a beta does not: `release:publish` promotes the npm
+ * `latest` tag only after re-downloading every published download and matching its bytes against
+ * this manifest. Written here because this is the only place that has both the verified bytes and
+ * the run that produced them; a beta prerelease is never promoted, so it does not carry one.
+ */
+function writeEvaluationManifest(workDir, input) {
+  const manifest = buildPortableEvaluationManifest(input);
+  const path = join(workDir, PORTABLE_EVALUATION_MANIFEST_ASSET_NAME);
+  writeFileSync(path, `${JSON.stringify(manifest, undefined, 2)}\n`);
+  log(
+    `wrote ${PORTABLE_EVALUATION_MANIFEST_ASSET_NAME} binding 4 downloads to ${input.releaseTag}.`,
+  );
+  return path;
+}
+
+/**
+ * The beta.0 pin, run where Gatekeeper actually runs: an unsealed bundle inside a ZIP is the
+ * "damaged" dead end and must never publish again. BOTH macOS archives are judged — codesign
+ * verifies the x64 seal statically on an arm64 host (no execution involved), so publishing
+ * keiko-macos-x64.zip without evidence about its own bytes is never necessary (review finding on
+ * #3037). A failure in either archive refuses the publish. Only darwin can execute codesign; any
+ * other host states the skip out loud instead of implying coverage.
+ */
+function verifyMacosSeal(publishDir, publicRelease = false) {
+  if (hostPlatform !== "darwin") {
+    // A beta may ship with the check reported as skipped — a tester reads that line. A PUBLIC
+    // release asserts sealed bundles to a customer, so a seal that was never proven must refuse
+    // rather than warn: the beta.0 "damaged" regression must not be able to reach the Latest
+    // release through a non-darwin publisher (Codex finding on #3054).
+    if (publicRelease) {
+      fail(
+        "macOS seal verification cannot run on a non-darwin host, and a public release must not assert seals it never proved — publish from a Mac.",
+      );
+    }
+    log(
+      "WARNING: macOS seal verification did not run (non-darwin host) — verify both macOS assets on a Mac before announcing the release.",
+    );
+    return "skipped-non-darwin";
+  }
+  for (const file of MACOS_SEALED_ASSETS) {
+    verifyMacosAssetSeal(publishDir, file);
+  }
+  return `verified (${MACOS_SEALED_ASSETS.join(", ")})`;
+}
+
+function verifyMacosAssetSeal(publishDir, file) {
+  const extractDir = join(publishDir, "..", `seal-check-${file}`);
+  run("/usr/bin/unzip", ["-q", join(publishDir, file), "-d", extractDir]);
+  const app = join(extractDir, "Keiko", "Keiko.app");
+  const result = processRunner("/usr/bin/codesign", ["--verify", "--deep", "--strict", app], {});
+  const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+  if (output.includes(DAMAGED_SIGNATURE_TEXT)) {
+    fail(`the ${file} bundle is unsealed (the beta.0 "damaged" regression): ${output.trim()}`);
+  }
+  if (result.status !== 0) {
+    fail(`codesign --verify --deep --strict failed for ${file}: ${output.trim()}`);
+  }
+  rmSync(extractDir, { recursive: true, force: true });
+  log(`${file} bundle seal verified (codesign --verify --deep --strict).`);
+}
+
+/**
+ * The heading and status paragraph. Both modes publish the SAME artifacts from the SAME evaluation
+ * lane and state the same waived signing honestly; they differ in what the release claims to be.
+ * ADR-0121 D1 bounds the public form: the reviewed release-impact entry records the `evaluation`
+ * signing status, and these notes state it with the first-launch steps it implies.
+ */
+function releaseHeading(input) {
+  if (input.publicRelease) {
+    return [
+      `# Keiko ${input.version}`,
+      "",
+      "Keiko's first public download release. Pick your platform below, unzip, and start it —",
+      "Node.js and the OpenCode sidecar are already inside; nothing else has to be installed.",
+      "",
+      "**Unsigned evaluation build (ADR-0121 D1, ADR-0163 D9).** The bundles are sealed, so macOS",
+      "will not report a damaged app, but they carry no Apple Developer ID, no notarization and no",
+      "Windows trusted publisher yet. That is why the first launch needs the one extra confirmation",
+      "described below. Every integrity digest, containment and provenance check stays enforced.",
+      "",
+    ];
+  }
+  return [
+    `# Keiko ${input.version} — evaluation prerelease ${input.tag}`,
+    "",
+    "Unsigned evaluation build (ADR-0163 D9): platform signature, notarization and platform",
+    "attestation are waived and declared honestly everywhere; every integrity digest stays",
+    "enforced. Not publishable to npm latest.",
+    "",
+  ];
+}
+
+/**
+ * The reviewed catalog bullets for this version. A public release is the customer's only view of
+ * what changed, so it carries both: the install instructions this lane owns, and the governed
+ * notes `release:publish` would otherwise have written. A beta never carried them and still
+ * does not.
+ */
+function catalogNotesSection(input) {
+  if (!input.publicRelease) return [];
+  const rendered = renderReleaseImpactNotesFromRoot(repoRoot, { tag: "latest" });
+  if (!rendered.ok || rendered.notes.trim() === "") {
+    fail(
+      `the governed release notes for this version could not be rendered: ${(rendered.failures ?? []).join("; ")}`,
+    );
+  }
+  return ["## What changed", "", rendered.notes.trim(), ""];
+}
+
+export function releaseBody(input) {
+  return [
+    ...releaseHeading(input),
+    ...catalogNotesSection(input),
+    "## Install on macOS",
+    "",
+    "1. Download and unzip; double-click `Keiko.app` inside the extracted folder (moving it to",
+    "   `/Applications` first also works — the first start adopts it there).",
+    "2. macOS will say it cannot verify the developer. Open **System Settings → Privacy &",
+    "   Security**, scroll to **Security**, click **Open Anyway**, and confirm. One time only.",
+    "3. Keiko installs itself to `/Applications`, starts, and opens at `http://127.0.0.1:1983`.",
+    "",
+    "If a start fails, Keiko now says why in a dialog. Runbook:",
+    "[macOS first-launch](https://github.com/" +
+      input.repository +
+      "/blob/dev/docs/troubleshooting/macos-portable-first-launch.md)",
+    "",
+    "## Install on Windows",
+    "",
+    "Run `keiko-windows-x64-setup.exe` (SmartScreen: More info → Run anyway), or unzip and start",
+    "`Keiko.exe`.",
+    "",
+    "## Checksums (SHA-256)",
+    "",
+    "```",
+    ...input.checksums,
+    "```",
+    "",
+    `macOS seal verification: ${input.sealVerification}.`,
+    `Built from commit ${input.commitSha} by workflow run ${input.runId}.`,
+    input.previousTag === undefined ? "" : `Supersedes ${input.previousTag}.`,
+  ].join("\n");
+}
+
+function createRelease(input) {
+  const bodyPath = join(input.workDir, "release-body.md");
+  // A direct fs write — never a shell — so no file name ever reaches a command line
+  // (CodeQL js/shell-command-injection-from-environment on #3037).
+  writeFileSync(bodyPath, input.body);
+  gh([
+    "release",
+    "create",
+    input.tag,
+    // Draft-first (review finding on #3037): nothing is public until the predecessor carries its
+    // superseded pointer — publishDraftRelease flips --draft=false as the LAST step, so a
+    // transient supersede failure leaves a resumable draft, never a live release without its
+    // pointer.
+    "--draft",
+    // A public release claims the Latest badge; a beta stays a prerelease and never does. Stated
+    // explicitly in both directions so the flag can never be inherited from a previous release.
+    ...(input.publicRelease ? ["--latest"] : ["--prerelease"]),
+    // The tag was already created ATOMICALLY at the built commit (ensureTagRefAtBuiltCommit) —
+    // --verify-tag fails closed if it vanished in the remaining window instead of silently
+    // minting a new one at whatever --target would resolve to (review finding on #3037).
+    "--verify-tag",
+    "--title",
+    `Keiko ${input.version} (${input.tag})`,
+    "--notes-file",
+    bodyPath,
+    ...PUBLISH_ASSETS.map((asset) => join(input.publishDir, asset.file)),
+    ...(input.evaluationManifestPath === undefined ? [] : [input.evaluationManifestPath]),
+  ]);
+  log(`created draft ${input.tag} (not public yet).`);
+}
+
+/**
+ * Publishing is the LAST step: the draft goes public only after the supersede edit landed. The
+ * tag ref is revalidated against the built commit HERE, at the publication boundary — a draft's
+ * tag stays mutable until publication, and `--verify-tag` at create time only proved the tag
+ * EXISTED, so a tag moved between create and publish would expose assets and provenance under a
+ * commit they were not built from. Unlike the create-conflict check, an ABSENT ref also refuses:
+ * the release was created without `--target`, so publishing over a vanished tag would re-mint it
+ * at the repository's default branch head, not the built commit. The recheck narrows the window
+ * to the single edit call below; it cannot close it entirely without server-side atomicity
+ * (review finding on #3037).
+ */
+function assertTagRefStillAtBuiltCommit(tag, commitSha) {
+  const ref = readRemoteTagRef(tag);
+  if (ref === undefined) {
+    fail(
+      `tag ${tag} vanished before publication — publishing now would re-mint it at the default branch head, not the built commit ${commitSha}; recreate the tag first.`,
+    );
+    return;
+  }
+  const resolved = peelTagRefToCommit(ref);
+  if (resolved !== commitSha) {
+    fail(
+      `tag ${tag} moved to ${resolved} after the draft was created and no longer points at the built commit ${commitSha} — publishing would expose assets and provenance under a commit they were not built from.`,
+    );
+  }
+}
+
+function publishDraftRelease(tag, commitSha) {
+  assertTagRefStillAtBuiltCommit(tag, commitSha);
+  gh(["release", "edit", tag, "--draft=false"]);
+  log(`published ${tag}.`);
+}
+
+/**
+ * Draft-first publishing makes an interrupted run resumable: a DRAFT carrying the target tag is
+ * the remnant of a run that died between create and the final --draft=false publish — it was
+ * never public, so the publish path deletes it and recreates the release fresh. A PUBLISHED
+ * release keeps the historical refusal: a live tag is never recreated (review finding on #3037).
+ * The check is read-only on purpose: the deletion itself happens only on the actual publish path
+ * — a --plan-only preview of a recovery must never destroy the draft it previews (review finding
+ * on #3037).
+ */
+function assertExistingTagIsResumableDraft(tag) {
+  const { isDraft } = ghJson(["release", "view", tag, "--json", "isDraft"]);
+  if (isDraft !== true) fail(`release ${tag} already exists.`);
+}
+
+function deleteInterruptedDraft(tag) {
+  gh(["release", "delete", tag, "--yes"]);
+  log(`deleted the interrupted draft ${tag}; recreating it.`);
+}
+
+/**
+ * The tag is bound to the built commit ATOMICALLY: a POST to git/refs either creates the ref at
+ * exactly that commit or fails on an existing ref (the GitHub API rejects duplicate refs in one
+ * operation) — closing the check-then-create window in which another actor could create or move
+ * the tag between a read-only assertion and `gh release create` (review finding on #3037). On
+ * the conflict, the existing ref is re-read and must already point at the built commit; release
+ * creation then runs with --verify-tag so a tag that vanishes afterwards fails closed.
+ */
+function ensureTagRefAtBuiltCommit(tag, commitSha) {
+  const args = [
+    "api",
+    "--method",
+    "POST",
+    "repos/{owner}/{repo}/git/refs",
+    "-f",
+    `ref=refs/tags/${tag}`,
+    "-f",
+    `sha=${commitSha}`,
+  ];
+  const result = processRunner(executableResolver("gh"), args, {});
+  if (result.error !== undefined) fail(`gh could not spawn: ${result.error.message}`);
+  if (result.status === 0) {
+    log(`created tag ${tag} at the built commit ${commitSha}.`);
+    return;
+  }
+  if (String(result.stderr ?? "").includes("already exists")) {
+    assertTagRefMatchesBuiltCommit(tag, commitSha);
+    return;
+  }
+  fail(`gh ${args.join(" ")} exited ${String(result.status)}: ${result.stderr}`);
+}
+
+/**
+ * The conflict half of ensureTagRefAtBuiltCommit: an existing ref is acceptable only when its
+ * (peeled) commit IS the built commit — a resumed run's own tag, or an identical concurrent
+ * creation. Anything else refuses before a release could attach fresh assets to an old commit
+ * (review finding on #3037).
+ */
+function assertTagRefMatchesBuiltCommit(tag, commitSha) {
+  const ref = readRemoteTagRef(tag);
+  if (ref === undefined) return;
+  const resolved = peelTagRefToCommit(ref);
+  if (resolved !== commitSha) {
+    fail(
+      `tag ${tag} already exists as a git ref at ${resolved}, not the built commit ${commitSha} — creating the release would attach the new assets to that old commit; delete or move the tag first.`,
+    );
+  }
+  log(`tag ${tag} already points at the built commit ${commitSha}; proceeding.`);
+}
+
+function readRemoteTagRef(tag) {
+  const args = ["api", `repos/{owner}/{repo}/git/ref/tags/${tag}`];
+  const result = processRunner(executableResolver("gh"), args, {});
+  if (result.error !== undefined) fail(`gh could not spawn: ${result.error.message}`);
+  if (result.status === 0) return JSON.parse(result.stdout ?? "");
+  // Only an absent ref (404) may proceed — any other lookup failure refuses, never guesses.
+  if (String(result.stderr ?? "").includes("Not Found")) return undefined;
+  fail(`gh ${args.join(" ")} exited ${String(result.status)}: ${result.stderr}`);
+  return undefined;
+}
+
+/** An annotated tag ref points at a TAG object, not a commit — peel (bounded) to the commit. */
+function peelTagRefToCommit(ref) {
+  let object = ref.object;
+  for (let depth = 0; depth < 5 && object.type === "tag"; depth += 1) {
+    object = ghJson(["api", `repos/{owner}/{repo}/git/tags/${object.sha}`]).object;
+  }
+  return object.sha;
+}
+
+function markPreviousSuperseded(previousTag, tag, repository) {
+  if (previousTag === undefined) return;
+  const body = ghJson(["api", `repos/${repository}/releases/tags/${previousTag}`]).body ?? "";
+  const pointer = `> **Superseded by [${tag}](https://github.com/${repository}/releases/tag/${tag}).**\n\n`;
+  if (body.startsWith("> **Superseded")) return;
+  gh(["release", "edit", previousTag, "--notes-file", "-"], { input: pointer + body });
+  log(`marked ${previousTag} as superseded.`);
+}
+
+/**
+ * Both tag refusals that can be decided BEFORE any remote call. A public release is the exact
+ * stable tag of a stable version — a prerelease version could only produce a tag the Release
+ * verification rejects. A --tag override must already match the governed beta shape, whose regex
+ * rejects a leading-zero index, so the lane never mints a tag the workflow then refuses (review
+ * finding on #3043).
+ */
+function assertRequestedTagShapeIsMintable(options, version) {
+  if (options.publicRelease && version.includes("-")) {
+    fail(
+      `--public-release requires a stable package version; the checkout is ${version}. Publish it as a beta prerelease instead.`,
+    );
+  }
+  if (options.tag !== undefined && !GOVERNED_BETA_TAG_RE.test(options.tag)) {
+    fail(
+      `tag ${options.tag} does not match the governed beta tag shape v<version>-beta.<n> (no leading-zero beta index) — the Release verification would reject its push.`,
+    );
+  }
+}
+
+function selectReleaseTag(options, version, tags) {
+  if (options.publicRelease) return `v${version}`;
+  return options.tag ?? defaultTagWithDraftResume(version, tags);
+}
+
+/**
+ * The branch a public release may be cut from. `release.yml` declares the release base branch, and
+ * that is the documented source once release-only fixes are stabilising on it; until that branch
+ * exists the repository's default branch IS the release source, which is how every release so far
+ * was cut (Codex finding on #3054). Hard-coding either one alone would reject a real release.
+ */
+function publicReleaseSourceBranch(repository) {
+  const declared = envValue(
+    readFileSync(join(repoRoot, RELEASE_WORKFLOW_PATH), "utf8"),
+    "RELEASE_BASE_BRANCH",
+  );
+  if (typeof declared === "string" && declared !== "" && branchExists(repository, declared)) {
+    return declared;
+  }
+  return ghJson(["api", `repos/${repository}`]).default_branch;
+}
+
+/**
+ * Absent is not the same as unknown. Treating every nonzero `gh` result as "the branch does not
+ * exist" would let an auth, rate-limit or network failure silently move release authority to the
+ * default branch while the configured release branch was alive (Codex finding on #3054). Only a
+ * definitive 404 answers "absent"; anything else refuses.
+ */
+function branchExists(repository, branch) {
+  // Encoded as ONE path parameter: a branch like release/0.3 embedded raw would split into two
+  // path segments, 404, and silently hand release authority to the default branch while the
+  // configured branch was alive (Codex finding on #3054).
+  const result = processRunner(
+    executableResolver("gh"),
+    ["api", `repos/${repository}/branches/${encodeURIComponent(branch)}`],
+    { cwd: repoRoot, encoding: "utf8" },
+  );
+  if (result.error !== undefined) fail(`gh could not spawn: ${result.error.message}`);
+  if (result.status === 0) return true;
+  // Matched on the HTTP status gh always embeds, not on prose: the live message is
+  // "Branch not found (HTTP 404)" while an earlier needle expected "Not Found", and the miss
+  // sent a genuine absence into the refusal branch (the 0.3.1 release outage).
+  if (/\(HTTP 404\)/u.test(String(result.stderr ?? ""))) return false;
+  fail(
+    `the release branch lookup for ${branch} did not resolve (${String(result.stderr ?? "").trim()}) — refusing to guess which branch is the release source.`,
+  );
+  return false;
+}
+
+/**
+ * A beta prerelease may be cut from any ref; that is what a prerelease is for. A PUBLIC release
+ * becomes the Latest download a customer installs, so everything about it must be verified before
+ * the tag exists — the workflow's own tag-push verification starts only after this script has
+ * already created the tag and the release (Codex findings on #3054).
+ *
+ * Four independent conditions, all evaluated before anything public is minted:
+ * the local checkout must BE the built commit and be clean (the code making this decision is
+ * otherwise unverified), the built commit must be contained in the release source branch, every
+ * required check must have passed on that exact commit, and the release owner's approval for this
+ * version must verify live against the GitHub API — the same gate the npm publisher runs, brought
+ * forward, because this producer exposes the downloads first.
+ */
+function assertPublicReleaseSourceIsApproved(commitSha, repository) {
+  assertPublisherCheckoutMatches(commitSha);
+  const branch = publicReleaseSourceBranch(repository);
+  // The basehead is one path segment; an unencoded slash in the branch name would split it.
+  const compare = ghJson([
+    "api",
+    `repos/${repository}/compare/${encodeURIComponent(branch)}...${commitSha}`,
+  ]);
+  if (compare.status !== "identical" && compare.status !== "behind") {
+    fail(
+      `commit ${commitSha} is not contained in ${branch} (compare status "${compare.status}") — a public release must be cut from integrated source, never from an unmerged branch.`,
+    );
+  }
+  assertRequiredChecksPassed(commitSha, repository, branch);
+  assertReleaseOwnerApproved(repository);
+  log(`public release source verified: ${commitSha} is in ${branch}, checked and approved.`);
+}
+
+/**
+ * The publishing decision is made by the code in THIS checkout, and the required checks say
+ * nothing about it. A different or dirty tree with the same package version would otherwise mint
+ * the stable tag and the Latest release from unverified local code.
+ */
+function assertPublisherCheckoutMatches(commitSha) {
+  const head = run(executableResolver("git"), ["rev-parse", "HEAD"]).trim();
+  if (head !== commitSha) {
+    fail(
+      `the publishing checkout is at ${head}, not the built commit ${commitSha} — check out the built commit before publishing a public release.`,
+    );
+  }
+  const dirty = run(executableResolver("git"), ["status", "--porcelain"]).trim();
+  if (dirty !== "") {
+    fail(
+      "the publishing checkout has uncommitted changes — a public release must be cut from a clean tree.",
+    );
+  }
+}
+
+/**
+ * The allowlist resolution has ONE owner in scripts/lib/release-owner-allowlist.mjs; this wrapper
+ * only binds it to this script's process seam and refusal semantics. An allowlist that does not
+ * resolve refuses rather than guessing.
+ */
+function releaseOwnerAllowlist(repository) {
+  const value = resolveReleaseOwnerAllowlist({
+    configured: process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS,
+    repository,
+    runGh: (args) =>
+      processRunner(executableResolver("gh"), args, { cwd: repoRoot, encoding: "utf8" }),
+  });
+  if (value === undefined) {
+    fail(
+      "the release-owner allowlist did not resolve: set KEIKO_RELEASE_OWNER_GITHUB_LOGINS or grant this checkout a gh login that can read the repository variable — an empty allowlist would refuse every approval.",
+    );
+  }
+  return value;
+}
+
+/**
+ * The live release-owner approval, run HERE rather than only in the npm publisher: this producer
+ * exposes the customer downloads first, so a stale or fabricated catalog approval would otherwise
+ * reach the public before any live check ran.
+ */
+function assertReleaseOwnerApproved(repository) {
+  const result = processRunner(
+    process.execPath,
+    ["scripts/check-release-impact.mjs", "--publish"],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GITHUB_REPOSITORY: repository,
+        KEIKO_RELEASE_OWNER_GITHUB_LOGINS: releaseOwnerAllowlist(repository),
+      },
+    },
+  );
+  if (result.error !== undefined) {
+    fail(`could not verify the release-owner approval: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    fail(
+      `the release-owner approval for this version did not verify; refusing to publish it as the latest release.\n${String(result.stdout ?? "")}${String(result.stderr ?? "")}`,
+    );
+  }
+}
+
+/**
+ * The verifier is handed its inputs explicitly rather than left to its own defaults, because both
+ * of those defaults are wrong for a locally driven public release:
+ *
+ * - `RELEASE_REQUIRED_CHECKS` — without it the verifier reads the base branch's protection, whose
+ *   contexts include pull-request-only ones that a push commit never emits, so a healthy commit
+ *   would look unverified. The list comes from `release.yml`, which already owns it and which
+ *   `check:release-required-workflows` already validates.
+ * - `GITHUB_TOKEN` — a local run authenticates through `gh`, not an env var. Unauthenticated
+ *   GitHub API calls would be rate-limited into a false failure.
+ */
+function requiredChecksEnvironment(commitSha, repository, branch) {
+  const token =
+    process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? gh(["auth", "token"], {}).trim();
+  return {
+    ...process.env,
+    GITHUB_REPOSITORY: repository,
+    GITHUB_TOKEN: token,
+    RELEASE_BASE_BRANCH: branch,
+    RELEASE_REQUIRED_CHECKS: JSON.stringify(releaseRequiredChecks()),
+    RELEASE_SHA: commitSha,
+  };
+}
+
+function assertRequiredChecksPassed(commitSha, repository, branch) {
+  const result = processRunner(process.execPath, ["scripts/verify-release-required-checks.mjs"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    env: requiredChecksEnvironment(commitSha, repository, branch),
+  });
+  if (result.error !== undefined) {
+    fail(`could not verify required checks: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    fail(
+      `required checks have not passed on ${commitSha}; refusing to publish it as the latest release.\n${String(result.stdout ?? "")}${String(result.stderr ?? "")}`,
+    );
+  }
+}
+
+export function runPortablePrerelease(argv) {
+  const options = parseArgs(argv);
+  if (options === undefined) {
+    fail(
+      "usage: release-portable-prerelease [--ref dev] [--tag vX.Y.Z-beta.N] [--run-id id] [--plan-only] [--public-release]\n" +
+        "  --public-release publishes v<version> as the latest release and takes no --tag.",
+    );
+    return;
+  }
+  const version = rootVersion();
+  assertRequestedTagShapeIsMintable(options, version);
+  const repository = repositorySlug();
+  const tags = existingReleaseTags();
+  const tag = selectReleaseTag(options, version, tags);
+  assertTagKeepsBetaSequenceMonotonic(tag, tags);
+  const hasPendingDraft = tags.includes(tag);
+  if (hasPendingDraft) assertExistingTagIsResumableDraft(tag);
+  const runId = options.runId ?? dispatchWorkflow(options.ref);
+  log(`waiting for workflow run ${runId} ...`);
+  const view = waitForRun(runId, options.ref);
+  // For a BETA a "failure" conclusion is still publishable on purpose: the run-level conclusion
+  // aggregates non-gating lanes, while the jobs that actually produce the published assets are
+  // separately and strictly asserted by assertStagingJobsSucceeded below. A PUBLIC release
+  // demands overall success: the npm publisher re-verifies the recorded run and requires
+  // conclusion "success", so a lenient producer here would mint a customer-visible release the
+  // documented promotion step can never accept (Codex finding on #3054).
+  if (options.publicRelease && view.conclusion !== "success") {
+    fail(
+      `run ${runId} concluded ${view.conclusion}; a public release requires an entirely successful run — rerun the workflow and publish from a green run.`,
+    );
+  }
+  if (view.conclusion !== "success" && view.conclusion !== "failure") {
+    fail(`run ${runId} concluded ${view.conclusion}; refusing to publish from it.`);
+  }
+  assertRunMatchesRelease(view.headSha, version, tag, options.publicRelease);
+  assertStagingJobsSucceeded(runId);
+  // Before the tag is minted, not after: the workflow's own tag-push verification cannot help
+  // here because it only starts once this script has already created the tag and the release.
+  if (options.publicRelease) assertPublicReleaseSourceIsApproved(view.headSha, repository);
+  const { workDir, publishDir } = downloadAssets(runId);
+  try {
+    runPublishSteps({
+      workDir,
+      publishDir,
+      options,
+      version,
+      repository,
+      tags,
+      tag,
+      runId,
+      view,
+      hasPendingDraft,
+    });
+  } finally {
+    // Refusals exit through fail() — the temp directory must not survive them, nor a plan-only
+    // run (review findings on #3032).
+    rmSync(workDir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * A plan-only run reports what a publish WOULD do and touches nothing — including a pending draft
+ * it only previews (review finding on #3037).
+ */
+function reportPlan(body, tag, hasPendingDraft) {
+  if (hasPendingDraft) {
+    log(
+      `PLAN-ONLY: the interrupted draft ${tag} would be deleted and recreated on publish (it was not touched).`,
+    );
+  }
+  process.stdout.write(`${body}\n`);
+  log(`PLAN-ONLY complete for ${tag} (nothing published).`);
+}
+
+/**
+ * The immutable identities of the evaluation artifacts this run uploaded. Recorded in the
+ * evidence so the npm publisher can refuse a rerun's replacement artifacts: names survive a
+ * rerun, ids do not (Codex finding on #3054).
+ */
+function evaluationArtifactIdentities(runId) {
+  const listing = ghJson([
+    "api",
+    `repos/{owner}/{repo}/actions/runs/${String(runId)}/artifacts?per_page=100`,
+  ]);
+  const artifacts = Array.isArray(listing.artifacts) ? listing.artifacts : [];
+  return EVALUATION_ARTIFACTS.map((name) => {
+    const matches = artifacts.filter((artifact) => artifact.name === name);
+    const id = matches[0]?.id;
+    if (matches.length !== 1 || !Number.isSafeInteger(id) || id <= 0) {
+      fail(
+        `run ${String(runId)} does not list exactly one artifact named ${name} with a usable id.`,
+      );
+    }
+    return { name, id };
+  });
+}
+
+/**
+ * The downloaded bytes, the listed artifact ids and the recorded attempt must all describe ONE
+ * execution. A rerun between the initial run view and this moment would hand the manifest the
+ * old attempt number with the rerun's artifacts and bytes — coherent-looking evidence about a
+ * mixture (Codex finding on #3055). Re-reading the attempt after everything else is gathered
+ * refuses that window.
+ */
+function assertRunAttemptUnchanged(runId, attempt) {
+  const view = ghJson(["run", "view", String(runId), "--json", "attempt"]);
+  if (view.attempt !== attempt) {
+    fail(
+      `run ${String(runId)} moved to attempt ${String(view.attempt)} while publishing (the evidence captured attempt ${String(attempt)}) — a rerun replaced the artifacts; restart the publish against the new run state.`,
+    );
+  }
+}
+
+/**
+ * Only a public release is ever promoted to npm `latest`, so only it needs the evidence the
+ * publisher re-verifies before promotion. A beta carries its checksums in the body and nothing
+ * more — it is never a promotion input.
+ */
+function evaluationManifestFor(input) {
+  if (!input.options.publicRelease) return undefined;
+  const artifacts = evaluationArtifactIdentities(input.runId);
+  assertRunAttemptUnchanged(input.runId, input.attempt);
+  return writeEvaluationManifest(input.workDir, {
+    releaseTag: input.tag,
+    sourceCommitSha: input.sourceCommitSha,
+    repository: input.repository,
+    workflowPath: WORKFLOW_PATH,
+    workflowRunId: input.runId,
+    workflowRunAttempt: input.attempt,
+    artifacts,
+    assets: input.digests,
+  });
+}
+
+function runPublishSteps(input) {
+  const { workDir, publishDir, options, repository, tag, runId, view, hasPendingDraft } = input;
+  const digests = publishedAssetDigests(publishDir);
+  const previousTag = previousBetaTag(tag, input.tags);
+  const body = releaseBody({
+    version: input.version,
+    tag,
+    repository,
+    checksums: checksumLines(digests),
+    sealVerification: verifyMacosSeal(publishDir, options.publicRelease),
+    commitSha: view.headSha,
+    runId,
+    previousTag,
+    publicRelease: options.publicRelease,
+  });
+  if (options.planOnly) {
+    reportPlan(body, tag, hasPendingDraft);
+    return;
+  }
+  ensureTagRefAtBuiltCommit(tag, view.headSha);
+  if (hasPendingDraft) deleteInterruptedDraft(tag);
+  createRelease({
+    workDir,
+    publishDir,
+    tag,
+    commitSha: view.headSha,
+    version: input.version,
+    body,
+    publicRelease: options.publicRelease,
+    evaluationManifestPath: evaluationManifestFor({
+      options,
+      workDir,
+      tag,
+      repository,
+      runId,
+      attempt: view.attempt,
+      digests,
+      sourceCommitSha: view.headSha,
+    }),
+  });
+  markPreviousSuperseded(previousTag, tag, repository);
+  publishDraftRelease(tag, view.headSha);
+  log(
+    `DONE - ${tag} is live with 4 verified assets${options.publicRelease ? " and is the latest release" : ""}.`,
+  );
+}
+
+const invokedDirectly =
+  process.argv[1] !== undefined && import.meta.url.endsWith(process.argv[1].replaceAll("\\", "/"));
+if (invokedDirectly) {
+  try {
+    runPortablePrerelease(process.argv.slice(2));
+  } catch (error) {
+    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  }
+}

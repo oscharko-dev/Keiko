@@ -99,6 +99,29 @@ aggregate whose eligibility is a separate decision (ADR-0161 D4, Consequences). 
 bounds and its proof are complete; the eligible set is the initial one Issue #2707 names. Widen it
 only with evidence, and record the widening here.
 
+## Post-activation observation, 2026-07-25 → 2026-08-25 (#2750)
+
+The original aggregate was withdrawn: a single GitHub workflow-runs listing is capped at 1,000
+records, so the stated classification breakdown could not establish that it covered the full
+window. The corrected, reproducible source envelope is generated per UTC day, which prevents that
+cap from silently truncating a high-volume day:
+
+```bash
+GH_TOKEN=... npm run report:infra-failure-observation -- --from 2026-07-25 --to 2026-08-25
+```
+
+The 2026-08-28 rerun returns **4,963** `workflow_run`-triggered observer records: **4,273** skipped
+because the source run was not a failure, and **690** where the observer job completed. Two manual
+`workflow_dispatch` executions are deliberately excluded: they are not production observations.
+The reporter outputs only dates and outcome counts; it does not read job logs or expose their
+contents.
+
+The Actions REST API does not surface a job summary's classifier verdict as structured data. This
+report therefore does **not** infer a `genuine`/`excluded-lane`/`already-attempted`/`infra`
+breakdown from observer completion counts. A future claim about those verdicts must commit a
+body-free, per-run decision export produced by the workflow itself. Until then, this window records
+the complete observer envelope only and does not authorize widening the eligible allowlist.
+
 ## When the signature drifts
 
 GitHub may reword a runner failure. The failure mode is safe by construction — an unrecognised

@@ -1,7 +1,7 @@
 /**
  * Monaco web-worker registration for the Keiko Editor (Issue #1193).
  *
- * monaco-editor 0.55.1 runs its editor service in a web worker selected through a
+ * monaco-editor 0.56.0 runs its editor service in a web worker selected through a
  * `self.MonacoEnvironment.getWorker(workerId, label)` factory. Per ADR-0042 D3/D3.6, Keiko ships
  * only Monaco's base editor worker **same-origin from the locally installed `monaco-editor`
  * package** using the ESM `new Worker(new URL(..., import.meta.url), { type: "module" })` pattern
@@ -26,7 +26,7 @@ export type MonacoWorkerEntry = (typeof MONACO_WORKER_ENTRIES)[number];
  * @internal Not part of the package public API (used by `./worker-entries.ts` and tests).
  */
 export const MONACO_WORKER_MODULES: Readonly<Record<MonacoWorkerEntry, string>> = {
-  editor: "monaco-editor/esm/vs/editor/editor.worker.js",
+  editor: "monaco-editor/editor/editor.worker.js",
 };
 
 /**

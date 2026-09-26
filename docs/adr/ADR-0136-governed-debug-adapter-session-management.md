@@ -39,7 +39,7 @@ The implementation must extend, not duplicate or weaken, these existing decision
 - ADR-0132's managed-LSP activation and ADR-0133's editor settings/control plane provide the
   revisioned, server-owned, explicit-opt-in precedents. The concrete human-debug composition points
   are `editorSettingsControlFactory.ts` and `deps.ts`, which inject the debug-specific deployment
-  provider. `autonomousDeliveryPolicy.ts` and `agentAuthorityRegistry.ts` contribute stricter-wins
+  provider. `gitDelivery/runBoundAuthority.ts` and `agentAuthorityRegistry.ts` contribute stricter-wins
   and Authority Envelope vocabulary only; correcting #2342's wording here avoids fabricating an
   editor-agent authority for a human-started session.
 - ADR-0042 D2/D3 require same-origin browser-to-BFF communication and unchanged CSP. ADR-0018
@@ -267,7 +267,7 @@ Effective debug activation is the fail-closed minimum of:
 Unknown, malformed, unavailable, stale, or inconsistent inputs deny activation. A legacy enable is a
 ceiling only and never substitutes for opt-in; a legacy disable denies. This composes ADR-0132's
 managed-LSP activation and ADR-0133's settings control plane without copying either store or policy
-mechanism. `autonomousDeliveryPolicy.ts` and `agentAuthorityRegistry.ts` are stricter-wins vocabulary
+mechanism. `gitDelivery/runBoundAuthority.ts` and `agentAuthorityRegistry.ts` are stricter-wins vocabulary
 and Authority Envelope precedents only; a human-started debug session must not fabricate or register
 an editor-agent authority record. `unavailable` and provider errors deny activation.
 

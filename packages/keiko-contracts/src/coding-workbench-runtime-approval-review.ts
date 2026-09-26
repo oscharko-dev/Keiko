@@ -1,3 +1,8 @@
+import {
+  isCodingRuntimeDeliveryReview,
+  type CodingRuntimeDeliveryReview,
+} from "./coding-runtime-delivery.js";
+import { isVerifiedCommitResult, type VerifiedCommitResult } from "./verified-commit.js";
 import type { CodingWorkbenchValidationResult } from "./coding-workbench.js";
 import {
   exactKeys,
@@ -44,8 +49,8 @@ export type CodingWorkbenchRuntimeApprovalReviewSession =
  * The paths are MODEL-SELECTED and therefore untrusted: they travel only over the authenticated
  * app-session channel, never through a general runtime snapshot or the SSE projection (#2644), they
  * are rendered as transient text and never as markup, and they are never written to durable
- * evidence. `patch content`, file bodies and model prose are NOT part of this contract and must
- * never be added to it — the reviewable unit is the path and the magnitude, not the bytes.
+ * evidence. Patch content and file bodies are not part of this contract. A verified commit also
+ * carries its bounded intended message for human review; that message stays on this channel.
  */
 export interface CodingWorkbenchRuntimePendingApprovalReview {
   /** Binds the review to the exact pending permission the operator is deciding about. */
@@ -58,6 +63,9 @@ export interface CodingWorkbenchRuntimePendingApprovalReview {
   readonly fileCount: number;
   readonly addedLines: number;
   readonly deletedLines: number;
+  /** Authenticated, transient human review only; never the durable runtime/event projection. */
+  readonly draftDelivery?: CodingRuntimeDeliveryReview;
+  readonly verifiedCommit?: { readonly result: VerifiedCommitResult; readonly message: string };
 }
 
 /**
@@ -111,7 +119,16 @@ function validatePendingApprovalReview(value: unknown, errors: string[]): void {
   errors.push(
     ...exactKeys(
       value,
-      ["requestId", "paths", "pathsTruncated", "fileCount", "addedLines", "deletedLines"],
+      [
+        "requestId",
+        "paths",
+        "pathsTruncated",
+        "fileCount",
+        "addedLines",
+        "deletedLines",
+        "verifiedCommit",
+        "draftDelivery",
+      ],
       "pendingApprovalReview",
     ),
   );
@@ -121,7 +138,8 @@ function validatePendingApprovalReview(value: unknown, errors: string[]): void {
     errors,
     CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
   );
-  validateReviewPaths(value.paths, errors);
+  if (value.draftDelivery === undefined) validateReviewPaths(value.paths, errors);
+  else validateDraftReview(value, errors);
   if (typeof value.pathsTruncated !== "boolean") {
     errors.push("pendingApprovalReview.pathsTruncated must be a boolean");
   }
@@ -129,6 +147,30 @@ function validatePendingApprovalReview(value: unknown, errors: string[]): void {
   validateReviewCount(value.addedLines, "addedLines", errors);
   validateReviewCount(value.deletedLines, "deletedLines", errors);
   validateReviewFileCountConsistency(value, errors);
+  if (value.verifiedCommit !== undefined) validateCommitReview(value, errors);
+}
+
+function validateCommitReview(pending: Record<string, unknown>, errors: string[]): void {
+  const value = pending.verifiedCommit;
+  if (!isRecord(value)) {
+    errors.push("verifiedCommit must be an object");
+    return;
+  }
+  errors.push(...exactKeys(value, ["result", "message"], "verifiedCommit"));
+  if (
+    !isVerifiedCommitResult(value.result) ||
+    value.result.status !== "approval-required" ||
+    value.result.proposalId !== pending.requestId
+  )
+    errors.push("verifiedCommit result must match the pending proposal");
+  if (!validateUntrustedDisplayText(value.message, 8192))
+    errors.push("verifiedCommit.message is invalid");
+  if (
+    typeof value.message !== "string" ||
+    value.message.trim().length === 0 ||
+    value.message.includes("\0")
+  )
+    errors.push("verifiedCommit.message is invalid");
 }
 
 /**
@@ -188,4 +230,21 @@ function validateReviewCount(value: unknown, key: string, errors: string[]): voi
   ) {
     errors.push(`pendingApprovalReview.${key} must be a bounded non-negative integer`);
   }
+}
+
+function validateDraftReview(pending: Record<string, unknown>, errors: string[]): void {
+  const value = pending.draftDelivery;
+  if (!isCodingRuntimeDeliveryReview(value) || value.record.proposalId !== pending.requestId)
+    errors.push("draftDelivery must match the exact pending proposal");
+  if (pending.verifiedCommit !== undefined)
+    errors.push("delivery review cannot carry commit authority");
+  if (
+    !Array.isArray(pending.paths) ||
+    pending.paths.length !== 0 ||
+    pending.pathsTruncated !== false ||
+    pending.fileCount !== 0 ||
+    pending.addedLines !== 0 ||
+    pending.deletedLines !== 0
+  )
+    errors.push("delivery review must not claim workspace edit counts");
 }

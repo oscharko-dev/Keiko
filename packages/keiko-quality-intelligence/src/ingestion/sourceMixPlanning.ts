@@ -10,7 +10,8 @@
 // Structurally inspired by Test Intelligence reference (TI) source-mix planning, but the
 // envelope-ref shape and the priority table are anchored on the Keiko contracts surface.
 
-import { compareStrings, type QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 
 type Envelope = QualityIntelligence.QualityIntelligenceSourceEnvelope;
 type EnvelopeId = QualityIntelligence.QualityIntelligenceSourceEnvelopeId;

@@ -401,7 +401,7 @@ describe("enum vocab + guards", () => {
   });
 
   it("drift markers", () => {
-    expect(TASK_WORKSPACE_DRIFT_MARKERS).toHaveLength(8);
+    expect(TASK_WORKSPACE_DRIFT_MARKERS).toHaveLength(10);
     for (const marker of TASK_WORKSPACE_DRIFT_MARKERS) {
       expect(isTaskWorkspaceDriftMarker(marker)).toBe(true);
     }
@@ -417,7 +417,7 @@ describe("enum vocab + guards", () => {
   });
 
   it("recovery strategies", () => {
-    expect(WORKSPACE_RECOVERY_STRATEGIES).toHaveLength(7);
+    expect(WORKSPACE_RECOVERY_STRATEGIES).toHaveLength(8);
     for (const strategy of WORKSPACE_RECOVERY_STRATEGIES) {
       expect(isWorkspaceRecoveryStrategy(strategy)).toBe(true);
     }

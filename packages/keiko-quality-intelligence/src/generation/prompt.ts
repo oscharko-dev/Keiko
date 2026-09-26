@@ -93,7 +93,16 @@ export const QI_TEST_DESIGN_RESPONSE_SCHEMA: Readonly<Record<string, unknown>> =
       maxItems: GENERATED_CANDIDATE_RESPONSE_MAX_ITEMS,
       items: {
         type: "object",
-        required: ["title", "steps", "expectedResults", "derivedFromEvidenceIndexes"],
+        required: [
+          "title",
+          "preconditions",
+          "steps",
+          "expectedResults",
+          "priority",
+          "riskClass",
+          "tags",
+          "derivedFromEvidenceIndexes",
+        ],
         additionalProperties: false,
         properties: {
           title: { type: "string", maxLength: GENERATED_CANDIDATE_TITLE_MAX_CHARS },

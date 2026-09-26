@@ -1,4 +1,18 @@
 import type { IncomingMessage } from "node:http";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  isErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+
+import { correlationIdOrUnknown } from "./correlation.js";
+import { errorKindOf, getServerLogger } from "./observability/index.js";
+import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
+
+// A raw Node header value: absent, a single value, or (for a repeated header) several. Shared by
+// every helper below that reads `Content-Type` off a request, so the union is spelled once.
+type ContentTypeHeaderValue = string | string[] | undefined;
+type RequestMediaType = "application/json" | "other" | "unspecified";
 
 export class RequestBodyTooLargeError extends Error {
   public constructor() {
@@ -53,6 +67,229 @@ function requestAlreadyTerminated(req: IncomingMessage): boolean {
   return req.readableAborted || req.destroyed || req.closed;
 }
 
+// The three outcomes this reader can reach, as an operator sees them. Only counts and a
+// classification cross the boundary: `receivedBytes` is the number of bytes observed before the
+// decision, never a byte of the body itself, and errors are reduced through `errorKindOf`,
+// `keikoStackFrames`, and `causeChain`, which never retain a message or an absolute path.
+interface BoundedBodyOutcomeFields {
+  readonly maxBytes: number;
+  readonly receivedBytes: number;
+}
+
+function boundedBodyFailureKind(error: unknown): string {
+  const failureKind = errorKindOf(error);
+  return isErrorKind(failureKind) ? failureKind : "unknown";
+}
+
+const HTTP_REQUEST_BODY_REJECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "http.request.body.rejected",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "bounded-request-body.logBodyRejected",
+  fields: {
+    maxBytes: { type: "integer", dataClass: "count", required: true },
+    receivedBytes: { type: "integer", dataClass: "count", required: true },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["limit-exceeded"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["http-request-body"],
+  proofIds: ["http.request.body.rejected.line"],
+  releaseImpact: "patch",
+});
+
+const HTTP_REQUEST_BODY_CANCELLED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "http.request.body.cancelled",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "bounded-request-body.logBodyCancelled",
+  fields: {
+    maxBytes: { type: "integer", dataClass: "count", required: true },
+    receivedBytes: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "timeline",
+  failureClasses: ["http-request-body"],
+  proofIds: ["http.request.body.cancelled.line"],
+  releaseImpact: "patch",
+});
+
+const HTTP_REQUEST_BODY_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "http.request.body.failed",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "bounded-request-body.logBodyFailed",
+  fields: {
+    maxBytes: { type: "integer", dataClass: "count", required: true },
+    receivedBytes: { type: "integer", dataClass: "count", required: true },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["http-request-body"],
+  proofIds: ["http.request.body.failed.line"],
+  releaseImpact: "patch",
+});
+
+const HTTP_REQUEST_BODY_RECEIVED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "http.request.body.received",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "bounded-request-body.logBodyReceived",
+  fields: {
+    contentType: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["application/json", "other", "unspecified"],
+    },
+    receivedBytes: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["http-request-body"],
+  proofIds: ["http.request.body.received.line"],
+  releaseImpact: "patch",
+});
+
+function logBodyRejected(
+  correlationId: string | undefined,
+  fields: BoundedBodyOutcomeFields,
+): void {
+  getServerLogger().warn(
+    activityLogEvent(
+      HTTP_REQUEST_BODY_REJECTED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId), errorKind: "invalid-request" },
+      { ...fields, reason: "limit-exceeded", completeness: "complete", loss: "none" },
+    ),
+  );
+}
+
+function logBodyCancelled(
+  correlationId: string | undefined,
+  fields: BoundedBodyOutcomeFields,
+): void {
+  // A client that disconnects mid-upload is routine, not a fault: it stays at debug so a busy
+  // server does not fill the log with it, while still being available when a stall is investigated.
+  getServerLogger().debug(() =>
+    activityLogEvent(
+      HTTP_REQUEST_BODY_CANCELLED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId), errorKind: "cancelled" },
+      { ...fields, completeness: "complete", loss: "none" },
+    ),
+  );
+}
+
+function logBodyFailed(
+  correlationId: string | undefined,
+  fields: BoundedBodyOutcomeFields,
+  error: unknown,
+): void {
+  const frames = keikoStackFrames(error);
+  const chain = causeChain(error);
+  getServerLogger().warn(
+    activityLogEvent(
+      HTTP_REQUEST_BODY_FAILED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId), errorKind: "internal" },
+      {
+        ...fields,
+        failureKind: boundedBodyFailureKind(error),
+        ...(frames.length === 0 ? {} : { frames }),
+        ...(chain.length === 0 ? {} : { causeChain: chain }),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+// `IncomingMessage.headers` is typed as always present, but several test doubles across the
+// codebase construct a stream cast to `IncomingMessage` without setting it — read defensively so a
+// caller that never populated it does not crash the very read it is trying to observe.
+function safeContentTypeHeader(req: IncomingMessage): ContentTypeHeaderValue {
+  const headers = req as { headers?: IncomingMessage["headers"] };
+  return headers.headers?.["content-type"];
+}
+
+// Every media type this server's body readers are ever legitimately reached with: `server.ts`'s
+// `isJsonRequest` gate already rejects any state-changing request whose Content-Type is not
+// exactly `application/json` with a 415 before a handler can read its body. Allowlisted rather
+// than left open, because stripping `; charset=...` parameters does not make an arbitrary
+// subtype safe to log — a client fully controls the whole header and can place sensitive data in
+// a syntactically valid subtype (e.g. `Content-Type: application/<secret>`) that never reaches
+// this gate at all.
+// Reduces a `Content-Type` header to its media type, discarding parameters (`; charset=utf-8`,
+// `; boundary=...`) that can carry caller-chosen, unbounded text, then maps it through the
+// allowlist above. A subtype this reader has no reason to ever see collapses to the fixed label
+// `"other"` rather than being retained verbatim in the diagnostic sink.
+function mediaTypeOf(header: ContentTypeHeaderValue): RequestMediaType {
+  const value = typeof header === "string" ? header : header?.[0];
+  const mediaType = value?.split(";", 1)[0]?.trim().toLowerCase();
+  if (mediaType === undefined || mediaType.length === 0) return "unspecified";
+  return mediaType === "application/json" ? mediaType : "other";
+}
+
+// The one success line this reader emits, at debug: per-request volume makes it unfit for info,
+// but it is what closes the loop for `keiko log:analyze` — the rejected/cancelled/failed paths
+// above already say what went wrong; this says what a body that just worked actually looked like.
+function logBodyReceived(
+  correlationId: string | undefined,
+  contentType: ContentTypeHeaderValue,
+  receivedBytes: number,
+): void {
+  getServerLogger().debug(() =>
+    activityLogEvent(
+      HTTP_REQUEST_BODY_RECEIVED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      {
+        contentType: mediaTypeOf(contentType),
+        receivedBytes,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
 class BoundedRequestBodyReader {
   private readonly chunks: Buffer[] = [];
   private total = 0;
@@ -62,9 +299,14 @@ class BoundedRequestBodyReader {
     private readonly req: IncomingMessage,
     private readonly maxBytes: number,
     private readonly signal: AbortSignal | undefined,
+    private readonly correlationId: string | undefined,
     private readonly resolve: (body: string) => void,
     private readonly reject: (error: Error) => void,
   ) {}
+
+  private get outcomeFields(): BoundedBodyOutcomeFields {
+    return { maxBytes: this.maxBytes, receivedBytes: this.total };
+  }
 
   public start(): void {
     this.signal?.addEventListener("abort", this.onCancellation, { once: true });
@@ -101,7 +343,16 @@ class BoundedRequestBodyReader {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     this.total += buffer.length;
     if (this.total > this.maxBytes) {
-      this.rejectOnce(new RequestBodyTooLargeError(), true, true);
+      // Fail closed on the size boundary. The line is emitted before `rejectOnce` clears the
+      // accumulated chunks so `receivedBytes` still reports what was actually observed, and only
+      // when this call is the one that settles the read — a late queued event must not log twice.
+      if (!this.settled) {
+        try {
+          logBodyRejected(this.correlationId, this.outcomeFields);
+        } finally {
+          this.rejectOnce(new RequestBodyTooLargeError(), true, true);
+        }
+      }
       return;
     }
     this.chunks.push(buffer);
@@ -111,15 +362,30 @@ class BoundedRequestBodyReader {
     if (this.settled) return;
     this.settled = true;
     this.cleanup();
-    this.resolve(Buffer.concat(this.chunks).toString("utf8"));
+    const body = Buffer.concat(this.chunks).toString("utf8");
+    try {
+      logBodyReceived(this.correlationId, safeContentTypeHeader(this.req), this.total);
+    } finally {
+      this.resolve(body);
+    }
   };
 
   private readonly onCancellation = (): void => {
-    this.rejectOnce(new RequestBodyCancelledError(), true, true);
+    if (this.settled) return;
+    try {
+      logBodyCancelled(this.correlationId, this.outcomeFields);
+    } finally {
+      this.rejectOnce(new RequestBodyCancelledError(), true, true);
+    }
   };
 
   private readonly onRequestError = (error: Error): void => {
-    this.rejectOnce(error, false, true);
+    if (this.settled) return;
+    try {
+      logBodyFailed(this.correlationId, this.outcomeFields, error);
+    } finally {
+      this.rejectOnce(error, false, true);
+    }
   };
 }
 
@@ -127,8 +393,58 @@ export function readBoundedRequestBody(
   req: IncomingMessage,
   maxBytes: number,
   signal?: AbortSignal,
+  // RB-6 continuity: when the caller already holds the request-scoped correlation id, the
+  // fail-closed rejection below is traceable to the same request as the 4xx the caller returns.
+  // Optional because most callers read the body from a helper that never received the RouteContext.
+  correlationId?: string,
 ): Promise<string> {
   return new Promise<string>((resolve, reject) => {
-    new BoundedRequestBodyReader(req, maxBytes, signal, resolve, reject).start();
+    new BoundedRequestBodyReader(req, maxBytes, signal, correlationId, resolve, reject).start();
   });
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+// #2902 audit finding 3: memory-handlers.ts, memory-conv-handlers.ts and memory-consolidation-
+// handlers.ts each hand-rolled a byte-identical "read a bounded body, then parse+validate it as a
+// JSON object" wrapper on top of `readBoundedRequestBody` — differing only in a catch-variable
+// name and which (identically-valued, 64_000) max-bytes constant they read. This is the ONE owner
+// for that wrapper layer; callers keep their own max-bytes constant (there is no reason to force
+// them to share one, only the logic), pass it in, and get back either the parsed JSON object or the
+// RouteResult (413/400) their handler should return as-is.
+export async function readJsonRequestBody(
+  req: IncomingMessage,
+  maxBytes: number,
+  correlationId?: string,
+): Promise<Record<string, unknown> | { readonly status: number; readonly body: unknown }> {
+  let raw: string;
+  try {
+    raw = await readBoundedRequestBody(req, maxBytes, undefined, correlationId);
+  } catch (error) {
+    if (error instanceof RequestBodyTooLargeError) {
+      return {
+        status: 413,
+        body: { error: { code: "PAYLOAD_TOO_LARGE", message: "Request body too large." } },
+      };
+    }
+    throw error;
+  }
+  let parsed: unknown;
+  try {
+    parsed = raw.length === 0 ? {} : JSON.parse(raw);
+  } catch {
+    return {
+      status: 400,
+      body: { error: { code: "BAD_REQUEST", message: "Request body is not valid JSON." } },
+    };
+  }
+  if (!isPlainRecord(parsed)) {
+    return {
+      status: 400,
+      body: { error: { code: "BAD_REQUEST", message: "Request body must be a JSON object." } },
+    };
+  }
+  return parsed;
 }

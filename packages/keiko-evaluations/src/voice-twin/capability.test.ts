@@ -10,7 +10,7 @@ import {
   VOICE_PROFILE_ALLOWED_MESSAGE_KINDS,
   VOICE_PROFILE_MEDIA_TRANSPORT,
   VOICE_PROFILE_NEGOTIATION_MODE,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
 import { describe, expect, it } from "vitest";
 import { deriveCapabilityCell } from "./capability.js";
 

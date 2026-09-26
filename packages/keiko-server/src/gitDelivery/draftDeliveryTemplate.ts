@@ -1,0 +1,398 @@
+import { join } from "node:path";
+import type { CodingWorkbenchIssueBinding } from "@oscharko-dev/keiko-contracts";
+import { validateCodingWorkbenchIssueBinding } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { hasIssueClosingDirective } from "@oscharko-dev/keiko-contracts/runtime/issue-closing-directive";
+import {
+  containsPrDescriptionMarker,
+  framePrDescriptionRegion,
+} from "@oscharko-dev/keiko-contracts/runtime/pr-description-region";
+import {
+  hasControlCharacter,
+  stripUnsafeFormatChars,
+} from "@oscharko-dev/keiko-contracts/runtime/text-safety";
+import { redact, sha256Hex } from "@oscharko-dev/keiko-security";
+import {
+  FileTooLargeError,
+  readWorkspaceFile,
+  type WorkspaceFs,
+  type WorkspaceInfo,
+  type WorkspaceDirEntry,
+} from "@oscharko-dev/keiko-workspace";
+import {
+  nodeWorkspaceFs,
+  WorkspaceDescriptorReadError,
+} from "@oscharko-dev/keiko-workspace/internal/fs";
+import { describeError } from "../diagnostics-log.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import type { ServerLogSink } from "../observability/server-log.js";
+import { MAX_LINKED_ISSUES } from "../coding-context/codingRuntimeIssueIntake.js";
+import {
+  renderDraftDeliveryChecks,
+  type DraftDeliveryChecks,
+  containsDraftChecksMarker,
+  frameDraftChecksSection,
+} from "./draftDeliveryChecks.js";
+
+const DRAFT_TEMPLATE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.draft-template",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitDelivery/draftDeliveryTemplate.resolveDraftDeliveryTemplate",
+  fields: {
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["ready", "blocked"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "invalid-issue-binding",
+        "title-invalid",
+        "issue-directive",
+        "managed-region-marker",
+        "template-ambiguous",
+        "template-too-large",
+        "template-unreadable",
+        "template-unsafe",
+        "template-unsupported",
+        "template-discovery-limit",
+      ],
+    },
+    titleDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    bodyDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    templateBytes: { type: "integer", dataClass: "count", required: false },
+    templateDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    relatedIssueCount: { type: "integer", dataClass: "count", required: false },
+    checksState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["absent", "listed", "unavailable"],
+    },
+    checkRowCount: { type: "integer", dataClass: "count", required: false },
+    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    code: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-draft-template"],
+  proofIds: ["git.draft-template.emitted-line"],
+  releaseImpact: "patch",
+});
+
+// Three fixed GitHub default locations, no recursive enumeration or model-selected template.
+// One sentinel entry makes discovery overflow explicit instead of selecting an arbitrary prefix.
+export const DRAFT_DELIVERY_TEMPLATE_DIRECTORY_MAX_ENTRIES = 1024;
+export const DRAFT_DELIVERY_TEMPLATE_MAX_BYTES = 32_768;
+const DEFAULT_NAME = /^pull_request_template(?:\..+)?$/iu;
+const SUPPORTED_NAME = /^pull_request_template(?:\.(?:md|txt))?$/iu;
+const DEFAULT_DIRECTORIES = [".github", "docs"] as const;
+
+export type DraftDeliveryTemplateFailure =
+  | "invalid-issue-binding"
+  | "title-invalid"
+  | "issue-directive"
+  | "managed-region-marker"
+  | "template-ambiguous"
+  | "template-too-large"
+  | "template-unreadable"
+  | "template-unsafe"
+  | "template-unsupported"
+  | "template-discovery-limit";
+
+export type DraftDeliveryTemplateResult =
+  | {
+      readonly status: "ready";
+      readonly title: string;
+      readonly titleDigest: string;
+      readonly body: string;
+      readonly bodyDigest: string;
+      readonly templateBytes: number;
+      readonly templateDigest?: string;
+      /** Rows of the rendered "Checks" section; absent when the input carried no checks. */
+      readonly checkRowCount?: number;
+    }
+  | { readonly status: "blocked"; readonly reason: DraftDeliveryTemplateFailure };
+
+export interface DraftDeliveryTemplateInput {
+  readonly workspace: WorkspaceInfo;
+  /** Accepted server-owned binding, never an issue number supplied by authored metadata. */
+  readonly issueBinding: CodingWorkbenchIssueBinding;
+  /**
+   * Same-repository issues the bound issue references and the authorized reader resolved (an epic's
+   * children). Rendered as a non-closing "Related issues" line: the bound issue alone is closed.
+   */
+  readonly relatedIssueNumbers?: readonly number[];
+  /**
+   * The run's verification history for the "Checks" section (ADR-0086 D9). Absent in compositions
+   * without a verified-commit context, which then carry no such section.
+   */
+  readonly verificationChecks?: DraftDeliveryChecks;
+  readonly title: string;
+  readonly correlationId: string;
+  readonly fs?: WorkspaceFs;
+  readonly activityLog?: ServerLogSink;
+}
+
+class TemplateResolutionError extends Error {
+  public constructor(public readonly reason: DraftDeliveryTemplateFailure) {
+    super(reason);
+    this.name = "TemplateResolutionError";
+  }
+}
+
+function validateAuthoredMetadata(text: string): void {
+  if (containsPrDescriptionMarker(text) || containsDraftChecksMarker(text))
+    throw new TemplateResolutionError("managed-region-marker");
+  if (hasIssueClosingDirective(text)) throw new TemplateResolutionError("issue-directive");
+}
+
+// Single source of truth for the bound: the intake's `MAX_LINKED_ISSUES` (the epic-children read at
+// `coding-context/codingRuntimeIssueIntake.ts`) and this template's related-issue line share the
+// exact same number, so the two can never drift apart (zero-test-coverage finding on PR #3452).
+export const DRAFT_DELIVERY_RELATED_ISSUES_MAX = MAX_LINKED_ISSUES;
+
+function validRelatedIssues(input: DraftDeliveryTemplateInput): boolean {
+  const related = input.relatedIssueNumbers ?? [];
+  return (
+    related.length <= DRAFT_DELIVERY_RELATED_ISSUES_MAX &&
+    new Set(related).size === related.length &&
+    related.every(
+      (issueNumber) =>
+        Number.isSafeInteger(issueNumber) &&
+        issueNumber > 0 &&
+        issueNumber !== input.issueBinding.issueNumber,
+    )
+  );
+}
+
+function issueReference(issueNumber: number): string {
+  return `#${String(issueNumber)}`;
+}
+
+function relatedIssuesLine(input: DraftDeliveryTemplateInput): string {
+  const related = input.relatedIssueNumbers ?? [];
+  if (related.length === 0) return "";
+  return `Related issues: ${related.map(issueReference).join(", ")}\n\n`;
+}
+
+function validateInput(input: DraftDeliveryTemplateInput): void {
+  if (!validateCodingWorkbenchIssueBinding(input.issueBinding).ok)
+    throw new TemplateResolutionError("invalid-issue-binding");
+  if (!validRelatedIssues(input)) throw new TemplateResolutionError("invalid-issue-binding");
+  const title = input.title;
+  if (
+    title.trim().length === 0 ||
+    title.length > 256 ||
+    hasControlCharacter(title) ||
+    stripUnsafeFormatChars(title) !== title ||
+    redact(title) !== title
+  )
+    throw new TemplateResolutionError("title-invalid");
+  validateAuthoredMetadata(title);
+}
+
+function boundedDirectory(fs: WorkspaceFs, absolutePath: string): readonly WorkspaceDirEntry[] {
+  const entries = fs.readDir(absolutePath, DRAFT_DELIVERY_TEMPLATE_DIRECTORY_MAX_ENTRIES + 1);
+  if (entries.length > DRAFT_DELIVERY_TEMPLATE_DIRECTORY_MAX_ENTRIES)
+    throw new TemplateResolutionError("template-discovery-limit");
+  return entries;
+}
+
+function directoryCandidates(entries: readonly WorkspaceDirEntry[], prefix: string): string[] {
+  const candidates: string[] = [];
+  for (const entry of entries) {
+    if (!DEFAULT_NAME.test(entry.name)) continue;
+    if (entry.isSymbolicLink) throw new TemplateResolutionError("template-unreadable");
+    // A named template collection is not a default. Selecting one requires a separate user choice.
+    if (entry.isDirectory && entry.name.toLowerCase() === "pull_request_template") continue;
+    if (!entry.isFile) throw new TemplateResolutionError("template-unreadable");
+    if (!SUPPORTED_NAME.test(entry.name)) throw new TemplateResolutionError("template-unsupported");
+    candidates.push(prefix.length === 0 ? entry.name : `${prefix}/${entry.name}`);
+  }
+  return candidates;
+}
+
+function resolveDefaultPath(fs: WorkspaceFs, root: string): string | undefined {
+  const entries = boundedDirectory(fs, root);
+  const candidates = directoryCandidates(entries, "");
+  for (const directory of DEFAULT_DIRECTORIES) {
+    const entry = entries.find((item) => item.name === directory);
+    if (entry === undefined) continue;
+    if (!entry.isDirectory || entry.isSymbolicLink)
+      throw new TemplateResolutionError("template-unreadable");
+    candidates.push(...directoryCandidates(boundedDirectory(fs, join(root, directory)), directory));
+  }
+  if (candidates.length > 1) throw new TemplateResolutionError("template-ambiguous");
+  return candidates[0];
+}
+
+function readTemplate(input: DraftDeliveryTemplateInput, fs: WorkspaceFs, path: string): string {
+  const descriptorRead = fs.readFileUtf8WithinRootSameDescriptor;
+  if (descriptorRead === undefined) throw new TemplateResolutionError("template-unreadable");
+  const canonicalRoot = fs.realPath(input.workspace.root);
+  let originalText: string | undefined;
+  // Keep the public governed deny/root/redaction guard chain and strengthen its descriptor read.
+  // A redacted or undecodable template is refused; it is never silently rewritten for publication.
+  const read = readWorkspaceFile(
+    input.workspace,
+    path,
+    { maxBytes: DRAFT_DELIVERY_TEMPLATE_MAX_BYTES },
+    {
+      ...fs,
+      readFileUtf8SameDescriptor: (absolutePath, maxBytes) => {
+        const value = descriptorRead.call(
+          fs,
+          canonicalRoot,
+          absolutePath,
+          maxBytes,
+          "reject",
+          "complete",
+        );
+        originalText = value.rawText;
+        return value;
+      },
+    },
+  );
+  if (
+    read.truncated ||
+    originalText === undefined ||
+    read.text !== originalText ||
+    read.text.includes("\ufffd") ||
+    Buffer.byteLength(read.text, "utf8") !== read.sizeBytes ||
+    stripUnsafeFormatChars(read.text) !== read.text
+  )
+    throw new TemplateResolutionError("template-unsafe");
+  validateAuthoredMetadata(read.text);
+  return read.text;
+}
+
+function renderedChecks(input: DraftDeliveryTemplateInput): {
+  readonly section: string;
+  readonly rowCount?: number;
+} {
+  if (input.verificationChecks === undefined) return { section: "" };
+  const rendered = renderDraftDeliveryChecks(input.verificationChecks);
+  return {
+    section: `${frameDraftChecksSection(rendered.markdown)}\n\n`,
+    rowCount: rendered.rowCount,
+  };
+}
+
+function compose(
+  input: DraftDeliveryTemplateInput,
+): Extract<DraftDeliveryTemplateResult, { status: "ready" }> {
+  validateInput(input);
+  const fs = input.fs ?? nodeWorkspaceFs;
+  const path = resolveDefaultPath(fs, input.workspace.root);
+  const template = path === undefined ? "" : readTemplate(input, fs, path);
+  if (resolveDefaultPath(fs, input.workspace.root) !== path)
+    throw new TemplateResolutionError("template-unreadable");
+  const prefix = template.length === 0 ? "" : `${template}\n\n`;
+  const checks = renderedChecks(input);
+  const body = `${prefix}Closes #${String(input.issueBinding.issueNumber)}\n\n${relatedIssuesLine(input)}${checks.section}${framePrDescriptionRegion("")}`;
+  return {
+    status: "ready",
+    title: input.title,
+    titleDigest: sha256Hex(input.title),
+    body,
+    bodyDigest: sha256Hex(body),
+    templateBytes: Buffer.byteLength(template, "utf8"),
+    ...(path === undefined ? {} : { templateDigest: sha256Hex(template) }),
+    ...(checks.rowCount === undefined ? {} : { checkRowCount: checks.rowCount }),
+  };
+}
+
+function failureReason(error: unknown): DraftDeliveryTemplateFailure {
+  if (error instanceof TemplateResolutionError) return error.reason;
+  if (
+    error instanceof FileTooLargeError ||
+    (error instanceof WorkspaceDescriptorReadError && error.reason === "too-large")
+  )
+    return "template-too-large";
+  return "template-unreadable";
+}
+
+function logReadyTemplate(
+  input: DraftDeliveryTemplateInput,
+  result: Extract<DraftDeliveryTemplateResult, { status: "ready" }>,
+): void {
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      DRAFT_TEMPLATE_OPERATION,
+      { correlationId: input.correlationId },
+      {
+        state: result.status,
+        titleDigest: result.titleDigest,
+        bodyDigest: result.bodyDigest,
+        templateBytes: result.templateBytes,
+        ...(result.templateDigest === undefined ? {} : { templateDigest: result.templateDigest }),
+        relatedIssueCount: input.relatedIssueNumbers?.length ?? 0,
+        checksState: input.verificationChecks?.status ?? "absent",
+        checkRowCount: result.checkRowCount ?? 0,
+      },
+    ),
+  );
+}
+
+function logBlockedTemplate(input: DraftDeliveryTemplateInput, error: unknown): void {
+  const detail = describeError(error);
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      DRAFT_TEMPLATE_OPERATION,
+      {
+        correlationId: input.correlationId,
+        level: "warn",
+        errorKind: error instanceof TemplateResolutionError ? "validation-failed" : "internal",
+      },
+      {
+        state: "blocked",
+        reason: failureReason(error),
+        errorClass: detail.errorClass,
+        ...(detail.code === undefined ? {} : { code: detail.code }),
+        ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+        ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+      },
+    ),
+  );
+}
+
+/** Pure local preparation only. The delivery owner must bind/recheck this exact payload at dispatch. */
+export function resolveDraftDeliveryTemplate(
+  input: DraftDeliveryTemplateInput,
+): DraftDeliveryTemplateResult {
+  try {
+    const result = compose(input);
+    logReadyTemplate(input, result);
+    return result;
+  } catch (error) {
+    const reason = failureReason(error);
+    logBlockedTemplate(input, error);
+    return { status: "blocked", reason };
+  }
+}

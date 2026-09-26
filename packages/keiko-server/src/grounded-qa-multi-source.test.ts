@@ -12,12 +12,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { IncomingMessage } from "node:http";
 
+import type { ContextLaneId } from "@oscharko-dev/keiko-contracts";
 import {
   CONTEXT_LANE_IDS,
   DEFAULT_CONTEXT_PROFILE,
   maxUtf8BytesForTokenBudget,
-  type ContextLaneId,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
@@ -41,6 +41,7 @@ import {
   buildLabeledAnswerCitations,
   buildConnectedScopes,
   buildMultiSourceGatewayMessages,
+  createMultiSourceAnswerer,
   mergeContextPackSummaries,
   runMultiSourceAsk,
   sourceLabels,
@@ -50,14 +51,24 @@ import {
   type MultiSourceAnswerer,
 } from "./grounded-qa-multi-source.js";
 import { buildGroundedAnswerContextPackSummary } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { normalizeGroundedAnswerPayload } from "./grounded-answer.js";
 import { attachContextBudgetDiagnostics } from "./grounded-context-diagnostics.js";
 import { createInMemoryUiStore, type Chat, type UiStore } from "./store/index.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
 import type { RouteContext } from "./routes.js";
 import type { OrchestratorInput, OrchestratorOutput } from "./grounded-orchestrator.js";
-import { RepoSearchUnsupportedFileError } from "@oscharko-dev/keiko-workspace";
-import { ContextOverflowError } from "@oscharko-dev/keiko-model-gateway";
+import {
+  PathDeniedError,
+  RepoSearchUnsupportedFileError,
+  WorkspaceNotFoundError,
+} from "@oscharko-dev/keiko-workspace";
+import {
+  ContextOverflowError,
+  type GatewayCallRequest,
+  type NormalizedResponse,
+} from "@oscharko-dev/keiko-model-gateway";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
 
 const NOW = 1_700_000_000_000;
 const CHAT_MODEL = "example-chat-model";
@@ -97,6 +108,7 @@ function fakeRes(): RouteContext["res"] {
 
 function ctx(body: string, res: RouteContext["res"] = fakeRes()): RouteContext {
   return {
+    correlationId: undefined,
     req: fakeReq(body),
     res,
     params: {},
@@ -884,6 +896,89 @@ describe("handleGroundedAsk multi-source branch (Epic #532)", () => {
     expect(skippedClaims).toContain("not readable");
   });
 
+  it("keeps a skipped source root denial path-free while healthy sources answer", async () => {
+    const healthy: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/a.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("healthy"),
+    };
+    const denied: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/denied.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("denied"),
+    };
+    const secondHealthy: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/c.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("second-healthy"),
+    };
+    const chatId = makeChat([healthy, denied, secondHealthy]);
+    const sensitivePath = join(tmp, ".aws", "customer-root");
+    const byPath = new Map<string, ConnectedContextPack>([
+      ["src/a.ts", scopePack("src/a.ts", 0.8, "a")],
+      ["src/c.ts", scopePack("src/c.ts", 0.7, "c")],
+    ]);
+    const retriever: GroundedRetriever = (input) =>
+      input.scope.relativePaths[0] === "src/denied.ts"
+        ? Promise.reject(new PathDeniedError(`denied source root: ${sensitivePath}`, sensitivePath))
+        : packPerScope(byPath)(input);
+
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "explain all" })),
+      recordingDeps([]),
+      undefined,
+      seam(retriever, constAnswerer("partial answer [src/a.ts] [src/c.ts]", { count: 0 })),
+    );
+
+    expect(result.status).toBe(200);
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    const serialized = JSON.stringify(answer);
+    expect(serialized).toContain("The workspace path is denied by policy.");
+    expect(serialized).not.toContain(sensitivePath);
+    expect(serialized).not.toContain("customer-root");
+  });
+
+  it("skips a root that disappears after admission while a healthy source answers", async () => {
+    const healthy: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/a.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("healthy-after-admission"),
+    };
+    const disappeared: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/gone.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("gone-after-admission"),
+    };
+    const chatId = makeChat([healthy, disappeared]);
+    const sensitivePath = join(tmp, ".aws", "gone-after-admission");
+    const healthyPack = scopePack("src/a.ts", 0.8, "a");
+    const retriever: GroundedRetriever = (input) =>
+      input.scope.relativePaths[0] === "src/gone.ts"
+        ? Promise.reject(
+            new WorkspaceNotFoundError("root disappeared", sensitivePath, [sensitivePath]),
+          )
+        : Promise.resolve({ pack: healthyPack, elapsedMs: 11, plan: { state: "ready" } as never });
+
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "explain all" })),
+      recordingDeps([]),
+      undefined,
+      seam(retriever, constAnswerer("healthy answer [src/a.ts]", { count: 0 })),
+    );
+
+    expect(result.status).toBe(200);
+    const answer = asConnectedAnswer(result.body as GroundedAnswer);
+    const serialized = JSON.stringify(answer);
+    expect(serialized).toContain("Connected scope root is not accessible.");
+    expect(serialized).not.toContain(sensitivePath);
+    expect(serialized).not.toContain(".aws");
+  });
+
   it("merges two sources: citations carry BOTH labels, omitted/usage/budget are summed", async () => {
     const scopeA: ChatConnectedScope = {
       kind: "directory",
@@ -1568,5 +1663,118 @@ describe("handleGroundedAsk folder ask-path source cap (Release 0.2.0)", () => {
     expect(retrieved).toHaveLength(16);
     const answer = asConnectedAnswer(result.body as GroundedAnswer);
     expect(answer.uncertainty.some((u) => u.kind === "source-skipped")).toBe(false);
+  });
+});
+
+// ─── KEIKO-0237 (#2901) ─────────────────────────────────────────────────────
+// Pin the second call site the hybrid-side test does not cover: multi-source entailment
+// forwards `retrieved.map(source => source.pack)` to the judge. Without an assertion here,
+// a regression that passed `[]` or the wrong pack set to the multi-source stage would still
+// leave the finding's coverage bar green through the hybrid test alone (Codex, #3201).
+describe("multi-source entailment forwards the retrieved packs (KEIKO-0237)", () => {
+  it("hands the judge the pack set the retriever returned, in scope order", async () => {
+    const scopes: readonly ChatConnectedScope[] = [
+      {
+        kind: "directory",
+        relativePaths: ["src/alpha.ts"],
+        connectedAtMs: NOW,
+        root: tempRoot("ms-a"),
+      },
+      {
+        kind: "directory",
+        relativePaths: ["src/beta.ts"],
+        connectedAtMs: NOW,
+        root: tempRoot("ms-b"),
+      },
+    ];
+    const chatId = makeChat(scopes);
+    const byPath = new Map<string, ConnectedContextPack>([
+      ["src/alpha.ts", scopePack("src/alpha.ts", 0.6, "atom-alpha")],
+      ["src/beta.ts", scopePack("src/beta.ts", 0.6, "atom-beta")],
+    ]);
+
+    const observedPacks: (readonly ConnectedContextPack[])[] = [];
+    const observedCapsulesPerCall: number[] = [];
+    const seenAnswerer = { count: 0 };
+
+    const result = await handleGroundedAsk(
+      ctx(JSON.stringify({ chatId, content: "trace packs" })),
+      recordingDeps([]),
+      undefined,
+      {
+        retriever: packPerScope(byPath),
+        answerer: constAnswerer("multi-source sentinel", seenAnswerer),
+        entailmentStageFactory: (input) => {
+          observedCapsulesPerCall.push(input.capsules.length);
+          return {
+            evaluate: (
+              _answer: string,
+              packs: readonly ConnectedContextPack[],
+              _now: number,
+            ): Promise<readonly never[]> => {
+              observedPacks.push(packs);
+              return Promise.resolve([]);
+            },
+            evaluateNumeric: (): Promise<readonly never[]> => Promise.resolve([]),
+          };
+        },
+      },
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(observedPacks).toHaveLength(1);
+    const forwardedIds = (observedPacks[0] ?? []).map((pack) => pack.stableId);
+    expect(forwardedIds).toEqual(["pack-atom-alpha", "pack-atom-beta"]);
+    // Multi-source is folder-only; the stage always sees an empty capsule list here (folder scopes
+    // carry no capsule). Pin that explicitly so a regression that starts forwarding capsules
+    // through the multi-source branch is visible.
+    expect(observedCapsulesPerCall).toEqual([0]);
+  });
+});
+
+// ─── Correlation threading (ADR-0173 D5) ──────────────────────────────────────
+//
+// createMultiSourceAnswerer is the real model.call site the tests above bypass via an injected
+// MultiSourceSeam.answerer; unit-test it directly against a fake ModelPort that records the request.
+describe("createMultiSourceAnswerer correlation threading", () => {
+  it("stamps the caller's correlation id into the Gateway double's GatewayCallRequest.logContext", async () => {
+    const seenRequests: GatewayCallRequest[] = [];
+    const recordingModel: ModelPort = {
+      call(request): Promise<NormalizedResponse> {
+        seenRequests.push(request);
+        return Promise.resolve({
+          modelId: request.modelId,
+          content: "multi-source answer",
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "multi-source-answerer-test",
+            promptTokens: 3,
+            completionTokens: 2,
+            latencyMs: 1,
+            costClass: "medium",
+          },
+        });
+      },
+    };
+
+    const answerer = createMultiSourceAnswerer(
+      recordingModel,
+      "example-chat-model",
+      buildRedactor({}),
+      new AbortController().signal,
+      "cid-multi-source-answerer-000001",
+    );
+    // `MultiSourceAnswerer`'s declared return type is `Promise<GroundedAnswerPayload>` (a
+    // `string | GroundedAnswerResult` union), even though `createMultiSourceAnswerer`'s own
+    // implementation always resolves the object branch — `normalizeGroundedAnswerPayload` is the
+    // SAME narrowing every production caller already applies to this result
+    // (grounded-qa-multi-source.ts, grounded-orchestrator.ts), not a test-only cast.
+    const result = normalizeGroundedAnswerPayload(await answerer("What is alpha?", []));
+
+    expect(result.content).toBe("multi-source answer");
+    expect(seenRequests).toHaveLength(1);
+    expect(seenRequests[0]?.logContext?.correlationId).toBe("cid-multi-source-answerer-000001");
   });
 });

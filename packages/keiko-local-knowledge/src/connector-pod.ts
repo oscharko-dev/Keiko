@@ -29,21 +29,21 @@
 
 import { randomUUID } from "node:crypto";
 
-import {
-  ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
-  htmlManualReachableFilesScope,
-  isKnowledgePodEvidenceSafeText,
-  standardPodModelUsePolicy,
-  type AtlassianSyncChangeCounts,
-  type AtlassianSyncChangeSummary,
-  type AtlassianSyncFailureReason,
-  type AtlassianSyncTerminalStatus,
-  type EmbeddingModelIdentity,
-  type KnowledgeCapsuleId,
-  type KnowledgePodModelUsePolicy,
-  type KnowledgePodSummary,
-  type KnowledgeSourceId,
+import type {
+  AtlassianSyncChangeCounts,
+  AtlassianSyncChangeSummary,
+  AtlassianSyncFailureReason,
+  AtlassianSyncTerminalStatus,
+  EmbeddingModelIdentity,
+  KnowledgeCapsuleId,
+  KnowledgePodModelUsePolicy,
+  KnowledgePodSummary,
+  KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
+import { ATLASSIAN_CONNECTOR_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { htmlManualReachableFilesScope } from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
+import { isKnowledgePodEvidenceSafeText } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods";
+import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
 
 import { createCapsule, getCapsule, updateCapsuleState } from "./capsule-lifecycle.js";
@@ -76,6 +76,7 @@ import {
   updateSourceScopeInCapsule,
 } from "./source-lifecycle.js";
 import type { KnowledgeStore } from "./store.js";
+import type { KnowledgeLogSink } from "./knowledge-log.js";
 
 // Synthetic absolute mount root (never touches disk; the in-memory page fs serves the bytes).
 const CONNECTOR_VIRTUAL_ROOT_PREFIX = "/keiko-connector-pod";
@@ -87,6 +88,7 @@ export interface ConnectorPodDeps {
   readonly now?: (() => number) | undefined;
   readonly idSource?: (() => string) | undefined;
   readonly auditSink?: AuditEventSink | undefined;
+  readonly logSink?: KnowledgeLogSink | undefined;
 }
 
 export interface ConnectorPodIndexingDeps extends ConnectorPodDeps {
@@ -301,6 +303,7 @@ function runConnectorIndexing(
     store: deps.store,
     ...(retainUndiscoveredDocuments ? { retainUndiscoveredDocuments: true } : {}),
     ...(deps.auditSink !== undefined ? { auditSink: deps.auditSink } : {}),
+    ...(deps.logSink !== undefined ? { logSink: deps.logSink } : {}),
     ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
     ...(deps.now !== undefined ? { now: deps.now } : {}),
     ...(deps.idSource !== undefined ? { idSource: deps.idSource } : {}),
@@ -555,6 +558,14 @@ export async function applyConnectorSyncRun(
   const prior = readConnectorItemFingerprints(deps.store, deps.capsuleId, deps.sourceId);
   const runId = input.runId ?? deps.idSource?.() ?? randomUUID();
   const carriedMode = (input.carriedItemKeys ?? []).length > 0;
+  // KEIKO-0197: capture whether the pod's source row was attached BEFORE this run. On a
+  // zero-items path indexAppliedItems returns early without calling
+  // ensureConnectorSourceAttached, so the empty-items branch of finalizeAppliedLifecycle
+  // must decide against the state that existed BEFORE the run — anything computed after
+  // indexing would see a source attached by this same run, defeating the check.
+  const sourceAlreadyAttached = listCapsuleSources(deps.store, deps.capsuleId).some(
+    (source) => source.id === deps.sourceId,
+  );
   const artifacts = await indexAppliedItems(deps, metadata, rootPath, input.items, carriedMode);
   const changes = buildAppliedChanges(prior, input, artifacts.indexing);
   const outcome = appliedOutcome(changes);
@@ -575,7 +586,7 @@ export async function applyConnectorSyncRun(
     appliedFailureReason(changes),
     applied ? input.providerWatermark : undefined,
   );
-  finalizeAppliedLifecycle(deps, outcome, input.items.length);
+  finalizeAppliedLifecycle(deps, outcome, input.items.length, sourceAlreadyAttached);
   return {
     changeSummary: summary,
     ...(artifacts.indexing === undefined ? {} : { indexing: artifacts.indexing }),
@@ -586,12 +597,20 @@ export async function applyConnectorSyncRun(
 // An applied run with zero fetched items never ran the indexing job (which is what normally
 // advances the capsule out of draft), so lifecycle is finalized explicitly; an indexing run
 // already set ready/error itself (orchestrator terminal transition).
+//
+// KEIKO-0197: gate the itemCount === 0 → 'ready' promotion on the source having been attached
+// BEFORE this run. Without that guard, a bare-shell pod whose upstream is genuinely empty on
+// its very first sync (empty Confluence space, unmatched Jira JQL) would be promoted to
+// 'ready' with zero attached capsule_sources rows — mirroring manual-pod.ts's
+// attachManualSource behaviour of leaving an empty crawl in 'draft'.
 function finalizeAppliedLifecycle(
   deps: ConnectorPodDeps,
   outcome: AtlassianSyncTerminalStatus,
   itemCount: number,
+  sourceAlreadyAttached: boolean,
 ): void {
   if (itemCount > 0) return;
+  if (!sourceAlreadyAttached) return;
   if (outcome === "succeeded" || outcome === "partial") {
     updateCapsuleState(deps.store, deps.capsuleId, "ready");
   }

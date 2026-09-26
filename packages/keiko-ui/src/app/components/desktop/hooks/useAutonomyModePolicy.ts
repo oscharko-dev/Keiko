@@ -1,12 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  resolveEffectiveCodingWorkbenchMode,
-  type CodingWorkbenchMode,
-  type MemoryAutonomyPolicyWire,
-} from "@oscharko-dev/keiko-contracts";
-import { loadMemoryAutonomyMode, persistMemoryAutonomyMode } from "@/lib/memory-api";
+import type { CodingWorkbenchMode, MemoryAutonomyPolicyWire } from "@oscharko-dev/keiko-contracts";
+import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { loadMemoryAutonomyMode, persistMemoryAutonomyMode } from "@/lib/memory-session-api";
 import {
   currentConversationMemoryModeRevision,
   useConversationMemorySettings,

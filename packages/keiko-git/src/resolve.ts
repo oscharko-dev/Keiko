@@ -93,7 +93,17 @@ export async function resolveGitMembership(
 // recognized" reports. Linux default filesystems are byte-sensitive: NFC and NFD spellings are
 // genuinely different directories there, so normalizing would make this guard more permissive —
 // compare exactly on every other platform.
-function comparablePath(value: string): string {
+/**
+ * The platform's filesystem identity spelling for a path. Case-insensitive and
+ * normalization-insensitive on darwin (APFS) and win32 (NTFS); byte-exact everywhere else.
+ *
+ * Exported because path identity is decided here: any caller that keys a per-file resource —
+ * a lock, a cache, a mutex queue — must agree with `containsPath` on what "the same file" means,
+ * or two spellings of one file end up in two buckets. `realpath()` does NOT settle this: on macOS
+ * it preserves the caller's casing, so realpath("Foo.ts") and realpath("foo.ts") return different
+ * strings for the same inode.
+ */
+export function comparablePath(value: string): string {
   return process.platform === "win32" || process.platform === "darwin"
     ? value.normalize("NFC").toLowerCase()
     : value;

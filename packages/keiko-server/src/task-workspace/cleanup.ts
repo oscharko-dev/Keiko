@@ -15,33 +15,43 @@
 // lifecycle evidence as provisioning/reconciliation/repair.
 
 import { existsSync, readdirSync, realpathSync, rmSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
+import type {
+  TaskWorkspaceLifecycleState,
+  WorkspaceCleanupRefusalReason,
+  WorkspaceEventType,
+  WorkspaceInfo,
+  WorkspaceInstance,
+  WorkspaceLock,
+} from "@oscharko-dev/keiko-contracts";
 import {
   TASK_WORKSPACE_SCHEMA_VERSION,
   evaluateWorkspaceCleanupSafety,
   isCleanupEligibleLifecycleState,
   validateTaskWorkspaceTransition,
-  type TaskWorkspaceLifecycleState,
-  type WorkspaceCleanupRefusalReason,
-  type WorkspaceEventType,
-  type WorkspaceInstance,
-  type WorkspaceLock,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 import { deriveRepositoryId } from "./naming.js";
 import {
   assertManagedTargetContained,
   isManagedRootOwned,
   isManagedTargetContained,
+  listManagedRepositoryIds,
 } from "./managed-root.js";
 import { deriveOrphanId } from "./health.js";
 import { assertSafeFieldValue } from "./field-safety.js";
 import { gatherInstanceReconciliationFacts } from "./reconciliation.js";
 import { lockIsLive, makeWorkspaceLock, resolveLockTtl } from "./locks.js";
 import { workspaceKey } from "./mutex.js";
-import { TaskWorkspaceError } from "./errors.js";
+import type { GitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import { asRepositoryUnreachable, TaskWorkspaceError } from "./errors.js";
+import { correlationIdOrUnknown } from "../correlation.js";
 import {
-  appendWorkspaceLifecycleEvidence,
+  logWorkspaceLifecycleFailure,
+  recordWorkspaceLifecycle,
+  runWithWorkspaceLifecycleFailureLogging,
+} from "./activity-log.js";
+import {
   buildWorkspaceEvent,
   WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
   type WorkspaceLifecycleOutcome,
@@ -55,12 +65,21 @@ import type {
   WorkspaceOrphanCleanupResult,
   WorkspaceOrphanRefusal,
 } from "./types.js";
+import {
+  resolveLifecycleManagedWorkspaceRootAccess,
+  type WorkspaceRootAccess,
+} from "./workspace-root-access.js";
 
 const MAX_FIELD_LENGTH = 512;
 
 interface CleanupCtx {
   readonly deps: WorkspaceCleanupServiceDeps;
   readonly lockTtlMs: number;
+  // The triggering operation's correlation id, so the worktree adapter's termination evidence joins
+  // the same timeline as every other line of that operation (AGENTS.md §8). It lives on the CTX, not
+  // in each helper's signature: the ctx is already threaded everywhere the adapter is built, so this
+  // needed no new parameter on any private function (PR #3355 review, P2).
+  readonly correlationId: string;
 }
 
 interface OrphanCleanupOutcome {
@@ -103,32 +122,40 @@ export function safelyRemoveManagedPath(managedRoot: string, target: string): vo
   rmSync(targetReal, { recursive: true, force: false });
 }
 
-function emit(
-  ctx: CleanupCtx,
-  input: {
-    readonly outcome: WorkspaceLifecycleOutcome;
-    readonly type: WorkspaceEventType;
-    readonly workspaceId: string;
-    readonly taskId: string;
-    readonly correlationId: string;
-    readonly fromState?: TaskWorkspaceLifecycleState | undefined;
-    readonly toState?: TaskWorkspaceLifecycleState | undefined;
-    readonly nowMs: number;
-  },
-): void {
+interface EmitCleanupInput {
+  readonly outcome: WorkspaceLifecycleOutcome;
+  readonly type: WorkspaceEventType;
+  readonly workspaceId: string;
+  readonly taskId: string;
+  // The triggering request's own correlation id (WorkspaceCleanupRequest /
+  // WorkspaceOrphanCleanupRequest .correlationId). Falls back to UNKNOWN_CORRELATION_ID — never the
+  // workspace's own persisted identity, which would make every cleanup event look like the same
+  // operation regardless of which HTTP request actually triggered it (AGENTS.md §8).
+  readonly correlationId: string | undefined;
+  readonly fromState?: TaskWorkspaceLifecycleState | undefined;
+  readonly toState?: TaskWorkspaceLifecycleState | undefined;
+  readonly nowMs: number;
+  // The live safety gate's own refusal reason (WorkspaceCleanupRefusalReason), when this line is a
+  // `cleanup-refused` outcome — carried into the activity-log line's `errorKind` so an agent can tell
+  // WHY a removal was refused, not merely that it was.
+  readonly errorCode?: string | undefined;
+}
+
+function emit(ctx: CleanupCtx, input: EmitCleanupInput): void {
+  const correlationId = correlationIdOrUnknown(input.correlationId);
   const event = buildWorkspaceEvent({
     eventId: ctx.deps.newId(),
     workspaceId: input.workspaceId,
     taskId: input.taskId,
     type: input.type,
     at: isoFrom(input.nowMs),
-    correlationId: input.correlationId,
+    correlationId,
     ...(input.fromState !== undefined ? { fromState: input.fromState } : {}),
     ...(input.toState !== undefined ? { toState: input.toState } : {}),
   });
-  appendWorkspaceLifecycleEvidence(
-    ctx.deps.evidenceStore,
-    {
+  recordWorkspaceLifecycle(ctx.deps, {
+    evidenceStore: ctx.deps.evidenceStore,
+    record: {
       kind: WORKSPACE_LIFECYCLE_EVIDENCE_KIND,
       schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
       recordedAt: input.nowMs,
@@ -139,8 +166,9 @@ function emit(
       worktreeCount: 0,
       event,
     },
-    ctx.deps.redactString,
-  );
+    redactString: ctx.deps.redactString,
+    errorCode: input.errorCode,
+  });
 }
 
 function loadInstance(ctx: CleanupCtx, workspaceId: string): WorkspaceInstance {
@@ -235,7 +263,7 @@ function requestCleanupImpl(
     type: "cleanup-requested",
     workspaceId: persisted.workspaceId,
     taskId: persisted.taskId,
-    correlationId: persisted.auditCorrelationId,
+    correlationId: request.correlationId,
     fromState,
     toState: persisted.lifecycleState,
     nowMs,
@@ -252,21 +280,81 @@ function requestCleanupImpl(
 // leaves the directory and its uncommitted/untracked files on disk while git refuses to read it) is
 // treated as DIRTY. A structurally-broken tree that may still hold real work is therefore refused
 // rather than force-removed (SC4). A missing worktree (nothing to lose) probes not-dirty.
+// The dirty probe is a REAL `git status`, never a denial in disguise — but only for the two verdicts
+// that leave the worktree's authenticity OPEN: a registration under the retired identity rule, or a
+// volume without creation times. Those rows are probed on the same contained, ownership-gated path
+// an orphan directory is probed on, and the denial is logged with this cleanup's correlation.
+// Converting the denial into "dirty" had stranded every such terminal row for good (#3376 review
+// P1). A DISPROVEN identity — a replaced tree, a path or kind failure — stays fail-closed: the row
+// is refused as ownership-unproven, because deleting whatever now occupies the registered path would
+// spend this row's operator approval on a tree Keiko has proven is not the one it registered.
+interface CleanupDirtyProbe {
+  readonly worktreeDirty: boolean;
+  // False when Keiko cannot vouch for the tree at all (disproven identity, adapter failure).
+  readonly proven: boolean;
+}
+
 async function probeCleanupDirty(
   ctx: CleanupCtx,
   worktreePath: string,
   probeable: boolean,
-): Promise<boolean> {
-  if (!probeable) return false;
-  const status = await ctx.deps.createAdapter(detectWorkspaceAt(worktreePath)).worktreeStatus();
-  return !status.ok || status.dirty;
+  registered: boolean,
+  unprovenNotDisproven = false,
+): Promise<CleanupDirtyProbe> {
+  if (!probeable) return { worktreeDirty: false, proven: true };
+  const access = registered
+    ? resolveLifecycleManagedWorkspaceRootAccess(ctx.deps, worktreePath, {
+        activityLog: ctx.deps.activityLog,
+        correlationId: ctx.correlationId,
+      })
+    : undefined;
+  if (registered && access === undefined && !unprovenNotDisproven) {
+    return { worktreeDirty: false, proven: false };
+  }
+  return statusProbe(ctx, worktreePath, access);
+}
+
+async function statusProbe(
+  ctx: CleanupCtx,
+  worktreePath: string,
+  access: WorkspaceRootAccess | undefined,
+): Promise<CleanupDirtyProbe> {
+  const workspace =
+    access === undefined
+      ? workspaceInfo(worktreePath)
+      : detectWorkspaceAt(access.canonicalRoot, access.fs);
+  try {
+    const status = await ctx.deps
+      .createAdapter(workspace, ctx.correlationId, access?.fs)
+      .worktreeStatus();
+    return { worktreeDirty: !status.ok || status.dirty, proven: true };
+  } catch {
+    return { worktreeDirty: true, proven: true };
+  }
+}
+
+function workspaceInfo(root: string): WorkspaceInfo {
+  return {
+    root,
+    selectedRoot: root,
+    name: undefined,
+    version: undefined,
+    testFramework: "unknown",
+    sourceDirs: [],
+    testDirs: [],
+    languages: [],
+    ignoreLines: [],
+  };
 }
 
 async function evaluateLiveCleanupSafety(
   ctx: CleanupCtx,
   instance: WorkspaceInstance,
 ): Promise<{ readonly allowed: boolean; readonly refusalReason?: WorkspaceCleanupRefusalReason }> {
-  const adapter = ctx.deps.createAdapter(detectWorkspaceAt(instance.repositoryRoot));
+  const adapter = ctx.deps.createAdapter(
+    detectWorkspaceAt(instance.repositoryRoot),
+    ctx.correlationId,
+  );
   const worktrees = await adapter.listWorktrees();
   const { facts } = await gatherInstanceReconciliationFacts(
     ctx.deps,
@@ -275,17 +363,19 @@ async function evaluateLiveCleanupSafety(
     instance,
     ctx.deps.now(),
   );
-  const worktreeDirty = await probeCleanupDirty(
+  const probe = await probeCleanupDirty(
     ctx,
     instance.managedWorktreePath,
     facts.worktreeDirExists && facts.pathContained,
+    true,
+    facts.gitdirIdentitySchemaRetired === true || facts.gitdirIdentityUnsupported === true,
   );
   return evaluateWorkspaceCleanupSafety({
     lifecycleState: instance.lifecycleState,
     hasRecord: true,
     pathContained: facts.pathContained,
-    ownershipProven: isManagedRootOwned(ctx.deps.managedRoot),
-    worktreeDirty,
+    ownershipProven: isManagedRootOwned(ctx.deps.managedRoot) && probe.proven,
+    worktreeDirty: probe.worktreeDirty,
     lockLive: facts.lockLive,
   });
 }
@@ -300,21 +390,55 @@ async function removeManagedWorktree(
   worktreePath: string,
 ): Promise<RemovalOutcome> {
   try {
-    const adapter = ctx.deps.createAdapter(detectWorkspaceAt(repositoryRoot));
-    const removal = await adapter.removeWorktree({ worktreePath, force: true });
+    const adapter = ctx.deps.createAdapter(detectWorkspaceAt(repositoryRoot), ctx.correlationId);
+    // Never `--force`: the safety gate proved the tree clean a moment ago, and git's own refusal of
+    // a worktree that holds modified or untracked files is the re-check that closes the gap between
+    // that proof and the removal (#3376 review). A refusal here is a `worktree-dirty` outcome, and
+    // the tree stays exactly as it is.
+    const removal = await adapter.removeWorktree({ worktreePath, force: false });
     await adapter.pruneWorktrees();
     if (existsSync(worktreePath)) {
-      const dirty = await probeCleanupDirty(ctx, worktreePath, true);
-      if (dirty || !removal.ok) {
+      // git refused (modified or untracked files arrived after the gate): the surviving tree is
+      // re-probed on the terms it was admitted on and reported dirty. A tree that survives a
+      // SUCCESSFUL removal is git's leftover or another actor's replacement, and the fallback deletes
+      // it only when ownership is proven again — never on the unproven fallback, which would hand a
+      // clean replacement to the recursive delete (#3376 review).
+      const probe = await probeCleanupDirty(ctx, worktreePath, true, true, !removal.ok);
+      if (!removal.ok || probe.worktreeDirty) {
         return { removed: false, refusalReason: "worktree-dirty" };
       }
+      if (!probe.proven) return { removed: false, refusalReason: "ownership-unproven" };
       safelyRemoveManagedPath(ctx.deps.managedRoot, worktreePath);
+    }
+    // git exited nonzero after the directory was gone (or never existed): the removal is complete
+    // only once git no longer lists the worktree, or the row would be deleted over partial admin
+    // metadata that prune could not clear — a locked entry, for one (#3376 review). The row stays
+    // in cleanup-pending for a retry.
+    if (!removal.ok && !(await registrationReleased(adapter, worktreePath))) {
+      throw new TaskWorkspaceError(
+        "CLEANUP_FAILED",
+        "git did not release the worktree registration",
+      );
     }
     return { removed: true };
   } catch (error) {
     if (error instanceof TaskWorkspaceError) throw error;
     throw new TaskWorkspaceError("CLEANUP_FAILED", "governed worktree removal failed");
   }
+}
+
+// Positive evidence only: the adapter answers `[]` for a listing git refused, and a listing git
+// produced always names the main worktree, so an empty answer is "unknown" and never "released"
+// (#3376 review). The row then stays in cleanup-pending for a retry instead of being deleted over
+// admin metadata git may still hold.
+async function registrationReleased(
+  adapter: GitWorktreeAdapter,
+  worktreePath: string,
+): Promise<boolean> {
+  const entries = await adapter.listWorktrees();
+  if (entries.length === 0) return false;
+  const target = resolve(worktreePath);
+  return !entries.some((entry) => resolve(entry.path) === target);
 }
 
 function cleanupLock(ctx: CleanupCtx, requestedBy: string, nowMs: number): WorkspaceLock {
@@ -332,15 +456,17 @@ function refuseCleanup(
   ctx: CleanupCtx,
   instance: WorkspaceInstance,
   refusalReason: WorkspaceCleanupRefusalReason | undefined,
+  correlationId: string | undefined,
 ): WorkspaceCleanupResult {
   emit(ctx, {
     outcome: "cleanup-refused",
     type: "transition-rejected",
     workspaceId: instance.workspaceId,
     taskId: instance.taskId,
-    correlationId: instance.auditCorrelationId,
+    correlationId,
     fromState: instance.lifecycleState,
     nowMs: ctx.deps.now(),
+    errorCode: refusalReason,
   });
   return {
     outcome: "refused",
@@ -357,6 +483,7 @@ async function finalizeCleanup(
   instance: WorkspaceInstance,
   requestedBy: string,
   nowMs: number,
+  correlationId: string | undefined,
 ): Promise<WorkspaceCleanupResult> {
   const locked = ctx.deps.store.upsert({
     ...instance,
@@ -374,7 +501,7 @@ async function finalizeCleanup(
       lock: null,
       updatedAt: isoFrom(ctx.deps.now()),
     });
-    return refuseCleanup(ctx, unlocked, removal.refusalReason);
+    return refuseCleanup(ctx, unlocked, removal.refusalReason, correlationId);
   }
   if (ctx.deps.activePointerStore.get()?.workspaceId === locked.workspaceId) {
     ctx.deps.activePointerStore.clear();
@@ -395,7 +522,7 @@ async function finalizeCleanup(
     type: "cleanup-completed",
     workspaceId: locked.workspaceId,
     taskId: locked.taskId,
-    correlationId: locked.auditCorrelationId,
+    correlationId,
     fromState: "cleanup-pending",
     nowMs: ctx.deps.now(),
   });
@@ -444,8 +571,10 @@ async function completeCleanupImpl(
   const nowMs = ctx.deps.now();
   assertCompleteCleanupAllowed(ctx, request, instance, nowMs);
   const safety = await evaluateLiveCleanupSafety(ctx, instance);
-  if (!safety.allowed) return refuseCleanup(ctx, instance, safety.refusalReason);
-  return finalizeCleanup(ctx, instance, request.requestedBy, nowMs);
+  if (!safety.allowed) {
+    return refuseCleanup(ctx, instance, safety.refusalReason, request.correlationId);
+  }
+  return finalizeCleanup(ctx, instance, request.requestedBy, nowMs, request.correlationId);
 }
 
 // Governed removal of orphaned managed worktrees: directories under the managed root with no persisted
@@ -457,6 +586,7 @@ async function cleanupOneOrphan(
   leaf: string,
   ownershipProven: boolean,
   knownPaths: ReadonlySet<string>,
+  correlationId: string | undefined,
 ): Promise<OrphanCleanupOutcome> {
   const orphanId = deriveOrphanId(repositoryId, leaf);
   const candidate = join(ctx.deps.managedRoot, repositoryId, leaf);
@@ -466,7 +596,8 @@ async function cleanupOneOrphan(
   const pathContained = isManagedTargetContained(ctx.deps.managedRoot, candidate);
   // Fail closed: an orphan whose `git status` is inconclusive (broken pointer) is treated as dirty and
   // refused, never force-removed (SC4) — it may still hold uncommitted work.
-  const worktreeDirty = await probeCleanupDirty(ctx, candidate, pathContained);
+  const probeable = pathContained && ownershipProven;
+  const worktreeDirty = (await probeCleanupDirty(ctx, candidate, probeable, false)).worktreeDirty;
   const decision = evaluateWorkspaceCleanupSafety({
     lifecycleState: "abandoned",
     hasRecord: false,
@@ -481,7 +612,7 @@ async function cleanupOneOrphan(
       refusal: { orphanId, refusalReason: decision.refusalReason ?? "path-escape" },
     };
   }
-  const stillDirty = await probeCleanupDirty(ctx, candidate, pathContained);
+  const stillDirty = (await probeCleanupDirty(ctx, candidate, probeable, false)).worktreeDirty;
   if (stillDirty) {
     return {
       removed: false,
@@ -494,16 +625,28 @@ async function cleanupOneOrphan(
     type: "cleanup-completed",
     workspaceId: orphanId,
     taskId: orphanId,
-    correlationId: orphanId,
+    correlationId,
     nowMs: ctx.deps.now(),
   });
   return { removed: true };
 }
 
+// The leaf directories of one repository's managed directory that no persisted row references, or
+// `[]` once the failure to list them is on the log.
+//
+// The bare `catch { return []; }` this replaces made "this repository has no orphans" and "this
+// repository could not be looked at" the same answer, so a permission change or an unreadable mount
+// silently removed the orphan sweep for that repository and the operator-approved run reported
+// `removed: 0` as if it had swept it. The health report closed exactly this class in
+// `orphanLeavesOrLogFailure` (health.ts); the MUTATING sweep is where it matters most, and the rule
+// it must never break is the one it already has — it still deletes nothing it could not inventory,
+// because the failure yields an empty candidate list rather than a guess (PR #3381 review, #3382).
+// Per-repository isolation, not a swallow: the rest of the sweep continues.
 function orphanLeavesFor(
   ctx: CleanupCtx,
   repositoryId: string,
   knownPaths: ReadonlySet<string>,
+  correlationId: string | undefined,
 ): readonly string[] {
   const repoDir = join(ctx.deps.managedRoot, repositoryId);
   if (!existsSync(repoDir)) return [];
@@ -512,7 +655,15 @@ function orphanLeavesFor(
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .filter((leaf) => !knownPaths.has(join(repoDir, leaf)));
-  } catch {
+  } catch (error) {
+    logWorkspaceLifecycleFailure(
+      ctx.deps,
+      { operation: "cleanup", workspaceIdentitySeed: repositoryId, correlationId },
+      asRepositoryUnreachable(
+        error,
+        "orphan sweep could not list the managed repository directory",
+      ),
+    );
     return [];
   }
 }
@@ -531,7 +682,7 @@ function resolveOrphanRepositoryIds(
     return new Set([deriveRepositoryId(request.repositoryRoot)]);
   }
   const ids = new Set(knownByRepo.keys());
-  for (const onDisk of managedRepoDirs(ctx)) ids.add(onDisk);
+  for (const onDisk of listManagedRepositoryIds(ctx.deps.managedRoot)) ids.add(onDisk);
   return ids;
 }
 
@@ -567,11 +718,11 @@ async function cleanupOrphansImpl(
   const refused: WorkspaceOrphanRefusal[] = [];
   for (const repositoryId of resolveOrphanRepositoryIds(ctx, request, knownByRepo)) {
     const known = knownByRepo.get(repositoryId) ?? new Set<string>();
-    for (const leaf of orphanLeavesFor(ctx, repositoryId, known)) {
+    for (const leaf of orphanLeavesFor(ctx, repositoryId, known, request.correlationId)) {
       // Serialize each candidate leaf and re-check persisted liveness inside the critical section. The
       // initial known-path snapshot may be stale if a provision finishes while a sweep is walking disk.
       const outcome = await ctx.deps.mutex.runExclusive([workspaceKey(leaf)], () =>
-        cleanupOneOrphan(ctx, repositoryId, leaf, ownershipProven, known),
+        cleanupOneOrphan(ctx, repositoryId, leaf, ownershipProven, known, request.correlationId),
       );
       if (outcome.removed) removed += 1;
       if (outcome.refusal !== undefined) refused.push(outcome.refusal);
@@ -580,33 +731,48 @@ async function cleanupOrphansImpl(
   return { removed, refused };
 }
 
-function managedRepoDirs(ctx: CleanupCtx): readonly string[] {
-  if (!existsSync(ctx.deps.managedRoot)) return [];
-  try {
-    return readdirSync(ctx.deps.managedRoot, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name);
-  } catch {
-    return [];
-  }
-}
-
 export function createWorkspaceCleanupService(
   deps: WorkspaceCleanupServiceDeps,
 ): WorkspaceCleanupService {
-  const ctx: CleanupCtx = { deps, lockTtlMs: resolveLockTtl(deps.lockTtlMs) };
+  const lockTtlMs = resolveLockTtl(deps.lockTtlMs);
+  // Built PER OPERATION, not once per service: the correlation id belongs to the request, and a
+  // service-lifetime ctx is exactly what forced the previous UNKNOWN_CORRELATION_ID here.
+  const ctxFor = (correlationId: string | undefined): CleanupCtx => ({
+    deps,
+    lockTtlMs,
+    correlationId: correlationIdOrUnknown(correlationId),
+  });
   return {
     // Serialized under the workspace's `ws:` key (#449, ADR-0093 D1) so a governed removal cannot race a
     // concurrent activate/pause/repair of the same workspace. `runExclusive` also turns a synchronous
     // validation throw from requestCleanupImpl into a rejected promise (the consistent async contract).
     cleanup: (request: WorkspaceCleanupRequest): Promise<WorkspaceCleanupResult> =>
-      ctx.deps.mutex.runExclusive([workspaceKey(request.workspaceId)], () =>
-        request.mode === "request"
-          ? requestCleanupImpl(ctx, request)
-          : completeCleanupImpl(ctx, request),
+      runWithWorkspaceLifecycleFailureLogging(
+        deps,
+        {
+          operation: "cleanup",
+          workspaceIdentitySeed: request.workspaceId,
+          correlationId: request.correlationId,
+        },
+        () =>
+          deps.mutex.runExclusive([workspaceKey(request.workspaceId)], () => {
+            const ctx = ctxFor(request.correlationId);
+            return request.mode === "request"
+              ? requestCleanupImpl(ctx, request)
+              : completeCleanupImpl(ctx, request);
+          }),
       ),
     cleanupOrphans: (
       request: WorkspaceOrphanCleanupRequest,
-    ): Promise<WorkspaceOrphanCleanupResult> => cleanupOrphansImpl(ctx, request),
+    ): Promise<WorkspaceOrphanCleanupResult> =>
+      runWithWorkspaceLifecycleFailureLogging(
+        deps,
+        {
+          operation: "cleanup",
+          workspaceIdentitySeed: request.repositoryRoot ?? "all-managed-task-workspaces",
+          correlationId: request.correlationId,
+        },
+        () => cleanupOrphansImpl(ctxFor(request.correlationId), request),
+      ),
   };
 }

@@ -3,13 +3,22 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { Worker } from "node:worker_threads";
 
+import type { EmbeddingModelIdentity } from "@oscharko-dev/keiko-contracts";
+import { embeddingIdentityKey } from "@oscharko-dev/keiko-contracts/runtime/vector-index-port";
 import {
-  embeddingIdentityKey,
-  type EmbeddingModelIdentity,
-  type EmbeddingVectorMetric,
-} from "@oscharko-dev/keiko-contracts";
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
-import { USEARCH_RUNTIME_MANIFEST, usearchRuntimeTargetKey } from "./usearch-runtime-manifest.js";
+import { emitKnowledgeLogEvent, type KnowledgeLogSink } from "../knowledge-log.js";
+
+import {
+  USEARCH_RUNTIME_MANIFEST,
+  type UsearchRuntimeApproval,
+  type UsearchRuntimeTargetKey,
+  usearchRuntimeApproval,
+  usearchRuntimeTargetKey,
+} from "./usearch-runtime-manifest.js";
 import {
   USEARCH_COMMAND,
   USEARCH_CONTROL,
@@ -18,6 +27,42 @@ import {
   type UsearchWorkerData,
   type UsearchWorkerMessage,
 } from "./usearch-worker-protocol.js";
+import { scoreVectorWithNorms, vectorNorm } from "./vector-scoring.js";
+
+const SEARCH_NATIVE_RUNTIME_RESOLVED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "search.native-runtime-resolved",
+  category: "search",
+  owner: "keiko-local-knowledge",
+  emitter: "retrieval/usearch-ann-index.logNativeRuntimeResolved",
+  fields: {
+    targetKey: {
+      type: "string",
+      dataClass: "safe-platform-class",
+      required: true,
+      values: ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "win32-x64"],
+    },
+    resolutionState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["resolved", "unavailable", "invalid"],
+    },
+    version: {
+      type: "string",
+      dataClass: "safe-version",
+      required: false,
+      maxLength: 64,
+    },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["native-runtime-unavailable", "native-runtime-invalid"],
+  proofIds: ["search.native-runtime-resolved.state"],
+  releaseImpact: "patch",
+});
 
 export interface UsearchVectorEntry {
   readonly id: string;
@@ -40,6 +85,10 @@ export interface UsearchAnnSearchRequest {
   readonly binaryPath?: string;
   readonly exactScanThreshold?: number;
   readonly maxIndexBytes?: number;
+  // Content-free activity log (ADR-0019 seam, `knowledge-log.ts`). Absent → nothing is written.
+  // Threaded down to `targetRuntime()` so a fresh native-addon resolution is visible in
+  // `server.log` beside the search that triggered it (Wave 4a, epic #3233 §8).
+  readonly logSink?: KnowledgeLogSink;
 }
 
 export interface UsearchAnnCandidate {
@@ -143,8 +192,12 @@ const MAX_CACHED_ESTIMATED_INDEX_BYTES = 256 * 1024 * 1024;
 const HNSW_NODE_OVERHEAD_BYTES = 256;
 const HNSW_EDGE_BYTES = 8;
 const WORKER_FIXED_BYTES = 8 * 1024 * 1024;
-const BUILD_TIMEOUT_MS = 120_000;
-const QUERY_TIMEOUT_MS = 30_000;
+// Exported (KEIKO-0362) so the Knowledge-M2 ANN closeout proof can measure its latency evidence
+// against the SAME production budgets these enforce, instead of proving only the relative claim
+// "ANN beat exact on this machine" — which a measurement 83% of the way to the build timeout also
+// satisfies. One definition, two consumers; a change here moves the gate with it.
+export const BUILD_TIMEOUT_MS = 120_000;
+export const QUERY_TIMEOUT_MS = 30_000;
 
 const INDEX_CACHE = new Map<string, CachedIndex>();
 let cachedIndexBytes = 0;
@@ -179,50 +232,6 @@ function finiteVector(vector: Float32Array): boolean {
   return true;
 }
 
-function vectorNorm(vector: Float32Array): number {
-  let squared = 0;
-  for (const value of vector) squared += value * value;
-  return Math.sqrt(squared);
-}
-
-function dotProduct(left: Float32Array, right: Float32Array): number {
-  let score = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    score += (left[index] ?? 0) * (right[index] ?? 0);
-  }
-  return score;
-}
-
-function cosineScore(
-  query: Float32Array,
-  queryNorm: number,
-  vector: Float32Array,
-  vectorNormValue: number,
-): number {
-  return dotProduct(query, vector) / (queryNorm * vectorNormValue);
-}
-
-function euclideanScore(query: Float32Array, vector: Float32Array): number {
-  let squared = 0;
-  for (let index = 0; index < query.length; index += 1) {
-    const delta = (query[index] ?? 0) - (vector[index] ?? 0);
-    squared += delta * delta;
-  }
-  return -Math.sqrt(squared);
-}
-
-function scoreVector(
-  metric: EmbeddingVectorMetric,
-  query: Float32Array,
-  queryNorm: number,
-  vector: Float32Array,
-  vectorNormValue: number,
-): number {
-  if (metric === "cosine") return cosineScore(query, queryNorm, vector, vectorNormValue);
-  if (metric === "dot") return dotProduct(query, vector);
-  return euclideanScore(query, vector);
-}
-
 function vectorAt(vectors: SharedVectors, dimensions: number, index: number): Float32Array {
   return new Float32Array(
     vectors.buffer,
@@ -244,7 +253,7 @@ function scoreIndexes(
     const entry = index.vectors.entries[rowIndex];
     if (entry === undefined) continue;
     const vector = vectorAt(index.vectors, identity.vectorDimensions, rowIndex);
-    const score = scoreVector(identity.vectorMetric, query, queryNorm, vector, entry.norm);
+    const score = scoreVectorWithNorms(identity.vectorMetric, query, queryNorm, vector, entry.norm);
     if (Number.isFinite(score)) candidates.push({ id: entry.id, score });
   }
   candidates.sort((left, right) => right.score - left.score || compareIds(left.id, right.id));
@@ -303,35 +312,160 @@ function loadSharedVectors(
   return { entries, buffer, byteSize: buffer.byteLength + entries.length * 64 };
 }
 
-function targetRuntime(
-  binaryPath: string | undefined,
-): { readonly path: string; readonly sha256: string } | "unavailable" | "invalid" {
-  const targetKey = usearchRuntimeTargetKey(process.platform, process.arch);
-  if (targetKey === undefined) return "unavailable";
-  const target = USEARCH_RUNTIME_MANIFEST.targets[targetKey];
+function approvedRuntimeFor(targetKey: string): Readonly<UsearchRuntimeApproval> {
+  const approval = usearchRuntimeApproval(targetKey);
+  if (approval === undefined) throw new Error("USearch runtime approval invariant failed");
+  return approval;
+}
+
+type TargetRuntimeResult =
+  | { readonly path: string; readonly sha256: string; readonly expectedVersion: string }
+  | "unavailable"
+  | "invalid";
+
+interface CachedTargetRuntime {
+  readonly result: TargetRuntimeResult;
+  readonly mtimeMs: number;
+  readonly ctimeMs: number;
+  readonly ino: number;
+  readonly size: number;
+}
+
+// KEIKO-0409: memoize targetRuntime per resolved (path, mtimeMs, size) so a warm search
+// call does not re-read + SHA-256 the multi-MB native addon on the Node.js event loop for
+// every request. The runtime-availability check STAYS BEFORE the in-memory index cache
+// (a swapped-out binary must never be masked by a stale cache hit), and the SHA-256 still
+// runs whenever a fresh binary lands or the file changes on disk.
+const TARGET_RUNTIME_CACHE = new Map<string, CachedTargetRuntime>();
+
+// Test-only: clear the memoization so a fresh test can observe the cold-path hashing without
+// depending on previous tests' cache state. Production code never calls this.
+export function __resetTargetRuntimeCacheForTests(): void {
+  TARGET_RUNTIME_CACHE.clear();
+}
+
+function resolvedRuntimePath(binaryPath: string | undefined, targetKey: string): string {
+  const approval = approvedRuntimeFor(targetKey);
   const portablePath =
     process.platform === "darwin"
       ? resolve(dirname(process.execPath), "..", "..", "native", "usearch.node")
       : resolve(dirname(process.execPath), "..", "native", "usearch.node");
   const defaultPath = existsSync(portablePath)
     ? portablePath
-    : resolve(
-        process.cwd(),
-        ".usearch",
-        USEARCH_RUNTIME_MANIFEST.version,
-        targetKey,
-        "usearch.node",
-      );
-  const path = binaryPath ?? process.env.KEIKO_USEARCH_BINARY_PATH ?? defaultPath;
-  if (!existsSync(path)) return "unavailable";
+    : resolve(process.cwd(), ".usearch", approval.version, targetKey, "usearch.node");
+  return binaryPath ?? process.env.KEIKO_USEARCH_BINARY_PATH ?? defaultPath;
+}
+
+function verifyRuntimeAt(path: string): TargetRuntimeResult {
   try {
     const stat = statSync(path);
     if (!stat.isFile()) return "invalid";
+    const targetKey = usearchRuntimeTargetKey(process.platform, process.arch);
+    if (targetKey === undefined) return "unavailable";
+    const approval = approvedRuntimeFor(targetKey);
     const digest = createHash("sha256").update(readFileSync(path)).digest("hex");
-    return digest === target.binarySha256 ? { path, sha256: digest } : "invalid";
+    return digest === approval.binarySha256
+      ? { path, sha256: digest, expectedVersion: approval.version }
+      : "invalid";
   } catch {
     return "invalid";
   }
+}
+
+function cacheEntryStillMatches(
+  cached: CachedTargetRuntime,
+  stat: {
+    readonly mtimeMs: number;
+    readonly ctimeMs: number;
+    readonly ino: number;
+    readonly size: number;
+  },
+): boolean {
+  if (process.platform === "win32") return false;
+  return (
+    cached.mtimeMs === stat.mtimeMs &&
+    cached.ctimeMs === stat.ctimeMs &&
+    cached.ino === stat.ino &&
+    cached.size === stat.size
+  );
+}
+
+// Content-free: `targetKey` is a closed platform:arch label this package owns
+// (`usearchRuntimeTargetKey`), never the resolved filesystem path or the raw SHA-256 digest.
+// Emitted only on the COLD path below — a warm cache hit never re-logs, matching the reasoning
+// that already justifies not re-hashing on every request (KEIKO-0409).
+function logNativeRuntimeResolved(
+  logSink: KnowledgeLogSink | undefined,
+  targetKey: UsearchRuntimeTargetKey,
+  result: TargetRuntimeResult,
+): void {
+  const resolutionState = typeof result === "string" ? result : "resolved";
+  emitKnowledgeLogEvent(
+    logSink,
+    activityLogEvent(
+      SEARCH_NATIVE_RUNTIME_RESOLVED_OPERATION,
+      typeof result === "string"
+        ? {
+            level: "warn",
+            errorKind: result === "invalid" ? "validation-failed" : "unavailable",
+          }
+        : { level: "info" },
+      {
+        targetKey,
+        resolutionState,
+        ...(typeof result === "string" ? {} : { version: result.expectedVersion }),
+      },
+    ),
+  );
+}
+
+function targetRuntime(
+  binaryPath: string | undefined,
+  logSink?: KnowledgeLogSink,
+): TargetRuntimeResult {
+  const targetKey = usearchRuntimeTargetKey(process.platform, process.arch);
+  if (targetKey === undefined) return "unavailable";
+  const path = resolvedRuntimePath(binaryPath, targetKey);
+  if (!existsSync(path)) return "unavailable";
+  let stat;
+  try {
+    stat = statSync(path);
+  } catch {
+    return "invalid";
+  }
+  const cached = TARGET_RUNTIME_CACHE.get(path);
+  // PR-review follow-up (Codex thread 3770517487): on Windows, ctime is birthtime-like and
+  // does not update on file mutation. An attacker with write access can restore mtime via
+  // utimes AND replace the file in place (same size, same file id), so mtime+size+ino+ctime
+  // all match a cached successful verification even though the bytes changed. Skip the cache
+  // on win32 and re-run SHA-256 verification every time — the extra hash is cheap next to
+  // the ANN load, and the platform lacks an unforgeable change signal.
+  if (cached !== undefined && cacheEntryStillMatches(cached, stat)) {
+    return cached.result;
+  }
+  const result = verifyRuntimeAt(path);
+  logNativeRuntimeResolved(logSink, targetKey, result);
+  // PR-review follow-up: only memoize SUCCESSFUL verifications. A transient failure
+  // (EMFILE, EIO, temporarily-tightened permissions) that later heals must NOT be cached
+  // against the same tuple — otherwise a recovered runtime is permanently invisible to every
+  // subsequent ANN request until process restart.
+  //
+  // Second PR-review follow-up: include ctimeMs and inode in the cache key. mtime alone can
+  // be restored by an attacker with write permission via `utimes`, allowing an in-place
+  // same-size mutation to bypass the SHA-256 verification. ctime is updated on any inode
+  // change and cannot be set from user space, and inode change (`mv` + fresh write) is
+  // detected too. On Windows ctime is birthtime-like; the fallback is the mtime+size pair
+  // that would otherwise apply, so behaviour is not worse than before.
+  if (typeof result !== "string") {
+    TARGET_RUNTIME_CACHE.set(path, {
+      result,
+      mtimeMs: stat.mtimeMs,
+      ctimeMs: stat.ctimeMs,
+      ino: stat.ino,
+      size: stat.size,
+    });
+  }
+  return result;
 }
 
 function isUsearchWorkerMessage(value: unknown): value is UsearchWorkerMessage {
@@ -420,13 +554,13 @@ function allocateAnnWorkerBuffers(
 function workerDataFor(
   partition: UsearchAnnPartition,
   vectors: SharedVectors,
-  runtime: { readonly path: string; readonly sha256: string },
+  runtime: { readonly path: string; readonly sha256: string; readonly expectedVersion: string },
   allocation: AnnWorkerAllocation,
 ): UsearchWorkerData {
   return {
     binaryPath: runtime.path,
     binarySha256: runtime.sha256,
-    expectedVersion: USEARCH_RUNTIME_MANIFEST.version,
+    expectedVersion: runtime.expectedVersion,
     dimensions: partition.identity.vectorDimensions,
     rowCount: partition.rowCount,
     connectivity: HNSW_CONNECTIVITY,
@@ -444,7 +578,7 @@ function workerDataFor(
 async function startWorker(
   partition: UsearchAnnPartition,
   vectors: SharedVectors,
-  runtime: { readonly path: string; readonly sha256: string },
+  runtime: { readonly path: string; readonly sha256: string; readonly expectedVersion: string },
   resultCapacity: number,
 ): Promise<AnnIndex | undefined> {
   const allocation = allocateAnnWorkerBuffers(partition, resultCapacity);
@@ -577,7 +711,7 @@ async function buildSearchIndex(
       byteSize: estimate,
     });
   }
-  const runtime = targetRuntime(request.binaryPath);
+  const runtime = targetRuntime(request.binaryPath, request.logSink);
   if (runtime === "unavailable") return { ok: false, reason: "runtime-unavailable" };
   if (runtime === "invalid") return { ok: false, reason: "runtime-integrity-failed" };
   const worker = await startWorker(request.partition, vectors, runtime, HNSW_MAX_RESULTS);
@@ -616,19 +750,23 @@ async function resolvedIndex(
   request: UsearchAnnSearchRequest,
 ): Promise<SearchIndex | UsearchAnnSearchResult> {
   const threshold = request.exactScanThreshold ?? DEFAULT_EXACT_SCAN_THRESHOLD;
-  if (request.partition.rowCount > threshold) {
-    const runtime = targetRuntime(request.binaryPath);
-    if (runtime === "unavailable") return { ok: false, reason: "runtime-unavailable" };
-    if (runtime === "invalid") return { ok: false, reason: "runtime-integrity-failed" };
-  }
   const maxBytes = Math.min(
     request.maxIndexBytes ?? DEFAULT_MAX_INDEX_BYTES,
     DEFAULT_MAX_INDEX_BYTES,
   );
+  if (request.partition.rowCount > threshold) {
+    // KEIKO-0409: the runtime-availability check runs first so a swapped-out or missing
+    // native addon can never be masked by a stale in-memory index cache. The SHA-256
+    // cost that motivated the finding is neutralised by memoization inside targetRuntime()
+    // (keyed on the resolved (path, mtimeMs, size)), so a warm hit no longer re-reads the
+    // multi-MB addon on the Node.js event loop.
+    const runtime = targetRuntime(request.binaryPath, request.logSink);
+    if (runtime === "unavailable") return { ok: false, reason: "runtime-unavailable" };
+    if (runtime === "invalid") return { ok: false, reason: "runtime-integrity-failed" };
+  }
   const cached = cachedIndex(request, maxBytes);
-  return (
-    cached ?? (await enqueueIndexBuild(request, request.partition.rowCount <= threshold, maxBytes))
-  );
+  if (cached !== undefined) return cached;
+  return await enqueueIndexBuild(request, request.partition.rowCount <= threshold, maxBytes);
 }
 
 function allIndexes(rowCount: number): readonly number[] {
@@ -816,7 +954,9 @@ export function clearUsearchAnnCacheForGroup(groupKey: string): void {
 
 export const USEARCH_ANN_PROFILE = Object.freeze({
   provider: "usearch",
-  version: USEARCH_RUNTIME_MANIFEST.version,
+  version:
+    usearchRuntimeApproval(usearchRuntimeTargetKey(process.platform, process.arch))?.version ??
+    USEARCH_RUNTIME_MANIFEST.version,
   algorithm: "hnsw",
   connectivity: HNSW_CONNECTIVITY,
   expansionAdd: HNSW_EXPANSION_ADD,

@@ -40,14 +40,16 @@ import {
   writeSync,
 } from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import { resolveWindowsPowerShellExecutable } from "@oscharko-dev/keiko-security";
 import type { CliIo } from "./runner.js";
 import {
   LauncherError,
   launcherFor,
   validateExecPath,
   validatePort,
+  windowsLauncherNeedsPowerShell,
   type LauncherContentInput,
   type Platform,
   type PlatformLauncher,
@@ -61,7 +63,16 @@ import {
   upsertEntry,
   type LauncherStateEntry,
 } from "./launcher-state.js";
-import { resolveKeikoBinary } from "./install-layout.js";
+import {
+  resolveKeikoBinary,
+  writeInstallLayoutOverrideEvidenceWithFactory,
+} from "./install-layout.js";
+import { resolveContainedStateDir } from "./state-paths.js";
+import {
+  createCliSecurityLogSink,
+  emitCliWindowsSystemFailure,
+  type CliSecurityLogSinkFactory,
+} from "./security-log.js";
 
 type LauncherSubcommand = "install" | "remove" | "status";
 
@@ -88,6 +99,8 @@ export interface LauncherCliDeps {
   // Test seam for sanity: which directory `.keiko/launcher-state.json` lives in.
   // Defaults to `<cwd>/.keiko`.
   readonly stateDir?: string;
+  readonly resolveWindowsPowerShell?: ((env: EnvSource) => string) | undefined;
+  readonly securityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
 }
 
 interface InstallArgs {
@@ -265,27 +278,11 @@ function writeAtomicExcl(target: string, content: string, mode: number): void {
 // user's homedir. Without this guard, an attacker who can plant the env var (wrapper
 // script in PATH, dev-container `.env`, exported in a parent shell) can combine with
 // F1 to steer the launcher state file to a world-writable location and from there to
-// arbitrary-file primitives. We re-use `assertRealpathContained` so symlinked-ancestor
-// edge cases compare consistently. The thrown error is re-classified as
-// `STATE_DIR_ESCAPE` so the user-facing message is unambiguous.
+// arbitrary-file primitives. Delegated to `resolveContainedStateDir` in
+// `state-paths.ts` so `keiko start|stop|status|restart` enforces the SAME rule with
+// the SAME `STATE_DIR_ESCAPE` classification (#KEIKO-0330).
 function defaultStateDir(cwd: string, env: EnvSource, home: string): string {
-  const fromEnv = env.KEIKO_STATE_DIR ?? process.env.KEIKO_STATE_DIR;
-  if (typeof fromEnv === "string" && fromEnv.length > 0) {
-    const resolved = isAbsolute(fromEnv) ? fromEnv : resolve(cwd, fromEnv);
-    try {
-      assertRealpathContained(home, resolved);
-    } catch (e) {
-      if (e instanceof LauncherError && e.code === "PATH_ESCAPE") {
-        throw new LauncherError(
-          "STATE_DIR_ESCAPE",
-          `keiko launcher: KEIKO_STATE_DIR ${fromEnv} resolves outside the user's home directory (${home}); refusing to proceed.`,
-        );
-      }
-      throw e;
-    }
-    return resolved;
-  }
-  return resolve(cwd, ".keiko");
+  return resolveContainedStateDir(cwd, env, home);
 }
 
 interface InstallPlan {
@@ -302,10 +299,20 @@ function buildInstallPlan(
   homedir: string,
   args: InstallArgs,
   exe: string,
+  env: EnvSource,
+  resolveWindowsPowerShell: (env: EnvSource) => string,
 ): InstallPlan {
   const approvedDir = launcher.installDirFor(homedir);
   const targetPath = join(approvedDir, launcher.safeFileName());
-  const contentInput: LauncherContentInput = { exe, port: args.port };
+  const contentInput: LauncherContentInput = {
+    exe,
+    port: args.port,
+    ...(launcher.id === "win32" && windowsLauncherNeedsPowerShell(exe)
+      ? {
+          windowsPowerShellPath: resolveWindowsPowerShell(env),
+        }
+      : {}),
+  };
   const content = launcher.generateContent(contentInput);
   return {
     platform: launcher.id,
@@ -350,7 +357,19 @@ function handleExistingTarget(
   homedir: string,
   io: CliIo,
 ): number {
-  const existing = readFileSync(plan.targetPath, "utf8");
+  // KEIKO-0795: mirror cmdStatus's try/catch — a directory or unreadable file at the
+  // shortcut path used to let a raw ErrnoException escape as an uncaught throw. Convert
+  // it into a typed LauncherError so runLauncherCli's existing catch (568-573) surfaces a
+  // launcher-prefixed exit-1 message instead of a stack trace.
+  let existing: string;
+  try {
+    existing = readFileSync(plan.targetPath, "utf8");
+  } catch (error) {
+    throw new LauncherError(
+      "TARGET_UNREADABLE",
+      `keiko launcher: cannot read the existing file at ${plan.targetPath} to compare content — ${errorCodeOf(error)}. Move or remove it manually before re-running.`,
+    );
+  }
   if (existing !== plan.content) {
     throw new LauncherError(
       "TARGET_FOREIGN",
@@ -363,19 +382,30 @@ function handleExistingTarget(
   return 0;
 }
 
+// KEIKO-0795: extract only the errno code from an unknown fs failure. Never include the
+// full ErrnoException message (which can quote absolute paths) in the LauncherError line.
+function errorCodeOf(error: unknown): string {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const code = (error as { readonly code?: unknown }).code;
+    if (typeof code === "string" && code.length > 0) return code;
+  }
+  return "unreadable";
+}
+
 function cmdInstall(
   args: InstallArgs,
   io: CliIo,
   env: EnvSource,
   deps: Required<Pick<LauncherCliDeps, "homedir" | "platform">> & {
     readonly resolveExe: (env: EnvSource) => string;
+    readonly resolveWindowsPowerShell: (env: EnvSource) => string;
     readonly stateDir: string;
   },
 ): number {
   const launcher = launcherFor(deps.platform());
   const exe = deps.resolveExe(env);
   const home = deps.homedir();
-  const plan = buildInstallPlan(launcher, home, args, exe);
+  const plan = buildInstallPlan(launcher, home, args, exe, env, deps.resolveWindowsPowerShell);
   assertRealpathContained(plan.approvedDir, plan.targetPath);
   if (args.dryRun || args.explain) {
     io.out(describePlan(plan, args.explain));
@@ -414,7 +444,16 @@ function processRemoveEntry(
     io.out(`missing: ${entry.path} (already gone — state cleared)\n`);
     return "missing";
   }
-  const existing = readFileSync(entry.path, "utf8");
+  // KEIKO-0795: an unreadable recorded shortcut (directory, permissions, EIO) used to
+  // throw mid-iteration and abort every remaining entry. Convert into a "refused" outcome
+  // so removeLauncherShortcuts's loop counts it and continues processing.
+  let existing: string;
+  try {
+    existing = readFileSync(entry.path, "utf8");
+  } catch (error) {
+    io.err(`refusing: ${entry.path} (unreadable — ${errorCodeOf(error)}; not deleted)\n`);
+    return "refused";
+  }
   if (hashContent(existing) !== entry.contentSha256) {
     io.err(
       `refusing: ${entry.path} (content does not match the launcher Keiko generated; not deleted)\n`,
@@ -524,7 +563,12 @@ interface ResolvedDeps {
   readonly homedir: () => string;
   readonly platform: () => NodeJS.Platform;
   readonly resolveExe: (env: EnvSource) => string;
+  readonly resolveWindowsPowerShell: (env: EnvSource) => string;
   readonly stateDir: string;
+}
+
+function defaultResolveWindowsPowerShell(env: EnvSource): string {
+  return resolveWindowsPowerShellExecutable(env);
 }
 
 function resolveDeps(env: EnvSource, deps: LauncherCliDeps): ResolvedDeps {
@@ -534,8 +578,21 @@ function resolveDeps(env: EnvSource, deps: LauncherCliDeps): ResolvedDeps {
     homedir: homedirFn,
     platform: deps.platform ?? ((): NodeJS.Platform => process.platform),
     resolveExe: deps.resolveExe ?? defaultResolveExe,
+    resolveWindowsPowerShell: deps.resolveWindowsPowerShell ?? defaultResolveWindowsPowerShell,
     stateDir: deps.stateDir ?? defaultStateDir(cwd, env, homedirFn()),
   };
+}
+
+function windowsSystemFailureExit(
+  error: unknown,
+  io: CliIo,
+  stateDir: string | undefined,
+  factory: CliSecurityLogSinkFactory | undefined,
+): number | undefined {
+  const sink = stateDir === undefined ? undefined : createCliSecurityLogSink(stateDir, factory);
+  if (!emitCliWindowsSystemFailure(error, sink, "launcher-install")) return undefined;
+  io.err("keiko launcher: trusted Windows launch helper is unavailable.\n");
+  return 1;
 }
 
 export function runLauncherCli(
@@ -555,11 +612,14 @@ export function runLauncherCli(
     return 2;
   }
   const rest = args.slice(1);
+  let resolved: ResolvedDeps | undefined;
   try {
     // `resolveDeps` may throw `STATE_DIR_ESCAPE` (F4) when KEIKO_STATE_DIR resolves
     // outside the user's home — it MUST be inside the try/catch so the LauncherError
     // is converted to a `1` exit instead of an uncaught throw.
     const r = resolveDeps(env, deps);
+    resolved = r;
+    writeInstallLayoutOverrideEvidenceWithFactory(deps.securityLogSinkFactory, r.stateDir, env);
     const home = r.homedir();
     const handlers: Readonly<Record<LauncherSubcommand, () => number>> = {
       install: () => dispatchInstall(rest, io, env, r),
@@ -572,6 +632,13 @@ export function runLauncherCli(
       io.err(`${e.message}\n`);
       return 1;
     }
+    const systemFailure = windowsSystemFailureExit(
+      e,
+      io,
+      resolved?.stateDir,
+      deps.securityLogSinkFactory,
+    );
+    if (systemFailure !== undefined) return systemFailure;
     throw e;
   }
 }
@@ -582,6 +649,7 @@ function dispatchInstall(
   env: EnvSource,
   ctx: Required<Pick<LauncherCliDeps, "homedir" | "platform">> & {
     readonly resolveExe: (env: EnvSource) => string;
+    readonly resolveWindowsPowerShell: (env: EnvSource) => string;
     readonly stateDir: string;
   },
 ): number {

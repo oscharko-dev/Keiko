@@ -1,6 +1,11 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
+import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import {
+  redeemCodingAppSessionPairingNavigation,
+  type CodingAppSessionPairingSeams,
+} from "@/lib/coding-app-session-client";
 import { WORKSPACE_MANIFEST_CHANGED_EVENT } from "@/lib/workspace-manifest-api";
 import { useWorkspaceManifest } from "./useWorkspaceManifest";
 
@@ -62,6 +67,19 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
+// A launcher re-pair that arrives without a page load (F65): a fragment, and a pair endpoint that
+// acknowledges it.
+const REPAIR_SEAMS: CodingAppSessionPairingSeams = {
+  readFragment: (): string =>
+    encodeCodingAppSessionPairingFragment({
+      requestId: "req_re-pair",
+      issuedAtMs: 1,
+      claim: "e".repeat(64),
+    }),
+  stripFragment: (): void => undefined,
+  postPairing: (): Promise<unknown> => Promise.resolve({ schemaVersion: "1" }),
+};
+
 describe("useWorkspaceManifest", () => {
   it("loads the manifest containing the tracked root and clears on miss", async () => {
     const alpha = manifest("ws-a", ["alpha"]);
@@ -108,6 +126,22 @@ describe("useWorkspaceManifest", () => {
     expect(view.result.current.manifest).toBeNull();
     expect(view.result.current.issue).toBeNull();
     expect(view.result.current.pathReadAuthority).toBe("unpaired");
+  });
+
+  it("reads the session answer again after a re-pair without a page load (F65)", async () => {
+    const alpha = manifest("ws-a", ["alpha"]);
+    fetchManifestAccess
+      .mockResolvedValueOnce({ session: "unpaired", manifests: [] })
+      .mockResolvedValue({ session: "paired", manifests: [alpha] });
+    const view = renderHook(() => useWorkspaceManifest("/ws/alpha"));
+    await waitFor(() => expect(view.result.current.pathReadAuthority).toBe("unpaired"));
+
+    await act(async () => {
+      await redeemCodingAppSessionPairingNavigation(REPAIR_SEAMS);
+    });
+
+    await waitFor(() => expect(view.result.current.pathReadAuthority).toBe("available"));
+    expect(view.result.current.manifest?.workspaceId).toBe("ws-a");
   });
 
   // This surface reads the marker to decide whether canonical paths are DISCLOSABLE, not to grant an

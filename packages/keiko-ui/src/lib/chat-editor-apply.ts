@@ -1,11 +1,10 @@
+import type { EditorDocumentVersion, LanguageRange } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_PATCH_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/tools";
+import { isEditorDocumentVersion } from "@oscharko-dev/keiko-contracts/runtime/editor-session";
 import {
-  DEFAULT_PATCH_LIMITS,
-  isEditorDocumentVersion,
   isRootRelativeFileIdentifier,
   resolveWorkspaceFileIdentifier,
-  type EditorDocumentVersion,
-  type LanguageRange,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import {
   EDITOR_AGENT_ACTION_ID_MAX_BYTES,
   EDITOR_AGENT_IDEMPOTENCY_KEY_MAX_BYTES,

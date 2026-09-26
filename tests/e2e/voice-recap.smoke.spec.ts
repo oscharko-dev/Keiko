@@ -3,12 +3,15 @@
 // Realtime Voice persists final transcripts through the normal chat lifecycle.
 //
 // Tagged @smoke so the Studio browser quality gate exercises it. The required `ci` check does not run
-// Playwright; the executable AC coverage that runs in `ci` lives in the keiko-contracts + keiko-server +
-// keiko-ui suites (voice-session-recap contract, voice-recap route, the recap hook, the VoiceRecap
-// component, and the ChatWindow voice integration) and the keiko-evaluations voice-recap suite, which
-// prove governed candidate creation, dormancy, content-free audit, and secret redaction (AC1–AC6).
+// Playwright; the executable AC coverage that runs in `ci` is server-route-level only — the
+// voice-session-recap contract tests (packages/keiko-contracts/src/voice-session-recap.test.ts) and
+// the voice-recap route tests (packages/keiko-server/src/voice-recap.test.ts). There is no
+// client-side integration in the current tree (ADR-0109 keeps the route dormant pending
+// re-activation), so this smoke asserts only what the browser can actually observe today.
 
 import { expect, test, type Page } from "@playwright/test";
+import { openChatComposer } from "./support/chat-composer.js";
+import { fakeDictationMediaInit } from "./support/dictation-media.js";
 
 const REALTIME_CAPABILITY = {
   voice: {
@@ -52,13 +55,6 @@ const NO_VOICE_CAPABILITY = {
 
 const RECAP_BUTTON = /review voice session/iu;
 
-async function openComposer(page: Page): Promise<void> {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Chat History", exact: true }).click();
-  await page.getByRole("button", { name: "New", exact: true }).click();
-  await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toBeVisible();
-}
-
 async function stubCapability(page: Page, body: unknown): Promise<void> {
   await page.route("**/api/voice/capability", (route) =>
     route.fulfill({ contentType: "application/json", body: JSON.stringify(body) }),
@@ -67,7 +63,7 @@ async function stubCapability(page: Page, body: unknown): Promise<void> {
 
 async function noVoiceFlow(page: Page): Promise<void> {
   await stubCapability(page, NO_VOICE_CAPABILITY);
-  await openComposer(page);
+  await openChatComposer(page);
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
   await composer.fill("plain typed message");
   await expect(composer).toHaveValue("plain typed message");
@@ -76,7 +72,7 @@ async function noVoiceFlow(page: Page): Promise<void> {
 
 async function playbackOnlyFlow(page: Page): Promise<void> {
   await stubCapability(page, SPEECH_OUTPUT_CAPABILITY);
-  await openComposer(page);
+  await openChatComposer(page);
   // Playback-only deployments capture no user transcript, so the recap control must be absent: a recap
   // derives from the committed user transcript, never from assistant speech output (AC1).
   await expect(page.getByRole("button", { name: RECAP_BUTTON })).toHaveCount(0);
@@ -84,7 +80,7 @@ async function playbackOnlyFlow(page: Page): Promise<void> {
 
 async function noRecapControlFlow(page: Page, body: unknown, text: string): Promise<void> {
   await stubCapability(page, body);
-  await openComposer(page);
+  await openChatComposer(page);
 
   await expect(page.getByRole("button", { name: RECAP_BUTTON })).toHaveCount(0);
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
@@ -105,6 +101,7 @@ test("voice recap @smoke — playback-only deployment has no recap control (AC1)
 test("voice recap @smoke — STT deployment keeps recap control absent; dictation remains separate (AC1)", async ({
   page,
 }) => {
+  await page.addInitScript(fakeDictationMediaInit("grant"));
   await noRecapControlFlow(page, STT_CAPABILITY, "typing with an STT deployment");
   await expect(page.getByRole("button", { name: "Dictate a message" })).toBeVisible();
 });

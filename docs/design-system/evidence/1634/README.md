@@ -36,18 +36,23 @@ It writes:
 - `07-loading.png`
 - `08-error.png`
 - `09-focus-visible.png`
-- `pdf-viewer-fidelity-proof.json`
+- `pdf-viewer-axe-gate-summary.json` (harness-regenerated per run — not tracked in git)
 - `a11y-proof.json`
 
 The JSON receipts include the `globals.css` SHA-256 digest, the capture matrix,
 and the aggregated axe results. The harness exits non-zero if any serious or
-critical axe violation is found.
+critical axe violation is found. `pdf-viewer-axe-gate-summary.json` is
+overwritten every run and is intentionally not committed alongside the PNGs; if
+you need the receipt for a bug report or bisect, run the harness locally in the
+same commit and capture its output.
 
 ## Result
 
-Latest local run: `PASS`
-
-- `pdf-viewer-fidelity-proof.json`: PASS
-- `a11y-proof.json`: PASS
-- Screenshot coverage: 9 captures across dark, light, dark-HC, light-HC,
-  forced-colors, responsive, loading, error, and focus-visible states
+**Tracked receipts (previous run):** `a11y-proof.json` recorded **PASS** — 9 captures across dark,
+light, dark-HC, light-HC, forced-colors, responsive, loading, error, and focus-visible states with
+0 serious/critical axe violations. That receipt's `cssSha256` reflects the reference CSS at the
+time of the run and no longer matches the current
+[`globals.css`](../../../../packages/keiko-ui/src/app/globals.css); re-run the harness locally
+against the current commit to obtain a fresh, self-consistent verdict. `pdf-viewer-axe-gate-summary.json`
+is intentionally not committed (see above) — it and `a11y-proof.json` are the receipts to
+regenerate together.

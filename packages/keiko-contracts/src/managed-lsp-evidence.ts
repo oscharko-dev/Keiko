@@ -12,6 +12,7 @@ import {
   type ManagedLspPolicyResult,
   parseManagedLspActivationStatus,
 } from "./managed-lsp-activation.js";
+import { parseSafely } from "./managed-lsp-parse-safely.js";
 
 export const MANAGED_LSP_EVIDENCE_SCHEMA_VERSION = "1" as const;
 
@@ -178,14 +179,5 @@ function parseEvidenceUnsafe(value: unknown): ManagedLspEvidenceParseResult {
 }
 
 export function parseManagedLspEvidence(value: unknown): ManagedLspEvidenceParseResult {
-  try {
-    return parseEvidenceUnsafe(value);
-  } catch (error: unknown) {
-    return {
-      ok: false,
-      errors: [
-        `payload could not be inspected: ${error instanceof Error ? error.name : "unknown"}`,
-      ],
-    };
-  }
+  return parseSafely(() => parseEvidenceUnsafe(value));
 }

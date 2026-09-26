@@ -1,9 +1,11 @@
+import { readFileSync } from "node:fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  CONTEXT_ENGINEERING_SCHEMA_VERSION,
-  type ContextCompactionModelSummary,
-  type ContextCompactionRecord,
+import type {
+  ContextCompactionModelSummary,
+  ContextCompactionRecord,
 } from "@oscharko-dev/keiko-contracts";
+import { CONTEXT_ENGINEERING_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   createInMemoryEvidenceStore,
   type EvidenceManifest,
@@ -12,13 +14,25 @@ import {
 } from "@oscharko-dev/keiko-evidence";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
+import {
   createDefaultChatCapability,
+  type GatewayCallRequest,
   type GatewayConfig,
   type GatewayRequest,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { UiHandlerDeps } from "./deps.js";
+import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
 import type { ChatMessage } from "./store/index.js";
 import { enrichChatCompactionWithModelSummary } from "./chat-compaction-model-summary.js";
 
@@ -28,6 +42,7 @@ const SECRET = "sk-summary-secret-1234567890abcdef";
 const ABS_PATH = "/Users/private/project/src/secret.ts";
 const SPACED_ABS_PATH = "/Users/Alice Smith/Secret Project/src/file.ts";
 const NOW = 1_700_000_000_000;
+const CORRELATION_ID = "summary-correlation-1";
 
 function response(
   content: string,
@@ -113,6 +128,7 @@ function deps(
   store: EvidenceStore,
   model: ModelPort | undefined,
   supportsResponseFormat = true,
+  diagnostics?: ServerDiagnosticSink,
 ): UiHandlerDeps {
   return {
     config: gatewayConfig(supportsResponseFormat),
@@ -121,6 +137,7 @@ function deps(
     env: {},
     redactor,
     modelPortFactory: () => model,
+    diagnostics,
   } as unknown as UiHandlerDeps;
 }
 
@@ -198,6 +215,14 @@ function neverResolvingModel(): ModelPort {
   };
 }
 
+function rejectingModel(): ModelPort {
+  return {
+    call(): Promise<NormalizedResponse> {
+      return Promise.reject(new Error("summary model transport failed"));
+    },
+  };
+}
+
 function defaultEnrichmentInput(
   messageCount = 2,
 ): Parameters<typeof enrichChatCompactionWithModelSummary>[1] {
@@ -212,6 +237,7 @@ function defaultEnrichmentInput(
       message("user", `Remember the plan and ${SECRET} at ${ABS_PATH}`, 0),
       message("assistant", "Acknowledged.", 1),
     ],
+    correlationId: CORRELATION_ID,
   };
 }
 
@@ -240,9 +266,54 @@ function expectStructuredSummaryPersisted(summary: ContextCompactionModelSummary
 
 afterEach(() => {
   vi.useRealTimers();
+  resetServerLogger();
 });
 
 describe("enrichChatCompactionWithModelSummary", () => {
+  it("labels inferred preserved facts instead of presenting them to the model as facts", async () => {
+    const store = createInMemoryEvidenceStore();
+    const calls: GatewayRequest[] = [];
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const input = defaultEnrichmentInput();
+    await enrichChatCompactionWithModelSummary(deps(store, structuredSummaryModel(calls)), {
+      ...input,
+      compaction: {
+        ...compactionRecord(),
+        preservedFacts: [
+          {
+            statement: "the compaction plan has verified evidence",
+            sourceRef: { kind: "message", stableId: "history-msg-0" },
+          },
+          { statement: "the plan likely needs no further review", inferred: true },
+        ],
+      },
+    });
+
+    const prompt = requireSummaryPrompt(requireFirstRequest(calls));
+
+    expect(prompt).toContain("Facts:\n- the compaction plan has verified evidence");
+    expect(prompt).toContain(
+      "Inferred statements (not facts):\n- the plan likely needs no further review",
+    );
+    expect(prompt).not.toContain("Facts:\n- the plan likely needs no further review");
+    const event = sink.events.find((entry) => entry.op === "chat.compaction.facts.classified");
+    expect(event).toMatchObject({
+      category: "gateway",
+      correlationId: CORRELATION_ID,
+      extra: {
+        inferredFactCount: 1,
+        verbatimFactCount: 1,
+        completeness: "complete",
+        loss: "none",
+      },
+    });
+    expect(
+      activityLogEventRegistration(event as unknown as Readonly<Record<PropertyKey, unknown>>),
+    ).toBeDefined();
+    expect(sink.lines().join("\n")).not.toContain("the plan likely needs no further review");
+  });
+
   it("persists a redacted bounded structured model-written summary for future resurfacing", async () => {
     const store = createInMemoryEvidenceStore();
     const calls: GatewayRequest[] = [];
@@ -258,6 +329,21 @@ describe("enrichChatCompactionWithModelSummary", () => {
     expect(calls).toHaveLength(1);
     expectStructuredSummaryRequest(request, prompt);
     expectStructuredSummaryPersisted(persisted);
+  });
+
+  // ADR-0173 D5: this best-effort background summarization has no live HTTP request in scope, so
+  // the chat's own (internally-minted, opaque) id is the stable correlation key stamped into the
+  // model's GatewayCallRequest.logContext.
+  it("stamps the chat id into the model gateway call's logContext", async () => {
+    const store = createInMemoryEvidenceStore();
+    const calls: GatewayRequest[] = [];
+    await enrichChatCompactionWithModelSummary(
+      deps(store, structuredSummaryModel(calls)),
+      defaultEnrichmentInput(),
+    );
+
+    const request = requireFirstRequest(calls);
+    expect((request as GatewayCallRequest).logContext?.correlationId).toBe(CHAT_ID);
   });
 
   it("keeps a safe legacy text fallback when the model lacks response-format support", async () => {
@@ -403,6 +489,44 @@ describe("enrichChatCompactionWithModelSummary", () => {
     expect(persisted.content).toBe("");
   });
 
+  // ADR-0173 D5 g25 — a scheduled-enrichment call failure used to reach only a bare `console.warn`
+  // (see the source-grep pin below); background summarization has no live REQUEST correlation id
+  // in scope, so the chat's own id — already the stable job key `callModelWithTimeout` labels its
+  // own call with — is the join key this diagnostic carries instead.
+  it("routes a model-call failure through the diagnostic sink, keyed by chatId", async () => {
+    const store = createInMemoryEvidenceStore();
+    const events: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = {
+      record: (record): void => {
+        events.push(record);
+      },
+    };
+
+    await enrichChatCompactionWithModelSummary(
+      deps(store, rejectingModel(), true, diagnostics),
+      defaultEnrichmentInput(9),
+    );
+
+    expect(events).toHaveLength(1);
+    const [event] = events;
+    if (event === undefined) throw new Error("expected a diagnostic record");
+    expect(event.correlationId).toBe(CHAT_ID);
+    expect(event.operation).toBe("chat.compaction.summary");
+    expect(event.source).toBe("chat.compaction.model-summary");
+    expect(event.errorClass).toBe("Error");
+    // The diagnostic is additive: the turn still gets a usable fallback summary either way.
+    const persisted = requireModelSummary(store, 9);
+    expect(persisted.failureReason).toBe("model-unavailable");
+  });
+
+  it("no longer logs a scheduled-enrichment failure through console.warn", () => {
+    const source = readFileSync(
+      new URL("./chat-compaction-model-summary.ts", import.meta.url),
+      "utf8",
+    );
+    expect(source).not.toContain("console.warn(");
+  });
+
   it("accepts a structured summary needing no safety redaction despite cosmetic whitespace", async () => {
     const store = createInMemoryEvidenceStore();
     const calls: GatewayRequest[] = [];
@@ -481,5 +605,43 @@ describe("enrichChatCompactionWithModelSummary", () => {
     expect(persisted.validationState).toBe("rejected");
     expect(persisted.failureReason).toBe("timed-out");
     expect(persisted.content).toBe("");
+  });
+
+  // Registry-linked executable proof (#3532): the inferred-vs-verbatim fact classification event,
+  // read back through the real formatter/registry path so `chat.compaction.facts.classified.line`
+  // resolves against a production-computed event (this task's rule 1).
+  it("persists chat.compaction.facts.classified as a registered Activity Log proof line", async () => {
+    const store = createInMemoryEvidenceStore();
+    const calls: GatewayRequest[] = [];
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const input = defaultEnrichmentInput();
+
+    await enrichChatCompactionWithModelSummary(deps(store, structuredSummaryModel(calls)), {
+      ...input,
+      compaction: {
+        ...compactionRecord(),
+        preservedFacts: [
+          {
+            statement: "the compaction plan has verified evidence",
+            sourceRef: { kind: "message", stableId: "history-msg-0" },
+          },
+          { statement: "the plan likely needs no further review", inferred: true },
+        ],
+      },
+    });
+
+    const event = sink.events.find((entry) => entry.op === "chat.compaction.facts.classified");
+    if (event === undefined) throw new Error("expected a fact-classification event");
+    const line = formatActivityLogProofLine(event);
+    const persisted = expectActivityLogProof("chat.compaction.facts.classified.line", line);
+    expect(persisted).toMatchObject({
+      category: "gateway",
+      correlationId: CORRELATION_ID,
+      inferredFactCount: 1,
+      verbatimFactCount: 1,
+      completeness: "complete",
+      loss: "none",
+    });
   });
 });

@@ -3,7 +3,6 @@ import {
   existsSync,
   lstatSync,
   mkdtempSync,
-  readFileSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -221,8 +220,6 @@ describe("loadState / saveState", () => {
     const root = makeRoot();
     saveState(root, { version: LAUNCHER_STATE_VERSION, entries: [makeEntry("/x")] });
     // No leftover temp directories.
-    const leftover = readFileSync; // dummy to suppress unused import warning
-    void leftover;
     const dir = join(root);
     expect(existsSync(join(dir, "launcher-state.json"))).toBe(true);
   });

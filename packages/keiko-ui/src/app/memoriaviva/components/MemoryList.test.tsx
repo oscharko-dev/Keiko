@@ -1,28 +1,21 @@
-// Issue #211 — tests for MemoryList: filtering, URL-state sync, empty states, errors.
+// Issue #211 — tests for MemoryListContent: filtering, empty/error states, entry points, a11y.
+//
+// KEIKO-0650: the earlier MemoryList URL-state-sync wrapper (a thin useSearchParams/useRouter
+// shim around MemoryListContent) was removed as dead code once every production caller
+// (MemoriaVivaWindow.tsx, MemoryJournal.tsx) moved to rendering MemoryListContent directly with
+// filters/onFilterChange as explicit props. The tests below render MemoryListContent the same
+// way MemoryList used to configure it (showWorkspaceBackLink) so no coverage of rows, metadata,
+// empty/error states, header entry points, or a11y was lost in the migration. The "passes q from
+// URL params" test was dropped outright — there is no URL parsing left in this file to test.
 
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { MemoryList, MemoryListContent } from "./MemoryList";
+import { MemoryListContent } from "./MemoryList";
 import type { MemoryFilterState } from "./MemoryFilters";
 import type { MemoryListResponse } from "@/lib/memory-api";
 import type { MemoryRecord, MemoryId } from "@oscharko-dev/keiko-contracts";
-
-// ---------------------------------------------------------------------------
-// next/navigation mock (required for useSearchParams / useRouter)
-// ---------------------------------------------------------------------------
-
-const pushMock = vi.fn();
-const searchParamsMock = { get: vi.fn().mockReturnValue(null) };
-// Mutable holder: tests can swap the object identity to simulate a URL change
-// (MemoryList reloads when the searchParams identity changes).
-let currentSearchParams: { get: (key: string) => string | null } = searchParamsMock;
-
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: pushMock }),
-  useSearchParams: () => currentSearchParams,
-}));
 
 vi.mock("next/link", () => ({
   default: ({
@@ -75,7 +68,7 @@ function makeListResponse(records: readonly MemoryRecord[]): MemoryListResponse 
   return { memories: records, total: records.length, limit: 50, offset: 0 };
 }
 
-function fetchWith(records: readonly MemoryRecord[]) {
+function fetchWith(records: readonly MemoryRecord[]): () => Promise<MemoryListResponse> {
   return vi.fn().mockResolvedValue(makeListResponse(records));
 }
 
@@ -88,20 +81,33 @@ const emptyFilters: MemoryFilterState = {
   sensitivity: [],
 };
 
+// The default (non-workspace-window) mode MemoryList used to configure: rows render as real
+// <a href> links, and the "back to workspace" link is shown.
+function renderDefaultList(
+  fetchMemoriesImpl: () => Promise<MemoryListResponse>,
+  filters: MemoryFilterState = emptyFilters,
+): ReturnType<typeof render> {
+  return render(
+    <MemoryListContent
+      filters={filters}
+      onFilterChange={vi.fn()}
+      fetchMemoriesImpl={fetchMemoriesImpl}
+      showWorkspaceBackLink
+    />,
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 beforeEach(() => {
-  pushMock.mockReset();
   emptyFetch.mockReset().mockResolvedValue(makeListResponse([]));
-  searchParamsMock.get.mockReturnValue(null);
-  currentSearchParams = searchParamsMock;
 });
 
-describe("MemoryList — loading state", () => {
+describe("MemoryListContent — loading state", () => {
   it("shows loading indicator initially", () => {
-    render(<MemoryList fetchMemoriesImpl={fetchWith([])} />);
+    renderDefaultList(fetchWith([]));
     // Two status regions exist now (loading indicator + result summary live
     // region, uiux-fix F035) — assert the visible loading message directly.
     expect(screen.getByText("Loading memories…")).toBeInTheDocument();
@@ -120,14 +126,21 @@ describe("MemoryList — loading state", () => {
             };
           }),
       );
-    const { rerender } = render(<MemoryList fetchMemoriesImpl={fetchImpl} />);
+    const { rerender } = renderDefaultList(fetchImpl);
     await waitFor(() => {
       expect(screen.getByText("Stable memory")).toBeInTheDocument();
     });
 
-    // Simulate a filter change: new searchParams identity triggers a reload.
-    currentSearchParams = { get: () => null };
-    rerender(<MemoryList fetchMemoriesImpl={fetchImpl} />);
+    // A new `filters` object identity triggers a reload (MemoryListContent's own
+    // useEffect([filters, load]) dependency), same as MemoryList's URL-identity change used to.
+    rerender(
+      <MemoryListContent
+        filters={{ ...emptyFilters }}
+        onFilterChange={vi.fn()}
+        fetchMemoriesImpl={fetchImpl}
+        showWorkspaceBackLink
+      />,
+    );
 
     // The old list stays rendered while the refetch is in flight — no
     // full-list replacement by the loading paragraph (uiux-fix F035).
@@ -141,39 +154,22 @@ describe("MemoryList — loading state", () => {
   });
 });
 
-describe("MemoryList — URL search", () => {
-  it("passes q from URL params into fetch filters", async () => {
-    const fetchImpl = fetchWith([]);
-    currentSearchParams = { get: (key: string) => (key === "q" ? "atlas" : null) };
-
-    render(<MemoryList fetchMemoriesImpl={fetchImpl} />);
-
-    await waitFor(() => {
-      expect(fetchImpl).toHaveBeenCalledWith(
-        expect.objectContaining({
-          query: "atlas",
-        }),
-      );
-    });
-  });
-});
-
-describe("MemoryList — empty state", () => {
+describe("MemoryListContent — empty state", () => {
   it("shows empty state when no memories returned", async () => {
-    render(<MemoryList fetchMemoriesImpl={emptyFetch} />);
+    renderDefaultList(emptyFetch);
     await waitFor(() => {
       expect(screen.getByTestId("memory-empty-state")).toBeInTheDocument();
     });
   });
 });
 
-describe("MemoryList — populated state", () => {
+describe("MemoryListContent — populated state", () => {
   it("renders memory rows", async () => {
     const records = [
       makeRecord({ id: makeMemoryId(1), body: "Memory alpha" }),
       makeRecord({ id: makeMemoryId(2), body: "Memory beta" }),
     ];
-    render(<MemoryList fetchMemoriesImpl={fetchWith(records)} />);
+    renderDefaultList(fetchWith(records));
     await waitFor(() => {
       expect(screen.getByText("Memory alpha")).toBeInTheDocument();
       expect(screen.getByText("Memory beta")).toBeInTheDocument();
@@ -191,7 +187,7 @@ describe("MemoryList — populated state", () => {
         sensitivity: "confidential",
       },
     });
-    render(<MemoryList fetchMemoriesImpl={fetchWith([record])} />);
+    renderDefaultList(fetchWith([record]));
     await waitFor(() => {
       expect(screen.getByText("Source explicit-user-instruction")).toBeInTheDocument();
       expect(screen.getByText("87% confidence")).toBeInTheDocument();
@@ -201,7 +197,7 @@ describe("MemoryList — populated state", () => {
 
   it("links each row to /memoriaviva/detail?id=:id", async () => {
     const record = makeRecord({ id: makeMemoryId(42), body: "Linked memory" });
-    render(<MemoryList fetchMemoriesImpl={fetchWith([record])} />);
+    renderDefaultList(fetchWith([record]));
     await waitFor(() => {
       const link = screen.getByRole("link", { name: /linked memory/i });
       expect(link).toHaveAttribute("href", "/memoriaviva/detail?id=mem-42");
@@ -256,7 +252,7 @@ describe("MemoryList — populated state", () => {
   });
 
   it("shows the consolidation entry point in the header", async () => {
-    render(<MemoryList fetchMemoriesImpl={fetchWith([makeRecord()])} />);
+    renderDefaultList(fetchWith([makeRecord()]));
     await waitFor(() => {
       expect(screen.getByRole("link", { name: /consolidation/i })).toHaveAttribute(
         "href",
@@ -266,7 +262,7 @@ describe("MemoryList — populated state", () => {
   });
 
   it("shows the Journal entry point in the header", async () => {
-    render(<MemoryList fetchMemoriesImpl={fetchWith([makeRecord()])} />);
+    renderDefaultList(fetchWith([makeRecord()]));
     await waitFor(() => {
       expect(screen.getByRole("link", { name: /^journal$/i })).toHaveAttribute(
         "href",
@@ -276,7 +272,7 @@ describe("MemoryList — populated state", () => {
   });
 
   it("shows the health scan entry point in the header", async () => {
-    render(<MemoryList fetchMemoriesImpl={fetchWith([makeRecord()])} />);
+    renderDefaultList(fetchWith([makeRecord()]));
     await waitFor(() => {
       expect(screen.getByRole("link", { name: /health scan/i })).toHaveAttribute(
         "href",
@@ -286,10 +282,10 @@ describe("MemoryList — populated state", () => {
   });
 });
 
-describe("MemoryList — error state", () => {
+describe("MemoryListContent — error state", () => {
   it("shows error alert and retry button on fetch failure", async () => {
     const failFetch = vi.fn().mockRejectedValue(new Error("network failure"));
-    render(<MemoryList fetchMemoriesImpl={failFetch} />);
+    renderDefaultList(failFetch);
     await waitFor(() => {
       expect(screen.getByRole("alert")).toBeInTheDocument();
       expect(screen.getByText(/network failure/i)).toBeInTheDocument();
@@ -304,7 +300,7 @@ describe("MemoryList — error state", () => {
       .mockResolvedValue(makeListResponse([makeRecord({ body: "Recovered memory" })]));
 
     const user = userEvent.setup();
-    render(<MemoryList fetchMemoriesImpl={failThenSucceed} />);
+    renderDefaultList(failThenSucceed);
     await waitFor(() => {
       expect(screen.getByRole("alert")).toBeInTheDocument();
     });
@@ -315,9 +311,9 @@ describe("MemoryList — error state", () => {
   });
 });
 
-describe("MemoryList — a11y", () => {
+describe("MemoryListContent — a11y", () => {
   it("jest-axe: empty state has no violations", async () => {
-    const { container } = render(<MemoryList fetchMemoriesImpl={emptyFetch} />);
+    const { container } = renderDefaultList(emptyFetch);
     await waitFor(() => {
       expect(screen.getByTestId("memory-empty-state")).toBeInTheDocument();
     });
@@ -330,7 +326,7 @@ describe("MemoryList — a11y", () => {
       makeRecord({ id: makeMemoryId(1), body: "First memory" }),
       makeRecord({ id: makeMemoryId(2), body: "Second memory", status: "proposed" }),
     ];
-    const { container } = render(<MemoryList fetchMemoriesImpl={fetchWith(records)} />);
+    const { container } = renderDefaultList(fetchWith(records));
     await waitFor(() => {
       expect(screen.getByText("First memory")).toBeInTheDocument();
     });

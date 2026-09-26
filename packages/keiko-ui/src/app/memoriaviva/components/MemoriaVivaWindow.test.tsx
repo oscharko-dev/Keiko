@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemoryListResponse, MemoryRecentCapturesResponse } from "@/lib/memory-api";
@@ -43,8 +43,7 @@ afterEach(() => {
 });
 
 describe("MemoriaVivaWindow request settings", () => {
-  it("owns the chat memory request switch and context budget controls", async () => {
-    const user = userEvent.setup();
+  it("leaves per-chat memory activation to each chat's branded control", async () => {
     render(
       <MemoriaVivaWindow
         fetchMemoriesImpl={fetchEmptyMemories()}
@@ -52,28 +51,11 @@ describe("MemoriaVivaWindow request settings", () => {
       />,
     );
 
-    const memorySwitch = screen.getByRole("switch", {
-      name: "Use MemoriaViva in chat requests",
-    });
-    expect(memorySwitch).toHaveAttribute("aria-checked", "true");
-    expect(screen.getByText("Enabled for chat")).toBeInTheDocument();
-
-    await user.click(memorySwitch);
-
-    expect(memorySwitch).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByText("Disabled for chat")).toBeInTheDocument();
-
-    const budgetInput = screen.getByLabelText("Memory context budget");
-    expect(budgetInput).toHaveValue(1200);
-
-    fireEvent.change(budgetInput, { target: { value: "800" } });
-    expect(budgetInput).toHaveValue(800);
-
-    await user.click(screen.getByRole("button", { name: "Increase Memory context budget" }));
-    expect(budgetInput).toHaveValue(900);
-
-    await user.click(screen.getByRole("button", { name: "Decrease Memory context budget" }));
-    expect(budgetInput).toHaveValue(800);
+    expect(screen.queryByRole("switch", { name: "Use MemoriaViva in chat requests" })).toBeNull();
+    expect(screen.queryByLabelText("Memory context budget")).toBeNull();
+    expect(
+      await screen.findByRole("radiogroup", { name: "Memory autonomy mode" }),
+    ).toBeInTheDocument();
   });
 
   it("opens the Memory Journal inside the existing window and returns to the list", async () => {

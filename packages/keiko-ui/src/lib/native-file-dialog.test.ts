@@ -19,13 +19,15 @@ vi.mock("./api", () => ({
   openNativeFileDialog: vi.fn(),
 }));
 
-import { fetchNativeFileDialogCapability } from "./api";
+import { openNativeFileDialog, fetchNativeFileDialogCapability } from "./api";
 import {
   nativeFileDialogSupported,
+  pickWithNativeDialog,
   resetNativeFileDialogCapabilityCacheForTests,
 } from "./native-file-dialog";
 
 const mockFetchCapability = vi.mocked(fetchNativeFileDialogCapability);
+const mockOpenDialog = vi.mocked(openNativeFileDialog);
 
 beforeEach(() => {
   mockFetchCapability.mockReset();
@@ -75,5 +77,41 @@ describe("nativeFileDialogSupported", () => {
     await expect(first).resolves.toBe(true);
     await expect(second).resolves.toBe(true);
     expect(mockFetchCapability).toHaveBeenCalledTimes(1);
+  });
+});
+
+// #2906 review (comment 3863185762): the response's rejectedSelectionCount used to have nowhere
+// to go once it reached the UI -- pickWithNativeDialog's "picked" outcome carried only `paths`, so
+// the shared client that EVERY Browse surface goes through silently dropped the signal even after
+// the server started sending it. This pins that the hook now threads it through unchanged.
+describe("pickWithNativeDialog", () => {
+  it("carries the server's rejectedSelectionCount through as rejectedCount on a picked outcome", async () => {
+    mockOpenDialog.mockResolvedValueOnce({
+      cancelled: false,
+      selections: [{ path: "/repo/a.txt", kind: "file" }],
+      rejectedSelectionCount: 2,
+      partial: true,
+    });
+
+    const outcome = await pickWithNativeDialog({ mode: "open-files" });
+
+    expect(outcome).toEqual({
+      kind: "picked",
+      paths: ["/repo/a.txt"],
+      rejectedCount: 2,
+    });
+  });
+
+  it("reports rejectedCount 0 when nothing was rejected", async () => {
+    mockOpenDialog.mockResolvedValueOnce({
+      cancelled: false,
+      selections: [{ path: "/repo/a.txt", kind: "file" }],
+      rejectedSelectionCount: 0,
+      partial: false,
+    });
+
+    const outcome = await pickWithNativeDialog({ mode: "open-file" });
+
+    expect(outcome).toMatchObject({ kind: "picked", rejectedCount: 0 });
   });
 });

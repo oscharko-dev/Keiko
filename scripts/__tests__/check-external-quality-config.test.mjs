@@ -72,7 +72,7 @@ describe("external quality integration configuration", () => {
     expect(findings({ packageJson: JSON.stringify(parsed) })).toEqual(
       expect.arrayContaining([
         "fallow must be pinned to 3.9.1",
-        "yaml must be pinned to 2.9.0 for semantic reviewer-policy validation",
+        "yaml must be pinned to 2.9.1 for semantic reviewer-policy validation",
         "check:external-quality-config script is missing or redirected",
         "check:review-bot-suppression script is missing or redirected",
         "semantic duplication must fail on every changed clone group",
@@ -84,7 +84,7 @@ describe("external quality integration configuration", () => {
     const weakened = sources.ciWorkflow
       .replace(
         "types: [opened, reopened, synchronize, ready_for_review, edited]",
-        "types: [opened]",
+        "types: [opened, reopened, synchronize, ready_for_review]",
       )
       .replace("npm run check:external-quality-config", "node --version")
       .replace("npm run check:review-bot-suppression", "node --version")
@@ -102,7 +102,31 @@ describe("external quality integration configuration", () => {
   });
 
   it("fails closed when redaction or the immutable quality range drifts", () => {
-    expect(findings({ ciWorkflow: sources.ciWorkflow.replace("--redact=100", "") })).toContain(
+    // Every Gitleaks invocation must be redacted, so dropping the flag from ANY ONE of them has to
+    // be caught -- `replaceAll` would only prove the all-or-nothing case and would pass even while
+    // a single unredacted call remained.
+    const redactionSites = sources.ciWorkflow.split("--redact=100").length - 1;
+    expect(redactionSites).toBeGreaterThan(1);
+    for (let site = 0; site < redactionSites; site += 1) {
+      let seen = -1;
+      const withoutOne = sources.ciWorkflow.replace(/--redact=100 /gu, (match) => {
+        seen += 1;
+        return seen === site ? "" : match;
+      });
+      expect(findings({ ciWorkflow: withoutOne })).toContain(
+        "Gitleaks output must remain fully redacted",
+      );
+    }
+    // A workflow with no Gitleaks scan at all must fail closed too: counting alone would read
+    // "0 of 0 redacted" as satisfied, silently accepting a secret scan that never runs. The probe
+    // removes the invocations but LEAVES a `--redact=100` occurrence behind, so a guard that only
+    // looks for that string still sees it -- the finding can then come from the count and nothing
+    // else, which is what makes this case exercise the new behaviour rather than the old one.
+    const noScans = sources.ciWorkflow
+      .replaceAll('"${RUNNER_TEMP}/gitleaks" git --redact=100 ', "")
+      .concat("\n# residual --redact=100 marker, no scan invocation\n");
+    expect(noScans).toContain("--redact=100");
+    expect(findings({ ciWorkflow: noScans })).toContain(
       "Gitleaks output must remain fully redacted",
     );
     const singleResolver = sources.ciWorkflow.replace(
@@ -111,6 +135,47 @@ describe("external quality integration configuration", () => {
     );
     expect(findings({ ciWorkflow: singleResolver })).toContain(
       "quality gates must share exactly two immutable-range resolver calls",
+    );
+  });
+
+  it("does not let a commented invocation satisfy the zero-scan guard", () => {
+    // The counting guard closed the "0 of 0 redacted" hole, but counting the RAW source opened a
+    // second one: strip every live invocation and leave a commented redacted command behind, and
+    // the comment itself counted as the scan -- `scans === redactedScans === 1` satisfied both the
+    // zero-scan guard and the redaction guard while no secret scan ran at all (#3463 review).
+    const commentedOnly = sources.ciWorkflow
+      .replaceAll('"${RUNNER_TEMP}/gitleaks" git --redact=100 ', "")
+      .concat(
+        '\n        # "${RUNNER_TEMP}/gitleaks" git --redact=100 --no-banner --timeout=120 .\n',
+      );
+    // The decoy is present as TEXT -- only its executability is missing, which is the whole point.
+    expect(commentedOnly).toContain('gitleaks" git --redact=100');
+    expect(findings({ ciWorkflow: commentedOnly })).toContain(
+      "Gitleaks output must remain fully redacted",
+    );
+  });
+
+  it("counts commented Gitleaks invocations symmetrically, so a comment cannot mask a live invocation", () => {
+    // The two counters cannot be balanced against each other: the redacted pattern extends the scan
+    // pattern, so every redacted match is also a scan match and `redactedScans <= scans` always
+    // holds. A commented invocation adds one to BOTH counters; a live unredacted call adds one to
+    // `scans` alone and breaks the equality the guard requires. This pins the decoy a reviewer of
+    // #3463 expected to slip through: a commented redacted call next to a live unredacted one.
+    // `replace` with a string pattern is first-occurrence on purpose -- exactly ONE live call loses
+    // the flag, which is the case a `replaceAll` probe cannot produce.
+    const decoy = sources.ciWorkflow
+      .replace('"${RUNNER_TEMP}/gitleaks" git --redact=100 ', '"${RUNNER_TEMP}/gitleaks" git ')
+      .concat(
+        '\n        # "${RUNNER_TEMP}/gitleaks" git --redact=100 --no-banner --timeout=120 .\n',
+      );
+    expect(findings({ ciWorkflow: decoy })).toContain("Gitleaks output must remain fully redacted");
+    // The same comment on an otherwise untouched workflow is inert: counted on both sides, it
+    // neither raises a finding nor suppresses one.
+    const commentOnly = sources.ciWorkflow.concat(
+      '\n        # "${RUNNER_TEMP}/gitleaks" git --redact=100 --no-banner --timeout=120 .\n',
+    );
+    expect(findings({ ciWorkflow: commentOnly })).not.toContain(
+      "Gitleaks output must remain fully redacted",
     );
   });
 

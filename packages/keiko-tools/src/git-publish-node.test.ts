@@ -12,11 +12,18 @@ import { makeWorkspace, recordingSpawn } from "./_support.js";
 import { createNodeGitPublishAdapter } from "./git-publish-node.js";
 import type { GitPublishExecRequest } from "./git-publish-gateway.js";
 
+// #3394 review: `setUpstreamTracking` is false here so a successful push in these env-forwarding
+// tests never triggers the best-effort tracking follow-up (`applyUpstreamTrackingIfRequested`,
+// git-publish-node.ts) — that follow-up is its own, second spawn, and this file's fake spawn shares
+// ONE recorded child across every call (see `recordingSpawn`), so a second spawn here would hang
+// waiting for a "close" event the test never emits a second time. The follow-up itself is covered
+// end-to-end, against a real local git remote, in git-publish-node.integration.test.ts.
 const PUSH: GitPublishExecRequest = {
   remoteAlias: "origin",
   sourceBranchName: "claude/issue-2843",
   remoteBranchName: "claude/issue-2843",
-  setUpstreamTracking: true,
+  setUpstreamTracking: false,
+  verifiedCommitSha: "a".repeat(40),
 };
 
 const REMOTE_PARENT_ENV: NodeJS.ProcessEnv = {
@@ -45,8 +52,33 @@ async function publishLaneEnv(): Promise<Record<string, string>> {
   return rec.calls()[0]?.options.env ?? {};
 }
 
-describe("node git publish adapter — the push can authenticate", () => {
-  it("forwards the real HOME so ~/.ssh and the credential helper are reachable", async () => {
+async function publishLaneArgs(): Promise<readonly string[]> {
+  const rec = recordingSpawn();
+  const { info } = makeWorkspace();
+  const adapter = createNodeGitPublishAdapter({
+    workspace: info,
+    processEnv: REMOTE_PARENT_ENV,
+    now: () => 0,
+    spawn: rec.fn,
+    resolveExecutable: () => "git",
+  });
+  const pending = adapter.publish(PUSH);
+  rec.child.emit("close", 0, null);
+  await pending;
+  return rec.calls()[0]?.args ?? [];
+}
+
+describe("node git publish adapter — the push can authenticate", (): void => {
+  it("neutralizes executable repository config before the governed push", async (): Promise<void> => {
+    const args = await publishLaneArgs();
+    expect(args).toContain("core.fsmonitor=false");
+    expect(args).toContain(`core.hooksPath=${process.platform === "win32" ? "NUL" : "/dev/null"}`);
+    expect(args).toContain("credential.helper=");
+    expect(args).toContain("protocol.ext.allow=never");
+    expect(args.at(-2)).toBe("origin");
+  });
+
+  it("forwards the real HOME so the user's SSH configuration is reachable", async () => {
     const env = await publishLaneEnv();
     expect(env.HOME).toBe("/Users/dev");
     expect(env.USERPROFILE).toBe("/Users/dev");

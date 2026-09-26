@@ -4,7 +4,6 @@ import {
   fetchCodingWorkbenchCodexSubscriptionProfile,
   prepareCodingWorkbenchCodexSubscriptionSetup,
 } from "./coding-workbench-provider-api";
-
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -16,6 +15,20 @@ describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
+
+  it.each(["no-tool-calling", "tool-calling-unverified"])(
+    "reads an unavailable %s profile without starting provider traffic",
+    async (reason) => {
+      const unavailable = { status: "unavailable", reason };
+      const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(unavailable));
+      vi.stubGlobal("fetch", fetchMock);
+      await expect(fetchCodingWorkbenchSidecarGatewayProfile()).resolves.toEqual(unavailable);
+      expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+        "/api/coding-sidecar/gateway/profile",
+        expect.objectContaining({ cache: "no-store" }),
+      );
+    },
+  );
 
   it("accepts a valid sidecar gateway profile response", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
@@ -131,6 +144,38 @@ describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
     await expect(fetchCodingWorkbenchSidecarGatewayProfile()).resolves.toMatchObject({
       status: "unavailable",
       reason: "missing-config",
+    });
+  });
+
+  // #3390 closeout: the readiness dimension appended for a profile whose derived
+  // `maxPromptTokens` cannot survive one real gateway call (epic #3384).
+  it("accepts the appended model-context-window-insufficient reason", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        status: "unavailable",
+        reason: "model-context-window-insufficient",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchCodingWorkbenchSidecarGatewayProfile()).resolves.toMatchObject({
+      status: "unavailable",
+      reason: "model-context-window-insufficient",
+    });
+  });
+
+  // PR #3452 (F73): an unverified profile retains its original unavailable reason.
+  it("preserves tool-calling-unverified until the operator verifies it", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({ status: "unavailable", reason: "tool-calling-unverified" }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchCodingWorkbenchSidecarGatewayProfile()).resolves.toMatchObject({
+      status: "unavailable",
+      reason: "tool-calling-unverified",
     });
   });
 

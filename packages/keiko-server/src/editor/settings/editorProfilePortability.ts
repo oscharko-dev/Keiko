@@ -1,24 +1,28 @@
+import type {
+  EditorM7SettingId,
+  EditorM7SettingValue,
+  WorkspaceProfileExportRedaction,
+  WorkspaceProfileExportResult,
+  WorkspaceProfileImportFailureCode,
+  WorkspaceProfileImportPreview,
+  WorkspaceProfileImportPreviewRow,
+  WorkspaceProfileManifest,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_M7_SETTING_REGISTRY,
-  EDITOR_M11_SETTINGS_SCHEMA_VERSION,
+  parseEditorM7SettingValue,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
+import { EDITOR_M11_SETTINGS_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-m11-settings";
+import {
   WORKSPACE_PROFILE_DISPLAY_NAME_MAX_CHARS,
   WORKSPACE_PROFILE_SCHEMA_VERSION,
   isAssignableWorkspaceProfileDisplayName,
   isReservedWorkspaceProfileDisplayName,
   isWorkspaceProfileDisplayName,
-  isWorkspaceProfileRef,
-  parseEditorM7SettingValue,
   workspaceProfileDisplayNameKey,
-  type EditorM7SettingId,
-  type EditorM7SettingValue,
   WORKSPACE_PROFILE_DISPLAY_NAME_FIELD,
-  type WorkspaceProfileExportRedaction,
-  type WorkspaceProfileExportResult,
-  type WorkspaceProfileImportFailureCode,
-  type WorkspaceProfileImportPreview,
-  type WorkspaceProfileImportPreviewRow,
-  type WorkspaceProfileManifest,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-profile";
+import { isWorkspaceProfileRef } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import { canonicalise, containsRedactableSecret, sha256Hex } from "@oscharko-dev/keiko-security";
 
 const IMPORT_MAX_DEPTH = 8;

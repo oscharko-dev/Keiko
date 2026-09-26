@@ -6,10 +6,10 @@
 
 import { describe, expect, it } from "vitest";
 
-import { lspStatusToProviderDescriptor } from "@oscharko-dev/keiko-contracts";
+import { lspStatusToProviderDescriptor } from "@oscharko-dev/keiko-contracts/runtime/lsp-process";
 import type { LanguageServiceOperation, LspProcessStatus } from "@oscharko-dev/keiko-contracts";
 
-import { LSP_PROCESS_STATUSES } from "@oscharko-dev/keiko-contracts";
+import { LSP_PROCESS_STATUSES } from "@oscharko-dev/keiko-contracts/runtime/lsp-process";
 import { buildLanguageProvider } from "./lspLanguageProvider.js";
 import { createLanguageProviderRegistry } from "../languageProvider.js";
 import { describeLanguageCapabilities } from "../languageService.js";

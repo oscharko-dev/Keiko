@@ -16,9 +16,15 @@ import {
 } from "./channelContract.js";
 import {
   isWellFormedSessionPairingAttestation,
+  LOCAL_APP_SESSION_PRINCIPAL_LABEL,
   type SessionPairingPort,
 } from "./sessionPairingPort.js";
 import type { AppSession, SessionRegistry } from "./sessionRegistry.js";
+import {
+  contentFreeErrorClass,
+  type ServerDiagnosticSink,
+  type ServerDiagnosticSummary,
+} from "../diagnostics-log.js";
 
 export const CODING_APP_SESSION_MAX_LIVE_STREAMS = 32;
 
@@ -39,11 +45,21 @@ export type CodingAppSessionPairResult =
 export type CodingAppSessionRotateResult =
   { readonly rotated: true; readonly cookieToken: string } | { readonly rotated: false };
 
+export type CodingAppSessionEnsureResult =
+  | { readonly status: "active" }
+  | { readonly status: "issued"; readonly cookieToken: string }
+  | { readonly status: "unavailable" };
+
 export interface CodingAppSessionChannel {
   readonly pair: (attestation: unknown) => CodingAppSessionPairResult;
+  readonly ensureLocalSession: (cookieToken: string | undefined) => CodingAppSessionEnsureResult;
   readonly snapshot: (cookieToken: string | undefined) => CodingAppSessionChannelSnapshot;
   readonly rotate: (cookieToken: string | undefined) => CodingAppSessionRotateResult;
-  readonly signOut: (cookieToken: string | undefined) => void;
+  /**
+   * Revoke the session behind a presented cookie: true when one was revoked, false for an absent,
+   * invalid, revoked or expired presentation, which leaves nothing to revoke.
+   */
+  readonly signOut: (cookieToken: string | undefined) => boolean;
   readonly sessionCount: () => number;
   /**
    * Verify a presented cookie token into its live session, or `undefined` for every invalid,
@@ -55,9 +71,11 @@ export interface CodingAppSessionChannel {
   readonly subscribe: (
     cookieToken: string | undefined,
     listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean,
+    options?: { readonly deferAdmissionReleaseOnBackpressure?: boolean },
   ) => {
     readonly snapshot: CodingAppSessionChannelSnapshot;
     readonly live: boolean;
+    readonly stop: () => void;
     readonly detach: () => void;
   };
 }
@@ -68,6 +86,13 @@ export interface CodingAppSessionChannelDeps {
   readonly pairingPort?: SessionPairingPort | undefined;
   /** Absent = channel serves content-free even to a paired session (this wave's production posture). */
   readonly contentSource?: CodingAppSessionContentSource | undefined;
+  /**
+   * When present, mid-stream listener failures (a `false` return or a throw from the SSE writer)
+   * are recorded as one redacted operator record per subscriber. Previously the failure was
+   * silently swallowed and the wire detached — the operator saw a dropped stream with nothing to
+   * diagnose. KEIKO-0225.
+   */
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 function projectContent(
@@ -110,6 +135,8 @@ function subscribeToContent(
   cookieToken: string | undefined,
   listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean,
   admission: LiveSubscriptionAdmission,
+  diagnostics: ServerDiagnosticSink | undefined,
+  deferAdmissionReleaseOnBackpressure: boolean,
 ): ReturnType<CodingAppSessionChannel["subscribe"]> {
   const session = registry.verify(cookieToken);
   const snapshot =
@@ -117,14 +144,59 @@ function subscribeToContent(
       ? contentFreeCodingAppSessionChannelSnapshot()
       : projectContent(session, contentSource);
   if (session === undefined || contentSource?.subscribeContent === undefined) {
-    return { snapshot, live: false, detach: (): void => undefined };
+    return inactiveSubscription(snapshot);
   }
-  return liveSubscription(registry, contentSource, cookieToken, snapshot, listener, admission);
+  return liveSubscription({
+    registry,
+    contentSource,
+    cookieToken,
+    snapshot,
+    listener,
+    admission,
+    diagnostics,
+    correlationId: session.sessionId,
+    deferAdmissionReleaseOnBackpressure,
+  });
+}
+
+function recordSseFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string,
+  message: ServerDiagnosticSummary,
+  errorClass: string,
+): void {
+  if (diagnostics === undefined) return;
+  try {
+    diagnostics.record({
+      // #3099 R4 P2: correlate per session so an operator watching two concurrent stream
+      // failures can distinguish them. The sessionId is a code-generated bounded token from the
+      // registry, safe to surface (no user content).
+      correlationId,
+      timestamp: new Date().toISOString(),
+      operation: "coding-app-session.channel.subscribe",
+      source: "coding-app-session.session-channel.publish",
+      errorClass,
+      message,
+    });
+  } catch {
+    // Diagnostic sink misbehaviour must not corrupt fan-out.
+  }
 }
 
 interface LiveSubscriptionAdmission {
   readonly acquire: () => boolean;
   readonly release: () => void;
+}
+
+function inactiveSubscription(
+  snapshot: CodingAppSessionChannelSnapshot,
+): ReturnType<CodingAppSessionChannel["subscribe"]> {
+  return {
+    snapshot,
+    live: false,
+    stop: (): void => undefined,
+    detach: (): void => undefined,
+  };
 }
 
 function rejectedSourceSubscription(
@@ -134,64 +206,134 @@ function rejectedSourceSubscription(
 ): ReturnType<CodingAppSessionChannel["subscribe"]> {
   source?.detach();
   detach();
-  return { snapshot, live: false, detach: (): void => undefined };
+  return inactiveSubscription(snapshot);
 }
 
-function liveSubscription(
-  registry: SessionRegistry,
-  contentSource: CodingAppSessionContentSource,
-  cookieToken: string | undefined,
-  snapshot: CodingAppSessionChannelSnapshot,
-  listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean,
-  admission: LiveSubscriptionAdmission,
-): ReturnType<CodingAppSessionChannel["subscribe"]> {
-  if (!admission.acquire()) return { snapshot, live: false, detach: (): void => undefined };
-  const lifecycle: {
-    active: boolean;
-    sourceDetach: () => void;
-    expiryTimer?: ReturnType<typeof setInterval>;
-  } = { active: true, sourceDetach: (): void => undefined };
-  const detach = (): void => {
-    if (!lifecycle.active) return;
+interface LiveLifecycle {
+  active: boolean;
+  released: boolean;
+  sourceDetach: () => void;
+  expiryTimer?: ReturnType<typeof setInterval>;
+}
+
+function stopLiveSource(lifecycle: LiveLifecycle): void {
+  if (lifecycle.active) {
     lifecycle.active = false;
     if (lifecycle.expiryTimer !== undefined) clearInterval(lifecycle.expiryTimer);
     lifecycle.sourceDetach();
+  }
+}
+
+function makeDetach(lifecycle: LiveLifecycle, admission: LiveSubscriptionAdmission): () => void {
+  return (): void => {
+    stopLiveSource(lifecycle);
+    if (lifecycle.released) return;
+    lifecycle.released = true;
     admission.release();
   };
-  const validity = (): boolean => registry.inspect(cookieToken) !== undefined;
-  const publish = (content: CodingAppSessionChannelContent | null): void => {
+}
+
+function makePublish(
+  lifecycle: LiveLifecycle,
+  validity: () => boolean,
+  listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean,
+  detach: () => void,
+  diagnostics: ServerDiagnosticSink | undefined,
+  correlationId: string,
+  deferAdmissionReleaseOnBackpressure: boolean,
+): (content: CodingAppSessionChannelContent | null) => void {
+  return (content: CodingAppSessionChannelContent | null): void => {
     if (!lifecycle.active) return;
     const valid = validity();
     try {
       const accepted = listener(
         valid ? snapshotForContent(content) : contentFreeCodingAppSessionChannelSnapshot(),
       );
-      if (!valid || !accepted) detach();
-    } catch {
+      if (!valid) {
+        detach();
+      } else if (!accepted) {
+        // KEIKO-0225: previously a listener returning `false` silently detached with nothing to
+        // diagnose. Report backpressure once so operators can see a stream that dropped.
+        recordSseFailure(diagnostics, correlationId, "sse-backpressure", "Error");
+        if (deferAdmissionReleaseOnBackpressure) stopLiveSource(lifecycle);
+        else detach();
+      }
+    } catch (error) {
+      recordSseFailure(
+        diagnostics,
+        correlationId,
+        "sse-listener-failed",
+        contentFreeErrorClass(error),
+      );
       detach();
     }
   };
+}
+
+interface LiveSubscriptionInput {
+  readonly registry: SessionRegistry;
+  readonly contentSource: CodingAppSessionContentSource;
+  readonly cookieToken: string | undefined;
+  readonly snapshot: CodingAppSessionChannelSnapshot;
+  readonly listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean;
+  readonly admission: LiveSubscriptionAdmission;
+  readonly diagnostics: ServerDiagnosticSink | undefined;
+  readonly correlationId: string;
+  readonly deferAdmissionReleaseOnBackpressure: boolean;
+}
+
+function liveSubscription(
+  input: LiveSubscriptionInput,
+): ReturnType<CodingAppSessionChannel["subscribe"]> {
+  const {
+    registry,
+    contentSource,
+    cookieToken,
+    snapshot,
+    listener,
+    admission,
+    diagnostics,
+    correlationId,
+    deferAdmissionReleaseOnBackpressure,
+  } = input;
+  if (!admission.acquire()) return inactiveSubscription(snapshot);
+  const lifecycle: LiveLifecycle = {
+    active: true,
+    released: false,
+    sourceDetach: (): void => undefined,
+  };
+  const detach = makeDetach(lifecycle, admission);
+  const stop = (): void => {
+    stopLiveSource(lifecycle);
+  };
+  const validity = (): boolean => registry.inspect(cookieToken) !== undefined;
+  const publish = makePublish(
+    lifecycle,
+    validity,
+    listener,
+    detach,
+    diagnostics,
+    correlationId,
+    deferAdmissionReleaseOnBackpressure,
+  );
   const sourceSubscription = contentSource.subscribeContent?.(publish);
   if (!sourceSubscription?.admitted)
     return rejectedSourceSubscription(sourceSubscription, detach, snapshot);
   if (!lifecycle.active) {
     sourceSubscription.detach();
-    return { snapshot, live: false, detach: (): void => undefined };
+    return { snapshot, live: false, stop, detach };
   }
   lifecycle.sourceDetach = sourceSubscription.detach;
   lifecycle.expiryTimer = setInterval(() => {
     if (!validity()) publish(null);
   }, 1_000);
   lifecycle.expiryTimer.unref();
-  return { snapshot, live: true, detach };
+  return { snapshot, live: true, stop, detach };
 }
 
-export function createCodingAppSessionChannel(
-  deps: CodingAppSessionChannelDeps,
-): CodingAppSessionChannel {
-  const { registry, pairingPort, contentSource } = deps;
+function makeLiveSubscriptionAdmission(): LiveSubscriptionAdmission {
   let liveSubscriptions = 0;
-  const admission: LiveSubscriptionAdmission = {
+  return {
     acquire: (): boolean => {
       if (liveSubscriptions >= CODING_APP_SESSION_MAX_LIVE_STREAMS) return false;
       liveSubscriptions += 1;
@@ -201,14 +343,42 @@ export function createCodingAppSessionChannel(
       liveSubscriptions = Math.max(0, liveSubscriptions - 1);
     },
   };
+}
+
+function pairSession(
+  registry: SessionRegistry,
+  pairingPort: SessionPairingPort | undefined,
+  attestation: unknown,
+): CodingAppSessionPairResult {
+  if (pairingPort === undefined) return { paired: false };
+  if (!isWellFormedSessionPairingAttestation(attestation)) return { paired: false };
+  const decision = pairingPort.attest(attestation);
+  if (decision.outcome !== "approved") return { paired: false };
+  const mint = registry.mint(decision.principalLabel);
+  return { paired: true, cookieToken: mint.cookieToken };
+}
+
+function ensureLocalSession(
+  registry: SessionRegistry,
+  pairingPort: SessionPairingPort | undefined,
+  cookieToken: string | undefined,
+): CodingAppSessionEnsureResult {
+  if (registry.verify(cookieToken) !== undefined) return { status: "active" };
+  if (pairingPort === undefined) return { status: "unavailable" };
+  const mint = registry.mint(LOCAL_APP_SESSION_PRINCIPAL_LABEL);
+  return { status: "issued", cookieToken: mint.cookieToken };
+}
+
+export function createCodingAppSessionChannel(
+  deps: CodingAppSessionChannelDeps,
+): CodingAppSessionChannel {
+  const { registry, pairingPort, contentSource, diagnostics } = deps;
+  const admission = makeLiveSubscriptionAdmission();
   return {
-    pair: (attestation: unknown): CodingAppSessionPairResult => {
-      if (pairingPort === undefined) return { paired: false };
-      if (!isWellFormedSessionPairingAttestation(attestation)) return { paired: false };
-      const decision = pairingPort.attest(attestation);
-      if (decision.outcome !== "approved") return { paired: false };
-      const mint = registry.mint(decision.principalLabel);
-      return { paired: true, cookieToken: mint.cookieToken };
+    pair: (attestation: unknown): CodingAppSessionPairResult =>
+      pairSession(registry, pairingPort, attestation),
+    ensureLocalSession: (cookieToken: string | undefined): CodingAppSessionEnsureResult => {
+      return ensureLocalSession(registry, pairingPort, cookieToken);
     },
     snapshot: (cookieToken: string | undefined): CodingAppSessionChannelSnapshot => {
       const session = registry.verify(cookieToken);
@@ -223,14 +393,24 @@ export function createCodingAppSessionChannel(
         ? { rotated: false }
         : { rotated: true, cookieToken: mint.cookieToken };
     },
-    signOut: (cookieToken: string | undefined): void => {
+    signOut: (cookieToken: string | undefined): boolean => {
       const session = registry.verify(cookieToken);
-      if (session !== undefined) registry.revoke(session.sessionId);
+      if (session === undefined) return false;
+      registry.revoke(session.sessionId);
+      return true;
     },
     sessionCount: (): number => registry.sessionCount(),
     verifySession: (cookieToken: string | undefined): AppSession | undefined =>
       registry.verify(cookieToken),
-    subscribe: (cookieToken, listener) =>
-      subscribeToContent(registry, contentSource, cookieToken, listener, admission),
+    subscribe: (cookieToken, listener, options) =>
+      subscribeToContent(
+        registry,
+        contentSource,
+        cookieToken,
+        listener,
+        admission,
+        diagnostics,
+        options?.deferAdmissionReleaseOnBackpressure ?? false,
+      ),
   };
 }

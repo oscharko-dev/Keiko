@@ -15,7 +15,6 @@ import {
   type GroundingPlan,
   type GroundingSourcePolicy,
   type GroundingStrategy,
-  type NoAnswerCondition,
   type PromptEnhancementRequest,
   type PromptTaskAnalysis,
   type RagEvaluationHint,
@@ -49,11 +48,16 @@ import {
 import {
   buildDirectives,
   buildSourcePriority,
-  MULTI_SOURCE_STRATEGIES,
   RAG_HINT_TEMPLATES,
   RETRIEVAL_MODES_BY_STRATEGY,
-  SCOPED_EVIDENCE_STRATEGIES,
+  buildNoAnswerConditions,
+  buildRecency,
 } from "./prompt-enhancer-grounding.js";
+import {
+  ASSUMPTION_TEMPLATES,
+  CLARIFICATION_TEMPLATES,
+  STRUCTURED_FORMATS,
+} from "./prompt-enhancer-analyzer.js";
 import {
   PROMPT_CRITIC_DIMENSIONS,
   isPromptCandidateRejectionReason,
@@ -87,8 +91,6 @@ const PROMPT_LOCALE_MAX_CHARS = 35;
 const PROMPT_SIGNAL_CODE_MAX_CHARS = 128;
 const ENHANCED_PROMPT_FIELD_MAX_CHARS = 20_000;
 const ENHANCED_PROMPT_LIST_MAX = 256;
-const STRUCTURED_OUTPUT_FORMATS: ReadonlySet<string> = new Set(["json", "yaml", "csv", "table"]);
-
 const REQUEST_KEYS: ReadonlySet<string> = new Set([
   "schemaVersion",
   "requestId",
@@ -165,26 +167,6 @@ interface ValidCitationShape {
   readonly discipline: (typeof CITATION_DISCIPLINES)[number];
   readonly granularity: (typeof CITATION_GRANULARITIES)[number];
 }
-
-const CLARIFICATION_TEMPLATES: Readonly<Record<string, string>> = {
-  subject: "What specific subject or task should this prompt address?",
-  scope: "Which part of the work should the task focus on?",
-  audience: "Who is the intended audience for the output?",
-  "output-format": "What output format is expected (for example JSON, a table, or prose)?",
-  constraints: "Are there language, framework, or length constraints to honor?",
-  "data-source": "Which files, documents, or sources should ground the answer?",
-  "success-criteria": "What defines a successful outcome for this task?",
-};
-
-const ASSUMPTION_TEMPLATES: Readonly<Record<string, string>> = {
-  subject: "Assuming the broadest reasonable interpretation of the requested subject.",
-  scope: "Assuming the task applies to the most relevant available scope.",
-  audience: "Assuming a general professional audience.",
-  "output-format": "Assuming a structured format appropriate to the task.",
-  constraints: "Assuming no constraints beyond standard best practices.",
-  "data-source": "Assuming the answer should rely only on supplied context, with gaps flagged.",
-  "success-criteria": "Assuming correctness and completeness are the primary success criteria.",
-};
 
 // ─── Pure predicates ─────────────────────────────────────────────────────────────
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -312,7 +294,8 @@ function validateOutputSchema(value: unknown, errors: string[]): void {
   } else if (
     typeof value.format === "string" &&
     PROMPT_OUTPUT_FORMATS.includes(value.format as (typeof PROMPT_OUTPUT_FORMATS)[number]) &&
-    value.structured !== STRUCTURED_OUTPUT_FORMATS.has(value.format)
+    value.structured !==
+      STRUCTURED_FORMATS.has(value.format as (typeof PROMPT_OUTPUT_FORMATS)[number])
   ) {
     errors.push("outputSchema.structured must match the selected output format");
   }
@@ -649,35 +632,16 @@ function validateRecencySemantics(
   errors: string[],
 ): void {
   if (!isValidRecency(value)) return;
-  const expectedStaleFlag = value.volatile || strategy === "external-research-required";
+  // Compared against the producer's own output rather than a re-derived formula.
+  const expected = buildRecency(value, strategy);
   if (
-    value.requireAsOfDate !== value.volatile ||
-    value.flagPotentiallyStale !== expectedStaleFlag
+    value.requireAsOfDate !== expected.requireAsOfDate ||
+    value.flagPotentiallyStale !== expected.flagPotentiallyStale
   ) {
     errors.push(
       "groundingPlan.recency must pair volatile data with as-of dates and strategy-appropriate stale flags",
     );
   }
-}
-
-function expectedNoAnswerConditions(
-  strategy: GroundingStrategy,
-  recency: RecencyExpectation,
-): readonly NoAnswerCondition[] {
-  if (strategy === "no-grounding") {
-    return [];
-  }
-  const expected: NoAnswerCondition[] = ["insufficient-evidence"];
-  if (MULTI_SOURCE_STRATEGIES.has(strategy)) {
-    expected.push("contradictory-evidence");
-  }
-  if (SCOPED_EVIDENCE_STRATEGIES.has(strategy)) {
-    expected.push("outside-evidence-scope");
-  }
-  if (recency.volatile || strategy === "external-research-required") {
-    expected.push("stale-or-unavailable-current-data");
-  }
-  return expected;
 }
 
 function validateNoAnswerSemantics(
@@ -687,7 +651,7 @@ function validateNoAnswerSemantics(
   errors: string[],
 ): void {
   if (!isMemberArray(value, NO_ANSWER_CONDITIONS) || !isValidRecency(recency)) return;
-  if (!arraysEqual(value, expectedNoAnswerConditions(strategy, recency))) {
+  if (!arraysEqual(value, buildNoAnswerConditions(strategy, recency))) {
     errors.push("groundingPlan.noAnswerConditions must match strategy and recency requirements");
   }
 }

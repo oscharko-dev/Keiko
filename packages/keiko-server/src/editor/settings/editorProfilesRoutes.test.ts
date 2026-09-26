@@ -5,14 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import {
-  EDITOR_M11_DEFAULT_PROFILE_REF,
-  isWorkspaceProfileRef,
-  type EditorM11ProfilesSnapshot,
-  type WorkspaceProfileExportResult,
-  type WorkspaceProfileImportPreview,
-  type WorkspaceProfileRef,
+import type {
+  EditorM11ProfilesSnapshot,
+  WorkspaceProfileExportResult,
+  WorkspaceProfileImportPreview,
+  WorkspaceProfileRef,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_M11_DEFAULT_PROFILE_REF } from "@oscharko-dev/keiko-contracts/runtime/editor-m11-settings";
+import { isWorkspaceProfileRef } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 
 import { buildCspHeader } from "../../csp.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../../index.js";

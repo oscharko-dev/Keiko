@@ -1,12 +1,36 @@
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
   codingWorkbenchStreamRunId,
   useCodingWorkbenchPairingEffect,
   useCodingWorkbenchWorkspaceEffect,
+  useCodingWorkbenchRuntimeRefreshEffects,
+  POST_RUN_DESCRIPTION_POLL_MAX_MS,
+  POST_RUN_DESCRIPTION_POLL_MS,
+  awaitingPostRunDescription,
 } from "./coding-workbench-runtime-effects";
+import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import {
+  redeemCodingAppSessionPairingNavigation,
+  type CodingAppSessionPairingSeams,
+} from "./coding-app-session-client";
 import { STREAMABLE_RUNTIME_STATES } from "./useCodingWorkbenchRuntime";
-import type { CodingWorkbenchRuntimeState } from "./coding-workbench-live-state";
+import {
+  createInitialCodingWorkbenchRuntimeState,
+  type CodingWorkbenchRuntimeState,
+} from "./coding-workbench-live-state";
+import {
+  GATEWAY_CONFIG_UPDATED_EVENT,
+  GATEWAY_MODEL_READINESS_UPDATED_EVENT,
+} from "@/app/components/desktop/widgets/shared/gatewaySetupBus";
+import { fetchCodingWorkbenchSidecarGatewayProfile } from "./coding-workbench-provider-api";
+
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
 const manifestAccessMock = vi.hoisted(() => vi.fn());
 vi.mock("./workspace-manifest-api", async (importOriginal) => {
@@ -33,6 +57,19 @@ describe("codingWorkbenchStreamRunId", () => {
   });
 });
 
+// A launcher re-pair that arrives without a page load (F65): a fragment, and a pair endpoint that
+// acknowledges it.
+const REPAIR_SEAMS: CodingAppSessionPairingSeams = {
+  readFragment: (): string =>
+    encodeCodingAppSessionPairingFragment({
+      requestId: "req_re-pair",
+      issuedAtMs: 1,
+      claim: "e".repeat(64),
+    }),
+  stripFragment: (): void => undefined,
+  postPairing: (): Promise<unknown> => Promise.resolve({ schemaVersion: "1" }),
+};
+
 describe("useCodingWorkbenchPairingEffect (release-audit F-08/RG-12)", () => {
   it("projects the honest workspaces session answer into the pairing dimension", async () => {
     manifestAccessMock.mockResolvedValue({ session: "unpaired", manifests: [] });
@@ -42,6 +79,27 @@ describe("useCodingWorkbenchPairingEffect (release-audit F-08/RG-12)", () => {
     });
     await waitFor(() => {
       expect(dispatch).toHaveBeenCalledWith({ kind: "pairing-set", pairing: "unpaired" });
+    });
+  });
+
+  it("resolves the dimension again after a re-pair without a page load (F65)", async () => {
+    manifestAccessMock
+      .mockResolvedValueOnce({ session: "unpaired", manifests: [] })
+      .mockResolvedValue({ session: "paired", manifests: [] });
+    const dispatch = vi.fn();
+    renderHook(() => {
+      useCodingWorkbenchPairingEffect(dispatch);
+    });
+    await waitFor(() => {
+      expect(dispatch).toHaveBeenCalledWith({ kind: "pairing-set", pairing: "unpaired" });
+    });
+
+    await act(async () => {
+      await redeemCodingAppSessionPairingNavigation(REPAIR_SEAMS);
+    });
+
+    await waitFor(() => {
+      expect(dispatch).toHaveBeenLastCalledWith({ kind: "pairing-set", pairing: "paired" });
     });
   });
 
@@ -148,5 +206,159 @@ describe("useCodingWorkbenchWorkspaceEffect", () => {
     });
     expect(dispatch).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledWith({ kind: "resource-loading", resource: "workspace" });
+  });
+});
+
+describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
+  // Settings replaces the gateway configuration and records readiness verdicts without this
+  // window knowing; the source stayed "unavailable" after tool calling had just been verified
+  // until a reload (workbench end-to-end run, 2026-09-03).
+  it("re-reads the source and the runtime posture when Settings announces a gateway change", async () => {
+    const refreshRuntime = vi.fn(() => Promise.resolve());
+    const refreshSource = vi.fn(() => Promise.resolve());
+    const refreshRun = vi.fn(() => Promise.resolve());
+    const { unmount } = renderHook(() => {
+      useCodingWorkbenchRuntimeRefreshEffects({
+        state: createInitialCodingWorkbenchRuntimeState(),
+        refreshRuntime,
+        refreshSource,
+        refreshRun,
+      });
+    });
+    await waitFor(() => {
+      expect(refreshSource).toHaveBeenCalledTimes(1);
+    });
+
+    window.dispatchEvent(new CustomEvent(GATEWAY_MODEL_READINESS_UPDATED_EVENT));
+    window.dispatchEvent(new CustomEvent(GATEWAY_CONFIG_UPDATED_EVENT));
+
+    await waitFor(() => {
+      expect(refreshSource).toHaveBeenCalledTimes(3);
+      expect(refreshRuntime).toHaveBeenCalledTimes(3);
+    });
+    unmount();
+    window.dispatchEvent(new CustomEvent(GATEWAY_CONFIG_UPDATED_EVENT));
+    expect(refreshSource).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps an unverified source read-only without recursive runtime refresh", async () => {
+    window.dispatchEvent(new CustomEvent(GATEWAY_CONFIG_UPDATED_EVENT));
+    const unavailable = { status: "unavailable", reason: "no-tool-calling" };
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(unavailable));
+    vi.stubGlobal("fetch", fetchMock);
+    const refreshSource = vi.fn(async (): Promise<void> => {
+      await fetchCodingWorkbenchSidecarGatewayProfile();
+    });
+    const { unmount } = renderHook(() => {
+      useCodingWorkbenchRuntimeRefreshEffects({
+        state: createInitialCodingWorkbenchRuntimeState(),
+        refreshRuntime: vi.fn(() => Promise.resolve()),
+        refreshSource,
+        refreshRun: vi.fn(() => Promise.resolve()),
+      });
+    });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(refreshSource).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/coding-sidecar/gateway/profile",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    expect(fetchMock.mock.calls.filter(([path]) => path === "/api/gateway/readiness")).toHaveLength(
+      0,
+    );
+    unmount();
+    vi.unstubAllGlobals();
+    window.dispatchEvent(new CustomEvent(GATEWAY_CONFIG_UPDATED_EVENT));
+  });
+});
+
+// #3390: the description job is dispatched AT the terminal transition and generates a few seconds
+// later -- after the run's event stream (live states only) has delivered its last re-snapshot. The
+// card an operator was watching kept the pre-generation state for good while a freshly opened
+// window showed "Review exact draft" at once (rehearsal run-04). The settled run is re-read, on a
+// bounded cadence, exactly while that generation is pending.
+describe("post-run description refresh (#3390)", () => {
+  const settled = (overrides: Record<string, unknown> = {}): CodingWorkbenchRuntimeState =>
+    ({
+      run: {
+        status: "ready",
+        value: {
+          runId: "run-1",
+          state: "succeeded",
+          draftDelivery: { phase: "draft-created" },
+          ...overrides,
+        },
+        error: null,
+      },
+    }) as unknown as CodingWorkbenchRuntimeState;
+
+  it("is pending only for a succeeded run with a draft pull request and no description yet", () => {
+    expect(awaitingPostRunDescription(settled().run.value)).toBe(true);
+    expect(awaitingPostRunDescription(settled({ state: "running" }).run.value)).toBe(false);
+    expect(
+      awaitingPostRunDescription(settled({ draftDelivery: { phase: "pushed" } }).run.value),
+    ).toBe(false);
+    expect(
+      awaitingPostRunDescription(
+        settled({ descriptionStatus: { state: "current", reason: "generated" } }).run.value,
+      ),
+    ).toBe(false);
+    expect(awaitingPostRunDescription(null)).toBe(false);
+  });
+
+  it("re-reads the settled run on the poll cadence until the description arrives, then stops", () => {
+    vi.useFakeTimers();
+    try {
+      const refreshRun = vi.fn(() => Promise.resolve());
+      const noop = vi.fn(() => Promise.resolve());
+      const { rerender, unmount } = renderHook(
+        ({ state }: { state: CodingWorkbenchRuntimeState }) => {
+          useCodingWorkbenchRuntimeRefreshEffects({
+            state,
+            refreshRuntime: noop,
+            refreshSource: noop,
+            refreshRun,
+          });
+        },
+        { initialProps: { state: settled() } },
+      );
+      const mountReads = refreshRun.mock.calls.length;
+      vi.advanceTimersByTime(POST_RUN_DESCRIPTION_POLL_MS * 3);
+      expect(refreshRun.mock.calls.length - mountReads).toBe(3);
+
+      rerender({
+        state: settled({ descriptionStatus: { state: "current", reason: "generated" } }),
+      });
+      const afterArrival = refreshRun.mock.calls.length;
+      vi.advanceTimersByTime(POST_RUN_DESCRIPTION_POLL_MS * 3);
+      expect(refreshRun.mock.calls).toHaveLength(afterArrival);
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives up after the bounded window so a job that never settles cannot poll forever", () => {
+    vi.useFakeTimers();
+    try {
+      const refreshRun = vi.fn(() => Promise.resolve());
+      const noop = vi.fn(() => Promise.resolve());
+      const { unmount } = renderHook(() => {
+        useCodingWorkbenchRuntimeRefreshEffects({
+          state: settled(),
+          refreshRuntime: noop,
+          refreshSource: noop,
+          refreshRun,
+        });
+      });
+      vi.advanceTimersByTime(POST_RUN_DESCRIPTION_POLL_MAX_MS);
+      const atLimit = refreshRun.mock.calls.length;
+      vi.advanceTimersByTime(POST_RUN_DESCRIPTION_POLL_MS * 5);
+      expect(refreshRun.mock.calls).toHaveLength(atLimit);
+      unmount();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

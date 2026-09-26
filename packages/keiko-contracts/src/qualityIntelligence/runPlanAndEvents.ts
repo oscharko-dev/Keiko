@@ -26,9 +26,54 @@ export const QUALITY_INTELLIGENCE_PLANNER_KINDS: readonly QualityIntelligencePla
   "model-routed",
 ] as const;
 
+/**
+ * Stable stage name. Union of every stage declared by a QI workflow descriptor
+ * (`packages/keiko-workflows/src/qualityIntelligence/descriptors.ts`): `qi:test-design` (plan,
+ * candidates, judge, coverage, validate, finalize), `qi:coverage-review` (plan, analyse, report),
+ * `qi:validation` (plan, run-judges, reconcile, report), and `qi:artifact-refinement` (plan,
+ * refine, validate, report). Closed rather than widened with `(string & {})`: unlike a
+ * server-originated error code, a new stage name is a keiko-workflows change released in lockstep
+ * with this contract, so the compiler catching a drifted or misspelled name here is the point
+ * (KEIKO-0274).
+ */
+export type QualityIntelligenceStageName =
+  | "plan"
+  | "candidates"
+  | "judge"
+  | "coverage"
+  | "validate"
+  | "finalize"
+  | "analyse"
+  | "report"
+  | "run-judges"
+  | "reconcile"
+  | "refine";
+
+/**
+ * Canonical runtime enumeration of {@link QualityIntelligenceStageName}, mirroring
+ * `QUALITY_INTELLIGENCE_PLANNER_KINDS` above. This contracts package cannot import
+ * `keiko-workflows/src/qualityIntelligence/descriptors.ts` (dependencies flow inward toward this
+ * leaf, never the reverse), so `descriptors.ts` imports and types its own `stageNames` field
+ * against this array's element type instead — a drifted or renamed stage there is then a compile
+ * error, not a silently-stale fixture on either side (KEIKO-0274).
+ */
+export const QUALITY_INTELLIGENCE_STAGE_NAMES: readonly QualityIntelligenceStageName[] = [
+  "plan",
+  "candidates",
+  "judge",
+  "coverage",
+  "validate",
+  "finalize",
+  "analyse",
+  "report",
+  "run-judges",
+  "reconcile",
+  "refine",
+] as const;
+
 export interface QualityIntelligenceRunStage {
-  /** Stable stage name (e.g. "ingest", "design", "validate", "review"). */
-  readonly name: string;
+  /** Stable stage name — see {@link QualityIntelligenceStageName}. */
+  readonly name: QualityIntelligenceStageName;
   /** Opaque descriptor identifier the runtime maps to a stage implementation. */
   readonly descriptor: string;
 }
@@ -52,17 +97,17 @@ export interface QualityIntelligenceRunStartedPayload {
 
 export interface QualityIntelligenceStageStartedPayload {
   readonly kind: "stage:started";
-  readonly stageName: string;
+  readonly stageName: QualityIntelligenceStageName;
 }
 
 export interface QualityIntelligenceStageCompletedPayload {
   readonly kind: "stage:completed";
-  readonly stageName: string;
+  readonly stageName: QualityIntelligenceStageName;
 }
 
 export interface QualityIntelligenceStageFailedPayload {
   readonly kind: "stage:failed";
-  readonly stageName: string;
+  readonly stageName: QualityIntelligenceStageName;
   /** Non-secret single-sentence failure reason; producer-redacted. */
   readonly reasonSummary: string;
 }

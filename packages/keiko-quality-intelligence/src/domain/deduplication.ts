@@ -22,6 +22,7 @@
 // what we port here.
 
 import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
 import { normaliseCandidateText, normaliseGermanComparisonText } from "./assertions.js";
@@ -45,20 +46,10 @@ const canonicaliseSequence = (values: readonly string[]): readonly string[] => {
   return out;
 };
 
-export const compareString = (left: string, right: string): number => {
-  if (left < right) {
-    return -1;
-  }
-  if (left > right) {
-    return 1;
-  }
-  return 0;
-};
-
 const compareCandidateById = (
   left: QualityIntelligence.QualityIntelligenceTestCaseCandidate,
   right: QualityIntelligence.QualityIntelligenceTestCaseCandidate,
-): number => compareString(String(left.id), String(right.id));
+): number => compareStrings(String(left.id), String(right.id));
 
 /**
  * Compute the canonical equivalence signature for a candidate. Exported so

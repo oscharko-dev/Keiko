@@ -1,17 +1,7 @@
 "use client";
 
-import {
-  useCallback,
-  useId,
-  useState,
-  type ChangeEvent,
-  type ReactNode,
-  type WheelEvent,
-} from "react";
-import { NumberControlStepper } from "@/app/components/desktop/NumberControlStepper";
+import { useCallback, useState, type ReactNode } from "react";
 import { useAutonomyModePolicy } from "@/app/components/desktop/hooks/useAutonomyModePolicy";
-import { useConversationMemorySettings } from "@/app/components/desktop/hooks/memorySettings";
-import { Toggle } from "@/app/components/desktop/widgets/shared/Toggle";
 import {
   loadMemoryAutonomyMode,
   persistMemoryAutonomyMode,
@@ -51,93 +41,11 @@ interface MemoriaVivaRequestSettingsProps {
   readonly persistMemoryAutonomyModeImpl: typeof persistMemoryAutonomyMode;
 }
 
-function MemoryEnabledSetting({
-  enabled,
-  onChange,
-}: {
-  readonly enabled: boolean;
-  readonly onChange: (next: boolean) => void;
-}): ReactNode {
-  const t = useTranslate();
-  return (
-    <div className="mv-setting-toggle">
-      <span>
-        <strong>{t("memoria.settings.useInChat")}</strong>
-        <span>{t("memoria.settings.useInChatHelp")}</span>
-      </span>
-      <Toggle on={enabled} onChange={onChange} label={t("memoria.settings.useInChatLabel")} />
-    </div>
-  );
-}
-
-function MemoryBudgetSetting({
-  budgetTokens,
-  setBudgetTokens,
-}: {
-  readonly budgetTokens: number;
-  readonly setBudgetTokens: (next: number) => void;
-}): ReactNode {
-  const t = useTranslate();
-  const generatedId = useId();
-  const inputId = `${generatedId}-memoriaviva-budget`;
-  const helpId = `${generatedId}-memoriaviva-budget-help`;
-  const step = useCallback(
-    (delta: number): void => setBudgetTokens(Math.max(0, budgetTokens + delta)),
-    [budgetTokens, setBudgetTokens],
-  );
-  const change = useCallback(
-    (event: ChangeEvent<HTMLInputElement>): void => {
-      setBudgetTokens(Math.max(0, Number(event.target.value) || 0));
-    },
-    [setBudgetTokens],
-  );
-  const wheel = useCallback(
-    (event: WheelEvent<HTMLInputElement>): void => {
-      if (event.deltaY === 0) return;
-      event.preventDefault();
-      step(event.deltaY < 0 ? 100 : -100);
-    },
-    [step],
-  );
-
-  return (
-    <div className="mv-setting-budget">
-      <label htmlFor={inputId}>{t("memoria.settings.budget")}</label>
-      <div className="mv-budget-control">
-        <span className="number-control number-control-pill">
-          <input
-            id={inputId}
-            type="number"
-            className="number-control-input"
-            min={0}
-            step={100}
-            value={budgetTokens}
-            aria-label={t("memoria.settings.budget")}
-            aria-describedby={helpId}
-            onChange={change}
-            onWheel={wheel}
-          />
-          <NumberControlStepper
-            label={t("memoria.settings.budget")}
-            onStepUp={() => step(100)}
-            onStepDown={() => step(-100)}
-          />
-        </span>
-        <span className="mv-budget-unit">{t("memoria.settings.budgetUnit")}</span>
-      </div>
-      <p id={helpId} className="mv-setting-help">
-        {t("memoria.settings.budgetHelp")}
-      </p>
-    </div>
-  );
-}
-
 function MemoriaVivaRequestSettings({
   loadMemoryAutonomyModeImpl,
   persistMemoryAutonomyModeImpl,
 }: MemoriaVivaRequestSettingsProps): ReactNode {
   const t = useTranslate();
-  const settings = useConversationMemorySettings();
   const policy = useAutonomyModePolicy({
     load: loadMemoryAutonomyModeImpl,
     persist: persistMemoryAutonomyModeImpl,
@@ -149,23 +57,9 @@ function MemoriaVivaRequestSettings({
           <h2 className="mv-settings-title">{t("memoria.settings.title")}</h2>
           <p className="mv-settings-copy">{t("memoria.settings.description")}</p>
         </div>
-        <span
-          className="mv-settings-status"
-          data-enabled={settings.memoryEnabled ? "true" : "false"}
-        >
-          {settings.memoryEnabled ? t("memoria.settings.enabled") : t("memoria.settings.disabled")}
-        </span>
       </div>
 
       <div className="mv-settings-grid">
-        <MemoryEnabledSetting
-          enabled={settings.memoryEnabled}
-          onChange={settings.setMemoryEnabled}
-        />
-        <MemoryBudgetSetting
-          budgetTokens={settings.memoryBudgetTokens}
-          setBudgetTokens={settings.setMemoryBudgetTokens}
-        />
         <MemoryAutonomyControl
           mode={policy.requestedMode}
           effectiveMode={policy.effectiveMode}

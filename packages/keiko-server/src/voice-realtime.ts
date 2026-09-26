@@ -27,10 +27,19 @@ import {
   selectRealtimeVoiceModel,
   type GatewayConfig,
   type ModelProviderConfig,
+  type RealtimeNegotiationErrorKind,
   type RealtimeNegotiationOutcome,
   type RealtimeNegotiationRequest,
   type VoiceCapabilityResolution,
 } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  VoiceControlMessage,
+  VoiceProfile,
+  VoiceProtocolErrorCode,
+  VoiceProviderLocality,
+  VoiceSessionChatContext,
+  VoiceSessionCreateMessage,
+} from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
   isVoiceReplayEligible,
@@ -38,21 +47,96 @@ import {
   VOICE_REALTIME_CONTROL_TRANSPORT,
   VOICE_PROFILE_NEGOTIATION_MODE,
   VOICE_PROTOCOL_VERSION,
+  VOICE_REPLAY_CAPACITY,
   voiceMessageAllowedForProfile,
-  type VoiceControlMessage,
-  type VoiceProfile,
-  type VoiceProtocolErrorCode,
-  type VoiceProviderLocality,
-  type VoiceSessionChatContext,
-  type VoiceSessionCreateMessage,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isAllowedHost } from "./host-check.js";
+import { resolveCorrelationId } from "./correlation.js";
 import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "./deps.js";
 import { isVoiceDisabledByPolicy, isVoiceRealtimeCapable } from "./read-handlers.js";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "./diagnostics-log.js";
+import { getServerLogger } from "./observability/index.js";
 
 // The single loopback path the BFF WebSocket upgrade is re-opened for. Every other upgrade keeps the
 // hard 404 + socket.destroy() default (server.ts).
 export const VOICE_CONTROL_PATH = "/api/voice/control";
+
+const VOICE_REALTIME_SESSION_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "voice.realtime.session-started",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "voice-realtime.VoiceControlConnection.start",
+  fields: {
+    profile: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["none", "speech-to-text", "speech-output", "full-realtime"],
+    },
+    resumed: { type: "boolean", dataClass: "closed-enum", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["voice-realtime-session"],
+  proofIds: ["voice.realtime.session-started.profile"],
+  releaseImpact: "patch",
+});
+
+const VOICE_REALTIME_SESSION_ENDED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "voice.realtime.session-ended",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "voice-realtime.VoiceControlConnection.endSession",
+  fields: {},
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["voice-realtime-session"],
+  proofIds: ["voice.realtime.session-ended.closed"],
+  releaseImpact: "patch",
+});
+
+const VOICE_REALTIME_POLICY_DECISION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "voice.realtime.policy-decision",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "voice-realtime.VoiceControlConnection.dispatchIn",
+  fields: {
+    decision: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["deny"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["profile-mismatch"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["voice-realtime-policy"],
+  proofIds: ["voice.realtime.policy-decision.reason"],
+  releaseImpact: "patch",
+});
 
 // Bound every client WebSocket control frame before UTF-8 conversion or JSON parsing. SDP and
 // transcript fields have narrower semantic caps below; this is the transport-level abuse guard.
@@ -61,8 +145,11 @@ export const MAX_VOICE_CONTROL_FRAME_BYTES = 320_000;
 // provider egress and oversized provider answers before client egress.
 const MAX_SDP_BYTES = 256_000;
 // The bounded per-session replay-diagnostic record (AC6): the host re-delivers these `replayable`
-// host→client events to a reconnecting client. Oldest entries are evicted past the cap.
-const MAX_REPLAY_EVENTS = 200;
+// host→client events to a reconnecting client. Oldest entries are evicted past the cap. The size is
+// owned by @oscharko-dev/keiko-contracts (`VOICE_REPLAY_CAPACITY`) — the keiko-ui timebase engine and
+// the keiko-evaluations voice-twin model bind to the same value, so drift is structurally impossible
+// (KEIKO-0380).
+const MAX_REPLAY_EVENTS: typeof VOICE_REPLAY_CAPACITY = VOICE_REPLAY_CAPACITY;
 // A disconnected session is resumable (by idempotency key) for this long, then swept.
 const SESSION_RESUME_TTL_MS = 60_000;
 // Bound the number of tracked sessions on the loopback control plane (single local user).
@@ -294,6 +381,24 @@ export interface VoiceControlConnectionOptions {
   readonly session: SessionState;
   readonly negotiate: NegotiateFn;
   readonly redact: (value: unknown) => unknown;
+  // Resolved ONCE per WebSocket connection at handleUpgrade (RB-6 / ADR-0173 D5), never re-minted
+  // per failure — every diagnostic-bearing message this connection emits over its whole lifetime,
+  // including across a session resumed by a later reconnect's OWN new connection, is joinable to
+  // the id of the upgrade that produced it.
+  readonly correlationId: string;
+  // RB-6 (GEN-OBS-DIAGNOSTICS-901/602/603) — operator diagnostic sink for negotiation failures.
+  // Optional: when undefined, emitServerDiagnostic falls back to the default stderr sink.
+  readonly diagnostics: ServerDiagnosticSink | undefined;
+}
+
+// Mirrors voice-live-dictation.ts's LiveDictationNegotiationError: a content-free stand-in error
+// used only when a negotiation outcome carries a failure kind but no underlying thrown value (a
+// typed protocol-level rejection rather than a caught exception), so serverDiagnosticFromError
+// always has an Error-shaped input to classify.
+class RealtimeControlNegotiationError extends Error {
+  constructor(readonly code: RealtimeNegotiationErrorKind) {
+    super("realtime control negotiation failed");
+  }
 }
 
 // The protocol state machine for one attached control socket. Pure of WebSocket/IO concerns beyond
@@ -305,6 +410,8 @@ export class VoiceControlConnection {
   private readonly session: SessionState;
   private readonly negotiate: NegotiateFn;
   private readonly redact: (value: unknown) => unknown;
+  private readonly correlationId: string;
+  private readonly diagnostics: ServerDiagnosticSink | undefined;
   private negotiation: AbortController | undefined;
   private closed = false;
 
@@ -313,12 +420,25 @@ export class VoiceControlConnection {
     this.session = options.session;
     this.negotiate = options.negotiate;
     this.redact = options.redact;
+    this.correlationId = options.correlationId;
+    this.diagnostics = options.diagnostics;
   }
 
   // Re-delivers the buffered replayable events to a (re)attached client, then announces the resolved
   // session — the reconnect catch-up of protocol §7. The additive productive constant keeps the
   // WebSocket realization distinct from the immutable v1 HTTP/SSE compatibility value.
   start(resume: boolean): void {
+    // Structured, correlation-keyed session-lifecycle line (w4b-voice-realtime, #2902): brackets
+    // dispose()'s session-ended line so an operator/agent reconstructing a defect can see exactly
+    // how long a control-plane session was attached. Content-free — profile and resume are both
+    // closed-vocabulary/boolean values, never the session or idempotency id.
+    getServerLogger().info(
+      activityLogEvent(
+        VOICE_REALTIME_SESSION_STARTED_OPERATION,
+        { correlationId: this.correlationId },
+        { profile: this.session.profile, resumed: resume },
+      ),
+    );
     if (resume) {
       for (const buffered of replayEvents(this.session)) {
         this.dispatchOut(buffered);
@@ -383,27 +503,74 @@ export class VoiceControlConnection {
     await this.dispatchIn(message);
   }
 
+  // Marks the connection closed exactly once and aborts any in-flight negotiation. Shared by
+  // dispose() (the plane's ws "close" handler — an abrupt disconnect) and shutdown() (an explicit
+  // protocol-driven close, e.g. session.close or fail()) so the session-ended line brackets
+  // start()'s session-started line exactly once, whichever path reaches the connection's end
+  // first (w4b-voice-realtime, #2902). Returns whether this call performed the transition, so a
+  // caller that still owns follow-up work (shutdown()'s socket.close) can skip it when a prior
+  // call already closed the connection.
+  private endSession(): boolean {
+    if (this.closed) {
+      return false;
+    }
+    this.closed = true;
+    getServerLogger().info(
+      activityLogEvent(
+        VOICE_REALTIME_SESSION_ENDED_OPERATION,
+        { correlationId: this.correlationId },
+        {},
+      ),
+    );
+    this.negotiation?.abort();
+    this.negotiation = undefined;
+    return true;
+  }
+
   // Aborts any in-flight negotiation and marks the connection closed (socket lifecycle ended). The
   // session record is retained by the plane for the resume window; this only detaches the socket.
   dispose(): void {
-    this.closed = true;
-    this.negotiation?.abort();
-    this.negotiation = undefined;
+    this.endSession();
   }
 
   private async dispatchIn(message: VoiceControlMessage): Promise<void> {
     // Only the kinds that drive a host action are handled. Every other permitted kind is an
     // observable no-op: a repeated session.create (start() already announced the session), a late
     // signal.ice.candidate (proxied single-shot SDP carries ICE in the offer/answer — no provider
-    // trickle channel), and client-reported media.track.state / playback.state. The productive
-    // direction allowlist above rejects transcript-bearing, host-originated, and future kinds before
-    // this switch, so an ignored branch can never acquire authority by generic contract expansion.
+    // trickle channel), client-reported media.track.state / playback.state, and control.interrupt
+    // (KEIKO-0661: added to the enumeration when the interrupt kind was introduced). The
+    // productive direction allowlist above rejects transcript-bearing, host-originated, and
+    // future kinds before this switch, so an ignored branch can never acquire authority by
+    // generic contract expansion.
     switch (message.kind) {
       case "signal.sdp.offer":
         await this.handleOffer(message.sdp);
         return;
       case "capability.select":
-        // The only selectable profile is the resolved full-realtime profile; acknowledge by policy.
+        // KEIKO-0661: validate the selected profile matches the negotiated one before acknowledging.
+        // Before this fix any capability.select was answered with unconditional "allow" -- a
+        // future or hand-crafted client selecting a profile the session was never negotiated for
+        // would get an "allow" back. The realtime transport only negotiates one profile per
+        // session, so a mismatched select must be denied. VoicePolicyDecision permits "deny"
+        // (voice-protocol.ts:266), so this uses the contract's own vocabulary rather than
+        // inventing a value.
+        if (message.profile !== this.session.profile) {
+          // No reason field: VoiceUnavailableReason is a fixed vocabulary in gateway.ts (no
+          // "profile-mismatch" member), and a policy.decision with just "deny" is valid.
+          // #2906 round 3: the WS frame alone is ephemeral -- record the denial on the activity
+          // log too (body-free: a fixed reason code only, never the requested or negotiated
+          // profile) so the timeline can reconstruct why capability selection failed, not just
+          // that this particular client session saw a "deny".
+          getServerLogger().info(
+            activityLogEvent(
+              VOICE_REALTIME_POLICY_DECISION_OPERATION,
+              { correlationId: this.correlationId, errorKind: "authority-denied" },
+              { decision: "deny", reason: "profile-mismatch" },
+            ),
+          );
+          this.emit({ kind: "policy.decision", decision: "deny" });
+          return;
+        }
         this.emit({ kind: "policy.decision", decision: "allow" });
         return;
       case "control.cancel":
@@ -428,8 +595,19 @@ export class VoiceControlConnection {
     this.negotiation = undefined;
   }
 
-  private failNegotiation(): void {
-    this.emitError("negotiation-failed");
+  // Mirrors voice-live-dictation.ts's reportNegotiationFailure (RB-6 / ADR-0173 D5, #2902
+  // w4b-voice-realtime): emits a body-free structured diagnostic — carrying the connection-scoped
+  // correlation id, never re-minted per failure — before answering the client's protocol error.
+  private failNegotiation(kind: RealtimeNegotiationErrorKind, thrown: unknown): void {
+    const diagnostic = serverDiagnosticFromError({
+      correlationId: this.correlationId,
+      operation: "voice.realtime.negotiate",
+      source: "voice.realtime",
+      error: thrown ?? new RealtimeControlNegotiationError(kind),
+      redact: (message: string): string => String(this.redact(message)),
+    });
+    emitServerDiagnostic(this.diagnostics, { ...diagnostic, code: kind });
+    this.emitError("negotiation-failed", this.correlationId);
     this.emit({ kind: "media.track.state", track: "audio-in", state: "ended" });
   }
 
@@ -444,9 +622,13 @@ export class VoiceControlConnection {
     superseded?.abort();
     this.emit({ kind: "media.track.state", track: "audio-in", state: "negotiating" });
     let outcome: RealtimeNegotiationOutcome;
+    let thrown: unknown;
     try {
       outcome = await this.negotiate(offerSdp, this.session.chatContext, controller.signal);
-    } catch {
+    } catch (error) {
+      // Provider transports may reject instead of returning a typed failure. Preserve the thrown
+      // class for the redacted diagnostic while normalizing its stable machine code below.
+      thrown = error;
       outcome = { ok: false, kind: "transport" };
     }
     if (this.negotiation !== controller) {
@@ -458,11 +640,11 @@ export class VoiceControlConnection {
       return;
     }
     if (!outcome.ok) {
-      this.failNegotiation();
+      this.failNegotiation(outcome.kind, thrown);
       return;
     }
     if (!isApprovedDirectionalSdp(outcome.value.answerSdp, "recvonly")) {
-      this.failNegotiation();
+      this.failNegotiation("invalid-response", undefined);
       return;
     }
     // signal.sdp.answer is ephemeral + secret-bearing: it is sent to the live negotiation but never
@@ -471,8 +653,8 @@ export class VoiceControlConnection {
     this.emit({ kind: "media.track.state", track: "audio-in", state: "live" });
   }
 
-  private emitError(code: VoiceProtocolErrorCode): void {
-    this.emit({ kind: "error", code });
+  private emitError(code: VoiceProtocolErrorCode, correlationId?: string): void {
+    this.emit({ kind: "error", code, ...(correlationId !== undefined ? { correlationId } : {}) });
   }
 
   // Builds a sequenced host→client control message from a payload, appends it to the bounded replay
@@ -520,12 +702,9 @@ export class VoiceControlConnection {
   }
 
   private shutdown(code: number, reason: string): void {
-    if (this.closed) {
+    if (!this.endSession()) {
       return;
     }
-    this.closed = true;
-    this.negotiation?.abort();
-    this.negotiation = undefined;
     try {
       this.socket.close(code, reason);
     } catch {
@@ -700,8 +879,11 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
     ) {
       return false;
     }
+    // Resolved ONCE per upgrade (RB-6 / ADR-0173 D5): the id is scoped to this physical WebSocket
+    // connection, not the resumable logical session, so a later reconnect gets its own fresh id.
+    const correlationId = resolveCorrelationId(req);
     this.wss.handleUpgrade(req, sock, head, (ws) => {
-      this.onConnection(ws, deps);
+      this.onConnection(ws, deps, correlationId);
     });
     return true;
   }
@@ -852,7 +1034,7 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
   }
 
   // eslint-disable-next-line max-lines-per-function -- connection lifecycle keeps heartbeat, frame limits, session start, and detach handling together.
-  private onConnection(ws: WsSocket, deps: UiHandlerDeps): void {
+  private onConnection(ws: WsSocket, deps: UiHandlerDeps, correlationId: string): void {
     this.attachHeartbeat(ws);
     const voice = resolveVoiceCapability(currentGatewayConfig(deps) ?? { providers: [] }, {
       policyDisabled: isVoiceDisabledByPolicy(deps.env),
@@ -896,6 +1078,8 @@ class VoiceControlPlaneImpl implements VoiceControlPlane {
         session: resolved.state,
         negotiate,
         redact: deps.redactor,
+        correlationId,
+        diagnostics: deps.diagnostics,
       });
       connection.start(resolved.resume);
     });

@@ -149,12 +149,16 @@ describe("walkSource — Windows separator normalisation", () => {
     const winFs: import("@oscharko-dev/keiko-workspace").WorkspaceFs = {
       readFileUtf8: () => "content",
       stat: (p) => {
-        if (p === winRoot || p === "C:\\Users\\workspace\\docs\\notes\\report.md") {
+        const isRoot = p === winRoot;
+        const isNotes = p === "C:\\Users\\workspace\\docs\\notes";
+        const isReport = p === "C:\\Users\\workspace\\docs\\notes\\report.md";
+        if (isRoot || isNotes || isReport) {
           return {
             size: fileContent.byteLength,
-            isFile: p !== winRoot,
-            isDirectory: p === winRoot,
+            isFile: isReport,
+            isDirectory: !isReport,
             isSymbolicLink: false,
+            fileIdentity: `windows:${p}`,
           };
         }
         throw new Error(`ENOENT: ${p}`);
@@ -163,7 +167,7 @@ describe("walkSource — Windows separator normalisation", () => {
         if (p === winRoot) {
           return [{ name: "notes", isDirectory: true, isFile: false, isSymbolicLink: false }];
         }
-        if (p === `${winRoot}/notes`) {
+        if (p === `${winRoot}/notes` || p === "C:\\Users\\workspace\\docs\\notes") {
           return [{ name: "report.md", isDirectory: false, isFile: true, isSymbolicLink: false }];
         }
         return [];
@@ -195,19 +199,24 @@ describe("walkSource — path containment", () => {
     const baseFs = memoryFs(ROOT, [{ relativePath: "docs/report.md", content: "ok" }]);
     const realRoot = `/private${ROOT}`;
     const toRequestedPath = (absolutePath: string): string =>
-      absolutePath.startsWith(`${realRoot}/`)
-        ? `${ROOT}/${absolutePath.slice(realRoot.length + 1)}`
-        : absolutePath;
+      absolutePath === realRoot
+        ? ROOT
+        : absolutePath.startsWith(`${realRoot}/`)
+          ? `${ROOT}/${absolutePath.slice(realRoot.length + 1)}`
+          : absolutePath;
     const fs: ReturnType<typeof memoryFs> = {
       ...baseFs,
       realPath: (absolutePath: string): string => {
         if (absolutePath === ROOT) return realRoot;
-        if (absolutePath === `${ROOT}/docs/report.md`) return `${realRoot}/docs/report.md`;
+        if (absolutePath.startsWith(`${ROOT}/`)) {
+          return `${realRoot}/${absolutePath.slice(ROOT.length + 1)}`;
+        }
         return baseFs.realPath(absolutePath);
       },
       stat: (absolutePath: string) => baseFs.stat(toRequestedPath(absolutePath)),
-      readFileBytes: (absolutePath: string, maxBytes: number) =>
-        baseFs.readFileBytes?.(toRequestedPath(absolutePath), maxBytes) ??
+      readDir: (absolutePath: string) => baseFs.readDir(toRequestedPath(absolutePath)),
+      readFileBytes: (absolutePath: string, maxBytes: number, hardLinkPolicy, expected) =>
+        baseFs.readFileBytes?.(toRequestedPath(absolutePath), maxBytes, hardLinkPolicy, expected) ??
         Promise.reject(new Error("readFileBytes unavailable")),
     };
 
@@ -250,6 +259,44 @@ describe("walkSource — path containment", () => {
     const files = collect(folderScope(ROOT), fs);
 
     expect(files).toStrictEqual([]);
+  });
+
+  it("denies the walk when the scope root itself was retargeted to a denied locus before this admission (#3347)", () => {
+    // Verified exploit: a lexical source initially admitted as safe (e.g. a symlinked scope
+    // root) is retargeted -- via the underlying symlink -- to a denied directory such as
+    // ~/.ssh before walkSource ever runs. A plain fs.realPath(root) only follows the symlink;
+    // it never asks whether the RESOLVED root is itself a denied locus, so the retargeted
+    // directory would otherwise be trusted as the new walk root and its contents yielded.
+    // The root must go through the same deny-root admission rule every other effectful
+    // consumer of a workspace root uses (resolveExistingAllowedWorkspaceRealRoot), not a bare
+    // realPath call.
+    const deniedRoot = "/home/test/.ssh";
+    const baseFs = memoryFs(deniedRoot, [
+      { relativePath: "notes.txt", content: "id_rsa contents" },
+    ]);
+    const fs: ReturnType<typeof memoryFs> = {
+      ...baseFs,
+      // The scope's lexical root -- and every path lexically beneath it, exactly like a real
+      // symlinked directory -- resolves through a symlink that was swapped, between admission
+      // and this walk, to point at the denied directory. Every descendant's realpath call must
+      // translate the same way a real symlinked mount would, not just the exact root path.
+      realPath: (absolutePath: string): string => {
+        if (absolutePath === ROOT) return deniedRoot;
+        if (absolutePath.startsWith(`${ROOT}/`)) {
+          return `${deniedRoot}/${absolutePath.slice(ROOT.length + 1)}`;
+        }
+        return baseFs.realPath(absolutePath);
+      },
+    };
+
+    const out = [...walkSource(fs, folderScope(ROOT))];
+
+    expect(out.some((yld) => yld.kind === "file")).toBe(false);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.kind).toBe("error");
+    if (out[0]?.kind === "error") {
+      expect(out[0].error.code).toBe("PATH_ESCAPE");
+    }
   });
 
   it("yields in-scope symlinks after their realPath passes the boundary checks", () => {
@@ -533,6 +580,108 @@ describe("walkSource — transient filesystem failures", () => {
     expect([...walkSource(fs, folderScope(ROOT))]).toContainEqual({
       kind: "error",
       error: { code: "READ_FAILED", message: "directory read failed" },
+    });
+  });
+
+  it("rejects entries when the enumerated directory changes canonical identity", () => {
+    const base = memoryFs(ROOT, [{ relativePath: "src/safe.ts", content: "safe" }]);
+    let swapped = false;
+    const fs: typeof base = {
+      ...base,
+      realPath: (absolutePath: string): string =>
+        swapped && absolutePath === `${ROOT}/src`
+          ? "/outside/private"
+          : base.realPath(absolutePath),
+      readDir: (absolutePath: string) => {
+        if (absolutePath === `${ROOT}/src`) {
+          swapped = true;
+          return [
+            {
+              name: "private.ts",
+              isDirectory: false,
+              isFile: true,
+              isSymbolicLink: false,
+            },
+          ];
+        }
+        return base.readDir(absolutePath);
+      },
+    };
+
+    const out = [...walkSource(fs, folderScope(ROOT))];
+
+    expect(swapped).toBe(true);
+    expect(out).toContainEqual({
+      kind: "error",
+      error: { code: "READ_FAILED", message: "directory read failed" },
+    });
+    expect(out).not.toContainEqual({
+      kind: "file",
+      file: { relativePath: "src/private.ts", sizeBytes: 4 },
+    });
+    expect(out).not.toContainEqual({
+      kind: "error",
+      error: {
+        code: "STAT_FAILED",
+        message: "entry stat failed",
+        relativePath: "src/private.ts",
+      },
+    });
+  });
+});
+
+describe("walkSource — bounded directory enumeration (#3347)", () => {
+  it("passes a finite maxEntries to readDir instead of materializing the whole directory", () => {
+    // Owner P1 on this PR: `safeReadDir` called `ctx.fs.readDir(path)` with no cap, so one
+    // adversarially large directory was fully allocated (and sorted) before `maxFiles`, abort or
+    // the elapsed budget could stop the walk. The reported repro observed `maxEntries === undefined`;
+    // this pins the ARGUMENT itself, not just the resulting file count, so removing the cap fails
+    // here even when the yielded files happen to stay the same.
+    const base = simpleFs();
+    const observedCaps: (number | undefined)[] = [];
+    const fs = {
+      ...base,
+      readDir: (absolutePath: string, maxEntries?: number): ReturnType<typeof base.readDir> => {
+        observedCaps.push(maxEntries);
+        return base.readDir(absolutePath, maxEntries);
+      },
+    };
+
+    const walked = [...walkSource(fs, folderScope(ROOT))];
+
+    expect(walked.length).toBeGreaterThan(0);
+    expect(observedCaps.length).toBeGreaterThan(0);
+    for (const cap of observedCaps) {
+      expect(cap).toBeTypeOf("number");
+      expect(Number.isFinite(cap)).toBe(true);
+    }
+  });
+
+  it("reports LIMIT_REACHED instead of yielding an arbitrary subset when a directory overflows", () => {
+    // A directory whose entry count exceeds the per-directory memory bound must stop the walk
+    // rather than silently discovering whatever filesystem order happened to return first. The
+    // fake caps at the requested `maxEntries`, so returning a full page proves the overflow.
+    const base = simpleFs();
+    const fs = {
+      ...base,
+      readDir: (absolutePath: string, maxEntries?: number): ReturnType<typeof base.readDir> => {
+        const entry = {
+          name: "filler.md",
+          isDirectory: false,
+          isFile: true,
+          isSymbolicLink: false,
+        };
+        return maxEntries === undefined
+          ? base.readDir(absolutePath)
+          : Array(maxEntries).fill(entry);
+      },
+    };
+
+    const out = [...walkSource(fs, folderScope(ROOT))];
+
+    expect(out).toContainEqual({
+      kind: "error",
+      error: { code: "LIMIT_REACHED", message: "directory entry limit reached" },
     });
   });
 });

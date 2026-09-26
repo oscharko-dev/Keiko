@@ -18,6 +18,7 @@ export interface SymbolGraphRecord {
 
 export interface SymbolGraphDiagnostics {
   readonly filesScanned: number;
+  readonly filesSkipped: number;
   readonly truncated: boolean;
   readonly unsupportedLanguages: readonly WorkspaceLanguage[];
 }

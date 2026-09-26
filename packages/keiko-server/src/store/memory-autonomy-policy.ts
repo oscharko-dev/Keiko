@@ -1,9 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
 import {
   compareCodingWorkbenchModeAuthority,
   isCodingWorkbenchMode,
-  type CodingWorkbenchMode,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import type { MemoryAutonomyPolicyRecord } from "./types.js";
 
 const MEMORY_CAPTURE_POLICY_ID = "capture";

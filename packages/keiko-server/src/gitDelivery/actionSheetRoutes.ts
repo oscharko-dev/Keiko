@@ -25,17 +25,22 @@
 
 import type { IncomingMessage } from "node:http";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
+import type {
+  GitDeliveryActionKind,
+  GitDeliveryApprovalRequirement,
+  GitDeliveryProviderCapability,
+  GitDeliveryResolvedInputs,
+} from "@oscharko-dev/keiko-contracts";
 import {
   isGitDeliveryProviderCapability,
   parseGitDeliveryResolvedInputs,
-  type GitDeliveryActionKind,
-  type GitDeliveryApprovalRequirement,
-  type GitDeliveryProviderCapability,
-  type GitDeliveryResolvedInputs,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import type { GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import type { ServerLogSink } from "../observability/server-log.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import { containsForbiddenSecretShape } from "../qualityIntelligence/connectorErrors.js";
 import {
   buildActionSheetFromFacts,
@@ -43,9 +48,9 @@ import {
   type GitDeliveryTrustedPolicyPacks,
 } from "./actionSheetProjection.js";
 import { defaultGitDeliveryPolicyPacksForAction } from "./defaultPolicyPacks.js";
-import { resolveProjectWorkspace } from "./execution.js";
+import { gitDeliveryTerminationHandler, resolveProjectWorkspace } from "./execution.js";
 import {
-  readTrustedGitDeliveryBranchProtection,
+  createTrustedGitDeliveryBranchProtectionReader,
   type GitDeliveryBranchProtectionReader,
 } from "./branchProtectionPreflight.js";
 
@@ -323,6 +328,11 @@ export interface GitDeliveryActionSheetRouteOptions {
   // The server clock (epoch ms). Injectable for deterministic tests; defaults to Date.now. Used only
   // to demote an expired granted approval to "waiting-for-approval" in the projection.
   readonly now?: () => number;
+  // Test/deployment seam for the default branch-protection reader's runCommand
+  // termination-evidence callback (see gitDeliveryTerminationHandler). Production writes
+  // content-free termination evidence through the process activity log, same as every other
+  // git-delivery route.
+  readonly activityLog?: ServerLogSink;
 }
 
 interface GitDeliveryProviderResolution {
@@ -359,7 +369,8 @@ async function defaultProviderState(
   const workspace = resolveProjectWorkspace(deps, request.projectId);
   if (workspace === undefined) return { facts: {}, ready: false };
   const result = await reader(workspace, target.remoteAlias, target.branchName);
-  if (result.outcome === "unavailable") return { facts: {}, ready: false };
+  if (result.outcome === "unavailable" || result.outcome === "unknown")
+    return { facts: {}, ready: false };
   return result.outcome === "protected"
     ? { facts: { branchProtection: result.protection }, ready: true }
     : { facts: {}, ready: true };
@@ -377,6 +388,35 @@ async function resolvedProviderState(
   }
 }
 
+type ActionSheetRequestRead =
+  | { readonly ok: true; readonly request: ValidatedRequest }
+  | { readonly ok: false; readonly result: RouteResult };
+
+// Reads the bounded body, parses JSON, and validates the envelope. Extracted from
+// createHandleGitDeliveryActionSheet's returned handler purely to stay under the
+// function-length budget (AGENTS.md §6) — no behavioral seam of its own.
+async function readValidatedActionSheetRequest(ctx: RouteContext): Promise<ActionSheetRequestRead> {
+  let raw: string;
+  try {
+    raw = await readBody(ctx.req);
+  } catch (error) {
+    if (error instanceof BodyTooLargeError) {
+      return { ok: false, result: errResult(413, "GIT_DELIVERY_ACTION_SHEET_PAYLOAD_TOO_LARGE") };
+    }
+    return { ok: false, result: errResult(400, "GIT_DELIVERY_ACTION_SHEET_BAD_REQUEST") };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return { ok: false, result: errResult(400, "GIT_DELIVERY_ACTION_SHEET_BAD_REQUEST") };
+  }
+  const validation = validateRequest(parsed);
+  return validation.kind === "err"
+    ? { ok: false, result: validation.result }
+    : { ok: true, request: validation.request };
+}
+
 export const createHandleGitDeliveryActionSheet = (
   options: GitDeliveryActionSheetRouteOptions = {},
 ): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
@@ -386,31 +426,29 @@ export const createHandleGitDeliveryActionSheet = (
     ((_deps: UiHandlerDeps, actionKind: GitDeliveryActionKind): GitDeliveryTrustedPolicyPacks =>
       defaultGitDeliveryPolicyPacksForAction(actionKind));
   const now = options.now ?? ((): number => Date.now());
-  const branchProtectionReader =
-    options.branchProtectionReader ?? readTrustedGitDeliveryBranchProtection;
-  const resolveProviderState =
-    options.providerState ??
-    ((deps: UiHandlerDeps, request: ValidatedRequest): Promise<GitDeliveryProviderResolution> =>
-      defaultProviderState(deps, request, branchProtectionReader));
+  const activityLog = options.activityLog ?? processServerLogSink();
   return async (ctx, deps): Promise<RouteResult> => {
-    let raw: string;
-    try {
-      raw = await readBody(ctx.req);
-    } catch (error) {
-      if (error instanceof BodyTooLargeError) {
-        return errResult(413, "GIT_DELIVERY_ACTION_SHEET_PAYLOAD_TOO_LARGE");
-      }
-      return errResult(400, "GIT_DELIVERY_ACTION_SHEET_BAD_REQUEST");
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      return errResult(400, "GIT_DELIVERY_ACTION_SHEET_BAD_REQUEST");
-    }
-    const validation = validateRequest(parsed);
-    if (validation.kind === "err") return validation.result;
-    const { request } = validation;
+    const read = await readValidatedActionSheetRequest(ctx);
+    if (!read.ok) return read.result;
+    const { request } = read;
+
+    // Built per-request (not at factory-construction time) so the default branch-protection
+    // reader's runCommand termination-evidence callback carries THIS request's own correlationId
+    // instead of silently omitting it (audit finding: this was the one branchProtectionReader
+    // consumer, alongside commitRoutes.ts and pushRoutes.ts, that never wired one in at all).
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+    const branchProtectionReader =
+      options.branchProtectionReader ??
+      createTrustedGitDeliveryBranchProtectionReader(
+        gitDeliveryTerminationHandler({ activityLog }, correlationId),
+      );
+    const resolveProviderState =
+      options.providerState ??
+      ((
+        stateDeps: UiHandlerDeps,
+        stateRequest: ValidatedRequest,
+      ): Promise<GitDeliveryProviderResolution> =>
+        defaultProviderState(stateDeps, stateRequest, branchProtectionReader));
 
     const provider = await resolvedProviderState(resolveProviderState, deps, request);
     const sheet = buildActionSheetFromFacts({

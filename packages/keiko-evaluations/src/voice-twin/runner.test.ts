@@ -286,6 +286,101 @@ describe("runVoiceTwinEvaluation with custom fixture sets", () => {
     expect(scorecard.summary.goNoGo).toBe("NO-GO");
   });
 
+  // ─── KEIKO-0257 — pin the three coverage flags previously untested in NO-GO form ───
+  // Existing NO-GO tests cover coversNoVoice, coversCustomerHosted, coversFullRealtime, coversPrivacy­
+  // Negative, and a failing dimension. Without the three tests below a silent drop of the
+  // `coversSttOnly &&`, `coversSpeechOutput &&`, or `coversAzureFoundry &&` conjunct from the goNoGo
+  // AND-chain in runner.ts summarize() would ship green.
+  it("returns NO-GO when coversSttOnly is false", () => {
+    // Every other coverage flag satisfied except coversSttOnly (no fixture with effectiveProfile
+    // 'speech-to-text').
+    const fixtures = [
+      noVoiceFixture("nogo-stt-1"),
+      speechOutputFixture("nogo-stt-2"),
+      fullRealtimeFixture("nogo-stt-3", "azure-foundry"),
+      fullRealtimeFixture("nogo-stt-4", "customer-hosted"),
+      privacyNegativeFixture("nogo-stt-5"),
+    ];
+    const scorecard = runVoiceTwinEvaluation(fixtures);
+    expect(scorecard.summary.coversSttOnly).toBe(false);
+    expect(scorecard.summary.coversNoVoice).toBe(true);
+    expect(scorecard.summary.coversSpeechOutput).toBe(true);
+    expect(scorecard.summary.coversFullRealtime).toBe(true);
+    expect(scorecard.summary.coversAzureFoundry).toBe(true);
+    expect(scorecard.summary.coversCustomerHosted).toBe(true);
+    expect(scorecard.summary.coversPrivacyNegative).toBe(true);
+    // The only reason for NO-GO here must be the missing STT coverage.
+    expect(scorecard.summary.goNoGo).toBe("NO-GO");
+  });
+
+  it("returns NO-GO when coversSpeechOutput is false", () => {
+    // Every other coverage flag satisfied except coversSpeechOutput.
+    const fixtures = [
+      noVoiceFixture("nogo-so-1"),
+      sttFixture("nogo-so-2"),
+      fullRealtimeFixture("nogo-so-3", "azure-foundry"),
+      fullRealtimeFixture("nogo-so-4", "customer-hosted"),
+      privacyNegativeFixture("nogo-so-5"),
+    ];
+    const scorecard = runVoiceTwinEvaluation(fixtures);
+    expect(scorecard.summary.coversSpeechOutput).toBe(false);
+    expect(scorecard.summary.coversNoVoice).toBe(true);
+    expect(scorecard.summary.coversSttOnly).toBe(true);
+    expect(scorecard.summary.coversFullRealtime).toBe(true);
+    expect(scorecard.summary.coversAzureFoundry).toBe(true);
+    expect(scorecard.summary.coversCustomerHosted).toBe(true);
+    expect(scorecard.summary.coversPrivacyNegative).toBe(true);
+    // The only reason for NO-GO here must be the missing speech-output coverage.
+    expect(scorecard.summary.goNoGo).toBe("NO-GO");
+  });
+
+  it("returns NO-GO when coversAzureFoundry is false", () => {
+    // Every other coverage flag satisfied except coversAzureFoundry (no azure-foundry fixture).
+    // The privacy-negative fixture defaults to azure-foundry, so build a customer-hosted variant.
+    const privacyCustomerHosted: VoiceTwinFixture = {
+      name: "nogo-af-privacy",
+      category: "privacy",
+      description: "privacy fixture on customer-hosted",
+      environment: "customer-hosted",
+      advertisedProfile: "full-realtime",
+      egressLedger: [{ class: "unapproved-external" }],
+      manifests: [{ packageName: "keiko-server", dependencyNames: ["ws"] }],
+      dimensions: new Set<VoiceTwinDimension>(["external-destination-privacy"]),
+      oracle: {
+        expectedEffectiveProfile: "full-realtime",
+        expectedEgressApproved: false,
+        expectedManifestsClean: true,
+      },
+    };
+    // Speech-output on customer-hosted so we retain speech-output coverage without pulling in azure.
+    const speechOutputCustomerHosted: VoiceTwinFixture = {
+      ...speechOutputFixture("nogo-af-so"),
+      environment: "customer-hosted",
+    };
+    // STT-only on customer-hosted (same reason).
+    const sttCustomerHosted: VoiceTwinFixture = {
+      ...sttFixture("nogo-af-stt"),
+      environment: "customer-hosted",
+    };
+    const fixtures = [
+      noVoiceFixture("nogo-af-nv"),
+      sttCustomerHosted,
+      speechOutputCustomerHosted,
+      fullRealtimeFixture("nogo-af-frt", "customer-hosted"),
+      privacyCustomerHosted,
+    ];
+    const scorecard = runVoiceTwinEvaluation(fixtures);
+    expect(scorecard.summary.coversAzureFoundry).toBe(false);
+    expect(scorecard.summary.coversNoVoice).toBe(true);
+    expect(scorecard.summary.coversSttOnly).toBe(true);
+    expect(scorecard.summary.coversSpeechOutput).toBe(true);
+    expect(scorecard.summary.coversFullRealtime).toBe(true);
+    expect(scorecard.summary.coversCustomerHosted).toBe(true);
+    expect(scorecard.summary.coversPrivacyNegative).toBe(true);
+    // The only reason for NO-GO here must be the missing azure-foundry coverage.
+    expect(scorecard.summary.goNoGo).toBe("NO-GO");
+  });
+
   it("returns NO-GO when coversFullRealtime is false", () => {
     // Only STT + no-voice fixtures: no full-realtime effective profile → coversFullRealtime=false.
     // The privacy-negative fixture has full-realtime profile so it must be excluded here.

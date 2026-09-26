@@ -107,7 +107,6 @@ function markerTopPercent(marker: DiagnosticOverviewMarker, lineCount: number): 
 function EditorDiagnosticMarkerButton(props: {
   readonly marker: DiagnosticOverviewMarker;
   readonly lineCount: number;
-  readonly index: number;
   readonly onActivate: (marker: DiagnosticOverviewMarker) => void;
 }): ReactElement {
   const marker = props.marker;
@@ -117,9 +116,6 @@ function EditorDiagnosticMarkerButton(props: {
   return (
     <button
       type="button"
-      key={`${String(props.index)}:${String(marker.severity)}:${String(marker.startLineNumber)}:${
-        marker.message
-      }`}
       className="keiko-editor-diagnostic-marker"
       aria-label={`${severityLabel} diagnostic on ${meta}: ${marker.message}`}
       data-severity={markerDataSeverity(marker.severity)}
@@ -177,7 +173,6 @@ function EditorDiagnosticOverview(props: {
           }`}
           marker={marker}
           lineCount={props.lineCount}
-          index={index}
           onActivate={props.onActivate}
         />
       ))}
@@ -201,7 +196,11 @@ function EditorStatusFooter(props: {
         {props.status.message}
       </div>
       {props.overLimit ? (
-        <div data-testid="keiko-editor-limit" role="note">
+        // The accessible announcement for this state now lives in the live status region above
+        // (status-text.ts's `overLimit` branch, Issue #2898/KEIKO-0259); this banner is a
+        // sighted-only visual reinforcement and must not be independently exposed to assistive
+        // tech, or the size-limit condition would be announced twice.
+        <div data-testid="keiko-editor-limit" role="note" aria-hidden="true">
           {`File exceeds the ${String(props.maxSizeBytes)}-byte editor limit and is read-only.`}
         </div>
       ) : null}

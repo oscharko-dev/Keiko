@@ -59,6 +59,16 @@ function positiveInteger(raw: number | undefined, fallback: number): number {
   return Math.max(1, Math.floor(raw));
 }
 
+// A timer armed with more than 2^31 - 1 ms fires at once, so a larger OCR timeout would end every
+// page's run the moment it starts; such a value is invalid like any other and takes the default
+// (PR #3452 review of KEIKO_RERANKER_TIMEOUT_MS; the same class).
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+function timerDelayMs(raw: number | undefined, fallback: number): number {
+  const value = positiveInteger(raw, fallback);
+  return value > MAX_TIMER_DELAY_MS ? fallback : value;
+}
+
 function envText(env: EnvSource, key: string): string | undefined {
   const value = env[key]?.trim();
   return value === undefined || value.length === 0 ? undefined : value;
@@ -113,7 +123,7 @@ async function runTesseract(
 export function createTesseractOcrAdapter(options: TesseractOcrAdapterOptions = {}): OcrAdapter {
   const command = options.command ?? DEFAULT_TESSERACT_COMMAND;
   const language = options.language ?? DEFAULT_TESSERACT_LANG;
-  const timeoutMs = positiveInteger(options.timeoutMs, DEFAULT_TIMEOUT_MS);
+  const timeoutMs = timerDelayMs(options.timeoutMs, DEFAULT_TIMEOUT_MS);
   const maxInputBytes = positiveInteger(options.maxInputBytes, DEFAULT_MAX_INPUT_BYTES);
   const runner = options.runner ?? missingTesseractCommandRunner;
   const args = tesseractArgs(language, options.extraArgs ?? []);

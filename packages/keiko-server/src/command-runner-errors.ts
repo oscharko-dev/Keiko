@@ -8,7 +8,7 @@
 // fail-closed evidence persistence: a settled run is not reported successful unless its content-free
 // evidence manifest is durably written.
 
-import { CodedHttpError, httpStatusFor } from "@oscharko-dev/keiko-contracts";
+import { CodedHttpError, httpStatusFor } from "@oscharko-dev/keiko-contracts/runtime/http-error";
 
 export const COMMAND_RUNNER_ERROR_CODES = {
   PROJECT_NOT_FOUND: "PROJECT_NOT_FOUND",

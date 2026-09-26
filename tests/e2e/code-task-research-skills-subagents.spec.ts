@@ -26,7 +26,7 @@ import { readFileSync } from "node:fs";
 
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts";
+import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
 
 import {
@@ -61,8 +61,8 @@ async function openWorkbench(page: Page, pairingFragment?: string): Promise<void
   if (pairingFragment !== undefined) {
     await expect.poll(() => page.url()).not.toContain("keiko-app-session");
   }
-  await page.getByRole("button", { name: "Coding Workbench" }).click();
-  await expect(page.getByRole("heading", { name: "Coding Workbench" })).toBeVisible();
+  await page.getByRole("button", { name: "Coding Workbench", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Coding Workbench", exact: true })).toBeVisible();
 }
 
 async function bindFixtureWorkspace(page: Page): Promise<void> {
@@ -175,6 +175,16 @@ async function expectAuxiliaryTimelineActivity(page: Page): Promise<void> {
   }
 }
 
+// #3417: the operator sees which approved skills the run may use, beside the research grant, from
+// the run's own authenticated channel. The listing is body-free by contract: the pinned id@version,
+// the closed category and the readiness, never a skill body, path, prompt or output. The seeded
+// catalog holds exactly one approved skill, so the disclosure names that one.
+async function expectApprovedSkillsDisclosure(page: Page): Promise<void> {
+  await expect(page.getByText("Approved skills (1)", { exact: true })).toBeVisible({
+    timeout: 90_000,
+  });
+}
+
 // #2637: the timeline must show the research read AS untrusted content. The operator approved a
 // destination, never what the page would say, so a bare "Research performed" would understate what
 // the run just took in.
@@ -245,6 +255,7 @@ test("#2387 research: approval mints the grant, the governed fetch runs, revoke 
   // content-free event reaches the timeline.
   await answerBlockingQuestion(page);
   await expectAuxiliaryTimelineActivity(page);
+  await expectApprovedSkillsDisclosure(page);
   await expectResearchReadShownAsUntrusted(page);
   await expectNoMutationWasAttempted(page);
 

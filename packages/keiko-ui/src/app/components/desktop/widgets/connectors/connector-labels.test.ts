@@ -11,7 +11,7 @@ import {
   ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
   ATLASSIAN_SYNC_FAILURE_REASONS,
   ATLASSIAN_SYNC_JOB_STATUSES,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { EN_MESSAGES } from "@/lib/i18n-messages.en";
 import { ATLASSIAN_CONNECTOR_VERIFY_STATUSES } from "@/lib/atlassian-connectors-api";
 import {

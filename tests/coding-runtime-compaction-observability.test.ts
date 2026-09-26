@@ -1,0 +1,150 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { describe, expect, it } from "vitest";
+
+import { analyzeLogText, findTimeline } from "../packages/keiko-cli/src/support-analyze.js";
+import { recordCompactionActivity } from "../packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.js";
+import { createFileServerLogSink } from "../packages/keiko-server/src/observability/server-log.js";
+import { readPersistedActivityLog } from "./support/activity-log-proof.js";
+
+describe("native coding-runtime compaction support reconstruction", () => {
+  it("retains the correlated body-free lifecycle in the support timeline", () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-native-compaction-"));
+    const activityLog = createFileServerLogSink(stateDir, { level: "debug" });
+    const runId = "run-native-compaction-observability";
+    const compactionIdSha256 = "b".repeat(64);
+    const failedCompactionIdSha256 = "d".repeat(64);
+    const tailStartIdSha256 = "c".repeat(64);
+    const bodyCanary = "SENTINEL_NATIVE_COMPACTION_BODY";
+    try {
+      recordCompactionActivity({ activityLog, correlationId: runId }, [
+        { compaction: { event: "completed", compactionIdSha256 } },
+        {
+          compaction: {
+            event: "started",
+            compactionIdSha256,
+            auto: true,
+            overflow: true,
+            retainedTail: false,
+          },
+        },
+        {
+          compaction: {
+            event: "tail-retained",
+            compactionIdSha256,
+            tailStartIdSha256,
+            auto: true,
+            overflow: true,
+            retainedTail: true,
+          },
+        },
+        {
+          compaction: {
+            event: "started",
+            compactionIdSha256: failedCompactionIdSha256,
+            auto: true,
+            overflow: false,
+            retainedTail: false,
+          },
+        },
+        {
+          compaction: {
+            event: "failed",
+            compactionIdSha256: failedCompactionIdSha256,
+            errorKind: "ContextOverflowError",
+            finishReason: "error",
+          },
+        },
+      ]);
+      activityLog.close?.();
+
+      const serialized = readPersistedActivityLog(stateDir);
+      const analysis = analyzeLogText(serialized);
+      const timeline = findTimeline(analysis, runId);
+      expect(timeline?.lines.map(({ op, extra, errorKind }) => ({ op, extra, errorKind }))).toEqual(
+        [
+          {
+            op: "server-log.safe-open",
+            errorKind: undefined,
+            extra: {
+              artifactClass: "activity-log",
+              persistenceStatus: "opened",
+              permissionAssurance: "verified-private",
+              containmentAssurance: "private-root-guarded",
+              completeness: "complete",
+              loss: "none",
+            },
+          },
+          {
+            op: "coding-runtime.compaction",
+            errorKind: undefined,
+            extra: {
+              completeness: "complete",
+              loss: "none",
+              event: "completed",
+              compactionIdSha256,
+            },
+          },
+          {
+            op: "coding-runtime.compaction",
+            errorKind: undefined,
+            extra: {
+              completeness: "complete",
+              loss: "none",
+              event: "started",
+              compactionIdSha256,
+              auto: true,
+              overflow: true,
+              retainedTail: false,
+            },
+          },
+          {
+            op: "coding-runtime.compaction",
+            errorKind: undefined,
+            extra: {
+              completeness: "complete",
+              loss: "none",
+              event: "tail-retained",
+              compactionIdSha256,
+              tailStartIdSha256,
+              auto: true,
+              overflow: true,
+              retainedTail: true,
+            },
+          },
+          {
+            op: "coding-runtime.compaction",
+            errorKind: undefined,
+            extra: {
+              completeness: "complete",
+              loss: "none",
+              event: "started",
+              compactionIdSha256: failedCompactionIdSha256,
+              auto: true,
+              overflow: false,
+              retainedTail: false,
+            },
+          },
+          {
+            op: "coding-runtime.compaction",
+            errorKind: "internal",
+            extra: {
+              completeness: "complete",
+              loss: "none",
+              event: "failed",
+              compactionIdSha256: failedCompactionIdSha256,
+              compactionErrorKind: "ContextOverflowError",
+              finishReason: "error",
+            },
+          },
+        ],
+      );
+      expect(serialized).not.toContain(bodyCanary);
+    } finally {
+      activityLog.close?.();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+});

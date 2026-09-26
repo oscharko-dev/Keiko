@@ -53,19 +53,11 @@ const VOICE_PROFILES: readonly VoiceProfile[] = [
   "full-realtime",
 ];
 
-const FORBIDDEN_SUBSTRINGS: readonly string[] = [
-  "apikey",
-  "secret",
-  "password",
-  "credential",
-  "bearer",
-  "baseurl",
-  "endpoint",
-  "authorization",
-  "privatekey",
-  "accesskey",
-  "token",
-];
+// KEIKO-0919: was a byte-copy of voice-session-recap.test.ts's list — now imported from the
+// shared test-support module so extending one lexicon tightens both pins at once.
+import { SHARED_FORBIDDEN_SECRET_VOCABULARY } from "./forbidden-substrings.test-support.js";
+
+const FORBIDDEN_SUBSTRINGS: readonly string[] = SHARED_FORBIDDEN_SECRET_VOCABULARY;
 
 function projectionWithText(text: string, segmentCount = 1): CommittedVoiceTranscriptProjection {
   return {

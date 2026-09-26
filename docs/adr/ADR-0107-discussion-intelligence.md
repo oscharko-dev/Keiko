@@ -11,6 +11,11 @@ contract and server prompt orchestration remain accepted. The dedicated `discuss
 transcript-segment binding is not called by current Twin; a settled spoken message enters the same
 canonical chat request as typed input, so Realtime owns no parallel discussion or answer path.
 
+Amended by Issue #3105 (KEIKO-0138, KEIKO-0141, KEIKO-0202): the shipped Voice Twin has no producer for
+`governedHandoffVoiceOrigin`, and `createDiscussionVoiceBinding` has no production importer. The
+server-side seam is therefore unreachable end-to-end. A settled Voice final remains ordinary untrusted
+chat input; it does not drive discussion state or create a governed handoff.
+
 ## Version
 
 0.2.0
@@ -139,11 +144,13 @@ accepts still flows through the existing `WorkflowHandoffRequest` + `userApprova
 #503). This module never produces a `WorkflowHandoffRequest`, never calls a tool, and never advances
 compacted history on behalf of an action.
 
-The voice integration hook (`packages/keiko-ui/src/app/components/desktop/hooks/discussion-voice.ts`)
-mirrors this: it is a content-free observer. It reads committed voice transcript; it maps voice signals
-to a `DiscussionMode`; it manages interruption-recovery context. It emits no side effects, makes no
-model calls, and produces no handoff. The same no-authority guarantee documented in ADR-0104 D7 applies
-here.
+The unreferenced voice integration factory
+(`packages/keiko-ui/src/app/components/desktop/hooks/discussion-voice.ts`) mirrors this design: it is a
+content-free observer. It reads committed voice transcript, maps voice signals to a `DiscussionMode`,
+and manages interruption-recovery context. It emits no authority-bearing side effects, makes no model
+calls, and produces no handoff; its optional observer callbacks are limited to observability. It has
+no production importer, so the shipped Twin does not invoke it. The same
+no-authority guarantee documented in ADR-0104 D7 applies here.
 
 ### D6 — Voice reuse: committed-only transcript, existing turn manager, existing playback summary (AC2 / AC5)
 
@@ -265,6 +272,10 @@ The following are explicitly not in scope for Issue #502:
 - **Governed spoken action handoff**: routing a `decide`-mode voice recommendation through
   `WorkflowHandoffRequest` is Issue #503's responsibility. This module produces the recommendation
   as informational text only.
+- **Voice-driven discussion activation**: the discussion binding and the voice-origin handoff seam are
+  deliberately unreachable in the shipped product. They remain so until the exact-proposal,
+  single-use human-confirmation proof required by ADR-0108 D10 is implemented in the same change as the
+  production wiring.
 - **Recap and memory persistence**: persisting discussion turns to a recap or memory store is Issue
   #504's responsibility.
 - **Live provider audio driving discussion**: driving discussion turn context from live

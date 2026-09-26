@@ -1,8 +1,9 @@
 # Portable Runtime Artifact Contract
 
-Status: Contract baseline for Issue #1947 and staging baseline for Issue #1948. This document
-defines the release artifact shape that later portable delivery children must implement and verify.
-It does not publish assets or change updater execution logic.
+Status: Production artifact contract amended by Epic #3403. The Windows generation producer and
+native coordinator consumer are implemented and exercised by required native quality lanes. This
+document defines the artifact shape that release production, runtime verification, and the updater
+consume. It does not by itself claim a completed two-release native update canary.
 
 Governing decisions:
 
@@ -15,39 +16,61 @@ Governing decisions:
 
 ## Product Contract
 
-Portable v1 is an archive-first delivery path for stable public releases. The promoted user journey
-is: download the platform ZIP, extract it, double-click `Keiko.exe` or `Keiko.app`, complete
-first-run setup into Keiko's target-specific managed install location, and launch Keiko afterward
-from the same native app surface or OS search entry.
+Portable v1 is an archive-backed delivery path for stable public releases with platform-specific
+promoted journeys. On Linux, users download the `linux-x64` ZIP, extract it, and open `Keiko`. On
+Windows, ordinary users download and run
+`keiko-windows-x64-setup.exe`; the unsigned setup bytes are bound by Keiko's signed release
+manifest. Setup verifies its embedded canonical ZIP, completes first-run setup
+into Keiko's per-user managed install location, and launches Keiko. On macOS, users download the
+target ZIP, extract `Keiko.app`, and double-click it to complete first-run setup into the managed app
+location. After setup, users launch Keiko from the same native app surface or OS search entry. The
+Windows ZIP remains the canonical release payload and support/bootstrap surface, but it is not the
+promoted ordinary-user install journey.
 
 Users must not need system Node.js, npm, Yarn, a package manager, build tools, or shell commands on
 the primary install/start path. Shell launchers may exist only for support and automated diagnostics.
 
 ## Platform Target Matrix
 
-Every stable release that claims portable product delivery must publish exactly these first-class
+Every production stable release that claims portable product delivery must publish exactly these first-class
 portable assets as a release-blocking set:
 
-| Platform target | Required asset name     | Archive format | Primary launcher | Runtime target | Signing evidence                              | Stable release requirement                           |
+| Platform target | Required asset name     | Archive format | Primary launcher | Runtime target | Mandatory trust evidence                      | Stable release requirement                           |
 | --------------- | ----------------------- | -------------- | ---------------- | -------------- | --------------------------------------------- | ---------------------------------------------------- |
-| `windows-x64`   | `keiko-windows-x64.zip` | ZIP            | `Keiko.exe`      | `win32-x64`    | Authenticode publisher-chain verification     | Required whenever portable delivery is advertised    |
-| `macos-arm64`   | `keiko-macos-arm64.zip` | ZIP            | `Keiko.app`      | `darwin-arm64` | Developer ID signature and notarization proof | Equal priority with `macos-x64`; never best-effort   |
-| `macos-x64`     | `keiko-macos-x64.zip`   | ZIP            | `Keiko.app`      | `darwin-x64`   | Developer ID signature and notarization proof | Equal priority with `macos-arm64`; never best-effort |
+| `linux-x64`     | `keiko-linux-x64.zip`   | ZIP            | `Keiko`          | `linux-x64`    | Ed25519 manifest + OIDC runtime qualification | Required; exact namespace-gateway proof, no fallback |
+| `windows-x64`   | `keiko-windows-x64.zip` | ZIP            | `Keiko.exe`      | `win32-x64`    | Keiko Ed25519 release manifest                | Required whenever portable delivery is advertised    |
+| `macos-arm64`   | `keiko-macos-arm64.zip` | ZIP            | `Keiko.app`      | `darwin-arm64` | Keiko Ed25519 release manifest                | Equal priority with `macos-x64`; never best-effort   |
+| `macos-x64`     | `keiko-macos-x64.zip`   | ZIP            | `Keiko.app`      | `darwin-x64`   | Keiko Ed25519 release manifest                | Equal priority with `macos-arm64`; never best-effort |
 
 The release is not portable-complete when any target is missing, mislabeled, checksum-mismatched,
-unsigned, unnotarized where required, or not represented in reviewed release-impact metadata.
+missing a valid Keiko release signature, or not represented in reviewed release-impact metadata.
+
+Stable releases also publish `keiko-windows-x64-setup.exe` as a companion to the canonical Windows
+ZIP. Authenticode is optional; the signed manifest binds the setup digest, size, asset id, and name.
+The setup embeds that exact ZIP, installs it under the per-user managed
+install root, and verifies that the launched Keiko process remains healthy. If a managed Keiko
+installation already exists, setup validates and launches that installation without replacing it;
+governed in-app update remains the upgrade authority. The setup is a convenience install surface
+for `windows-x64`, not a fifth platform target; release qualification and digest binding still
+derive from the ZIP and its reviewed evidence.
 
 ## Current Staging Status
 
 The portable release pipeline stages the packed Keiko package, acquires and verifies the target
 Node.js runtime and the approved OpenCode runtime, builds the native launcher and governed runtime
-helpers, and validates redacted artifact manifests. Stable-tag production jobs additionally perform
-Windows signing, macOS signing and notarization, native runtime qualification, release upload, and
-published-asset verification. First-run setup promotes the verified bundle into the managed install
-root before the Coding Workbench may activate the bundled runtime.
+helpers, and validates redacted artifact manifests on native runners. Linux stable-tag jobs also
+perform OIDC attestation, namespace qualification, and fresh-runner verification. Windows and macOS
+stable-tag jobs emit honest unsigned-native evidence plus `releaseTrustRequired: true`. Assembly
+revalidates every non-platform predicate. After upload assigns final identities, the protected
+publisher adds and verifies the Ed25519 release signature. First-run setup promotes the verified
+bundle into the managed install root before the Coding Workbench may activate the bundled runtime.
+macOS and ordinary Windows output use schema 1; the optional native-qualified Windows generation
+format remains schema 2.
 
-Manifest schema v1 has three explicit validation contexts. Staging manifests use
-`verificationPolicy: "staging"`,
+Schema v1 has staging, evaluation, candidate, published, and `published-release-trust` validation
+contexts (plus `published-contract` for this document's example).
+Windows production schema 2 uses the production candidate/published rules with the generation binding.
+Staging manifests use `verificationPolicy: "staging"`,
 `verificationStatus: "unverified-staging"`, `signatureVerified: false`,
 `notarizationVerified: false`, target-specific `verificationChecks` set to `false`, and
 `platformSignatureLocallyVerified: false`. They also use `artifact.assetId: 0` because GitHub
@@ -56,6 +79,74 @@ must use `release.releaseId: 0`, `artifact.assetId: 0`, and matching zero-id rel
 any positive pre-upload identity is rejected. After upload, the published context requires positive
 ids that exactly match the GitHub API release/asset snapshot. The manifest example below remains the
 production-complete contract for artifacts that may be promoted as portable release assets.
+
+### Unsigned native and stable release-trust lanes (ADR-0163 D9)
+
+An explicitly requested `workflow_dispatch` run (`evaluation_build: true`) produces the evaluation
+context instead of staging. Its declared triple is `verificationPolicy: "evaluation"`,
+`verificationStatus: "evaluation-unqualified"`, and reason codes exactly
+`["evaluation-artifact", "evaluation-unsigned-allowed"]`, written in the manifest security block,
+every sidecar signing block, every native-helper signing block, and the native addon. Its
+`runtimeActivation.trustAnchor` is `evaluation-unqualified` — the anchor states plainly that NO
+platform seal binds the activation document the runtime reads at discovery. Like staging, it uses
+`release.releaseId: 0` and `artifact.assetId: 0`.
+
+A stable tag uses the separate `--release-build` producer flag. Before publication it carries the
+same truthful native evidence, plus `updateEligibility.requiredPredicates.releaseTrustRequired:
+true`. The protected publisher binds positive GitHub release/asset ids and then adds the Keiko
+Ed25519 `releaseTrust` object. The published validator and runtime cryptographically verify that
+object; a dispatch artifact never receives it.
+
+Unlike staging, an evaluation artifact ACTIVATES: the packaged runtime will run its bundled
+OpenCode sidecar. What that waives is exactly the platform signature, notarization and attestation
+gates. Everything else stays mandatory and identical to production — `payloadSha256`, `sizeBytes`,
+`payloadRootPath` equality and containment of `executablePath`, all three `shippedExecutable*`
+fields (validated in this context, not only under the production policy), the exact 11-key sidecar
+signing set, license and SBOM evidence paths and digests, the complete portable provenance pin, and
+both native-helper digests re-hashed from disk at discovery AND again at launch. The waived platform
+booleans must be present and `false`, never absent: a manifest that omits `verificationChecks` or
+asserts any single platform check is rejected.
+
+An evaluation dispatch artifact is not a publication candidate and is never one-click eligible.
+The stable-tag release-trust profile is assembled only as a mutually consistent three-target set and
+becomes one-click eligible only after its final manifest signature verifies. Native evidence stays
+`evaluation-unqualified`; the signature does not relabel it as Apple- or Microsoft-qualified. The
+schema shape of an evaluation manifest is pinned in `scripts/__tests__/portable-runtime.test.mjs`
+rather than as a second JSON fence here, because `check:portable-manifest` validates only the FIRST
+fence in this document under the published-contract context.
+
+## Windows production generation layout
+
+Production Windows output uses outer portable-manifest schema 2 and root setup-manifest schema 2.
+The payload is assembled under `.portable/generation-staging` while it is mutable. The producer
+binds the runtime activation record, runtime attestation, helper and sidecar evidence, and the
+qualified payload before it closes the generation. It hashes the staging tree with KHT1, renames it
+to `.portable/generations/<treeSha256>`, and rehashes the destination. No file may be written under
+the closed generation after that point.
+
+The outer manifest, `provenance.windowsGeneration`, `releaseImpact.reviewedBinding.windowsGeneration`,
+and root `.portable/setup-manifest.json` carry the same exact six-field binding:
+`schemaVersion: 1`, `resourceRoot: .portable/generations/<treeSha256>`, `treeHashSchema: KHT1`,
+`treeSha256: <lowercase 64-hex tree digest>`, `launcherPath: Keiko.exe`, and
+`launcherSha256: <lowercase 64-hex final signed root-launcher digest>`.
+
+The producer inventories the staged PE files and hashes the exact bytes before mutation. It signs and
+qualifies the generation payload and runtime attestation, closes and rehashes the generation, compiles
+the literal generation id into the root `Keiko.exe`, signs that launcher separately, and verifies the
+complete PE inventory. Finalization binds the schema-2 fields and writes the root setup metadata before
+the fresh-artifact verifier checks that setup binding. It rebuilds the archive and verifies the final
+archive bytes. The setup companion is built from the bound manifest and signed as a separate root
+artifact. The root launcher, setup companion, and outer
+manifest are outside the generation tree hash; the generation tree itself remains closed.
+
+The explicit `--windows-generation-production` staging flag is production-only and cannot be used by
+evaluation output. Windows generation-v1 discovery, consumers, startup attestation and recovery
+integration are implemented. The three-target, two-release N−1→N canary remains incomplete; KHA1
+coordinator acceptance now dispatches the production
+coordinator, and required native lanes exercise its mechanics and crash checkpoints. The canary
+uses Keiko-signed releases; Apple/Microsoft signing is not a prerequisite. Implementation and
+host-side tests do not by themselves establish that canary. These are release gates, not evidence
+supplied by this document.
 
 ## Archive And Evidence Layout
 
@@ -68,11 +159,56 @@ Every ZIP asset extracts into one top-level `Keiko/` directory. That directory i
 payload, not the long-lived self-update target until first-run setup attests and promotes a managed
 install.
 
+Linux archive:
+
+```text
+linux-x64/
+  keiko-linux-x64.zip
+  manifest/
+    portable-manifest.json
+  evidence/
+    SHA256SUMS.txt
+    sbom.cdx.json
+    third-party-notices.txt
+    signing-verification.json
+  payload/
+    Keiko/
+      Keiko
+      .portable/
+        setup-manifest.json
+        runtime-activation.json
+        runtime-qualification.json
+        runtime-qualification.sigstore.json
+      app/
+        package.json
+        dist/
+        node_modules/
+        release-impact.catalog.json
+      runtime/
+        native/
+          keiko-secure-workspace-read
+        node/
+          bin/node
+          LICENSE
+          NOTICE
+          NODE_RUNTIME_SOURCE.json
+        sidecars/
+          opencode-compatible/
+            bin/
+              opencode
+            evidence/
+              LICENSE
+              sbom.cdx.json
+      support/
+        keiko-support.sh
+```
+
 Windows archive:
 
 ```text
 windows-x64/
   keiko-windows-x64.zip
+  keiko-windows-x64-setup.exe
   manifest/
     portable-manifest.json
   evidence/
@@ -85,27 +221,32 @@ windows-x64/
       Keiko.exe
       .portable/
         setup-manifest.json
-      app/
-        package.json
-        dist/
-        node_modules/
-        release-impact.catalog.json
-      runtime/
-        native/
-          keiko-secure-workspace-read.exe
-          keiko-runtime-supervisor.exe
-          keiko-runtime-attestation.exe
-        node/
-          node.exe
-          LICENSE
-          NOTICE
-          NODE_RUNTIME_SOURCE.json
-        sidecars/
-          opencode-compatible/
-            opencode.cmd
-            LICENSE.txt
-            evidence/
-              sbom.cdx.json
+        generations/
+          <treeSha256>/
+            .portable/
+              runtime-activation.json
+            app/
+              package.json
+              dist/
+              node_modules/
+              release-impact.catalog.json
+            runtime/
+              native/
+                keiko-secure-workspace-read.exe
+                keiko-runtime-supervisor.exe
+                keiko-runtime-attestation.exe
+              node/
+                node.exe
+                LICENSE
+                NOTICE
+                NODE_RUNTIME_SOURCE.json
+              sidecars/
+                opencode-compatible/
+                  bin/
+                    opencode.exe
+                  evidence/
+                    LICENSE
+                    sbom.cdx.json
       support/
         keiko-support.cmd
 ```
@@ -156,9 +297,10 @@ macos-arm64/
                 NODE_RUNTIME_SOURCE.json
               sidecars/
                 opencode-compatible/
-                  bin/opencode
-                  LICENSE.txt
+                  bin/
+                    opencode
                   evidence/
+                    LICENSE
                     sbom.cdx.json
       support/
         keiko-support.sh
@@ -166,7 +308,7 @@ macos-arm64/
 
 Layout rules:
 
-- `Keiko.exe` and `Keiko.app` are the only primary launchers named in user-facing install/start
+- `Keiko`, `Keiko.exe`, and `Keiko.app` are the only primary launchers named in user-facing install/start
   instructions.
 - `support/` is optional and support-only. It must not be the primary user path and must not be
   referenced from default install/start copy.
@@ -198,6 +340,7 @@ Default managed roots:
 
 | Platform target | Managed root                      | Native registration owned by #1950                             |
 | --------------- | --------------------------------- | -------------------------------------------------------------- |
+| `linux-x64`     | `~/.local/opt/Keiko`              | User-local XDG desktop entry pointing to managed `Keiko`       |
 | `windows-x64`   | `%LOCALAPPDATA%\\Programs\\Keiko` | User-local Start Menu shortcut pointing to managed `Keiko.exe` |
 | `macos-arm64`   | `/Applications/Keiko.app`         | Canonical app bundle registration for Spotlight/Finder launch  |
 | `macos-x64`     | `/Applications/Keiko.app`         | Canonical app bundle registration for Spotlight/Finder launch  |
@@ -220,6 +363,27 @@ payloads, full archives, or customer-content backups. The exact persisted
 `updatedAt`; a managed record may additionally carry an optional `managedRootLocator`
 (`default`, `home-relative`, or `absolute-local`) plus managed-only attestation hashes; a
 `setup-failed` record carries only a bounded `failureReason` code beyond the shared fields.
+
+### Exact update input and handoff boundary
+
+The updater consumes the server-owned candidate defined by ADR-0099, not a fresh lookup of `latest`
+partway through execution. Release/asset ids, archive bytes and digest, manifest and checksum
+identities, reviewed compatibility binding, platform target, and sidecar identities must remain the
+same through preflight, download, verification, staging, and handoff. Rebound or changed evidence
+requires a fresh preflight and confirmation, not substitution inside an existing attempt.
+
+Only the attested installation is a mutation target. Before replacement, a verified copy of the
+current native launcher and supervisor may occupy the activation-specific private handoff capsule
+under the existing update state root. This bounded executable control capsule is distinct from the
+staged product archive and previous installation tree, both of which remain outside runtime state.
+Its fixed plan paths and mechanical receipts must never enter release archives, support exports,
+activity evidence, or browser projections. The capsule grants no arbitrary path or command authority.
+
+ADR-0121's acknowledged ownership transfer, same-volume promotion, process-tree containment, exact
+target startup proof, and idempotent recovery are required in addition to the artifact checks. A
+manifest that passes schema and digest validation does not prove those runtime steps. Production
+qualification additionally requires two actual Keiko-signed eligible releases on all four targets.
+Evaluation artifacts remain manual-only, including the first transition to a release-trusted build.
 
 ## State And Payload Exclusions
 
@@ -265,15 +429,15 @@ downloads, updater-time side downloads, global npm installs, curl installers, or
 customer-side tool installation path. Refreshing a frozen sidecar payload is a Keiko release
 decision: update the approvals file (for example with
 `npm run portable:approve-runtimes -- --opencode-version <v>`), review and merge that diff,
-regenerate all three portable artifacts, verify the
+regenerate all four portable artifacts, verify the
 new digests/evidence/signing status, and ship through the normal reviewed release flow. The runtime
 payload is an inseparable child of that whole-product release: it has no independent promotion,
 self-update, downgrade, rollback, or recovery channel.
 
-OpenCode `1.17.17` is pinned to tag commit
-`474abdd7ee60f4b67476cfcef7e5311beff4a824`. Its HTTP/SSE adapter compatibility is bound to the raw
-bytes of `packages/sdk/openapi.json` at that commit, SHA-256
-`7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de`. The digest input is
+OpenCode `2.0.10` is pinned to tag commit
+`b8cedc1a7a5e2916bbb65dc1d4b620729c261638`. Its HTTP/SSE adapter compatibility is bound to the raw
+bytes of `packages/protocol/openapi.json` at that commit, SHA-256
+`1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec`. The digest input is
 `upstream-raw-bytes`; canonicalized or reformatted JSON is not interchangeable. Codex is absent
 from approved payloads and support claims until separate human redistribution and subscription-auth
 approval is recorded. Pending or missing approval fails closed as `redistribution-unapproved` and
@@ -419,19 +583,19 @@ required contract vocabulary.
         "owner": "anomalyco",
         "repository": "opencode",
         "name": "opencode",
-        "version": "1.17.17",
-        "tag": "v1.17.17",
-        "commit": "474abdd7ee60f4b67476cfcef7e5311beff4a824"
+        "version": "2.0.10",
+        "tag": "v2.0.10",
+        "commit": "b8cedc1a7a5e2916bbb65dc1d4b620729c261638"
       },
       "adapterCompatibility": {
         "adapterName": "keiko-coding-sidecar",
-        "adapterVersion": "1",
+        "adapterVersion": "2",
         "transport": "http-sse"
       },
       "protocolSchema": {
-        "path": "packages/sdk/openapi.json",
-        "url": "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/sdk/openapi.json",
-        "sha256": "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de",
+        "path": "packages/protocol/openapi.json",
+        "url": "https://raw.githubusercontent.com/anomalyco/opencode/b8cedc1a7a5e2916bbb65dc1d4b620729c261638/packages/protocol/openapi.json",
+        "sha256": "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec",
         "hashAlgorithm": "sha256",
         "hashEncoding": "lowercase-hex",
         "digestInput": "upstream-raw-bytes",
@@ -440,7 +604,7 @@ required contract vocabulary.
       "releaseApproval": {
         "redistribution": {
           "status": "approved",
-          "reviewReference": "https://github.com/oscharko-dev/Keiko/issues/2253"
+          "reviewReference": "https://github.com/oscharko-dev/Keiko/pull/3561"
         },
         "subscriptionAuth": {
           "status": "not-applicable",
@@ -449,30 +613,30 @@ required contract vocabulary.
       },
       "license": {
         "spdxId": "MIT",
-        "url": "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/LICENSE",
+        "url": "https://raw.githubusercontent.com/anomalyco/opencode/b8cedc1a7a5e2916bbb65dc1d4b620729c261638/LICENSE",
         "sha256": "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b"
       },
       "archive": {
-        "platformTarget": "windows-x64",
-        "url": "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode-windows-x64.zip",
-        "sizeBytes": 69576819,
-        "sha256": "0a7fd7730a8efb00c69bce86fabcc0c24668371d821e99078a90dc78b71b4b85"
+        "url": "https://opencode.ai/files/bin/2.0.10/opencode-windows-x64.zip",
+        "sizeBytes": 90799413,
+        "sha256": "1b0aa36b36ecdb73ff4c2a11c6ff10963b6949686597e0a2989540871e970c3d",
+        "platformTarget": "windows-x64"
       },
       "executableTreeAlgorithm": "keiko-directory-tree-sha256-v1",
-      "executableTreeSha256": "081a514d31cf00426400e26fb713273ffab91d23c110fa9bac469ad254f3336b",
+      "executableTreeSha256": "eec767a3240bb604808a4d08279326bcbba8a7b19044d3450808e2ade6cdfb84",
       "executableSha256": "64-hex-opencode-executable-digest",
       "platformTarget": "windows-x64",
       "payloadRootPath": "runtime/sidecars/opencode-compatible",
-      "executablePath": "runtime/sidecars/opencode-compatible/opencode.cmd",
+      "executablePath": "runtime/sidecars/opencode-compatible/bin/opencode.exe",
       "payloadSha256": "64-hex-opencode-compatible-payload-digest",
       "sizeBytes": 2345678,
       "licenseEvidence": {
-        "path": "runtime/sidecars/opencode-compatible/LICENSE.txt",
+        "path": "runtime/sidecars/opencode-compatible/evidence/LICENSE",
         "sha256": "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b"
       },
       "sbomEvidence": {
         "path": "runtime/sidecars/opencode-compatible/evidence/sbom.cdx.json",
-        "sha256": "64-hex-opencode-compatible-sbom-digest"
+        "sha256": "553fedfc7a92fe8e7c4c6f0bc77b71986e50a91e4d930017a2b1a072891e3826"
       },
       "signing": {
         "verificationPolicy": "production",
@@ -647,19 +811,19 @@ required contract vocabulary.
             "owner": "anomalyco",
             "repository": "opencode",
             "name": "opencode",
-            "version": "1.17.17",
-            "tag": "v1.17.17",
-            "commit": "474abdd7ee60f4b67476cfcef7e5311beff4a824"
+            "version": "2.0.10",
+            "tag": "v2.0.10",
+            "commit": "b8cedc1a7a5e2916bbb65dc1d4b620729c261638"
           },
           "adapterCompatibility": {
             "adapterName": "keiko-coding-sidecar",
-            "adapterVersion": "1",
+            "adapterVersion": "2",
             "transport": "http-sse"
           },
           "protocolSchema": {
-            "path": "packages/sdk/openapi.json",
-            "url": "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/sdk/openapi.json",
-            "sha256": "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de",
+            "path": "packages/protocol/openapi.json",
+            "url": "https://raw.githubusercontent.com/anomalyco/opencode/b8cedc1a7a5e2916bbb65dc1d4b620729c261638/packages/protocol/openapi.json",
+            "sha256": "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec",
             "hashAlgorithm": "sha256",
             "hashEncoding": "lowercase-hex",
             "digestInput": "upstream-raw-bytes",
@@ -668,7 +832,7 @@ required contract vocabulary.
           "releaseApproval": {
             "redistribution": {
               "status": "approved",
-              "reviewReference": "https://github.com/oscharko-dev/Keiko/issues/2253"
+              "reviewReference": "https://github.com/oscharko-dev/Keiko/pull/3561"
             },
             "subscriptionAuth": {
               "status": "not-applicable",
@@ -677,30 +841,30 @@ required contract vocabulary.
           },
           "license": {
             "spdxId": "MIT",
-            "url": "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/LICENSE",
+            "url": "https://raw.githubusercontent.com/anomalyco/opencode/b8cedc1a7a5e2916bbb65dc1d4b620729c261638/LICENSE",
             "sha256": "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b"
           },
           "archive": {
             "platformTarget": "windows-x64",
-            "url": "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode-windows-x64.zip",
-            "sizeBytes": 69576819,
-            "sha256": "0a7fd7730a8efb00c69bce86fabcc0c24668371d821e99078a90dc78b71b4b85"
+            "url": "https://opencode.ai/files/bin/2.0.10/opencode-windows-x64.zip",
+            "sizeBytes": 90799413,
+            "sha256": "1b0aa36b36ecdb73ff4c2a11c6ff10963b6949686597e0a2989540871e970c3d"
           },
           "executableTreeAlgorithm": "keiko-directory-tree-sha256-v1",
-          "executableTreeSha256": "081a514d31cf00426400e26fb713273ffab91d23c110fa9bac469ad254f3336b",
+          "executableTreeSha256": "eec767a3240bb604808a4d08279326bcbba8a7b19044d3450808e2ade6cdfb84",
           "executableSha256": "64-hex-opencode-executable-digest",
           "platformTarget": "windows-x64",
           "payloadRootPath": "runtime/sidecars/opencode-compatible",
-          "executablePath": "runtime/sidecars/opencode-compatible/opencode.cmd",
+          "executablePath": "runtime/sidecars/opencode-compatible/bin/opencode.exe",
           "payloadSha256": "64-hex-opencode-compatible-payload-digest",
           "sizeBytes": 2345678,
           "licenseEvidence": {
-            "path": "runtime/sidecars/opencode-compatible/LICENSE.txt",
+            "path": "runtime/sidecars/opencode-compatible/evidence/LICENSE",
             "sha256": "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b"
           },
           "sbomEvidence": {
             "path": "runtime/sidecars/opencode-compatible/evidence/sbom.cdx.json",
-            "sha256": "64-hex-opencode-compatible-sbom-digest"
+            "sha256": "553fedfc7a92fe8e7c4c6f0bc77b71986e50a91e4d930017a2b1a072891e3826"
           },
           "signing": {
             "verificationPolicy": "production",
@@ -747,14 +911,22 @@ required contract vocabulary.
 
 Validation rules:
 
-- The top-level portable manifest `schemaVersion` remains `1`. Sidecar entries separately carry
-  `approvalSchemaVersion: 2`; schema-v1 sidecar approval and compatibility claims are rejected.
+- macOS and flat Windows manual/evaluation artifacts retain top-level portable-manifest `schemaVersion: 1`.
+  Windows production generation artifacts use top-level and root setup `schemaVersion: 2`. Sidecar
+  entries separately carry `approvalSchemaVersion: 2`; schema-v1 sidecar approval and compatibility
+  claims are rejected.
 - `nativeHelpers` is additive in schema v1. Legacy manifests without it remain parseable but expose
   no secure-read capability. Every newly staged, signed-candidate, and published artifact contains
   exactly one `keiko-secure-workspace-read` entry at the fixed target path. The entry binds target,
   architecture, `KSR1`/`KSS1`, source commit and tree, unsigned and final signed-byte digests,
   signature/notarization state, and one CycloneDX `bom-ref`; it is not a sidecar runtime.
-- `artifact.platformTarget` is one of `windows-x64`, `macos-arm64`, or `macos-x64`.
+- `runtimeQualification` is required for production Linux and macOS artifacts and has exactly
+  `schemaVersion`, `path`, `sha256`, and `backend`. Linux requires
+  `.portable/runtime-qualification.json` with backend `linux-namespace-gateway`, plus the fixed
+  `.portable/runtime-qualification.sigstore.json` bundle whose offline-verified OIDC identity and
+  subject bytes bind that receipt. The complete object is duplicated in `reviewedBinding`; drift,
+  absence, or a target/backend mismatch fails closed.
+- `artifact.platformTarget` is one of `linux-x64`, `windows-x64`, `macos-arm64`, or `macos-x64`.
 - `artifact.assetName` must match the platform matrix exactly.
 - `artifact.assetId` and `release.releaseId` are exactly `0` for staging and verified unpublished
   candidates. API-bound published manifests require positive values matching the remote snapshot.
@@ -769,18 +941,18 @@ Validation rules:
 - `sidecarRuntimes[]` remains optional only for legacy manifest parsing. Newly produced staging,
   candidate, and published manifests require exactly one entry named `opencode-compatible` at the
   exact payload root `runtime/sidecars/opencode-compatible`.
-- OpenCode entries are exact-key bound to repository `anomalyco/opencode`, version `1.17.17`, tag
-  `v1.17.17`, commit `474abdd7ee60f4b67476cfcef7e5311beff4a824`, and HTTP/SSE transport.
+- OpenCode entries are exact-key bound to repository `anomalyco/opencode`, version `2.0.10`, tag
+  `v2.0.10`, commit `b8cedc1a7a5e2916bbb65dc1d4b620729c261638`, and HTTP/SSE transport.
 - OpenCode protocol compatibility is the raw-byte SHA-256 of commit-addressed
-  `packages/sdk/openapi.json`; `hashAlgorithm`, `hashEncoding`, and `digestInput` must be `sha256`,
+  `packages/protocol/openapi.json`; `hashAlgorithm`, `hashEncoding`, and `digestInput` must be `sha256`,
   `lowercase-hex`, and `upstream-raw-bytes` respectively.
 - Every included sidecar requires approved redistribution and applicable subscription-auth gates.
   Codex remains absent while either gate is unapproved; absence cannot activate a global-install or
   first-run-download fallback.
 - Sidecar `license` is normalized from the schema-v2 approval and must retain its SPDX id,
   commit-addressed source URL, and SHA-256. Its digest must match `licenseEvidence.sha256`.
-- Sidecar `platformTarget` must match the parent artifact target. A Windows sidecar cannot be
-  carried by a macOS artifact, and macOS arm64 and macOS x64 sidecars are independently verified.
+- Sidecar `platformTarget` must match the parent artifact target. A sidecar cannot cross Linux,
+  Windows, or macOS artifacts, and macOS arm64 and macOS x64 sidecars are independently verified.
 - Sidecar `executablePath`, `licenseEvidence.path`, and `sbomEvidence.path` must be contained
   relative paths under that sidecar payload root. Traversal, absolute paths, `.keiko`, customer
   repository paths, temp roots, private paths, raw logs, package-manager output, prompts, diffs,
@@ -789,38 +961,45 @@ Validation rules:
   protocol-schema SHA-256 values bind independently reviewed inputs to the staged bytes. Any
   mismatch fails closed before spawn or promotion.
 - Sidecar signing metadata uses the same bounded verification vocabulary as the parent artifact.
-  Production validation requires a verified signature plus the shipped executable fields
+  Stable validation requires Keiko release trust plus the shipped executable fields
   `shippedExecutableSha256`, `shippedExecutableTreeAlgorithm`, and
   `shippedExecutableTreeSha256`. These fields are signed evidence for the executable bytes and
   executable tree that Keiko stages and checks before production staging or sidecar pre-spawn.
   The upstream `executableSha256`, `executableTreeAlgorithm`, and `executableTreeSha256` fields
   remain immutable provenance for the approved upstream release; shipped evidence does not replace
-  or rewrite that upstream record. macOS sidecars also require Developer ID, notarization,
-  stapling, and assessment proof where applicable.
+  or rewrite that upstream record. Optional macOS Developer ID, notarization, stapling, and
+  assessment evidence must verify when present and must otherwise remain explicitly false.
 - `release.stable` and `updateEligibility.stableOnly` must both be `true` for one-click portable
   update eligibility. Prerelease, beta, canary, downgrade, and rollback paths are out of scope.
-- `security.verificationPolicy` is one of `staging`, `development`, `pull-request`, or
+- `security.verificationPolicy` is one of `staging`, `development`, `pull-request`, `evaluation`, or
   `production`; `security.verificationStatus` must match that policy and whether the target's
   signature/notarization checks are complete.
 - `security.verificationReasonCodes` is a bounded, redacted enum list. It may record policy or
-  failure reasons such as `staging-unverified`, `non-production-unsigned-allowed`, or
+  failure reasons such as `staging-unverified`, `non-production-unsigned-allowed`,
+  `evaluation-artifact`, `evaluation-unsigned-allowed`, or
   `macos-staple-unverified`, but it must never store certificate subjects, team ids, account ids,
   keychain names, private endpoints, or raw signing/notarization output.
 - `security.verificationChecks` stores target-specific redacted booleans only:
-  `publisherChainVerified` and `timestampVerified` for Windows; `developerIdVerified`,
+  `provenanceVerified` for Linux; `publisherChainVerified` and `timestampVerified` for Windows; `developerIdVerified`,
   `notarizationVerified`, `stapleVerified`, and `assessmentVerified` for both macOS architectures.
 - `updateEligibility.requiredPredicates` must all be true before the one-click portable updater may
-  execute. Any missing platform signature/notarization proof or missing crash-safe same-volume
-  promotion capability forces a manual-only path.
-- `entrypoints.primaryLauncher` must be `Keiko.exe` for `windows-x64` and `Keiko.app` for both macOS
-  targets.
-- macOS targets require Developer ID signature and notarization verification. Windows requires
-  Authenticode publisher-chain verification. Windows point-of-use admission additionally invokes
-  the fixed system verifier with a closed environment and requires every runtime attestation carrier
-  and privileged helper to have the same verified leaf signer identity as `Keiko.exe`.
-- macOS point-of-use admission derives the qualified outer app's closed Developer ID TeamIdentifier
-  and requires the app seal, system-extension manager, Endpoint Security extension, and secure-read
-  helper to verify under that same team identity. Raw team ids remain forbidden in persisted evidence.
+  execute. A missing or invalid Keiko release signature, or a missing crash-safe same-volume
+  promotion capability, forces a manual-only path. Apple and Microsoft platform-signature
+  predicates are not required.
+- `entrypoints.primaryLauncher` must be `Keiko` for `linux-x64`, `Keiko.exe` for `windows-x64`, and
+  `Keiko.app` for both macOS targets.
+- Linux production admission requires `github-oidc-attested`, `provenanceVerified: true`, the exact
+  qualification receipt and offline-verifiable bundle, and a live qualified namespace backend.
+  Runtime discovery binds the launcher, Node.js executable, USearch addon, helpers, sidecars,
+  activation manifest, source commit, repository, and workflow identity.
+- macOS Developer ID/notarization and Windows Authenticode are optional defense in depth. When a
+  manifest claims that evidence, point-of-use admission invokes the existing closed native verifier
+  and requires the complete same-release identity chain; false or inconsistent positive claims fail
+  closed. Cross-release Windows comparison permits legitimate Azure leaf rotation only after both
+  independently verified Public Trust chains bind the reviewed subscriber identity-validation EKU.
+  macOS native verification, when claimed, derives the outer app's closed Developer ID
+  TeamIdentifier and binds the app seal, system-extension manager, Endpoint Security extension, and
+  secure-read helper to that identity. Raw identities remain forbidden in persisted evidence.
 - The release-impact entry must bind the full reviewed ADR-0121 tuple for the same artifact:
   release id/tag, asset id/name/size, package version, runtime identity, archive digest, build
   provenance, SBOM/license/checksum evidence, platform target, signing/notarization status, and any
@@ -838,7 +1017,7 @@ This contract intentionally leaves implementation to the remaining portable runt
 - #1951 implements signing, notarization, checksum, provenance, and artifact verification gates.
 - #1983 introduced product-owned coding sidecar payload staging and manifest validation; ADR-0163
   and #2762 make the single approved OpenCode payload mandatory for customer artifacts.
-- #1952 attaches all three portable assets and reviewed evidence to GitHub Releases.
+- #1952 attaches the portable assets and reviewed evidence to GitHub Releases.
 - #1953 adds portable launch/setup smoke tests and operator documentation.
 - #1945 consumes the managed install and manifest contract for portable updater v2.
 

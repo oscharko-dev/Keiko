@@ -245,7 +245,7 @@ function bubblewrapPlan(
 
 function containerPlan(
   input: StrictDebugCapsuleInput,
-  backend: "container-docker" | "container-podman",
+  _backend: "container-docker" | "container-podman",
   command: string,
   executableDigest: string,
 ): StrictDebugCapsulePlan {

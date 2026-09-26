@@ -6,7 +6,6 @@
 // license, and verifies both again. Product code repeats the binary check at every native load.
 
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
@@ -14,7 +13,6 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -25,8 +23,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import {
   USEARCH_RUNTIME_MANIFEST,
+  usearchRuntimeApproval,
   usearchRuntimeTargetKey,
 } from "../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
+import { resolveWindowsSystemDirectory } from "../packages/keiko-security/src/windows-system-directory.ts";
+import { sha256File } from "./lib/digest.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const LICENSE_ARCHIVE_PATH = "package/LICENSE";
@@ -34,13 +35,23 @@ const DOWNLOAD_CONNECT_TIMEOUT_SECONDS = 10;
 const DOWNLOAD_MAX_SECONDS = 300;
 const DOWNLOAD_MAX_BYTES = 64 * 1024 * 1024;
 
-export function systemBinariesFor(hostPlatform, systemRoot) {
-  return hostPlatform === "win32"
-    ? {
-        curl: join(systemRoot ?? String.raw`C:\Windows`, "System32", "curl.exe"),
-        tar: join(systemRoot ?? String.raw`C:\Windows`, "System32", "tar.exe"),
-      }
-    : { curl: "/usr/bin/curl", tar: "/usr/bin/tar" };
+// IDX55 follow-up (PR #3355 review): this used to read SystemRoot raw (`systemRoot ?? "C:\Windows"`)
+// and join it straight onto System32/curl.exe and System32/tar.exe, unvalidated — the same banned
+// pattern windows-msvc.mjs carried, missed by trusted-system-root-usage.test.mjs only because that
+// pin scans packages/*/src, not scripts/. `resolveWindowsSystemDirectory` adds the canonical-shape
+// validation (throws on a hostile override); the existence check stays with `systemBinary()` below,
+// which already performs it and fails closed through this script's own `fail()`, not by throwing.
+export function systemBinariesFor(
+  hostPlatform,
+  systemRoot,
+  resolveSystemRoot = resolveWindowsSystemDirectory,
+) {
+  if (hostPlatform !== "win32") return { curl: "/usr/bin/curl", tar: "/usr/bin/tar" };
+  const trustedSystemRoot = resolveSystemRoot({ SystemRoot: systemRoot });
+  return {
+    curl: join(trustedSystemRoot, "System32", "curl.exe"),
+    tar: join(trustedSystemRoot, "System32", "tar.exe"),
+  };
 }
 
 const SYSTEM_BINARIES = systemBinariesFor(platform, env.SystemRoot);
@@ -50,12 +61,8 @@ export function fail(message, { error = console.error, exit = process.exit } = {
   exit(1);
 }
 
-function sha256Of(path) {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
-}
-
 function verify(path, expected, failWith = fail) {
-  const actual = sha256Of(path);
+  const actual = sha256File(path);
   if (actual !== expected) failWith(`checksum mismatch: expected ${expected}, got ${actual}`);
 }
 
@@ -87,7 +94,7 @@ export function isTrustedProvisionedUsearchFile(
     const entry = lstatSync(path);
     const parent = lstatSync(dirname(path));
     return (
-      trustedProvisionedEntries(entry, parent, currentUid) && sha256Of(path) === expectedSha256
+      trustedProvisionedEntries(entry, parent, currentUid) && sha256File(path) === expectedSha256
     );
   } catch {
     return false;
@@ -146,9 +153,10 @@ export function provisionedUsearchBinaryPath(
   hostArchitecture = arch,
 ) {
   const target = usearchRuntimeTargetKey(hostPlatform, hostArchitecture);
-  return target === undefined
+  const approval = usearchRuntimeApproval(target);
+  return approval === undefined
     ? undefined
-    : join(root, ".usearch", USEARCH_RUNTIME_MANIFEST.version, target, "usearch.node");
+    : join(root, ".usearch", approval.version, target, "usearch.node");
 }
 
 export function extractApprovedFiles(
@@ -164,14 +172,14 @@ export function extractApprovedFiles(
   );
 }
 
-function writeProvenance(targetDir, targetKey, runtimeManifest) {
+function writeProvenance(targetDir, targetKey, approval) {
   writeFileSync(
     join(targetDir, "PROVENANCE.txt"),
     [
-      `version=${runtimeManifest.version}`,
-      `sourceCommit=${runtimeManifest.sourceCommit}`,
+      `version=${approval.version}`,
+      `sourceCommit=${approval.sourceCommit}`,
       `target=${targetKey}`,
-      `tarballSha256=${runtimeManifest.tarballSha256}`,
+      `tarballSha256=${approval.tarballSha256}`,
       "",
     ].join("\n"),
     "utf8",
@@ -193,18 +201,18 @@ function provisionOptions(input) {
   };
 }
 
-function installUsearchRuntime(options, targetKey, target, targetDir, binaryPath, licensePath) {
-  const { downloadFile, extractFiles, failWith, log, runtimeManifest, trustFile } = options;
+function installUsearchRuntime(options, targetKey, approval, targetDir, binaryPath, licensePath) {
+  const { downloadFile, extractFiles, failWith, log, trustFile } = options;
   const staging = mkdtempSync(join(tmpdir(), "keiko-usearch-provision-"));
   try {
-    const tarball = join(staging, `usearch-${runtimeManifest.version}.tgz`);
-    downloadFile(tarball, runtimeManifest);
-    verify(tarball, runtimeManifest.tarballSha256, failWith);
-    extractFiles(tarball, staging, target.archivePath);
-    const extractedBinary = join(staging, target.archivePath);
+    const tarball = join(staging, `usearch-${approval.version}.tgz`);
+    downloadFile(tarball, approval);
+    verify(tarball, approval.tarballSha256, failWith);
+    extractFiles(tarball, staging, approval.archivePath);
+    const extractedBinary = join(staging, approval.archivePath);
     const extractedLicense = join(staging, LICENSE_ARCHIVE_PATH);
-    verify(extractedBinary, target.binarySha256, failWith);
-    verify(extractedLicense, runtimeManifest.licenseSha256, failWith);
+    verify(extractedBinary, approval.binarySha256, failWith);
+    verify(extractedLicense, approval.licenseSha256, failWith);
     rmSync(targetDir, { recursive: true, force: true });
     mkdirSync(targetDir, { recursive: true, mode: 0o755 });
     chmodSync(targetDir, 0o755);
@@ -212,11 +220,11 @@ function installUsearchRuntime(options, targetKey, target, targetDir, binaryPath
     copyFileSync(extractedLicense, licensePath);
     chmodSync(binaryPath, 0o755);
     chmodSync(licensePath, 0o644);
-    writeProvenance(targetDir, targetKey, runtimeManifest);
+    writeProvenance(targetDir, targetKey, approval);
     chmodSync(join(targetDir, "PROVENANCE.txt"), 0o644);
     if (
-      !trustFile(binaryPath, target.binarySha256) ||
-      !trustFile(licensePath, runtimeManifest.licenseSha256)
+      !trustFile(binaryPath, approval.binarySha256) ||
+      !trustFile(licensePath, approval.licenseSha256)
     ) {
       failWith("provisioned runtime ownership, permissions, or digest verification failed");
     }
@@ -237,18 +245,22 @@ export function provisionUsearch(input = {}) {
     );
     return undefined;
   }
-  const target = runtimeManifest.targets[targetKey];
-  const targetDir = join(root, ".usearch", runtimeManifest.version, targetKey);
+  const approval = usearchRuntimeApproval(targetKey, runtimeManifest);
+  if (approval === undefined) {
+    log(`provision-usearch: no approved runtime for ${targetKey}; skipping.`);
+    return undefined;
+  }
+  const targetDir = join(root, ".usearch", approval.version, targetKey);
   const binaryPath = join(targetDir, "usearch.node");
   const licensePath = join(targetDir, "LICENSE");
   if (
-    trustFile(binaryPath, target.binarySha256) &&
-    trustFile(licensePath, runtimeManifest.licenseSha256)
+    trustFile(binaryPath, approval.binarySha256) &&
+    trustFile(licensePath, approval.licenseSha256)
   ) {
     log(`provision-usearch: already verified at ${binaryPath}`);
     return binaryPath;
   }
-  return installUsearchRuntime(options, targetKey, target, targetDir, binaryPath, licensePath);
+  return installUsearchRuntime(options, targetKey, approval, targetDir, binaryPath, licensePath);
 }
 
 const entryPoint = process.argv[1];

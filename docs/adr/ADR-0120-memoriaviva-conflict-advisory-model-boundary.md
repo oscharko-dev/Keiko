@@ -11,7 +11,7 @@ attached to ambiguous MemoriaViva conflict `ReviewItem`s, to help a human review
 The issue carries its own mandatory stop condition: implementation must not proceed until the
 `architect` role has triaged whether sending memory content to a model for adjudication is an
 acceptable trust-boundary crossing for this deployment. This ADR is that triage decision, recorded
-where AGENTS.md §11 requires it — a behavioural change that introduces a new trust-boundary
+where AGENTS.md §12 requires it — a behavioural change that introduces a new trust-boundary
 crossing is exactly the kind of decision this repository documents, not assumes.
 
 Two facts about the current system bound the design space:

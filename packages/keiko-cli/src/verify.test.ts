@@ -247,6 +247,44 @@ describe("runVerifyCli", () => {
     expect(c.err()).toContain("Usage");
   });
 
+  // Regression pin (KEIKO-0492): parseArgs used args.indexOf on a fixed set of names and never
+  // iterated argv, so any unknown token was ignored and a mistyped `--onlyy` silently escalated a
+  // targeted run into the full typecheck/lint/test/build matrix. The same reason `--dir ""` and
+  // `--changed ""` were accepted — flagValue only rejected `undefined` or `--` prefixes.
+  it("rejects unknown flags with a usage error and never runs the plan", async () => {
+    writePackage({ test: 'node -e "process.exit(0)"' });
+    const c = makeIo();
+    const code = await runVerifyCli(["--dir", dir, "--onlyy", "typecheck"], c.io);
+    expect(code).toBe(2);
+    expect(c.err()).toContain("Usage");
+    expect(c.out()).toBe("");
+  });
+
+  it("rejects --dir with an empty-string value", async () => {
+    const c = makeIo();
+    expect(await runVerifyCli(["--dir", ""], c.io)).toBe(2);
+    expect(c.err()).toContain("Usage");
+  });
+
+  it("rejects --changed with an empty-string value", async () => {
+    const c = makeIo();
+    expect(await runVerifyCli(["--changed", ""], c.io)).toBe(2);
+    expect(c.err()).toContain("Usage");
+  });
+
+  it(
+    "still accepts --only typecheck alongside --json",
+    async () => {
+      writePackage({ typecheck: 'node -e "process.exit(0)"' });
+      const c = makeIo();
+      const code = await runVerifyCli(["--dir", dir, "--only", "typecheck", "--json"], c.io);
+      expect(code).toBe(0);
+      const parsed = JSON.parse(c.out()) as { results: { kind: string }[] };
+      expect(parsed.results[0]?.kind).toBe("typecheck");
+    },
+    VERIFY_CLI_SPAWN_TIMEOUT_MS,
+  );
+
   it(
     "redacts a secret printed by a verification command",
     async () => {

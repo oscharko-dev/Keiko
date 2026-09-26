@@ -8,13 +8,15 @@
 // This file lives under `__tests__/` so it is excluded from coverage instrumentation; it is test data,
 // not production code.
 
+import type {
+  MissingInformationStrategy,
+  PromptEnhancementProfileId,
+  PromptEnhancementRequest,
+} from "@oscharko-dev/keiko-contracts";
 import {
   asPromptEnhancementRequestId,
   PROMPT_ENHANCER_SCHEMA_VERSION,
-  type MissingInformationStrategy,
-  type PromptEnhancementProfileId,
-  type PromptEnhancementRequest,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
 
 export interface ProfileFixture {
   readonly name: string;

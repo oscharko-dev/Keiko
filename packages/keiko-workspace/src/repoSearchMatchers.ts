@@ -12,7 +12,7 @@ import {
 } from "./ecosystems.js";
 import { RepoSearchInvalidQueryError } from "./errors.js";
 import { expandedQueryTermGroups, expandedQueryTerms } from "./repoSearchQueryTerms.js";
-import { regexSafetyIssue } from "./repoSearchRegexSafety.js";
+import { compileSafeWorkspaceSearchRegex, regexSafetyIssue } from "./repoSearchRegexSafety.js";
 import { repositoryRouteDeclarationMatches, repositoryRouteQuery } from "./repoSearchRoutes.js";
 import {
   repositorySourceLines,
@@ -24,12 +24,21 @@ export interface LineMatcher {
   readonly match: (line: string, sourceLine?: RepositorySourceLine) => number;
 }
 
-export function fingerprintFor(query: RetrievalQuery): string {
+/** Trusted workspace callers can request literal substring matching for an exact-text query. */
+export interface LiteralQueryInterpretation {
+  readonly kind: "literal";
+}
+
+export function fingerprintFor(
+  query: RetrievalQuery,
+  interpretation?: LiteralQueryInterpretation,
+): string {
   const canonical = JSON.stringify({
     kind: query.kind,
     text: query.text,
     caseSensitive: query.caseSensitive,
     maxResults: query.maxResults,
+    ...(interpretation === undefined ? {} : { interpretation: interpretation.kind }),
   });
   return createHash("sha256").update(canonical).digest("hex").slice(0, 16);
 }
@@ -704,6 +713,10 @@ function buildExactSymbolMatcher(query: RetrievalQuery): LineMatcher {
   if (/\s/.test(query.text)) {
     throw new RepoSearchInvalidQueryError("exact-symbol query must not contain whitespace");
   }
+  return buildLiteralMatcher(query);
+}
+
+function buildLiteralMatcher(query: RetrievalQuery): LineMatcher {
   const needle = query.caseSensitive ? query.text : query.text.toLowerCase();
   return {
     match: (line: string): number => {
@@ -718,12 +731,15 @@ function buildRegexMatcher(query: RetrievalQuery): LineMatcher {
   if (issue !== undefined) {
     throw new RepoSearchInvalidQueryError(issue);
   }
-  let regex: RegExp;
   try {
-    regex = new RegExp(query.text, query.caseSensitive ? "g" : "gi");
+    const regex = compileSafeWorkspaceSearchRegex(query.text, query.caseSensitive);
+    return regexLineMatcher(regex);
   } catch {
     throw new RepoSearchInvalidQueryError(`invalid regex: ${query.text}`);
   }
+}
+
+function regexLineMatcher(regex: RegExp): LineMatcher {
   const cap = 100;
   return {
     match: (line: string): number => {
@@ -740,7 +756,15 @@ function buildRegexMatcher(query: RetrievalQuery): LineMatcher {
   };
 }
 
-export function buildMatcher(query: RetrievalQuery): LineMatcher {
+export function buildMatcher(
+  query: RetrievalQuery,
+  interpretation?: LiteralQueryInterpretation,
+): LineMatcher {
+  if (interpretation?.kind === "literal") {
+    if (query.kind !== "exact-symbol")
+      throw new RepoSearchInvalidQueryError("literal interpretation requires exact-text query");
+    return buildLiteralMatcher(query);
+  }
   if (query.kind === "natural-language") {
     return buildNaturalLanguageMatcher(query);
   }

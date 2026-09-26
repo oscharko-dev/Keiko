@@ -24,7 +24,7 @@
 // module has no path to reach.
 
 import type { VoiceProfile } from "@/lib/types";
-import { voiceMessageAllowedForProfile } from "@oscharko-dev/keiko-contracts";
+import { voiceMessageAllowedForProfile } from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
 import { type VoiceClock, createBrowserVoiceClock } from "./voice-timebase";
 
 // Re-export the clock seam and the capability adapter so consumers of the turn manager construct it

@@ -1,25 +1,34 @@
 import { createHash, timingSafeEqual } from "node:crypto";
-import { chmodSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import {
-  createServer,
-  type IncomingHttpHeaders,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse,
-} from "node:http";
-import type { Socket } from "node:net";
+  DEFAULT_SANDBOX_POLICY,
+  GOVERNED_TOOL_SETTLEMENT_GRACE_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/tools";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { type IncomingHttpHeaders, type IncomingMessage } from "node:http";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
 import type {
   CodingWorkbenchRuntimeEvent,
   UpdatePortableTarget,
 } from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 
 import {
   contentFreeErrorClass,
+  describeError,
   emitServerDiagnostic,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
+import { isValidCorrelationId } from "../correlation.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
   createCodingRuntimeManager,
@@ -37,37 +46,58 @@ import {
   parseCodingToolRequest,
   type CodingToolResult,
 } from "./codingToolIpc.js";
-import type { CodingToolFacade } from "./codingToolFacadePorts.js";
+import type { CodingToolEditBaseRead, CodingToolFacade } from "./codingToolFacadePorts.js";
+import { staleEditBaseToolResult } from "./codingToolFacade.js";
+import type { OpenCodeQuestionRequest } from "./opencodeHttpClient.js";
 import {
-  createOpenCodeHttpClient,
-  type OpenCodeHttpClient,
-  type OpenCodeQuestionRequest,
-  parseOpenCodeChildEndpoint,
-} from "./opencodeHttpClient.js";
-import { buildOpenCodeLaunchProfile } from "./opencodeLaunchProfile.js";
+  createOpenCodeV2HttpClient,
+  parseOpenCodeV2ChildEndpoint,
+  type OpenCodeV2HttpClient,
+} from "./opencodeV2HttpClient.js";
+import { createOpenCodeV2HistoryProjection, OpenCodeV2HistoryError } from "./opencodeV2History.js";
+import { recordContextPresentation } from "./codingRuntimeHistory.js";
 import {
-  createGeneratedOpenCodeBundle,
+  createOpenCodeV2ApprovalRequests,
+  type OpenCodeV2ApprovalDecision,
+  type OpenCodeV2ApprovalOutcome,
+  type ToolBridgeApprovalRejection,
+} from "./opencodeV2ApprovalRequests.js";
+import type { SidecarPermissionEvent } from "./codingSidecarEventParser.js";
+import { answerOpenCodeV2Form, projectOpenCodeV2Form, v2FormId } from "./opencodeV2Questions.js";
+import {
+  buildOpenCodeLaunchProfile,
+  OPENCODE_RUNTIME_READINESS_PROMPT,
+} from "./opencodeLaunchProfile.js";
+import type { OpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
+import {
+  createGeneratedOpenCodeV2Plugins,
   createOpenCodeRuntimeAdapter,
   type OpenCodeGovernedSinkReceipt,
   type OpenCodeRuntimeAdapter,
   type OpenCodeSyncHint,
 } from "./opencodeRuntimeAdapter.js";
 import {
-  classifyOpenCodeLiveControl,
-  parseOpenCodeHistory,
-  projectOpenCodePermissionEvent,
+  OPENCODE_HISTORY_RESPONSE_MAX_BYTES,
   projectOpenCodePermissionRequestId,
 } from "./opencodeProtocol.js";
-import { normalizeOpenCodeSafeActivityHistory } from "./opencodeSafeActivity.js";
 import {
-  OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM,
-  projectOpenCodeProtocolSurface,
+  OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM,
+  projectOpenCodeV2ProtocolSurface,
 } from "./opencodeProtocolSurface.js";
 import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import type { RuntimeProcessSupervisor } from "./runtimeProcessSupervisor.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeToolSchemas.js";
+import { CodingRuntimeQuestionAnswerRejectedError } from "./codingRuntimeQuestionPort.js";
+import { openCodeCatalogSettlementBudgetMs } from "../tool-catalog/catalogToolFacadeBridge.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 
-const PINNED_RAW_SCHEMA_SHA256 = "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de";
+function v2Record(value: unknown): Readonly<Record<string, unknown>> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Readonly<Record<string, unknown>>)
+    : undefined;
+}
+
+const PINNED_RAW_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
 const DIGEST = /^[a-f0-9]{64}$/u;
 const ABORT_SETTLEMENT_TIMEOUT_MS = 30_000;
 const INITIAL_TURN_BASELINE_STABILIZATION_MS = 500;
@@ -77,7 +107,8 @@ interface VerifiedPortableInput {
   readonly resourceRoot: string;
   readonly target: UpdatePortableTarget;
   /** Admission policy that vouched for the record; absent fails closed to release-qualified. */
-  readonly admission?: "release-qualified" | "functional-dev-lane" | undefined;
+  readonly admission?:
+    "release-qualified" | "functional-dev-lane" | "functional-evaluation-lane" | undefined;
 }
 
 /** Terminal states for a tool action's safe-activity settlement (#2386). */
@@ -86,6 +117,7 @@ type OpenCodeToolSettlementState = "succeeded" | "failed" | "denied" | "cancelle
 export interface OpenCodeRuntimeCompositionInput {
   readonly portable: VerifiedPortableInput;
   readonly stateBaseRoot: string;
+  readonly contextGeometry: OpenCodeContextGeometry;
   readonly capabilities: {
     readonly modelGatewayCapability: string;
     readonly toolFacadeCapability: string;
@@ -94,6 +126,14 @@ export interface OpenCodeRuntimeCompositionInput {
     readonly requestDeadlineMs: number;
     readonly maxInFlight: number;
   };
+  /**
+   * ADR-0043 D11-D14: the tool facade rides the SAME single attested loopback destination as the
+   * model gateway (`<loopback origin>/api/coding-sidecar/tool`) instead of a second ephemeral
+   * listener the Seatbelt egress profile would deny (#3390). Full URL, not a port -- the caller
+   * (productionOpenCodeActivation.ts) derives it from the one loopback origin, never a hard-coded
+   * port.
+   */
+  readonly toolFacadeOrigin: string;
   readonly toolFacade: CodingToolFacade;
   readonly codingToolApprovals?: CodingToolApprovalBridge | undefined;
   readonly governedEventSink: {
@@ -104,6 +144,11 @@ export interface OpenCodeRuntimeCompositionInput {
   };
   readonly safeActivity?:
     | {
+        readonly captureMessages?:
+          | ((
+              messages: readonly import("./codingRuntimeHistory.js").CodingHistoryMessage[],
+            ) => boolean)
+          | undefined;
         readonly arm: () => void;
         readonly clear: () => void;
         readonly ingest: (
@@ -119,11 +164,14 @@ export interface OpenCodeRuntimeCompositionInput {
     | undefined;
   readonly gatewayReadiness: {
     readonly waitForObservedRequest: (runId: string, signal: AbortSignal) => Promise<boolean>;
+    readonly verifyObserved: (runId: string) => void;
     readonly clear: (runId: string, preserveVerification?: boolean) => void;
   };
   readonly fetch: typeof globalThis.fetch;
   readonly supervisor: RuntimeProcessSupervisor;
+  readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
   readonly onRuntimeEvent?: ((event: CodingWorkbenchRuntimeEvent) => void) | undefined;
   readonly onSandboxAttestation?: CodingRuntimeManagerDeps["onSandboxAttestation"];
   /**
@@ -148,11 +196,38 @@ type SafeToolSettlement = NonNullable<
 
 export interface OpenCodeToolBridge {
   readonly url: string;
+  /**
+   * The SAME per-run deadline (ms) the admission gate applies to an in-flight facade call
+   * (`createToolBridgeAdmissionGate`'s `limits.requestDeadlineMs`), exposed so the BFF route can
+   * bound body-ingestion time with the identical number instead of a second, restated constant —
+   * closing the gap where a slow/partial POST could otherwise buffer for as long as Node's generic
+   * socket defaults allow before the gate's own timer ever starts (#3390 follow-up).
+   */
+  readonly requestDeadlineMs: number;
   handle(input: {
     readonly method: "POST";
     readonly headers: Headers;
     readonly body: string;
-  }): Promise<{ readonly status: number; readonly body: string }>;
+    /**
+     * Caller-owned cancellation (e.g. the BFF route observing its client disconnect). Optional:
+     * a caller that has no disconnect signal of its own (the readiness challenge, this file's own
+     * tests) simply omits it. Merged with the admission gate's own deadline abort so both sources
+     * settle the SAME in-flight facade call through the one existing abort path.
+     */
+    readonly signal?: AbortSignal;
+  }): Promise<OpenCodeToolBridgeResponse>;
+}
+
+/**
+ * `rejection` is set only on a refused governed ask (#3610): the outcome of the human decision,
+ * carried beside the status so the route never reads that 403 as an origin refusal.
+ */
+export interface OpenCodeToolBridgeResponse {
+  readonly status: number;
+  readonly body: string;
+  readonly rejection?: ToolBridgeApprovalRejection;
+  /** The run and permission request a refused governed ask belongs to (PR #3617 review). */
+  readonly approval?: { readonly runId: string; readonly requestId: string } | undefined;
 }
 
 export interface OpenCodeRuntimeComposition {
@@ -162,7 +237,7 @@ export interface OpenCodeRuntimeComposition {
 }
 
 export interface OpenCodeRunPort {
-  readonly submitTask: (runId: string, text: string) => Promise<boolean>;
+  readonly submitTask: (runId: string, text: string, initialContext?: string) => Promise<boolean>;
   readonly abortTask: (runId: string) => Promise<boolean>;
   readonly waitForTerminal: (runId: string, signal: AbortSignal) => Promise<boolean>;
   readonly listQuestions: (runId: string) => Promise<readonly OpenCodeQuestionRequest[]>;
@@ -182,12 +257,14 @@ export interface OpenCodeRunPort {
 interface PreparedRun {
   readonly runId: string;
   readonly runRoot: string;
+  readonly workspaceRoot: string;
   readonly password: string;
   readonly configDigest: string;
   readonly verification: PortableSidecarRuntimeVerification;
   readonly observedPermissionIds: Set<string>;
+  onPermission?: ((event: SidecarPermissionEvent) => void) | undefined;
   runtimeAdapter?: OpenCodeRuntimeAdapter | undefined;
-  client?: OpenCodeHttpClient | undefined;
+  client?: OpenCodeV2HttpClient | undefined;
   sessionId?: string | undefined;
   initialTurnBaselineStable: boolean;
   ready: boolean;
@@ -195,9 +272,15 @@ interface PreparedRun {
 
 interface ReadyRun extends PreparedRun {
   runtimeAdapter: OpenCodeRuntimeAdapter;
-  client: OpenCodeHttpClient;
+  client: OpenCodeV2HttpClient;
   sessionId: string;
-  ready: true;
+  // Deliberately NOT narrowed to the literal `true`: `isReadyRun` below only asserts `ready`
+  // was `true` at lookup time. The same mutable object stays reachable through `runs` and can
+  // flip `ready` to `false` (dispose/monitor cleanup) while an async run port call is still
+  // in flight on this reference -- a literal-`true` type would make TS (and, on top of it,
+  // ESLint's no-unnecessary-condition) treat every later `run.ready` check as dead code and
+  // invite deleting the very guard that catches that race.
+  ready: boolean;
 }
 type ReadyRunLookup = (runId: string) => ReadyRun | undefined;
 type QuestionRunPort = Pick<OpenCodeRunPort, "listQuestions" | "answerQuestion" | "rejectQuestion">;
@@ -205,20 +288,26 @@ type QuestionRunPort = Pick<OpenCodeRunPort, "listQuestions" | "answerQuestion" 
 export function createOpenCodeRuntimeComposition(
   input: OpenCodeRuntimeCompositionInput,
 ): OpenCodeRuntimeComposition {
+  const runs = new Map<string, PreparedRun>();
+  const approvals = createOpenCodeV2ApprovalRequests(input.diagnostics, input.activityLog);
   const bridge = createToolBridge(
     input.capabilities.toolFacadeCapability,
     input.toolFacade,
     input.toolBridge,
     input.safeActivity?.settleTool,
     input.diagnostics,
+    input.toolFacadeOrigin,
+    { approvals, runs },
   );
-  const runs = new Map<string, PreparedRun>();
   const lifecycle = lifecycleAdapter(input, bridge, runs);
   const manager = createCodingRuntimeManager({
     supervisor: input.supervisor,
     processEnv: {},
     openCodeLifecycleAdapter: lifecycle,
     portableRuntimeResolver: () => input.portable,
+    ...(input.resolveWorkspaceRootAccess === undefined
+      ? {}
+      : { resolveWorkspaceRootAccess: input.resolveWorkspaceRootAccess }),
     ...(input.onRuntimeEvent ? { onRuntimeEvent: input.onRuntimeEvent } : {}),
     ...(input.onSandboxAttestation ? { onSandboxAttestation: input.onSandboxAttestation } : {}),
     ...(input.codingToolApprovals === undefined
@@ -226,56 +315,194 @@ export function createOpenCodeRuntimeComposition(
       : { codingToolApprovals: input.codingToolApprovals }),
     ...input.authorityLifecycle,
   });
-  return { manager, toolBridge: bridge.publicPort, runPort: createRunPort(runs) };
+  return {
+    manager,
+    toolBridge: bridge.publicPort,
+    runPort: createRunPort(runs, input.diagnostics, input.activityLog, approvals),
+  };
 }
 
-function createRunPort(runs: Map<string, PreparedRun>): OpenCodeRunPort {
+function createRunPort(
+  runs: Map<string, PreparedRun>,
+  diagnostics: ServerDiagnosticSink | undefined,
+  activityLog: ServerLogSink | undefined,
+  approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>,
+): OpenCodeRunPort {
   const readyRun = (runId: string): ReadyRun | undefined => {
     const run = runs.get(runId);
     return isReadyRun(run) ? run : undefined;
   };
   return {
-    submitTask: async (runId, text): Promise<boolean> => {
-      const run = readyRun(runId);
-      if (run === undefined) return false;
-      if (!(await synchronizeTurnBaseline(run))) return false;
-      if (!run.runtimeAdapter.armTurn()) return false;
-      try {
-        await run.client.promptAsync(run.sessionId, text);
-        return run.ready;
-      } catch {
-        run.runtimeAdapter.cancelTurn();
-        return false;
-      }
-    },
+    submitTask: createSubmitTask(readyRun, diagnostics, activityLog),
     abortTask: createAbortTask(readyRun),
-    waitForTerminal: (runId, signal): Promise<boolean> => {
-      const run = readyRun(runId);
-      return run?.runtimeAdapter.waitForTerminal(signal) ?? Promise.resolve(false);
-    },
-    replyPermission: async (runId, requestId, reply): Promise<boolean> => {
+    waitForTerminal: async (runId, signal): Promise<boolean> => {
       const run = readyRun(runId);
       if (run === undefined) return false;
-      try {
-        const owned = (await run.client.listPermissions()).filter(
-          (request) =>
-            request.sessionID === run.sessionId &&
-            projectOpenCodePermissionRequestId(request.id) === requestId,
-        );
-        const permission = owned[0];
-        return (
-          owned.length === 1 &&
-          permission !== undefined &&
-          (await run.client.replyPermission(permission.id, reply)) &&
-          run.ready
-        );
-      } catch {
-        return false;
-      }
+      const outcome = await run.runtimeAdapter.waitForTerminal(signal);
+      if (!outcome && !signal.aborted) recordOpenCodeTurnFailure(diagnostics, run, "terminal");
+      return outcome;
     },
-    ...createQuestionRunPort(readyRun),
+    replyPermission: createReplyPermission(readyRun, diagnostics, approvals),
+    ...createQuestionRunPort(readyRun, diagnostics),
   };
 }
+
+function createSubmitTask(
+  readyRun: ReadyRunLookup,
+  diagnostics: ServerDiagnosticSink | undefined,
+  activityLog: ServerLogSink | undefined,
+): OpenCodeRunPort["submitTask"] {
+  return async (runId, text, initialContext): Promise<boolean> => {
+    const run = readyRun(runId);
+    if (run === undefined) return false;
+    if (!(await synchronizeTurnBaseline(run))) return false;
+    if (!run.runtimeAdapter.armTurn()) return false;
+    try {
+      await run.client.prompt(
+        run.sessionId,
+        initialContext === undefined ? text : `${initialContext}\n\n${text}`,
+        undefined,
+        initialContext === undefined
+          ? undefined
+          : {
+              displayText: text,
+              hiddenContextSha256: createHash("sha256").update(initialContext).digest("hex"),
+            },
+      );
+      if (initialContext !== undefined) recordContextPresentation(activityLog, runId);
+      return run.ready;
+    } catch (error) {
+      recordOpenCodeTurnFailure(diagnostics, run, "submit", error);
+      run.runtimeAdapter.cancelTurn();
+      return false;
+    }
+  };
+}
+
+function createReplyPermission(
+  readyRun: ReadyRunLookup,
+  diagnostics: ServerDiagnosticSink | undefined,
+  approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>,
+): OpenCodeRunPort["replyPermission"] {
+  return async (runId, requestId, reply): Promise<boolean> => {
+    const run = readyRun(runId);
+    if (run === undefined) return false;
+    if (approvals.resolve(runId, requestId, reply === "once")) return run.ready;
+    try {
+      const owned = (await run.client.permissions()).filter(
+        (request) =>
+          request.sessionID === run.sessionId &&
+          typeof request.id === "string" &&
+          projectOpenCodePermissionRequestId(request.id) === requestId,
+      );
+      const permission = owned[0];
+      if (owned.length !== 1 || typeof permission?.id !== "string") return false;
+      await run.client.replyPermission(run.sessionId, permission.id, reply);
+      return run.ready;
+    } catch (error) {
+      recordOpenCodeTurnFailure(diagnostics, run, "permission", error);
+      return false;
+    }
+  };
+}
+
+type OpenCodeTurnFailureStage = "permission" | "question" | "submit" | "terminal";
+
+function recordOpenCodeTurnFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  run: ReadyRun,
+  stage: OpenCodeTurnFailureStage,
+  error?: unknown,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: run.runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.opencode-composition",
+    source: "opencode.turn",
+    errorClass: error === undefined ? "OpenCodeTurnFailure" : contentFreeErrorClass(error),
+    message: "runtime-turn-failed",
+    code: openCodeTurnFailureCode(run.runRoot, stage),
+  });
+}
+
+function openCodeTurnFailureCode(runRoot: string, stage: OpenCodeTurnFailureStage): string {
+  const database = projectOpenCodeRuntimeDatabase(join(runRoot, "state", "opencode.db"));
+  return `stage=${stage}:${database}`;
+}
+
+function projectOpenCodeRuntimeDatabase(databasePath: string): string {
+  if (!existsSync(databasePath)) return "db=missing";
+  try {
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      return openCodeRuntimeDatabaseSummary(database);
+    } finally {
+      database.close();
+    }
+  } catch {
+    return "db=unavailable";
+  }
+}
+
+function openCodeRuntimeDatabaseSummary(database: DatabaseSync): string {
+  const messages = database.prepare(OPEN_CODE_MESSAGE_SUMMARY_SQL).get() as CountRow;
+  const parts = database.prepare(OPEN_CODE_PART_SUMMARY_SQL).get() as CountRow;
+  return [
+    "db=ok",
+    `m=${String(boundedCount(messages.total))}`,
+    `a=${String(boundedCount(messages.assistant))}`,
+    `stop=${String(boundedCount(messages.stop))}`,
+    `tool=${String(boundedCount(messages.toolCalls))}`,
+    `error=${String(boundedCount(messages.error))}`,
+    `length=${String(boundedCount(messages.length))}`,
+    `err=${String(boundedCount(messages.errorName))}`,
+    `p=${String(boundedCount(parts.total))}`,
+    `ptool=${String(boundedCount(parts.tool))}`,
+    `ptext=${String(boundedCount(parts.text))}`,
+    `pfail=${String(boundedCount(parts.failed))}`,
+    `pdone=${String(boundedCount(parts.completed))}`,
+  ].join(":");
+}
+
+interface CountRow {
+  readonly total?: unknown;
+  readonly assistant?: unknown;
+  readonly stop?: unknown;
+  readonly toolCalls?: unknown;
+  readonly error?: unknown;
+  readonly length?: unknown;
+  readonly errorName?: unknown;
+  readonly tool?: unknown;
+  readonly text?: unknown;
+  readonly failed?: unknown;
+  readonly completed?: unknown;
+}
+
+function boundedCount(value: unknown): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+const OPEN_CODE_MESSAGE_SUMMARY_SQL = `
+SELECT
+  COUNT(*) AS total,
+  COALESCE(SUM(CASE WHEN type = 'assistant' THEN 1 ELSE 0 END), 0) AS assistant,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.finish') = 'stop' THEN 1 ELSE 0 END), 0) AS stop,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.finish') = 'tool-calls' THEN 1 ELSE 0 END), 0) AS toolCalls,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.finish') = 'error' THEN 1 ELSE 0 END), 0) AS error,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.finish') = 'length' THEN 1 ELSE 0 END), 0) AS length,
+  COALESCE(SUM(CASE WHEN json_extract(data, '$.error.name') IS NOT NULL THEN 1 ELSE 0 END), 0) AS errorName
+FROM session_message
+`;
+
+const OPEN_CODE_PART_SUMMARY_SQL = `
+SELECT
+  COUNT(*) AS total,
+  COALESCE(SUM(CASE WHEN json_extract(part.value, '$.type') = 'tool' THEN 1 ELSE 0 END), 0) AS tool,
+  COALESCE(SUM(CASE WHEN json_extract(part.value, '$.type') = 'text' THEN 1 ELSE 0 END), 0) AS text,
+  COALESCE(SUM(CASE WHEN json_extract(part.value, '$.state.status') = 'failed' THEN 1 ELSE 0 END), 0) AS failed,
+  COALESCE(SUM(CASE WHEN json_extract(part.value, '$.state.status') = 'completed' THEN 1 ELSE 0 END), 0) AS completed
+FROM session_message AS message, json_each(json_extract(message.data, '$.content')) AS part
+`;
 
 async function synchronizeTurnBaseline(run: ReadyRun): Promise<boolean> {
   if (!run.initialTurnBaselineStable) {
@@ -294,14 +521,17 @@ function createAbortTask(readyRun: ReadyRunLookup): OpenCodeRunPort["abortTask"]
     const run = readyRun(runId);
     if (run === undefined) return false;
     try {
-      if (!(await run.client.abortSession(run.sessionId))) {
-        run.runtimeAdapter.cancelTurn();
-        return false;
-      }
-      const settled = await run.runtimeAdapter.waitForTerminal(
+      await run.client.interrupt(run.sessionId);
+      const settled = await fixedV2SessionIsTerminal(
+        run.client,
+        run.sessionId,
         AbortSignal.timeout(ABORT_SETTLEMENT_TIMEOUT_MS),
       );
-      if (!settled) run.runtimeAdapter.cancelTurn();
+      if (settled) {
+        await run.runtimeAdapter.waitForTerminal(AbortSignal.timeout(ABORT_SETTLEMENT_TIMEOUT_MS));
+      } else {
+        run.runtimeAdapter.cancelTurn();
+      }
       return settled && run.ready;
     } catch {
       run.runtimeAdapter.cancelTurn();
@@ -310,44 +540,70 @@ function createAbortTask(readyRun: ReadyRunLookup): OpenCodeRunPort["abortTask"]
   };
 }
 
-function createQuestionRunPort(readyRun: ReadyRunLookup): QuestionRunPort {
+function createQuestionRunPort(
+  readyRun: ReadyRunLookup,
+  diagnostics: ServerDiagnosticSink | undefined,
+): QuestionRunPort {
   return {
     listQuestions: async (runId): Promise<readonly OpenCodeQuestionRequest[]> => {
       const run = readyRun(runId);
       if (run === undefined) return [];
       try {
-        return (await run.client.listQuestions()).filter(
-          (request) => request.sessionID === run.sessionId,
-        );
-      } catch {
-        return [];
+        return (await run.client.forms())
+          .filter((form) => form.sessionID === run.sessionId)
+          .map(projectOpenCodeV2Form);
+      } catch (error) {
+        recordOpenCodeTurnFailure(diagnostics, run, "question", error);
+        throw error;
       }
     },
     answerQuestion: async (runId, requestId, answers): Promise<boolean> => {
       const run = readyRun(runId);
       if (run === undefined) return false;
       try {
-        const pending = (await run.client.listQuestions()).find(
-          (request) => request.id === requestId && request.sessionID === run.sessionId,
+        const formId = v2FormId(requestId);
+        const pending = (await run.client.forms()).find(
+          (form) => form.id === formId && form.sessionID === run.sessionId,
         );
-        if (pending === undefined || !answersMatchQuestions(pending, answers)) return false;
-        return (await run.client.answerQuestion(requestId, answers)) && run.ready;
-      } catch {
-        return false;
+        if (pending === undefined || !run.ready) return false;
+        const question = projectOpenCodeV2Form(pending);
+        if (!answersMatchQuestions(question, answers))
+          throw new CodingRuntimeQuestionAnswerRejectedError();
+        await run.client.replyForm(
+          run.sessionId,
+          String(pending.id),
+          answerOpenCodeV2Form(pending, answers),
+        );
+        return run.ready;
+      } catch (error) {
+        if (error instanceof CodingRuntimeQuestionAnswerRejectedError) throw error;
+        recordOpenCodeTurnFailure(diagnostics, run, "question", error);
+        throw error;
       }
     },
-    rejectQuestion: async (runId, requestId): Promise<boolean> => {
-      const run = readyRun(runId);
-      if (run === undefined) return false;
-      try {
-        const owned = (await run.client.listQuestions()).some(
-          (request) => request.id === requestId && request.sessionID === run.sessionId,
-        );
-        return owned && (await run.client.rejectQuestion(requestId)) && run.ready;
-      } catch {
-        return false;
-      }
-    },
+    rejectQuestion: createRejectQuestion(readyRun, diagnostics),
+  };
+}
+
+function createRejectQuestion(
+  readyRun: ReadyRunLookup,
+  diagnostics: ServerDiagnosticSink | undefined,
+): QuestionRunPort["rejectQuestion"] {
+  return async (runId, requestId): Promise<boolean> => {
+    const run = readyRun(runId);
+    if (run === undefined) return false;
+    try {
+      const formId = v2FormId(requestId);
+      const owned = (await run.client.forms()).some(
+        (form) => form.id === formId && form.sessionID === run.sessionId,
+      );
+      if (!owned || formId === undefined) return false;
+      await run.client.cancelForm(run.sessionId, formId);
+      return run.ready;
+    } catch (error) {
+      recordOpenCodeTurnFailure(diagnostics, run, "question", error);
+      throw error;
+    }
   };
 }
 
@@ -393,6 +649,7 @@ function lifecycleAdapter(
     },
     dispose: async (runId): Promise<boolean> => {
       input.safeActivity?.clear();
+      bridge.approvals.close();
       const run = runs.get(runId);
       if (run === undefined) return true;
       run.ready = false;
@@ -412,6 +669,90 @@ function lifecycleAdapter(
   };
 }
 
+// KEIKO-0320: the prepare cleanup calls (bridge.close, rmSync) can each throw on their own — a
+// permission-denied unlink, a socket teardown failure. Without an inner guard, a throw here
+// escapes as an uncaught rejection and the outer manager relabels the resulting timeout as a
+// generic retryable failure, discarding the real cause. Guard each cleanup step and emit a
+// redacted operator diagnostic when the disposal itself fails (#3099 P2 follow-up: previously
+// the failure was silently swallowed, so a permission-error leak left the private run root on
+// disk with no diagnostic and no retry hook).
+function recordPrepareDisposalFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  operation: "prepare-bridge-close" | "prepare-run-root-remove",
+  error: unknown,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.opencode-composition",
+    source: `opencode-runtime-composition.${operation}`,
+    errorClass: contentFreeErrorClass(error),
+    message: operation,
+  });
+}
+
+async function disposeFailedPrepare(
+  bridge: ToolBridgeController,
+  runRoot: string,
+  runId: string,
+  diagnostics: ServerDiagnosticSink | undefined,
+): Promise<void> {
+  try {
+    await bridge.close();
+  } catch (error) {
+    recordPrepareDisposalFailure(diagnostics, runId, "prepare-bridge-close", error);
+  }
+  try {
+    rmSync(runRoot, { recursive: true, force: true });
+  } catch (error) {
+    // The private run root may persist on disk; the operator record makes the leak diagnosable.
+    recordPrepareDisposalFailure(diagnostics, runId, "prepare-run-root-remove", error);
+  }
+}
+
+async function materializePrepare(
+  input: OpenCodeRuntimeCompositionInput,
+  bridge: ToolBridgeController,
+  runs: Map<string, PreparedRun>,
+  request: OpenCodeLifecyclePrepareRequest,
+  runRoot: string,
+): Promise<OpenCodeLifecyclePrepareResult> {
+  createPrivateState(runRoot);
+  await bridge.start();
+  const profile = buildOpenCodeLaunchProfile({
+    executable: request.executablePath,
+    stateRoot: runRoot,
+    contextGeometry: input.contextGeometry,
+  });
+  if (!profile.ok) throw new Error("profile-invalid");
+  const config = profile.config;
+  materialize(runRoot, config, createGeneratedOpenCodeV2Plugins());
+  const password = profile.env.OPENCODE_SERVER_PASSWORD;
+  if (password === undefined) throw new Error("password-missing");
+  const configDigest = createHash("sha256").update(config, "utf8").digest("hex");
+  runs.set(
+    request.runId,
+    preparedRun(
+      request.runId,
+      runRoot,
+      request.env.KEIKO_CODING_WORKSPACE_ROOT ?? "",
+      password,
+      configDigest,
+      request.verification,
+    ),
+  );
+  return {
+    ok: true,
+    env: {
+      ...profile.env,
+      KEIKO_MODEL_GATEWAY_CAPABILITY: input.capabilities.modelGatewayCapability,
+      KEIKO_TOOL_FACADE_URL: bridge.publicPort.url,
+      KEIKO_TOOL_FACADE_CAPABILITY: input.capabilities.toolFacadeCapability,
+    },
+  };
+}
+
 async function prepare(
   input: OpenCodeRuntimeCompositionInput,
   bridge: ToolBridgeController,
@@ -426,35 +767,9 @@ async function prepare(
   }
   const runRoot = join(input.stateBaseRoot, request.runId);
   try {
-    createPrivateState(runRoot);
-    await bridge.start();
-    const profile = buildOpenCodeLaunchProfile({
-      executable: request.executablePath,
-      stateRoot: runRoot,
-    });
-    if (!profile.ok) throw new Error("profile-invalid");
-    const bundle = createGeneratedOpenCodeBundle();
-    const config = JSON.stringify(bundle.config);
-    materialize(runRoot, config, bundle.toolSources);
-    const password = profile.env.OPENCODE_SERVER_PASSWORD;
-    if (password === undefined) throw new Error("password-missing");
-    const configDigest = createHash("sha256").update(config, "utf8").digest("hex");
-    runs.set(
-      request.runId,
-      preparedRun(request.runId, runRoot, password, configDigest, request.verification),
-    );
-    return {
-      ok: true,
-      env: {
-        ...profile.env,
-        KEIKO_MODEL_GATEWAY_CAPABILITY: input.capabilities.modelGatewayCapability,
-        KEIKO_TOOL_FACADE_URL: bridge.publicPort.url,
-        KEIKO_TOOL_FACADE_CAPABILITY: input.capabilities.toolFacadeCapability,
-      },
-    };
+    return await materializePrepare(input, bridge, runs, request, runRoot);
   } catch {
-    await bridge.close();
-    rmSync(runRoot, { recursive: true, force: true });
+    await disposeFailedPrepare(bridge, runRoot, request.runId, input.diagnostics);
     return { ok: false, reason: "config-materialization-failed" };
   }
 }
@@ -462,6 +777,7 @@ async function prepare(
 function preparedRun(
   runId: string,
   runRoot: string,
+  workspaceRoot: string,
   password: string,
   configDigest: string,
   verification: PortableSidecarRuntimeVerification,
@@ -469,6 +785,7 @@ function preparedRun(
   return {
     runId,
     runRoot,
+    workspaceRoot,
     password,
     configDigest,
     verification,
@@ -487,18 +804,23 @@ async function handshake(
 ): Promise<{ readonly ok: true } | { readonly ok: false; readonly reason: string }> {
   const run = runs.get(request.runId);
   if (run === undefined) return { ok: false, reason: "preparation-missing" };
+  run.onPermission = request.onPermission;
   try {
-    const parsed = parseOpenCodeChildEndpoint(await request.startupOutput.nextLine(request.signal));
-    if (!parsed.ok) return { ok: false, reason: "endpoint-invalid" };
-    const client = createOpenCodeHttpClient({
-      endpoint: parsed.endpoint,
+    const endpoint = parseOpenCodeV2ChildEndpoint(
+      await request.startupOutput.nextLine(request.signal),
+    );
+    if (endpoint === undefined) return { ok: false, reason: "endpoint-invalid" };
+    const client = createOpenCodeV2HttpClient({
+      endpoint,
       password: run.password,
       fetch: input.fetch,
-      requestTimeoutMs: request.timeoutMs,
-      eventIdleTimeoutMs: request.timeoutMs,
+      timeoutMs: request.timeoutMs,
     });
     const adapter = createOpenCodeRuntimeAdapter({
-      readiness: readinessPorts(input, bridge, run, client, parsed.endpoint, request),
+      correlationId: request.runId,
+      contextGeometry: input.contextGeometry,
+      ...(input.activityLog === undefined ? {} : { activityLog: input.activityLog }),
+      readiness: readinessV2Ports(input, bridge, run, client, endpoint, request),
       governedSink: input.governedEventSink,
       ...(input.safeActivity
         ? {
@@ -510,8 +832,7 @@ async function handshake(
         : {}),
       control: {
         status: async (sessionId, signal) => {
-          const status = (await client.sessionStatuses({ signal }))[sessionId];
-          return status === undefined || status.type === "idle" ? "terminal" : "activity";
+          return (await v2SessionIsTerminal(client, sessionId, signal)) ? "terminal" : "activity";
         },
       },
       safety: {
@@ -541,18 +862,23 @@ async function handshake(
   }
 }
 
-// eslint-disable-next-line max-lines-per-function -- readiness port wiring keeps trust bindings visible together.
-function readinessPorts(
+// eslint-disable-next-line max-lines-per-function -- ordered V2 readiness ports bind one attested child.
+function readinessV2Ports(
   input: OpenCodeRuntimeCompositionInput,
   bridge: ToolBridgeController,
   run: PreparedRun,
-  client: ReturnType<typeof createOpenCodeHttpClient>,
+  client: OpenCodeV2HttpClient,
   endpoint: string,
   request: OpenCodeLifecycleHandshakeRequest,
 ): Parameters<typeof createOpenCodeRuntimeAdapter>[0]["readiness"] {
-  let startupRead = false;
   let fixedSessionId: string | undefined;
-  const safeActivity = new Map<
+  let startupRead = false;
+  const history = createOpenCodeV2HistoryProjection({
+    runId: run.runId,
+    activityLog: input.activityLog,
+    captureMessages: input.safeActivity?.captureMessages,
+  });
+  const staged = new Map<
     string,
     import("./codingSafeActivityProjection.js").CodingSafeActivitySignal
   >();
@@ -566,216 +892,264 @@ function readinessPorts(
     materialize: (): Promise<boolean> => Promise.resolve(configMaterialized(run.runRoot)),
     startupLine: (): Promise<string> => {
       startupRead = true;
-      return Promise.resolve(`opencode server listening on ${endpoint}\n`);
+      return Promise.resolve(`server listening on ${endpoint}\n`);
     },
-    health: (authorization) =>
+    health: async (
+      authorization,
+    ): Promise<{ readonly status: number; readonly version?: string }> =>
       authorization === "basic"
-        ? authenticatedHealth(client)
-        : unauthenticatedHealth(input.fetch, endpoint, request.signal),
-    openApiDigest: () => openApiDigest(client),
+        ? authenticatedV2Health(client)
+        : unauthenticatedV2Health(input.fetch, endpoint, request.signal),
+    openApiDigest: async (): Promise<string> =>
+      projectOpenCodeV2ProtocolSurface(await client.document()).digest,
     gatewayChallenge: () =>
-      challengeGateway(
-        input,
-        run,
-        client,
-        fixedSessionId,
-        request.signal,
-        request.timeoutMs,
-        startupRead,
-      ),
+      challengeV2Gateway(input, run, client, fixedSessionId, request, startupRead),
     toolFacadeChallenge: () => challengeToolFacade(input, bridge),
     subscribe: async function* (signal): AsyncIterable<OpenCodeSyncHint> {
-      fixedSessionId = await createAndEchoFixedSession(client, request.signal);
-      const combinedSignal =
+      fixedSessionId = await createAndEchoV2Session(client, run.workspaceRoot, request.signal);
+      const combined =
         request.signal === undefined ? signal : AbortSignal.any([signal, request.signal]);
-      for await (const event of client.events({ signal: combinedSignal })) {
-        const eventType = event.data.type;
-        if (eventType !== "sync") {
-          observeLiveQuestion(input, event.data, fixedSessionId);
-          observeLivePermission(run, request, event.data, fixedSessionId);
-          const control = classifyOpenCodeLiveControl(event.data);
-          const fixedControl = control?.sessionId === fixedSessionId ? control : undefined;
-          yield {
-            requiresHistoryIdentity: false,
-            ...(fixedControl === undefined ? {} : { control: fixedControl }),
-          };
-          continue;
-        }
-        const eventId = event.data.id;
-        if (typeof eventId !== "string") throw new Error("opencode-event-identity-invalid");
-        yield { id: eventId, requiresHistoryIdentity: true };
+      for await (const event of client.events(combined)) {
+        yield v2SyncHint(event, fixedSessionId, input.onQuestionObserved);
       }
     },
     history: async (checkpoints, signal): Promise<readonly OpenCodeReconciliationEvent[]> => {
-      const combinedSignal =
-        request.signal === undefined ? signal : AbortSignal.any([signal, request.signal]);
-      const rows = await client.history(checkpoints, { signal: combinedSignal });
-      const normalized = normalizeOpenCodeSafeActivityHistory(rows);
-      stageSafeActivity(normalized, safeActivity, input.safeActivity);
-      const parsed = parseOpenCodeHistory(rows);
-      if (!parsed.ok) throw new Error("opencode-history-invalid");
-      return parsed.value;
+      if (fixedSessionId === undefined) throw new Error("opencode-v2-session-missing");
+      let messages: readonly Readonly<Record<string, unknown>>[] = [];
+      try {
+        messages = await client.messages(fixedSessionId, signal);
+        const events = history.project(fixedSessionId, messages, checkpoints[fixedSessionId]);
+        staged.clear();
+        for (const event of events) {
+          const safe = history.takeSignal(event);
+          if (safe !== undefined)
+            staged.set(`${event.aggregateId}\u0000${String(event.sequence)}`, safe);
+        }
+        return events;
+      } catch (error) {
+        if (messages.length > 0) input.safeActivity?.recordDrops(messages.length);
+        recordOpenCodeV2HistoryFailure(input.diagnostics, run.runId, error);
+        throw error;
+      }
     },
     takeSafeActivity: (
       identityKey,
     ): import("./codingSafeActivityProjection.js").CodingSafeActivitySignal | undefined => {
-      const signal = safeActivity.get(identityKey);
-      safeActivity.delete(identityKey);
-      return signal;
+      const safe = staged.get(identityKey);
+      staged.delete(identityKey);
+      return safe;
     },
     clearSafeActivity: (): void => {
-      safeActivity.clear();
+      staged.clear();
+      history.clearSignals();
     },
     sessionEcho: (): Promise<string> => Promise.resolve(fixedSessionId ?? ""),
   };
 }
 
-const MAX_STAGED_SAFE_ACTIVITY_ITEMS = 2_048;
-const MAX_STAGED_SAFE_ACTIVITY_BYTES = 128 * 1_024;
-const MAX_OBSERVED_PERMISSION_IDS = 256;
+function v2ExecutionState(type: unknown): "activity" | "terminal" | undefined {
+  if (type === "session.execution.started") return "activity";
+  if (
+    type === "session.execution.succeeded" ||
+    type === "session.execution.failed" ||
+    type === "session.execution.cancelled"
+  )
+    return "terminal";
+  return undefined;
+}
 
-function observeLivePermission(
-  run: PreparedRun,
-  request: OpenCodeLifecycleHandshakeRequest,
-  data: unknown,
+function v2SyncHint(
+  event: Readonly<Record<string, unknown>>,
   fixedSessionId: string,
-): void {
-  if (!isPermissionAskedForSession(data, fixedSessionId)) return;
-  const projected = projectOpenCodePermissionEvent(data, fixedSessionId);
-  if (projected === undefined) throw new Error("opencode-permission-invalid");
-  if (run.observedPermissionIds.has(projected.requestId)) return;
-  if (run.observedPermissionIds.size >= MAX_OBSERVED_PERMISSION_IDS) {
-    throw new Error("opencode-permission-limit");
-  }
-  run.observedPermissionIds.add(projected.requestId);
-  request.onPermission(projected);
+  onQuestionObserved: ((identity: string) => void) | undefined,
+): OpenCodeSyncHint {
+  const data = v2Record(event.data);
+  if (
+    event.type === "form.created" &&
+    typeof event.id === "string" &&
+    v2Record(data?.form)?.sessionID === fixedSessionId
+  )
+    onQuestionObserved?.(event.id);
+  const state = v2ExecutionState(event.type);
+  return {
+    requiresHistoryIdentity: false,
+    ...(data?.sessionID === fixedSessionId && state !== undefined
+      ? { control: { sessionId: fixedSessionId, state } }
+      : {}),
+  };
 }
 
-function isPermissionAskedForSession(value: unknown, fixedSessionId: string): boolean {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const event = value as Record<string, unknown>;
-  if (event.type !== "permission.asked") return false;
-  const properties = event.properties;
-  return (
-    typeof properties === "object" &&
-    properties !== null &&
-    !Array.isArray(properties) &&
-    (properties as Record<string, unknown>).sessionID === fixedSessionId
-  );
-}
-
-function stageSafeActivity(
-  normalized: ReturnType<typeof normalizeOpenCodeSafeActivityHistory>,
-  staged: Map<string, import("./codingSafeActivityProjection.js").CodingSafeActivitySignal>,
-  sink: OpenCodeRuntimeCompositionInput["safeActivity"],
-): void {
-  staged.clear();
-  let stagedBytes = 0;
-  let dropped = normalized.dropped;
-  for (const item of normalized.signals) {
-    const itemBytes = Buffer.byteLength(JSON.stringify(item), "utf8");
-    if (
-      staged.size >= MAX_STAGED_SAFE_ACTIVITY_ITEMS ||
-      stagedBytes + itemBytes > MAX_STAGED_SAFE_ACTIVITY_BYTES
-    ) {
-      dropped += 1;
-      continue;
-    }
-    staged.set(item.identity, item.signal);
-    stagedBytes += itemBytes;
-  }
-  if (dropped > 0) sink?.recordDrops(dropped);
-}
-
-const LIVE_QUESTION_EVENT_TYPES = new Set([
-  "question.asked",
-  "question.replied",
-  "question.rejected",
+const KNOWN_V2_HISTORY_FAILURES = new Set([
+  "opencode-v2-response-invalid",
+  "opencode-v2-envelope-invalid",
+  "opencode-v2-history-oversized",
+  "opencode-v2-cursor-invalid",
+  "opencode-v2-message-time-invalid",
+  "opencode-v2-message-id-invalid",
+  "opencode-v2-content-invalid",
+  "opencode-v2-parent-message-missing",
+  "opencode-v2-tool-invalid",
+  "opencode-v2-tool-time-invalid",
+  "opencode-v2-tool-state-invalid",
+  "opencode-v2-plan-invalid",
+  "opencode-v2-text-oversized",
 ]);
 
-/**
- * Surfaces the fixed session's live question lifecycle as a content-free identity (#2386).
- * Fails closed: no session binding, foreign sessions, and malformed frames observe nothing.
- */
-function observeLiveQuestion(
-  input: OpenCodeRuntimeCompositionInput,
-  data: { readonly id?: unknown; readonly type?: unknown; readonly properties?: unknown },
-  fixedSessionId: string,
+function v2HistoryFailureReason(error: unknown): string {
+  if (error instanceof OpenCodeV2HistoryError) return error.safeCode;
+  if (error instanceof Error && error.message === "opencode-v2-response-oversized")
+    return `reason=transport-oversized:responseBudgetBytes=${String(OPENCODE_HISTORY_RESPONSE_MAX_BYTES)}`;
+  if (error instanceof Error && KNOWN_V2_HISTORY_FAILURES.has(error.message))
+    return `reason=${error.message}`;
+  return "reason=transport-invalid";
+}
+
+function recordOpenCodeV2HistoryFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  error: unknown,
 ): void {
-  if (input.onQuestionObserved === undefined || fixedSessionId.length === 0) return;
-  if (typeof data.type !== "string" || !LIVE_QUESTION_EVENT_TYPES.has(data.type)) return;
-  if (liveQuestionSession(data.properties) !== fixedSessionId) return;
-  if (typeof data.id !== "string" || data.id.length === 0) return;
-  input.onQuestionObserved(`${data.type}\u0000${data.id}`);
+  const reason = v2HistoryFailureReason(error);
+  const detail = describeError(error);
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.history",
+    source: "opencode.history",
+    errorClass: "OpenCodeHistoryFailure",
+    message: "runtime-history-failed",
+    code: `stage=history:${reason}`,
+    ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+    ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+  });
 }
 
-function liveQuestionSession(properties: unknown): string | undefined {
-  if (typeof properties !== "object" || properties === null || Array.isArray(properties)) {
-    return undefined;
-  }
-  const sessionId = (properties as Record<string, unknown>).sessionID;
-  return typeof sessionId === "string" ? sessionId : undefined;
-}
-
-async function createAndEchoFixedSession(
-  client: ReturnType<typeof createOpenCodeHttpClient>,
+async function createAndEchoV2Session(
+  client: OpenCodeV2HttpClient,
+  directory: string,
   signal: AbortSignal | undefined,
 ): Promise<string> {
-  const created = await client.createSession({ signal });
-  const createdId = typeof created.id === "string" ? created.id : undefined;
-  if (createdId === undefined || !/^ses_[A-Za-z0-9_-]{1,251}$/u.test(createdId)) return "";
-  const sessions = await client.sessions({ signal });
-  return sessions.length === 1 && sessions[0]?.id === createdId ? createdId : "";
+  const created = await client.createSession(directory, signal);
+  const id = created.id;
+  if (typeof id !== "string" || !/^ses_[A-Za-z0-9_-]{1,251}$/u.test(id)) return "";
+  const sessions = await client.sessions(signal);
+  return sessions.length === 1 && sessions[0]?.id === id ? id : "";
 }
 
-async function challengeGateway(
-  input: OpenCodeRuntimeCompositionInput,
-  run: PreparedRun,
-  client: OpenCodeHttpClient,
-  sessionId: string | undefined,
+async function authenticatedV2Health(
+  client: OpenCodeV2HttpClient,
+): Promise<{ readonly status: number; readonly version?: string }> {
+  const info = await client.info();
+  return typeof info.version === "string"
+    ? { status: 200, version: info.version }
+    : { status: 500 };
+}
+
+async function unauthenticatedV2Health(
+  fetchFn: typeof globalThis.fetch,
+  endpoint: string,
   signal: AbortSignal | undefined,
-  timeoutMs: number,
-  startupRead: boolean,
-): Promise<boolean> {
-  if (
-    !startupRead ||
-    sessionId === undefined ||
-    input.capabilities.modelGatewayCapability.length < 32
-  )
-    return false;
-  const challengeSignal = signal ?? AbortSignal.timeout(timeoutMs);
-  const observed = input.gatewayReadiness.waitForObservedRequest(run.runId, challengeSignal);
-  let verified = false;
-  try {
-    await client.promptAsync(sessionId, "Keiko runtime readiness handshake.", {
-      signal: challengeSignal,
-    });
-    const accepted = await observed;
-    await client.abortSession(sessionId, { signal: challengeSignal });
-    const terminal = await fixedSessionIsTerminal(client, sessionId, challengeSignal);
-    verified = accepted && terminal;
-    return verified;
-  } catch {
-    return false;
-  } finally {
-    // Preserve the successful exact-tool handshake until runtime disposal. OpenCode's pinned
-    // compaction path intentionally omits `tools`; the gateway admits that privilege-reducing
-    // follow-up only for this verified run. Disposal still clears the verification marker.
-    input.gatewayReadiness.clear(run.runId, verified);
-  }
+): Promise<{ readonly status: number }> {
+  const response = await fetchFn(new URL("/api/info", endpoint), {
+    method: "GET",
+    redirect: "manual",
+    ...(signal === undefined ? {} : { signal }),
+  });
+  return { status: response.status };
 }
 
-async function fixedSessionIsTerminal(
-  client: OpenCodeHttpClient,
+async function v2SessionIsTerminal(
+  client: OpenCodeV2HttpClient,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const active = await client.active(signal);
+  return !Object.hasOwn(active, sessionId);
+}
+
+async function fixedV2SessionIsTerminal(
+  client: OpenCodeV2HttpClient,
   sessionId: string,
   signal: AbortSignal,
 ): Promise<boolean> {
   while (!signal.aborted) {
-    const status = (await client.sessionStatuses({ signal }))[sessionId];
-    if (status === undefined || status.type === "idle") return true;
+    if (await v2SessionIsTerminal(client, sessionId, signal)) return true;
     if (!(await readinessPollDelay(signal))) return false;
   }
   return false;
+}
+
+async function challengeV2Gateway(
+  input: OpenCodeRuntimeCompositionInput,
+  run: PreparedRun,
+  client: OpenCodeV2HttpClient,
+  sessionId: string | undefined,
+  request: OpenCodeLifecycleHandshakeRequest,
+  startupRead: boolean,
+): Promise<boolean> {
+  const reason = gatewayChallengePrecondition(input, sessionId, startupRead);
+  if (reason !== undefined || sessionId === undefined) {
+    recordGatewayChallengeFailure(input.diagnostics, run.runId, reason ?? "session-missing");
+    return false;
+  }
+  const signal = request.signal ?? AbortSignal.timeout(request.timeoutMs);
+  const observed = input.gatewayReadiness.waitForObservedRequest(run.runId, signal);
+  let verified = false;
+  try {
+    // One constant for the prompt and for every reader that must recognise it: the sidecar's fixed
+    // readiness answer and the Coding History capture, which never stores this turn (#3610).
+    await client.prompt(sessionId, OPENCODE_RUNTIME_READINESS_PROMPT, signal);
+    const accepted = await observed;
+    await client.interrupt(sessionId, signal);
+    verified = accepted && (await fixedV2SessionIsTerminal(client, sessionId, signal));
+    // An unaccepted wait the start signal did not end is the gateway route refusing the challenge
+    // request (#3603): named apart from a request that never arrived or a turn that did not end.
+    if (!verified)
+      recordGatewayChallengeFailure(
+        input.diagnostics,
+        run.runId,
+        accepted || signal.aborted ? "live-verification-failed" : "gateway-refused",
+      );
+    return verified;
+  } catch {
+    recordGatewayChallengeFailure(input.diagnostics, run.runId, "live-verification-failed");
+    return false;
+  } finally {
+    input.gatewayReadiness.clear(run.runId, verified);
+  }
+}
+
+type GatewayChallengePreconditionFailure =
+  | "startup-unread"
+  | "session-missing"
+  | "capability-invalid"
+  | "live-verification-failed"
+  | "gateway-refused";
+
+function gatewayChallengePrecondition(
+  input: OpenCodeRuntimeCompositionInput,
+  sessionId: string | undefined,
+  startupRead: boolean,
+): GatewayChallengePreconditionFailure | undefined {
+  if (!startupRead) return "startup-unread";
+  if (sessionId === undefined) return "session-missing";
+  return input.capabilities.modelGatewayCapability.length < 32 ? "capability-invalid" : undefined;
+}
+
+function recordGatewayChallengeFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  reason: GatewayChallengePreconditionFailure,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.handshake",
+    source: "opencode.gateway-challenge",
+    errorClass: "OpenCodeGatewayChallengeFailure",
+    message: "runtime-handshake-failed",
+    code: `stage=gateway-challenge:reason=${reason}`,
+  });
 }
 
 function readinessPollDelay(signal: AbortSignal): Promise<boolean> {
@@ -783,16 +1157,16 @@ function readinessPollDelay(signal: AbortSignal): Promise<boolean> {
   return new Promise((resolve) => {
     const settle = (result: boolean): void => {
       clearTimeout(timer);
-      signal.removeEventListener("abort", abort);
+      signal.removeEventListener("abort", onAbort);
       resolve(result);
     };
-    const abort = (): void => {
+    const onAbort = (): void => {
       settle(false);
     };
     const timer = setTimeout(() => {
       settle(true);
     }, 10);
-    signal.addEventListener("abort", abort, { once: true });
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
@@ -823,33 +1197,6 @@ async function challengeToolFacade(
   }
 }
 
-async function openApiDigest(client: ReturnType<typeof createOpenCodeHttpClient>): Promise<string> {
-  return projectOpenCodeProtocolSurface(await client.document()).digest;
-}
-
-async function authenticatedHealth(
-  client: ReturnType<typeof createOpenCodeHttpClient>,
-): Promise<{ readonly status: number; readonly version?: string }> {
-  const result = await client.health();
-  if (!result.ok || result.value.healthy !== true || typeof result.value.version !== "string") {
-    return { status: 500 };
-  }
-  return { status: 200, version: result.value.version };
-}
-
-async function unauthenticatedHealth(
-  fetch: typeof globalThis.fetch,
-  endpoint: string,
-  signal: AbortSignal | undefined,
-): Promise<{ readonly status: number }> {
-  const response = await fetch(new URL("/global/health", endpoint), {
-    method: "GET",
-    redirect: "manual",
-    ...(signal === undefined ? {} : { signal }),
-  });
-  return { status: response.status };
-}
-
 function verifiedProtocol(
   candidate: PortableSidecarRuntimeVerification,
   trusted: PortableSidecarRuntimeVerification,
@@ -861,7 +1208,7 @@ function verifiedProtocol(
     candidate.availability.protocolSchemaVerified &&
     candidate.protocolSchemaRawSha256 === PINNED_RAW_SCHEMA_SHA256 &&
     runtimeField(candidate, "protocolHandshakeAlgorithm") ===
-      OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM &&
+      OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM &&
     DIGEST.test(candidate.protocolHandshakeDigest)
   );
 }
@@ -892,7 +1239,7 @@ function createPrivateState(runRoot: string): void {
   }
   for (const path of [
     join(runRoot, "config", "opencode"),
-    join(runRoot, "config", "opencode", "tools"),
+    join(runRoot, "config", "opencode", "plugins"),
   ]) {
     mkdirSync(path, { recursive: true, mode: 0o700 });
     chmodSync(path, 0o700);
@@ -902,12 +1249,12 @@ function createPrivateState(runRoot: string): void {
 function materialize(
   runRoot: string,
   config: string,
-  toolSources: Readonly<Record<string, string>>,
+  pluginSources: Readonly<Record<string, string>>,
 ): void {
   const discoveryRoot = join(runRoot, "config", "opencode");
   writePrivateFile(join(discoveryRoot, "opencode.json"), config);
-  for (const [name, source] of Object.entries(toolSources)) {
-    writePrivateFile(join(discoveryRoot, "tools", `${name}.ts`), source);
+  for (const [name, source] of Object.entries(pluginSources)) {
+    writePrivateFile(join(discoveryRoot, "plugins", `${name}.ts`), source);
   }
 }
 
@@ -929,6 +1276,7 @@ function configMaterialized(runRoot: string): boolean {
 
 interface ToolBridgeController {
   readonly publicPort: OpenCodeToolBridge;
+  readonly approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>;
   start(): Promise<void>;
   close(): Promise<void>;
   active(): boolean;
@@ -941,16 +1289,41 @@ interface ToolBridgeLimits {
 
 interface AdmittedToolRequest {
   readonly controller: AbortController;
+  // The deadline this request was admitted under, named by the diagnostic its expiry leaves.
+  readonly deadlineMs: number;
   release(): void;
 }
 
 interface ToolBridgeAdmissionGate {
-  readonly admit: () => AdmittedToolRequest | undefined;
+  readonly limits: ToolBridgeLimits;
+  readonly admit: (requestDeadlineMs: number) => AdmittedToolRequest | undefined;
   readonly abortAll: () => void;
 }
 
 const DEFAULT_TOOL_BRIDGE_DEADLINE_MS = 30_000;
 const MAX_TOOL_BRIDGE_DEADLINE_MS = 60_000;
+/**
+ * The deadline the tool bridge admits a request under. A tool the catalog settles beyond the
+ * sandbox default (the verification tool at its derived work budget, the four proposal tools at the
+ * wait for the operator's approval on top of their own work) is admitted one settlement grace past
+ * that budget, read from the catalog descriptor of the tool the request dispatches to, so the
+ * facade's answer (the result, or the catalog's own timeout) always reaches the sidecar instead of a
+ * bridge-side abort racing it. Every other request, and a body the facade's parser refuses, gets the
+ * configured default; the facade refuses the latter afterwards as before. A deadline read from the
+ * verification action alone cut every waiting approval off at 30 s (PR #3452, F44).
+ */
+export function toolBridgeRequestDeadlineMs(
+  configuredDeadlineMs: number,
+  body: string | undefined,
+): number {
+  const request =
+    body === undefined ? undefined : parseCodingToolRequest(body, CODING_TOOL_MAX_BODY_BYTES);
+  const budgetMs = request === undefined ? undefined : openCodeCatalogSettlementBudgetMs(request);
+  return budgetMs !== undefined && budgetMs > DEFAULT_SANDBOX_POLICY.defaultTimeoutMs
+    ? budgetMs + GOVERNED_TOOL_SETTLEMENT_GRACE_MS
+    : configuredDeadlineMs;
+}
+
 const MAX_TOOL_BRIDGE_IN_FLIGHT = 64;
 const DEADLINE_ABORT = "tool-bridge-deadline";
 const DISCONNECT_ABORT = "tool-bridge-disconnect";
@@ -965,59 +1338,55 @@ interface ToolBridgeExecutionDeps {
   readonly diagnostics: ServerDiagnosticSink | undefined;
 }
 
+// #3390 (ADR-0043 D11-D14): the tool facade no longer opens its own loopback listener -- a second
+// attested destination is exactly the defect the Seatbelt egress profile exists to deny. `handle`
+// is the ONLY dispatch surface; the BFF route (coding-sidecar-tool-facade.ts) calls it directly
+// over the already-attested `/api/coding-sidecar/gateway` loopback port. `active`/`start`/`close`
+// stay so the composition's existing prepare/dispose lifecycle (which gates the readiness
+// challenge and rejects post-close calls with 503) is unchanged; only the transport underneath
+// them changes. A caller that still needs a real HTTP endpoint (the scripted functional harness's
+// fake sidecar) owns its OWN tiny listener wrapping this SAME `handle` -- never a second
+// production path (see opencodeFunctionalHarness/_support.ts).
 function createToolBridge(
   capability: string,
   facade: CodingToolFacade,
   configuredLimits: OpenCodeRuntimeCompositionInput["toolBridge"],
   settleTool: SafeToolSettlement | undefined,
   diagnostics: ServerDiagnosticSink | undefined,
+  toolFacadeOrigin: string,
+  v2: {
+    readonly approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>;
+    readonly runs: ReadonlyMap<string, PreparedRun>;
+  },
 ): ToolBridgeController {
+  const { approvals, runs } = v2;
   const limits = normalizeToolBridgeLimits(configuredLimits);
-  let server: Server | undefined;
-  let url = "http://127.0.0.1:0/tool";
   let listening = false;
   const gate = createToolBridgeAdmissionGate(limits);
-  const sockets = new Set<Socket>();
   const deps: ToolBridgeExecutionDeps = { capability, facade, settleTool, diagnostics };
   const handle: OpenCodeToolBridge["handle"] = (request) =>
-    handleDirectToolRequest(listening, deps, gate, request);
-  const listener = bridgeRequestListener(() => listening, deps, gate);
+    handleDirectToolRequest(listening, deps, gate, request, approvals, runs);
   const publicPort: OpenCodeToolBridge = {
     get url(): string {
-      return url;
+      return toolFacadeOrigin;
     },
+    requestDeadlineMs: limits.requestDeadlineMs,
     handle,
   };
   return {
     publicPort,
+    approvals,
     active: () => listening,
-    start: async (): Promise<void> => {
-      if (listening) return;
-      server = configuredBridgeServer(limits, sockets, listener);
-      url = await listenBridge(server);
+    start: (): Promise<void> => {
       listening = true;
+      return Promise.resolve();
     },
-    close: async (): Promise<void> => {
+    close: (): Promise<void> => {
       listening = false;
-      const current = server;
-      server = undefined;
-      if (current === undefined) return;
+      approvals.close();
       gate.abortAll();
-      for (const socket of sockets) socket.destroy();
-      await closeBridgeServer(current);
+      return Promise.resolve();
     },
-  };
-}
-
-// The listener reads `listening` through the accessor at request time, preserving the closure
-// semantics it replaces: a request that arrives after close() is rejected by the preflight.
-function bridgeRequestListener(
-  isListening: () => boolean,
-  deps: ToolBridgeExecutionDeps,
-  gate: ToolBridgeAdmissionGate,
-): (request: IncomingMessage, response: ServerResponse) => void {
-  return (request, response): void => {
-    void handleIncomingToolRequest(request, response, isListening(), deps, gate.admit);
   };
 }
 
@@ -1026,30 +1395,171 @@ function handleDirectToolRequest(
   deps: ToolBridgeExecutionDeps,
   gate: ToolBridgeAdmissionGate,
   input: Parameters<OpenCodeToolBridge["handle"]>[0],
-): Promise<{ readonly status: number; readonly body: string }> {
-  const rejection = preflightToolRequest(active, deps.capability, input.headers, input.body);
-  if (rejection !== undefined) return Promise.resolve(rejection);
-  const admission = gate.admit();
+  approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>,
+  runs: ReadonlyMap<string, PreparedRun>,
+): Promise<OpenCodeToolBridgeResponse> {
+  const preflight = preflightToolRequest(active, deps.capability, input.headers, input.body);
+  if (preflight.outcome === "rejected") {
+    return Promise.resolve({ status: preflight.status, body: preflight.body });
+  }
+  const permission = parseV2PermissionRequest(input.body);
+  if (permission !== undefined) {
+    return handleV2PermissionRequest(permission, input.signal, deps, approvals, runs);
+  }
+  const admission = gate.admit(
+    toolBridgeRequestDeadlineMs(gate.limits.requestDeadlineMs, input.body),
+  );
   if (admission === undefined) return Promise.resolve({ status: 429, body: "" });
-  return executeToolRequest(deps, input.headers, input.body, admission);
+  const detachExternalAbort = bindExternalAbort(input.signal, admission);
+  return executeToolRequest(deps, input.headers, input.body, admission).finally(
+    detachExternalAbort,
+  );
+}
+
+function parseV2PermissionRequest(body: string): Readonly<Record<string, unknown>> | undefined {
+  if (!validJson(body)) return undefined;
+  const parsed: unknown = JSON.parse(body);
+  const value = v2Record(parsed);
+  return value?.action === "permission-request" ? value : undefined;
+}
+
+async function handleV2PermissionRequest(
+  value: Readonly<Record<string, unknown>>,
+  signal: AbortSignal | undefined,
+  deps: ToolBridgeExecutionDeps,
+  approvals: ReturnType<typeof createOpenCodeV2ApprovalRequests>,
+  runs: ReadonlyMap<string, PreparedRun>,
+): Promise<OpenCodeToolBridgeResponse> {
+  const run = typeof value.runId === "string" ? runs.get(value.runId) : undefined;
+  if (signal?.aborted === true) return refusedApproval("cancelled");
+  if (run?.ready !== true || run.sessionId === undefined || run.onPermission === undefined)
+    return refusedApproval("unavailable");
+  const { editBaseDigest } = deps.facade;
+  const decision = await approvals.request({
+    value,
+    runId: run.runId,
+    sessionId: run.sessionId,
+    onPermission: run.onPermission,
+    signal: signal ?? new AbortController().signal,
+    ...(editBaseDigest === undefined
+      ? {}
+      : {
+          editBaseDigest: (
+            file: string,
+            readSignal: AbortSignal,
+          ): Promise<CodingToolEditBaseRead> => editBaseDigest(deps.capability, file, readSignal),
+        }),
+  });
+  settleDecidedTool(deps.settleTool, decision);
+  return withApprovalIds(approvalResponse(decision), run.runId, decision);
+}
+
+// A refused ask names its run and permission request, so the route's line joins the run's own
+// approval lines (PR #3617 review).
+function withApprovalIds(
+  response: OpenCodeToolBridgeResponse,
+  runId: string,
+  decision: OpenCodeV2ApprovalDecision,
+): OpenCodeToolBridgeResponse {
+  return decision.requestId === undefined || response.rejection === undefined
+    ? response
+    : { ...response, approval: { runId, requestId: decision.requestId } };
+}
+
+// The tool call a refused ask ends is settled with Keiko's own verdict (#3612): OpenCode reports
+// any refused call as a generic failure, which read "Failed" for a human's denial. A stale base is
+// a failed edit, reached without asking anyone.
+const DECIDED_TOOL_STATES: Readonly<
+  Partial<Record<OpenCodeV2ApprovalOutcome, OpenCodeToolSettlementState>>
+> = {
+  denied: "denied",
+  expired: "cancelled",
+  cancelled: "cancelled",
+  stale: "failed",
+  // PR #3617 review: an edit the run's authority no longer admits is denied, not a generic failure.
+  "authority-denied": "denied",
+};
+
+function settleDecidedTool(
+  settleTool: SafeToolSettlement | undefined,
+  decision: OpenCodeV2ApprovalDecision,
+): void {
+  const state = DECIDED_TOOL_STATES[decision.outcome];
+  if (state !== undefined) settleSafeTool(settleTool, decision.actionId, state);
+}
+
+// A stale base answers with the edit's own refusal result, which the plugin hands to the model in
+// place of the tool call, so the model reads the same re-read guidance as after an approval.
+function approvalResponse(decision: OpenCodeV2ApprovalDecision): OpenCodeToolBridgeResponse {
+  if (decision.outcome === "approved") return { status: 200, body: '{"status":"approved"}' };
+  if (decision.outcome === "stale") {
+    return {
+      status: 409,
+      body: JSON.stringify(staleEditBaseToolResult(decision.staleFile)),
+      rejection: "approval-stale",
+    };
+  }
+  return refusedApproval(decision.outcome);
+}
+
+const APPROVAL_REJECTIONS: Readonly<
+  Record<Exclude<OpenCodeV2ApprovalOutcome, "approved">, ToolBridgeApprovalRejection>
+> = {
+  denied: "approval-denied",
+  expired: "approval-expired",
+  cancelled: "approval-cancelled",
+  unavailable: "approval-unavailable",
+  stale: "approval-stale",
+  "authority-denied": "approval-authority-denied",
+};
+
+// The plugin only reads `response.ok`, so the status stays 403; the outcome rides beside it.
+function refusedApproval(
+  outcome: Exclude<OpenCodeV2ApprovalOutcome, "approved">,
+): OpenCodeToolBridgeResponse {
+  return { status: 403, body: "", rejection: APPROVAL_REJECTIONS[outcome] };
+}
+
+// The route's own disconnect signal (its client going away mid-execution) and the admission
+// gate's deadline timer settle the SAME in-flight facade call through the one existing abort
+// path (`executeToolRequest`'s `raceAbort`) -- this is the only place an external signal joins it,
+// so "abort-on-close" never grows a second cancellation mechanism.
+function bindExternalAbort(
+  signal: AbortSignal | undefined,
+  admission: AdmittedToolRequest,
+): () => void {
+  if (signal === undefined) return () => undefined;
+  if (signal.aborted) {
+    admission.controller.abort(new Error(DISCONNECT_ABORT));
+    return () => undefined;
+  }
+  const onAbort = (): void => {
+    admission.controller.abort(new Error(DISCONNECT_ABORT));
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+  return (): void => {
+    signal.removeEventListener("abort", onAbort);
+  };
 }
 
 function createToolBridgeAdmissionGate(limits: ToolBridgeLimits): ToolBridgeAdmissionGate {
   let admitted = 0;
   const controllers = new Set<AbortController>();
   return {
-    admit: (): AdmittedToolRequest | undefined => {
+    limits,
+    admit: (requestDeadlineMs: number): AdmittedToolRequest | undefined => {
       if (admitted >= limits.maxInFlight) return undefined;
       admitted += 1;
       const controller = new AbortController();
       controllers.add(controller);
       const timer = setTimeout(() => {
         controller.abort(new Error(DEADLINE_ABORT));
-      }, limits.requestDeadlineMs);
+      }, requestDeadlineMs);
       timer.unref();
       let released = false;
       return {
         controller,
+        deadlineMs: requestDeadlineMs,
         release: (): void => {
           if (released) return;
           released = true;
@@ -1063,42 +1573,6 @@ function createToolBridgeAdmissionGate(limits: ToolBridgeLimits): ToolBridgeAdmi
       for (const controller of controllers) controller.abort(new Error(CLOSE_ABORT));
     },
   };
-}
-
-function configuredBridgeServer(
-  limits: ToolBridgeLimits,
-  sockets: Set<Socket>,
-  handler: (request: IncomingMessage, response: ServerResponse) => void,
-): Server {
-  const server = createServer(handler);
-  server.headersTimeout = Math.min(limits.requestDeadlineMs, 10_000);
-  server.requestTimeout = limits.requestDeadlineMs;
-  server.keepAliveTimeout = 1_000;
-  server.timeout = limits.requestDeadlineMs;
-  server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.once("close", () => sockets.delete(socket));
-  });
-  return server;
-}
-
-async function listenBridge(server: Server): Promise<string> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (address === null || typeof address === "string") throw new Error("bridge-bind-failed");
-  return `http://127.0.0.1:${String(address.port)}/tool`;
-}
-
-async function closeBridgeServer(server: Server): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => {
-      if (error === undefined) resolve();
-      else reject(error);
-    });
-  });
 }
 
 function normalizeToolBridgeLimits(
@@ -1124,26 +1598,30 @@ function boundedInteger(value: number | undefined, fallback: number, maximum: nu
     : Math.min(maximum, Math.max(1, Math.trunc(value)));
 }
 
+type ToolPreflightResult =
+  | { readonly outcome: "rejected"; readonly status: number; readonly body: string }
+  | { readonly outcome: "admitted" };
+
 function preflightToolRequest(
   active: boolean,
   capability: string,
   headers: Headers,
   body?: string,
-): { readonly status: number; readonly body: string } | undefined {
-  if (!active) return { status: 503, body: "" };
-  if (headers.has("origin")) return { status: 403, body: "" };
+): ToolPreflightResult {
+  if (!active) return { outcome: "rejected", status: 503, body: "" };
+  if (headers.has("origin")) return { outcome: "rejected", status: 403, body: "" };
   const bearer = headers.get("authorization");
   if (bearer === null || !safeEqual(bearer, `Bearer ${capability}`)) {
-    return { status: 401, body: "" };
+    return { outcome: "rejected", status: 401, body: "" };
   }
   const declaredLength = declaredBodyLength(headers.get("content-length"));
   if (declaredLength === "invalid" || declaredLength > CODING_TOOL_MAX_BODY_BYTES) {
-    return { status: 413, body: "" };
+    return { outcome: "rejected", status: 413, body: "" };
   }
   if (body !== undefined && Buffer.byteLength(body, "utf8") > CODING_TOOL_MAX_BODY_BYTES) {
-    return { status: 413, body: "" };
+    return { outcome: "rejected", status: 413, body: "" };
   }
-  return undefined;
+  return { outcome: "admitted" };
 }
 
 function declaredBodyLength(value: string | null): number | "invalid" {
@@ -1170,19 +1648,42 @@ async function executeToolRequest(
   try {
     const result = await raceAbort(work, admission.controller.signal);
     const reason = abortReason(admission.controller.signal);
-    if (reason !== undefined) {
-      settleSafeTool(settleTool, actionId, "cancelled");
-      return reason === DEADLINE_ABORT ? { status: 408, body: "" } : { status: 502, body: "" };
-    }
+    if (reason !== undefined) return abortedToolResponse(deps, actionId, admission, reason);
     return responseForToolResult(result, settleTool, actionId);
   } catch (error) {
     const reason = abortReason(admission.controller.signal);
     // A cancellation is an expected outcome, not a facade fault, so only a genuine failure is
     // surfaced to the operator.
-    if (reason === undefined) emitFacadeFailureDiagnostic(diagnostics, actionId, error);
-    settleSafeTool(settleTool, actionId, reason === undefined ? "failed" : "cancelled");
-    return reason === DEADLINE_ABORT ? { status: 408, body: "" } : { status: 502, body: "" };
+    if (reason !== undefined) return abortedToolResponse(deps, actionId, admission, reason);
+    emitFacadeFailureDiagnostic(diagnostics, actionId, error);
+    settleSafeTool(settleTool, actionId, "failed");
+    return { status: 502, body: "" };
   }
+}
+
+// A request the bridge itself stopped. Its own deadline leaves a diagnostic naming the deadline the
+// request was admitted under, so a call cut off here is told apart in the log from one its caller
+// dropped or the catalog timed out; a 30 s bridge deadline once cut waiting approvals off without a
+// line of its own (PR #3452, F44).
+function abortedToolResponse(
+  deps: ToolBridgeExecutionDeps,
+  actionId: string | undefined,
+  admission: AdmittedToolRequest,
+  reason: string,
+): { readonly status: number; readonly body: string } {
+  settleSafeTool(deps.settleTool, actionId, "cancelled");
+  if (reason !== DEADLINE_ABORT) return { status: 502, body: "" };
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: actionCorrelationId(actionId),
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.tool-bridge",
+    source: "opencode-runtime-composition.request-deadline",
+    errorClass: "TimeoutError",
+    message: "tool-bridge-deadline",
+    httpStatus: 408,
+    deadlineMs: admission.deadlineMs,
+  });
+  return { status: 408, body: "" };
 }
 
 function responseForToolResult(
@@ -1224,9 +1725,24 @@ function startFacadeExecution(
 // class label comes from the shared `contentFreeErrorClass` hardening in diagnostics-log, so the
 // mutable-`Error.name` defense lives in exactly one place.
 // `actionId` is request content (parseCodingToolRequest bounds it to a non-empty string ≤512
-// bytes only), so it rides on the redaction-safe diagnostic solely as a bounded machine token:
-// the `tool:<callId>` production shape passes, prose/whitespace/overlength degrade to a marker.
-const SAFE_ACTION_CORRELATION_ID = /^[A-Za-z0-9:._-]{1,128}$/;
+// bytes only), so it rides on the redaction-safe diagnostic solely as a bounded machine token that
+// satisfies the one canonical correlation-id shape (`isValidCorrelationId`, the shape
+// `defaultServerDiagnosticSink` sanitizes against — a wider local shape would be replaced by the
+// sink's content-free marker and lose the correlation). The `tool:<callId>` production shape is not
+// valid as-is (the canonical shape admits no `:`), so it is mapped onto `tool-<callId>` — a fixed,
+// documented prefix swap an analyzer joins back to the evidence's `actionId`. Prose, whitespace,
+// overlength and too-short values degrade to the marker.
+const TOOL_ACTION_ID_PREFIX = "tool:";
+const TOOL_ACTION_CORRELATION_PREFIX = "tool-";
+const UNPARSED_ACTION_CORRELATION_ID = "tool-bridge-unparsed-action";
+
+function actionCorrelationId(actionId: string | undefined): string {
+  if (actionId === undefined) return UNPARSED_ACTION_CORRELATION_ID;
+  const candidate = actionId.startsWith(TOOL_ACTION_ID_PREFIX)
+    ? `${TOOL_ACTION_CORRELATION_PREFIX}${actionId.slice(TOOL_ACTION_ID_PREFIX.length)}`
+    : actionId;
+  return isValidCorrelationId(candidate) ? candidate : UNPARSED_ACTION_CORRELATION_ID;
+}
 
 function emitFacadeFailureDiagnostic(
   diagnostics: ServerDiagnosticSink | undefined,
@@ -1234,10 +1750,7 @@ function emitFacadeFailureDiagnostic(
   error: unknown,
 ): void {
   emitServerDiagnostic(diagnostics, {
-    correlationId:
-      actionId !== undefined && SAFE_ACTION_CORRELATION_ID.test(actionId)
-        ? actionId
-        : "tool-bridge-unparsed-action",
+    correlationId: actionCorrelationId(actionId),
     timestamp: new Date().toISOString(),
     operation: "coding-runtime.tool-bridge",
     source: "opencode-runtime-composition.facade-execute",
@@ -1315,66 +1828,17 @@ function safeEqual(left: string, right: string): boolean {
   return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes);
 }
 
-async function handleIncomingToolRequest(
-  request: IncomingMessage,
-  response: ServerResponse,
-  active: boolean,
-  deps: ToolBridgeExecutionDeps,
-  admit: () => AdmittedToolRequest | undefined,
-): Promise<void> {
-  if (request.method !== "POST" || request.url !== "/tool") {
-    response.writeHead(404).end();
-    return;
-  }
-  const headers = incomingHeaders(request.headers);
-  const rejection = preflightToolRequest(active, deps.capability, headers);
-  if (rejection !== undefined) {
-    response.writeHead(rejection.status).end();
-    return;
-  }
-  const admission = admit();
-  if (admission === undefined) {
-    response.writeHead(429).end();
-    return;
-  }
-  const removeDisconnectListeners = bindToolDisconnect(request, response, admission);
-  try {
-    const bytes = await readBoundedBody(request, admission.controller.signal);
-    const body = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    const result = await executeToolRequest(deps, headers, body, admission);
-    if (!response.destroyed) {
-      response.writeHead(result.status, { "Content-Type": "application/json" }).end(result.body);
-    }
-  } catch {
-    admission.release();
-    if (response.destroyed) return;
-    const status = abortReason(admission.controller.signal) === DEADLINE_ABORT ? 408 : 400;
-    response.writeHead(status).end();
-  } finally {
-    removeDisconnectListeners();
-  }
-}
+// Retired production HTTP listener for this bridge (#3390 / ADR-0043 D11-D14): NOTHING in this
+// module calls `.listen()` any more -- `handle()` above is the one dispatch surface, reached over
+// the already-attested `/api/coding-sidecar/gateway` loopback port via
+// coding-sidecar-tool-facade.ts. The two small helpers below (Node headers -> `Headers`, and a
+// byte-budget-bounded body read) are kept, exported, for the ONE caller still allowed to own a
+// real HTTP endpoint around this same `handle`: the scripted functional harness's fake sidecar
+// (opencodeFunctionalHarness/_support.ts) -- never a second production path.
 
-function bindToolDisconnect(
-  request: IncomingMessage,
-  response: ServerResponse,
-  admission: AdmittedToolRequest,
-): () => void {
-  const abortDisconnect = (): void => {
-    admission.controller.abort(new Error(DISCONNECT_ABORT));
-  };
-  const responseClosed = (): void => {
-    if (!response.writableFinished) abortDisconnect();
-  };
-  request.once("aborted", abortDisconnect);
-  response.once("close", responseClosed);
-  return (): void => {
-    request.removeListener("aborted", abortDisconnect);
-    response.removeListener("close", responseClosed);
-  };
-}
-
-function incomingHeaders(values: IncomingHttpHeaders): Headers {
+/** Node's multi-valued header shape flattened onto the Fetch `Headers` `preflightToolRequest` and
+ * the BFF route both read. */
+export function incomingHeaders(values: IncomingHttpHeaders): Headers {
   const headers = new Headers();
   for (const [name, value] of Object.entries(values)) {
     if (typeof value === "string") headers.set(name, value);
@@ -1383,7 +1847,10 @@ function incomingHeaders(values: IncomingHttpHeaders): Headers {
   return headers;
 }
 
-function readBoundedBody(request: IncomingMessage, signal: AbortSignal): Promise<Buffer> {
+/** Same byte budget (`CODING_TOOL_MAX_BODY_BYTES`) as `preflightToolRequest`'s declared-length
+ * check, enforced against the ACTUAL stream as it arrives rather than a (possibly absent or
+ * understated) `content-length` header. */
+export function readBoundedBody(request: IncomingMessage, signal: AbortSignal): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let bytes = 0;

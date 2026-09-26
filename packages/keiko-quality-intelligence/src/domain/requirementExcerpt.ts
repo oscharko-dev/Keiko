@@ -20,7 +20,7 @@
 // Persistence redacts every string leaf again (defense in depth), so a stored excerpt is redacted at
 // least twice; the format-char strip sits upstream of every persisted coverage/finding/export surface.
 
-import { redact } from "@oscharko-dev/keiko-security";
+import { REDACTION_PLACEHOLDER, redact } from "@oscharko-dev/keiko-security";
 
 import { stripUnsafeFormatChars } from "./assertions.js";
 
@@ -29,10 +29,8 @@ export const REQUIREMENT_EXCERPT_MAX_CHARS = 96 as const;
 
 const ELLIPSIS = "…";
 const EMAIL_ADDRESS_PATTERN = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/giu;
-const REDACTED = "[REDACTED]";
-
 const redactExcerptText = (value: string): string =>
-  redact(value).replace(EMAIL_ADDRESS_PATTERN, REDACTED);
+  redact(value).replace(EMAIL_ADDRESS_PATTERN, REDACTION_PLACEHOLDER);
 
 /**
  * Build a short, redacted, single-line excerpt of an atom's canonical text. Returns `undefined`

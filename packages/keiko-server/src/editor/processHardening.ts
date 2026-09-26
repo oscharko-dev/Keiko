@@ -1,7 +1,11 @@
 import { accessSync, constants, existsSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, resolve as resolvePath } from "node:path";
-import { buildSandboxEnv } from "@oscharko-dev/keiko-tools";
+import {
+  buildSandboxEnv,
+  buildWindowsShellInvocation,
+  type WindowsShellInvocationOptions,
+} from "@oscharko-dev/keiko-tools";
 import { isWithinWorkspace, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 
 export class EditorProcessHardeningError extends Error {
@@ -136,6 +140,29 @@ export function buildCopyOnlyProcessEnv(
   return buildSandboxEnv(processEnv, envAllowlist);
 }
 
+export interface WindowsSpawnInvocation {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly windowsVerbatimArguments: boolean;
+}
+
+// Wraps a resolved executable for Windows-safe spawning (issue #3350 / Node CVE-2024-27980): a
+// `.cmd`/`.bat` resolved by resolveExecutableOutsideWorkspace cannot be spawned with `shell:false`
+// on Windows without raising EINVAL. Delegates to keiko-tools' pure hardened cmd.exe wrapper — the
+// SAME implementation exec.ts's runCommand spawn boundary uses — so every editor-tree Node process
+// adapter that resolves an executable through this module shares one escaping implementation
+// instead of re-deriving it. A no-op on every non-`.cmd`/`.bat` resolved path and on every
+// non-Windows platform (pass-through, `windowsVerbatimArguments: false`).
+export function resolveWindowsSpawnInvocation(
+  executable: string,
+  args: readonly string[],
+  options?: WindowsShellInvocationOptions,
+): WindowsSpawnInvocation {
+  // `options` is forwarded only so a test can force the win32 branch on any host; production callers
+  // (the LSP adapter) omit it and get the real process.platform / process.env.
+  return buildWindowsShellInvocation(executable, args, options);
+}
+
 function safeKill(child: KillableChild, signal: NodeJS.Signals): void {
   try {
     child.kill(signal);
@@ -155,6 +182,21 @@ export function escalateKill(
   scheduler: KillScheduler = productionKillScheduler,
   whenExited?: ChildExitRegistration,
 ): Promise<void> {
+  // THE ORDER HERE IS LOAD-BEARING, AND IT IS NOT THE ORDER `killGroup` USES. A PR #3355 review P1
+  // asked for the exit check to be hoisted above this signal, matching the guard keiko-tools'
+  // exec.ts gained for `killGroup`. It was implemented and then WITHDRAWN, because `child` here is
+  // frequently a process GROUP handle, not a single process: `dapCapsuleSupervisor` passes
+  // `handle.processGroup` with `handle.exited`, which reports the DIRECT child. "The direct child
+  // exited" does not mean "there is nothing left to signal" — surviving descendants are exactly what
+  // containment must still reach. Hoisting the check timed out that supervisor's own proof,
+  // "rejects hostile descendant counts after containment" (15s, reproduced against HEAD both ways),
+  // by leaving the descendants unsignalled.
+  //
+  // The raw-pid hazard that P1 names is real and IS closed — at the layer that knows a pid, which
+  // this one does not: lspNodeAdapter's `kill` wrapper checks `exitCode`/`signalCode` before it
+  // reaches `nodeWindowsTreeKill` and logs a `not-attempted` disposition instead. `safeKill` here
+  // goes through `child.kill`, so that guard is in force for this call too; what it deliberately
+  // does not suppress is a group signal that still has descendants to reach.
   safeKill(child, "SIGTERM");
   if (exited()) return Promise.resolve();
   return new Promise<void>((resolve) => {

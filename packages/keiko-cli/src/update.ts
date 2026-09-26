@@ -4,6 +4,7 @@ import {
   type UpdateReleaseImpactInput,
   type UpdateRemediationStatusReport,
   type UpdateSession,
+  type UpdateSessionStartRequest,
   type UpdateSessionStatus,
 } from "@oscharko-dev/keiko-contracts";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
@@ -18,10 +19,12 @@ import { loadEvidence, loadServer } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
 import {
   isPortableManagedInstallMode,
+  isTerminalUpdateSession,
   renderApplyTerminal,
   renderUpdateStatus,
 } from "./update-output.js";
 import { resolveStateDir as resolveRuntimeStateDir } from "./state-paths.js";
+import { writeInstallLayoutOverrideEvidence } from "./install-layout.js";
 
 type ServerModule = typeof import("@oscharko-dev/keiko-server");
 type EvidenceModule = typeof import("@oscharko-dev/keiko-evidence");
@@ -139,24 +142,45 @@ async function createRuntime(env: EnvSource, deps: UpdateCliDeps): Promise<Updat
   const [server, evidence] = await Promise.all([loadServer(), loadEvidence()]);
   const handlerDeps = createHandlerDeps(env, deps.fetchImpl, server, evidence);
   const stateDir = resolveRuntimeStateDir(deps.cwd ?? process.cwd(), env);
-  const localState = server.createUpdateLocalStateManager({ stateDir });
-  const processEnv = processEnvFrom(env);
-  const service = server.createUpdatePreflightService();
-  return {
-    preflight: deps.preflight ?? bindPreflight(service, handlerDeps),
-    session:
-      deps.session ??
-      server.createUpdateSessionManager({
-        processEnv,
-        lock: server.createStateDirUpdateSessionLock(stateDir),
-        redactor: stringRedactor(env, server),
-      }),
-    remediation: deps.remediation ?? server.createUpdateRemediationManager({ localState }),
-    server,
-    close: (): void => {
+  let activityLog: ReturnType<ServerModule["createFileServerLogSink"]> | undefined;
+  const close = (): void => {
+    try {
       handlerDeps.store.close();
-    },
+    } finally {
+      activityLog?.close?.();
+    }
   };
+  try {
+    activityLog = server.createFileServerLogSink(stateDir);
+    writeInstallLayoutOverrideEvidence(activityLog, env);
+    const candidateAuthority = server.createUpdateCandidateAuthority({ activityLog });
+    const localState = server.createUpdateLocalStateManager({ stateDir, activityLog });
+    const processEnv = processEnvFrom(env);
+    const service = server.createUpdatePreflightService({ candidateAuthority });
+    return {
+      preflight: deps.preflight ?? bindPreflight(service, handlerDeps),
+      session:
+        deps.session ??
+        server.createUpdateSessionManager({
+          processEnv,
+          lock: server.createStateDirUpdateSessionLock(stateDir),
+          redactor: stringRedactor(env, server),
+          candidateAuthority,
+          localState,
+          activityLog,
+        }),
+      remediation: deps.remediation ?? server.createUpdateRemediationManager({ localState }),
+      server,
+      close,
+    };
+  } catch (error) {
+    try {
+      close();
+    } catch {
+      // Preserve the construction error; both owned resources received a close attempt.
+    }
+    throw error;
+  }
 }
 
 function primaryRemediation(
@@ -204,6 +228,18 @@ function parseSubcommand(args: readonly string[]): UpdateSubcommand | "help" | u
 function noUpdateApplyGuard(report: UpdatePreflightReport): string | undefined {
   if (!report.updateAvailable || report.targetVersion === undefined) return "No update available.";
   return undefined;
+}
+
+function candidateRequestForApply(
+  report: UpdatePreflightReport,
+): UpdateSessionStartRequest | undefined {
+  const candidate = report.candidate;
+  if (candidate === undefined || candidate.targetVersion !== report.targetVersion) return undefined;
+  return {
+    candidateId: candidate.candidateId,
+    confirmationDigest: candidate.confirmationDigest,
+    executionToken: candidate.executionToken,
+  };
 }
 
 function portableApplyFallback(): string {
@@ -299,14 +335,11 @@ function terminalSessionFor(
   return undefined;
 }
 
-function isTerminal(session: UpdateSession): boolean {
-  return (
-    session.phase === "restart-required" ||
-    session.phase === "succeeded" ||
-    session.phase === "failed" ||
-    session.phase === "cancelled"
-  );
-}
+// KEIKO-0809: the loop used `pollIntervalMs` as both the sleep interval AND the loop
+// counter increment, so a 0 (or negative) poll interval — trivially reachable from a
+// test's injected deps — meant `elapsed += 0` and an unbounded spin. Clamp the sleep
+// interval to a minimum of 1 ms so the wall-clock bound (`maxWaitMs`) actually ticks.
+const MIN_POLL_INTERVAL_MS = 1;
 
 async function waitForTerminalSession(
   manager: UpdateSessionManager,
@@ -315,10 +348,11 @@ async function waitForTerminalSession(
   pollIntervalMs: number,
   maxWaitMs: number,
 ): Promise<UpdateSession | undefined> {
-  for (let elapsed = 0; elapsed <= maxWaitMs; elapsed += pollIntervalMs) {
+  const effectiveInterval = Math.max(pollIntervalMs, MIN_POLL_INTERVAL_MS);
+  for (let elapsed = 0; elapsed <= maxWaitMs; elapsed += effectiveInterval) {
     const session = terminalSessionFor(manager.getStatus(), sessionId);
-    if (session !== undefined && isTerminal(session)) return session;
-    await sleep(pollIntervalMs);
+    if (session !== undefined && isTerminalUpdateSession(session)) return session;
+    await sleep(effectiveInterval);
   }
   return terminalSessionFor(manager.getStatus(), sessionId);
 }
@@ -335,12 +369,6 @@ function writeApplyGuard(io: CliIo, report: UpdatePreflightReport, guard: string
   const line = `keiko update apply: ${guard}\n`;
   if (report.updateAvailable) io.err(line);
   else io.out(line);
-}
-
-function targetVersionForApply(report: UpdatePreflightReport, io: CliIo): string | undefined {
-  if (report.targetVersion !== undefined) return report.targetVersion;
-  io.err("keiko update apply: No target version was available.\n");
-  return undefined;
 }
 
 async function runStatus(runtime: UpdateRuntime, io: CliIo): Promise<number> {
@@ -383,12 +411,17 @@ async function runApply(runtime: UpdateRuntime, io: CliIo, deps: UpdateCliDeps):
     writeApplyGuard(io, report, guard);
     return applyGuardExitCode(report);
   }
-  const targetVersion = targetVersionForApply(report, io);
-  if (targetVersion === undefined) {
+  const candidate = candidateRequestForApply(report);
+  if (candidate === undefined) {
+    io.err(
+      "keiko update apply: The fresh update check did not issue a usable server-approved candidate. Run `keiko update check` and retry.\n",
+    );
     return 1;
   }
-  const started = runtime.session.start({ targetVersion });
-  io.out(`Update session: ${started.reused ? "reused" : "started"} for ${targetVersion}\n`);
+  const started = runtime.session.start(candidate, report);
+  io.out(
+    `Update session: ${started.reused ? "reused" : "started"} for ${report.targetVersion ?? "the approved target"}\n`,
+  );
   const terminal = await waitForTerminalSession(
     runtime.session,
     started.session.sessionId,
@@ -400,9 +433,32 @@ async function runApply(runtime: UpdateRuntime, io: CliIo, deps: UpdateCliDeps):
   return successfulApply(terminal) ? 0 : 1;
 }
 
-function safeErrorMessage(error: unknown, server: ServerModule | undefined): string {
+function errorDiscriminator(error: unknown): string {
+  const name = error instanceof Error ? error.name : "UnknownError";
+  const code =
+    error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
+      ? error.code
+      : undefined;
+  return code === undefined ? name : `${name} (${code})`;
+}
+
+// Body-free error discriminator. The UpdateSessionError branch keeps its already-vetted
+// error.message (that type is authored to be operator-safe). For every other error we emit
+// only the error's constructor name plus, when present, the errno `code` — no message, no
+// stack, no path — and route the fragment through the same secret redactor createRuntime uses
+// so a redactor rule authored for that runtime also masks anything that ever leaked into a
+// constructor/code string. When createRuntime itself threw, `server` is undefined and we fall
+// back to the unredacted discriminator (never to silence — see #KEIKO-0486 root cause).
+function safeErrorMessage(
+  error: unknown,
+  env: EnvSource,
+  server: ServerModule | undefined,
+): string {
   if (server !== undefined && error instanceof server.UpdateSessionError) return error.message;
-  return "Unexpected update command failure.";
+  const discriminator = errorDiscriminator(error);
+  const redacted =
+    server === undefined ? discriminator : stringRedactor(env, server)(discriminator);
+  return `Unexpected update command failure. ${redacted}`;
 }
 
 export async function runUpdateCli(
@@ -427,7 +483,7 @@ export async function runUpdateCli(
     if (subcommand === "check") return await runCheck(runtime, io);
     return await runApply(runtime, io, deps);
   } catch (error) {
-    io.err(`keiko update ${subcommand}: ${safeErrorMessage(error, runtime?.server)}\n`);
+    io.err(`keiko update ${subcommand}: ${safeErrorMessage(error, env, runtime?.server)}\n`);
     return 1;
   } finally {
     runtime?.close();

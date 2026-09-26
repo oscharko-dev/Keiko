@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createInMemoryUiStore, createNodeUiStore, UiStoreError, type UiStore } from "./index.js";
 import { MAX_CHAT_TITLE_LEN } from "./chats.js";
-import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "./types.js";
+import type { ChatConnectedScope, ChatGitChangeScope, ChatLocalKnowledgeScope } from "./types.js";
 
 let tmp: string;
 let proj: string;
@@ -924,6 +924,97 @@ describe("updateChat — localKnowledgeScopes list round-trip (#189)", () => {
       capsuleId: "cap-list",
       connectedAtMs: 2,
     });
+  });
+});
+
+// Issue #3400 (epic #3384) — the third, sibling git-change scope list. No legacy single-object
+// field exists for this scope kind (mirrors the localKnowledgeScopes plural-only shape).
+function gitChangeScope(patch: Partial<ChatGitChangeScope> = {}): ChatGitChangeScope {
+  return {
+    kind: "git-change",
+    relationshipId: "rel-1",
+    remoteDigest: "d".repeat(64),
+    comparisonLabel: "main...feature/x",
+    baseRef: "main",
+    headRef: "feature/x",
+    baseSha: "a".repeat(40),
+    headSha: "b".repeat(40),
+    mergeBaseSha: "c".repeat(40),
+    snapshotDigest: "e".repeat(64),
+    fileCount: 3,
+    totalFiles: 3,
+    omittedFiles: 0,
+    truncatedFiles: 0,
+    descriptionStatus: "current",
+    connectedAtMs: 10,
+    ...patch,
+  };
+}
+
+describe("updateChat — gitChangeScopes round-trip (#3400)", () => {
+  it("sets a git-change scope and round-trips it through SQLite", () => {
+    const c = store.createChat(proj, "t", "m");
+    const scope = gitChangeScope();
+    const updated = store.updateChat(c.id, { gitChangeScopes: [scope] });
+    expect(updated.gitChangeScopes).toEqual([scope]);
+    const fetched = store.findChatById(c.id);
+    expect(fetched?.gitChangeScopes).toEqual([scope]);
+  });
+
+  it("round-trips the bounded server-held description proposal id", () => {
+    const c = store.createChat(proj, "t", "m");
+    const scope = gitChangeScope({ descriptionProposalId: "proposal-chat-1" });
+    store.updateChat(c.id, { gitChangeScopes: [scope] });
+    expect(store.findChatById(c.id)?.gitChangeScopes).toEqual([scope]);
+    expect(() =>
+      store.updateChat(c.id, {
+        gitChangeScopes: [gitChangeScope({ descriptionProposalId: "x".repeat(129) })],
+      }),
+    ).toThrow(/well-formed/u);
+  });
+
+  it("clears the list when patched with gitChangeScopes: null", () => {
+    const c = store.createChat(proj, "t", "m");
+    store.updateChat(c.id, { gitChangeScopes: [gitChangeScope()] });
+    const cleared = store.updateChat(c.id, { gitChangeScopes: null });
+    expect(cleared.gitChangeScopes ?? []).toHaveLength(0);
+    const fetched = store.findChatById(c.id);
+    expect(fetched?.gitChangeScopes ?? []).toHaveLength(0);
+  });
+
+  it("leaves gitChangeScopes untouched when the patch omits the field", () => {
+    const c = store.createChat(proj, "t", "m");
+    store.updateChat(c.id, { gitChangeScopes: [gitChangeScope()] });
+    store.updateChat(c.id, { title: "renamed" });
+    const fetched = store.findChatById(c.id);
+    expect(fetched?.gitChangeScopes).toEqual([gitChangeScope()]);
+  });
+
+  it("rejects a malformed git-change scope entry (defense-in-depth against a tampered PATCH)", () => {
+    const c = store.createChat(proj, "t", "m");
+    expect(() =>
+      store.updateChat(c.id, {
+        gitChangeScopes: [gitChangeScope({ remoteDigest: "not-a-digest" })],
+      }),
+    ).toThrow(UiStoreError);
+  });
+
+  it("does not overload connectedScopes or localKnowledgeScopes (contract correction 2)", () => {
+    const c = store.createChat(proj, "t", "m");
+    const updated = store.updateChat(c.id, { gitChangeScopes: [gitChangeScope()] });
+    expect(updated.connectedScopes ?? []).toHaveLength(0);
+    expect(updated.localKnowledgeScopes ?? []).toHaveLength(0);
+  });
+
+  it("changes groundingScopeIdentity when the git-change snapshotDigest changes", () => {
+    const c = store.createChat(proj, "t", "m");
+    const before = store.updateChat(c.id, {
+      gitChangeScopes: [gitChangeScope({ snapshotDigest: "1".repeat(64) })],
+    });
+    const after = store.updateChat(c.id, {
+      gitChangeScopes: [gitChangeScope({ snapshotDigest: "2".repeat(64) })],
+    });
+    expect(after.groundingScopeIdentity).not.toBe(before.groundingScopeIdentity);
   });
 });
 

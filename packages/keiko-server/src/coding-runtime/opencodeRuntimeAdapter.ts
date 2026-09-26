@@ -1,10 +1,31 @@
+import { opencodeRegistrationSet } from "@oscharko-dev/keiko-tool-catalog";
+import type { ToolDescriptor } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  DEFAULT_SANDBOX_POLICY,
+  GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS,
+  GOVERNED_TOOL_SETTLEMENT_GRACE_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { isAbsolute } from "node:path";
+import { correlationIdOrUnknown } from "../correlation.js";
+import type { ServerLogSink } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
+import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
 
-import { createFixedOpenCodeConfig } from "./opencodeLaunchProfile.js";
+import {
+  createFixedOpenCodeConfig,
+  type OpenCodeContextGeometry,
+} from "./opencodeLaunchProfile.js";
 import {
   createOpenCodeReconciler,
+  isOpenCodeProviderTokenUsage,
+  isOpenCodeCompactionActivity,
   OPEN_CODE_EVENT_KINDS,
   type OpenCodeReconciliationEvent,
   type OpenCodeReconciliationPreparation,
@@ -28,6 +49,166 @@ const MAX_HISTORY_CATCH_UP_ATTEMPTS = 4;
 const MAX_STREAM_RECONNECTS = 3;
 // The generated client must outlive the server-owned 30 s governed tool-bridge deadline.
 const OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS = 35_000;
+
+const OPEN_CODE_READINESS_PHASES = [
+  "target-attestation",
+  "config-materialization",
+  "endpoint",
+  "authenticated-health",
+  "authenticated-health-version",
+  "unauthenticated-health",
+  "openapi-digest",
+  "gateway-challenge",
+  "tool-facade-challenge",
+  "sse-history-reconciliation",
+  "session-echo",
+] as const;
+
+const CODING_RUNTIME_OPERATION_BASE = {
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  category: "process",
+  owner: "keiko-server",
+  causal: "correlation",
+  releaseImpact: "patch",
+} as const;
+
+const OPEN_CODE_READINESS_PHASE_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  required: true,
+  values: OPEN_CODE_READINESS_PHASES,
+} as const;
+
+// `required: false`, not `true`: `keikoStackFrames`/`causeChain` always return an array, empty
+// when there is nothing to report (no stack, no cause) — the shared redaction pipeline
+// (`log-redaction.ts`'s guarded-array hatch, matching `diagnostics-log.ts`'s documented
+// `nonEmpty` contract for these exact field names) degrades that empty array to absent on every
+// persisted line, same as every other operation that carries `frames`/`causeChain`. Declaring
+// either field required here made the real file sink silently persist a line missing a
+// registration-required field whenever the causing error had no capturable stack or `.cause`
+// chain — the common case for a plain thrown error — without the write path ever catching it.
+const OPEN_CODE_READINESS_FRAMES_FIELD = {
+  type: "string-array",
+  dataClass: "opaque-id",
+  required: false,
+  maxLength: 512,
+  maxItems: 8,
+} as const;
+
+const OPEN_CODE_READINESS_CAUSE_CHAIN_FIELD = {
+  type: "string-array",
+  dataClass: "error-kind",
+  required: false,
+  maxLength: 128,
+  maxItems: 5,
+} as const;
+
+const CODING_RUNTIME_READINESS_FAILED_OPERATION = defineActivityLogOperation({
+  ...CODING_RUNTIME_OPERATION_BASE,
+  op: "coding-runtime.readiness.failed",
+  emitter: "coding-runtime.opencodeRuntimeAdapter.startRuntime",
+  fields: {
+    phase: OPEN_CODE_READINESS_PHASE_FIELD,
+    frames: OPEN_CODE_READINESS_FRAMES_FIELD,
+    causeChain: OPEN_CODE_READINESS_CAUSE_CHAIN_FIELD,
+  },
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-runtime-readiness"],
+  proofIds: ["coding-runtime.readiness.failed.emitted-line"],
+});
+
+const CODING_RUNTIME_READINESS_PHASE_OPERATION = defineActivityLogOperation({
+  ...CODING_RUNTIME_OPERATION_BASE,
+  op: "coding-runtime.readiness.phase",
+  emitter: "coding-runtime.opencodeRuntimeAdapter.recordReadinessPhase",
+  fields: {
+    phase: OPEN_CODE_READINESS_PHASE_FIELD,
+    planningMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["conversation-text"],
+    },
+    configDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    dependencyInstallPolicy: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["offline"],
+    },
+    contextWindowTokens: { type: "integer", dataClass: "count", required: false },
+    maxInputTokens: { type: "integer", dataClass: "count", required: false },
+    maxOutputTokens: { type: "integer", dataClass: "count", required: false },
+    compactionAuto: { type: "boolean", dataClass: "closed-enum", required: false },
+    compactionPrune: { type: "boolean", dataClass: "closed-enum", required: false },
+  },
+  lifecycle: "state",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["coding-runtime-readiness"],
+  proofIds: ["coding-runtime.readiness.phase.emitted-line"],
+});
+
+const CODING_RUNTIME_COMPACTION_OPERATION = defineActivityLogOperation({
+  ...CODING_RUNTIME_OPERATION_BASE,
+  op: "coding-runtime.compaction",
+  emitter: "coding-runtime.opencodeRuntimeAdapter.recordCompactionActivity",
+  fields: {
+    event: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["started", "tail-retained", "completed", "failed"],
+    },
+    compactionIdSha256: {
+      type: "string",
+      dataClass: "digest",
+      required: true,
+      maxLength: 64,
+    },
+    tailStartIdSha256: {
+      type: "string",
+      dataClass: "digest",
+      required: false,
+      maxLength: 64,
+    },
+    auto: { type: "boolean", dataClass: "closed-enum", required: false },
+    overflow: { type: "boolean", dataClass: "closed-enum", required: false },
+    retainedTail: { type: "boolean", dataClass: "closed-enum", required: false },
+    compactionErrorKind: {
+      type: "string",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 64,
+    },
+    finishReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["content-filter", "error", "length", "unknown"],
+    },
+  },
+  lifecycle: "state",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["coding-runtime-compaction"],
+  proofIds: ["coding-runtime.compaction.emitted-line"],
+});
+
+/**
+ * The generated plugin client's timeout for a tool the catalog settles at `settlementBudgetMs`. A
+ * tool settled beyond the sandbox default (the verification tool, the four proposal tools that wait
+ * for the operator's approval) is admitted by the tool bridge one grace past its budget, and its
+ * client outlives that deadline by another grace and a margin, so the sidecar always receives the
+ * server's answer (the result, or the catalog's timeout) rather than producing one of its own. Every
+ * other tool keeps the default above. The proposal tools' clients were sized to the approval wait
+ * alone, behind a server that cut them off at 30 s (PR #3452, F44).
+ */
+export function openCodeToolClientTimeoutMs(settlementBudgetMs: number): number {
+  return settlementBudgetMs > DEFAULT_SANDBOX_POLICY.defaultTimeoutMs
+    ? settlementBudgetMs + 2 * GOVERNED_TOOL_SETTLEMENT_GRACE_MS + 5_000
+    : OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS;
+}
 export const OPEN_CODE_MAX_TURN_WAIT_MS = 30 * 60_000;
 
 export type OpenCodeGovernedSinkReceipt = "applied" | "duplicate";
@@ -36,18 +217,7 @@ export type OpenCodeSyncHint =
   | { readonly id: string; readonly requiresHistoryIdentity?: true }
   | { readonly requiresHistoryIdentity: false; readonly control?: OpenCodeLiveControl };
 
-export type OpenCodeReadinessPhase =
-  | "target-attestation"
-  | "config-materialization"
-  | "endpoint"
-  | "authenticated-health"
-  | "authenticated-health-version"
-  | "unauthenticated-health"
-  | "openapi-digest"
-  | "gateway-challenge"
-  | "tool-facade-challenge"
-  | "sse-history-reconciliation"
-  | "session-echo";
+export type OpenCodeReadinessPhase = (typeof OPEN_CODE_READINESS_PHASES)[number];
 
 export interface OpenCodeAdapterFailure {
   readonly ok: false;
@@ -68,6 +238,8 @@ export interface GeneratedOpenCodeBundle {
     readonly model: string;
     readonly agent: Readonly<Record<string, { readonly prompt: string }>>;
     readonly provider: Readonly<Record<string, unknown>>;
+    readonly compaction: Readonly<Record<string, boolean | number>>;
+    readonly tool_output: Readonly<{ readonly max_bytes: number }>;
     readonly tools: Readonly<Record<string, boolean>>;
     readonly permission: Readonly<Record<string, string>>;
   };
@@ -75,6 +247,9 @@ export interface GeneratedOpenCodeBundle {
 }
 
 export interface OpenCodeRuntimeAdapterPorts {
+  readonly activityLog?: ServerLogSink | undefined;
+  readonly correlationId?: string | undefined;
+  readonly contextGeometry?: OpenCodeContextGeometry | undefined;
   readonly readiness: {
     readonly verifiedTarget: { readonly executable: string; readonly attestationDigest: string };
     readonly configDigest: string;
@@ -215,7 +390,6 @@ export function createOpenCodeRuntimeAdapter(
         monitoring = false;
         cancelTurn();
         activeAbort?.abort();
-        void activeIterator?.return?.();
       };
 
       async function monitorLoop(): Promise<void> {
@@ -323,11 +497,11 @@ export function createOpenCodeRuntimeAdapter(
     turnNotifications.clear();
   }
 
-  /** Active/terminal, caller, deadline, stop, and polling gates fail independently. */
-  async function waitForTerminal(callerSignal: AbortSignal): Promise<boolean> {
-    const generation = turnGeneration;
-    if (turnSettled(generation) && !callerSignal.aborted) return turnSettledOutcome ?? false;
-    if (!turnArmed || ready === undefined || closed || callerSignal.aborted) return false;
+  async function awaitTerminalBounded(
+    generation: number,
+    callerSignal: AbortSignal,
+    sessionId: string,
+  ): Promise<boolean> {
     const deadline = new AbortController();
     const timer = setTimeout(() => {
       deadline.abort();
@@ -335,9 +509,32 @@ export function createOpenCodeRuntimeAdapter(
     timer.unref();
     const signal = AbortSignal.any([callerSignal, deadline.signal]);
     try {
-      return await awaitTurnTerminal(generation, signal, ready.sessionId);
+      return await awaitTurnTerminal(generation, signal, sessionId);
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  function waitForTerminalPreflightBlocked(callerSignal: AbortSignal): boolean {
+    return !turnArmed || ready === undefined || closed || callerSignal.aborted;
+  }
+
+  /** Active/terminal, caller, deadline, stop, and polling gates fail independently. */
+  async function waitForTerminal(callerSignal: AbortSignal): Promise<boolean> {
+    const generation = turnGeneration;
+    if (turnSettled(generation) && !callerSignal.aborted) return turnSettledOutcome ?? false;
+    // KEIKO-0240 + #3099 P2: settle the turn (as failed) on EVERY unsettled exit — including
+    // the outer early-return path when the caller signal is already aborted, when the adapter
+    // is closed, or when armTurn was never called. `awaitTurnTerminal`'s finally cannot cover
+    // those cases because they return before we enter the poll loop. This outer try/finally
+    // covers both.
+    try {
+      if (waitForTerminalPreflightBlocked(callerSignal) || ready === undefined) return false;
+      return await awaitTerminalBounded(generation, callerSignal, ready.sessionId);
+    } finally {
+      if (generation === turnGeneration && turnArmed && turnSettledGeneration !== generation) {
+        settleTurn(generation, false);
+      }
     }
   }
 
@@ -346,14 +543,25 @@ export function createOpenCodeRuntimeAdapter(
     signal: AbortSignal,
     sessionId: string,
   ): Promise<boolean> {
-    while (turnCurrent(generation, signal)) {
-      const settled = settleIfCompleted(generation, signal);
-      if (settled !== undefined) return settled;
-      const outcome = await pollTurnOnce(generation, signal, sessionId);
-      if (outcome !== undefined) return outcome;
-      await waitForTurnChange(signal, generation);
+    try {
+      while (turnCurrent(generation, signal)) {
+        const settled = settleIfCompleted(generation, signal);
+        if (settled !== undefined) return settled;
+        const outcome = await pollTurnOnce(generation, signal, sessionId);
+        if (outcome !== undefined) return outcome;
+        await waitForTurnChange(signal, generation);
+      }
+      return turnSettled(generation) ? (turnSettledOutcome ?? false) : false;
+    } finally {
+      // KEIKO-0240: every exit from this function that has not settled the current generation
+      // leaves `turnArmed = true`, which locks armTurn() closed forever on this adapter instance
+      // — every subsequent turn silently no-ops. Settle the turn as failed on any unsettled exit
+      // (deadline, caller abort, or a pollTurnOnce catch that returned false), so armTurn() can
+      // succeed again on the next turn.
+      if (generation === turnGeneration && turnArmed && turnSettledGeneration !== generation) {
+        settleTurn(generation, false);
+      }
     }
-    return turnSettled(generation) ? (turnSettledOutcome ?? false) : false;
   }
 
   /** Returns the settled wait outcome, or undefined when polling must continue. */
@@ -467,52 +675,95 @@ async function startAdapter(
   }>,
 ): Promise<OpenCodeAdapterReady | OpenCodeAdapterFailure> {
   const { readiness } = ports;
-  let phase: OpenCodeReadinessPhase = "target-attestation";
+  let phase = recordReadinessPhase(ports, "target-attestation");
   try {
     if (!validTarget(readiness) || !(await readiness.verifyTargetAttestation())) {
       return fail("target-attestation");
     }
-    phase = "config-materialization";
+    phase = recordReadinessPhase(ports, "config-materialization");
     if (!(await readiness.materialize(createGeneratedOpenCodeBundle()))) {
       return fail("config-materialization");
     }
-    phase = "endpoint";
+    phase = recordReadinessPhase(ports, "endpoint");
     const endpoint = parseStartupEndpoint(await readiness.startupLine());
     if (endpoint === undefined) return fail("endpoint");
-    phase = "authenticated-health";
+    phase = recordReadinessPhase(ports, "authenticated-health");
     const authenticated = await readiness.health("basic");
     if (authenticated.status !== 200) return fail("authenticated-health");
     if (authenticated.version !== OPENCODE_PINNED_VERSION)
       return fail("authenticated-health-version");
-    phase = "unauthenticated-health";
+    phase = recordReadinessPhase(ports, "unauthenticated-health");
     const unauthenticated = await readiness.health("none");
     if (unauthenticated.status !== 401) return fail("unauthenticated-health");
-    phase = "openapi-digest";
+    phase = recordReadinessPhase(ports, "openapi-digest");
     if ((await readiness.openApiDigest()) !== readiness.verifiedTarget.attestationDigest) {
       return fail("openapi-digest");
     }
-    phase = "sse-history-reconciliation";
+    phase = recordReadinessPhase(ports, "sse-history-reconciliation");
     const firstHint = await openSubscription();
-    phase = "session-echo";
+    phase = recordReadinessPhase(ports, "session-echo");
     const sessionId = await readiness.sessionEcho();
     if (!SESSION_ID.test(sessionId)) return fail("session-echo");
-    phase = "sse-history-reconciliation";
+    phase = recordReadinessPhase(ports, "sse-history-reconciliation");
     if (!(await reconcileHint(ports, state, firstHint.hint, firstHint.signal))) {
       return fail("sse-history-reconciliation");
     }
     if (!state.checkpoints.has(sessionId)) return fail("session-echo");
-    phase = "gateway-challenge";
+    phase = recordReadinessPhase(ports, "gateway-challenge");
     if (!(await readiness.gatewayChallenge())) return fail("gateway-challenge");
-    phase = "tool-facade-challenge";
+    phase = recordReadinessPhase(ports, "tool-facade-challenge");
     if (!(await readiness.toolFacadeChallenge())) return fail("tool-facade-challenge");
-    phase = "sse-history-reconciliation";
+    phase = recordReadinessPhase(ports, "sse-history-reconciliation");
     if (!(await reconcileHistory(ports, state, firstHint.signal))) {
       return fail("sse-history-reconciliation");
     }
     return { ok: true, endpoint, sessionId, configDigest: readiness.configDigest };
-  } catch {
+  } catch (error) {
+    (ports.activityLog ?? processServerLogSink()).write(
+      activityLogEvent(
+        CODING_RUNTIME_READINESS_FAILED_OPERATION,
+        {
+          level: "error",
+          correlationId: correlationIdOrUnknown(ports.correlationId),
+          errorKind: "internal",
+        },
+        { phase, frames: keikoStackFrames(error), causeChain: causeChain(error) },
+      ),
+    );
     return fail(phase);
   }
+}
+
+function recordReadinessPhase(
+  ports: OpenCodeRuntimeAdapterPorts,
+  phase: OpenCodeReadinessPhase,
+): OpenCodeReadinessPhase {
+  (ports.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_READINESS_PHASE_OPERATION,
+      { level: "info", correlationId: correlationIdOrUnknown(ports.correlationId) },
+      {
+        phase,
+        ...(phase === "config-materialization"
+          ? {
+              dependencyInstallPolicy: "offline",
+              planningMode: "conversation-text",
+              configDigest: ports.readiness.configDigest,
+              ...(ports.contextGeometry === undefined
+                ? {}
+                : {
+                    contextWindowTokens: ports.contextGeometry.contextWindowTokens,
+                    maxInputTokens: ports.contextGeometry.maxInputTokens,
+                    maxOutputTokens: ports.contextGeometry.maxOutputTokens,
+                    compactionAuto: true,
+                    compactionPrune: true,
+                  }),
+            }
+          : {}),
+      },
+    ),
+  );
+  return phase;
 }
 
 function validTarget(readiness: OpenCodeRuntimeAdapterPorts["readiness"]): boolean {
@@ -524,8 +775,7 @@ function validTarget(readiness: OpenCodeRuntimeAdapterPorts["readiness"]): boole
 }
 
 function parseStartupEndpoint(line: string): string | undefined {
-  const match =
-    /^opencode server listening on http:\/\/127\.0\.0\.1:([1-9]\d{0,4})(?:\r?\n)?$/u.exec(line);
+  const match = /^server listening on http:\/\/127\.0\.0\.1:([1-9]\d{0,4})(?:\r?\n)?$/u.exec(line);
   const port = Number(match?.[1]);
   return Number.isSafeInteger(port) && port <= 65_535
     ? `http://127.0.0.1:${String(port)}`
@@ -605,6 +855,7 @@ async function applyHistoryPlan(
     if (receipt !== "applied" && receipt !== "duplicate") throw new Error("sink-receipt-invalid");
   }
   if (!prepared.commit()) throw new Error("reconciler-commit-conflict");
+  recordCompactionActivity(ports, prepared.projections);
   replaceMap(state.checkpoints, planned.checkpoints);
   replaceMap(state.evidenceCheckpoints, planned.evidenceCheckpoints);
   replaceMap(state.terminalCheckpoints, planned.terminalCheckpoints);
@@ -612,7 +863,56 @@ async function applyHistoryPlan(
   replaceMap(state.recent, planned.recent);
   replaceMap(state.observedIds, planned.observedIds);
   for (const signal of activity) {
-    if (ports.safeActivitySink?.ingest(signal) === false) ports.safeActivitySink.recordDrops(1);
+    // The sink owns rejection accounting and records the projection-specific closed reason.
+    ports.safeActivitySink?.ingest(signal);
+  }
+}
+
+interface CompactionActivityLogPorts {
+  readonly activityLog?: ServerLogSink | undefined;
+  readonly correlationId?: string | undefined;
+}
+
+export function recordCompactionActivity(
+  ports: CompactionActivityLogPorts,
+  projections: readonly Pick<import("./opencodeReconciler.js").OpenCodeProjection, "compaction">[],
+): void {
+  const activityLog = ports.activityLog ?? processServerLogSink();
+  for (const projection of projections) {
+    const activity = projection.compaction;
+    if (activity === undefined) continue;
+    const failure = activity.event === "failed";
+    activityLog.write(
+      activityLogEvent(
+        CODING_RUNTIME_COMPACTION_OPERATION,
+        {
+          level: failure ? "error" : "info",
+          correlationId: correlationIdOrUnknown(ports.correlationId),
+          ...(failure ? { errorKind: "internal" } : {}),
+        },
+        failure
+          ? {
+              event: activity.event,
+              compactionIdSha256: activity.compactionIdSha256,
+              compactionErrorKind: activity.errorKind,
+              finishReason: registeredCompactionFinishReason(activity.finishReason),
+            }
+          : activity,
+      ),
+    );
+  }
+}
+
+type RegisteredCompactionFinishReason = "content-filter" | "error" | "length" | "unknown";
+
+function registeredCompactionFinishReason(value: string): RegisteredCompactionFinishReason {
+  switch (value) {
+    case "content-filter":
+    case "error":
+    case "length":
+      return value;
+    default:
+      return "unknown";
   }
 }
 
@@ -767,15 +1067,37 @@ function validControl(value: unknown): value is OpenCodeLiveControl {
   );
 }
 
+const RECONCILIATION_EVENT_KEYS = ["id", "aggregateId", "sequence", "digest", "kind"];
+const RECONCILIATION_EVENT_COMPACTION_KEYS = [...RECONCILIATION_EVENT_KEYS, "compaction"];
+const RECONCILIATION_EVENT_USAGE_KEYS = [...RECONCILIATION_EVENT_KEYS, "providerTokenUsage"];
+const RECONCILIATION_EVENT_COMPACTION_USAGE_KEYS = [
+  ...RECONCILIATION_EVENT_KEYS,
+  "compaction",
+  "providerTokenUsage",
+];
+
+function reconciliationEventKeys(event: OpenCodeReconciliationEvent): readonly string[] {
+  if (event.compaction !== undefined) {
+    return event.providerTokenUsage === undefined
+      ? RECONCILIATION_EVENT_COMPACTION_KEYS
+      : RECONCILIATION_EVENT_COMPACTION_USAGE_KEYS;
+  }
+  return event.providerTokenUsage === undefined
+    ? RECONCILIATION_EVENT_KEYS
+    : RECONCILIATION_EVENT_USAGE_KEYS;
+}
+
 function validEvent(event: OpenCodeReconciliationEvent): boolean {
   return (
-    exactRecord(event, ["id", "aggregateId", "sequence", "digest", "kind"]) &&
+    exactRecord(event, reconciliationEventKeys(event)) &&
     EVENT_ID.test(event.id) &&
     SESSION_ID.test(event.aggregateId) &&
     Number.isSafeInteger(event.sequence) &&
     event.sequence >= 0 &&
     DIGEST.test(event.digest) &&
-    OPEN_CODE_EVENT_KINDS.includes(event.kind)
+    OPEN_CODE_EVENT_KINDS.includes(event.kind) &&
+    isOpenCodeCompactionActivity(event.compaction) &&
+    isOpenCodeProviderTokenUsage(event.providerTokenUsage)
   );
 }
 
@@ -835,7 +1157,14 @@ function runCleanup(safety: OpenCodeRuntimeAdapterPorts["safety"]): void {
 
 export function createGeneratedOpenCodeBundle(): GeneratedOpenCodeBundle {
   return {
-    config: createFixedOpenCodeConfig(),
+    // The no-argument bundle is used only by the adapter's readiness shape and hermetic tool-source
+    // fixtures. Production materialization passes the per-run config built from admitted gateway
+    // geometry in opencodeRuntimeComposition.ts.
+    config: createFixedOpenCodeConfig({
+      contextWindowTokens: 32_768,
+      maxInputTokens: 28_672,
+      maxOutputTokens: 4_096,
+    }),
     toolSources: Object.fromEntries(
       OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name, action, arguments: schemas }) => [
         name,
@@ -845,47 +1174,141 @@ export function createGeneratedOpenCodeBundle(): GeneratedOpenCodeBundle {
   };
 }
 
-type GeneratedToolAction =
-  "read" | "discover" | "edit" | "verification" | "egress" | "skill" | "child-agent";
-
-function toolDescription(action: GeneratedToolAction): string {
-  if (action === "discover") {
-    return (
-      "Find exact workspace-relative file paths through Keiko's bounded repository discovery. " +
-      "Search by short filename or path keywords before reading files; * returns only a bounded " +
-      "overview. Denied and ignored paths never appear."
-    );
-  }
-  if (action === "read") {
-    return (
-      "Read one repository text file through Keiko governance — the only way to observe " +
-      "workspace content. startLine/maxLines select the returned line window (start at 1 with " +
-      "a generous maxLines for a whole small file); the result reports totalLines plus " +
-      "nextStartLine when truncated, and the whole-file SHA-256 digest that " +
-      "keiko_changeset_edit requires as expectedContentHash."
-    );
-  }
-  if (action === "egress") {
-    return "Fetch one approved public https URL through governed read-only research (#2387).";
-  }
-  if (action === "skill") return "Invoke one exact server-approved read-only skill.";
-  if (action === "child-agent") return "Run one bounded, one-layer read-only child agent.";
-  if (action === "verification") {
-    return (
-      "Run one vetted repository verification through Keiko governance — the only way to " +
-      "execute checks (there is no shell). Pick exactly one verifierId: test, targeted-test, " +
-      "typecheck, lint, or build."
-    );
-  }
-  return (
-    "Submit a bounded changeset through Keiko governance — the only way to modify workspace " +
-    "files. Provide one strict unified diff and, for every listed file, the " +
-    "expectedContentHash digest returned by its most recent keiko_workspace_read; on a digest " +
-    "mismatch re-read the file and rebuild the patch."
+/** V2 loads governed tools through plugin transforms instead of V1 tool files. */
+export function createGeneratedOpenCodeV2Plugins(): Readonly<Record<string, string>> {
+  return Object.fromEntries(
+    OPENCODE_TOOL_SOURCE_DEFINITIONS.map(({ name, action, arguments: schemas }) => [
+      name,
+      toolSource(action, schemas, name, "v2"),
+    ]),
   );
 }
 
-function governedPermissionSource(): readonly string[] {
+// #3386/#3387/#3388: git-status/git-diff/git-stage/git-commit/git-push/git-pull-request/git-ci are
+// each a fixed wire shape onto codingToolIpc.ts's existing "git"/"delivery" actions (see
+// `wireRequestFor` below); git-execute is the one shared redemption tool that turns any pending
+// stage/commit/push/pull-request proposalId into the matching execute-phase request once a human
+// has approved it through the existing Workbench approval channel -- the model never commits,
+// pushes or opens a pull request directly.
+type GeneratedToolAction =
+  | "read"
+  | "discover"
+  | "repository-search"
+  | "edit"
+  | "verification"
+  | "egress"
+  | "skill"
+  | "skill-discover"
+  | "child-agent"
+  | "git-status"
+  | "git-diff"
+  | "git-stage"
+  | "git-commit"
+  | "git-push"
+  | "git-pull-request"
+  | "git-ci"
+  | "git-execute";
+
+/**
+ * The fixed wire `action` and literal (non-model-supplied) fields for every git/delivery action.
+ * `git-execute` builds its request entirely at runtime from the model-supplied `kind` instead (see
+ * `toolSource`), so it is deliberately absent here.
+ */
+function wireRequestFor(
+  action: GeneratedToolAction,
+): { readonly action: string; readonly literal: Readonly<Record<string, unknown>> } | undefined {
+  switch (action) {
+    // #3406/#3414: projects #3386's H1 search handler through the same "search" wire action
+    // codingToolIpc.ts's `searchRequest` parser already accepts; `toolSource` below nests the
+    // model-supplied arguments under `repositoryRequest` instead of the flat top-level fields
+    // every other action uses (see the `repository-search` special case there).
+    case "repository-search":
+      return { action: "search", literal: {} };
+    case "git-status":
+      return { action: "git", literal: { operation: "status" } };
+    case "git-diff":
+      return { action: "git", literal: { operation: "diff" } };
+    case "git-stage":
+      return { action: "git", literal: { operation: "stage", phase: "propose" } };
+    case "git-ci":
+      return { action: "git", literal: { operation: "ci" } };
+    case "git-commit":
+      return { action: "delivery", literal: { intent: "commit", phase: "propose" } };
+    case "git-push":
+      return { action: "delivery", literal: { intent: "push", phase: "propose" } };
+    case "git-pull-request":
+      return { action: "delivery", literal: { intent: "pull-request", phase: "propose" } };
+    default:
+      return undefined;
+  }
+}
+
+// The catalog descriptor of every generated tool, by alias, compiled once when this module loads.
+// The registration set is deterministic, and compiling it for every lookup rebuilt all of its
+// descriptors twice per tool for every bundle: the scripted transcripts generate a bundle per tool
+// call, and doing so turned their CI runs into timeouts (PR #3452).
+const CATALOG_DESCRIPTORS_BY_ALIAS: ReadonlyMap<string, ToolDescriptor> = new Map(
+  opencodeRegistrationSet().entries.map((entry) => [entry.alias, entry.descriptor]),
+);
+
+// The native plugin and actual provider use one description owner. Otherwise richer native
+// read/edit guidance is replaced by a generic catalog description at the gateway boundary.
+function toolCatalogDescriptor(action: GeneratedToolAction): ToolDescriptor {
+  const definition = OPENCODE_TOOL_SOURCE_DEFINITIONS.find((tool) => tool.action === action);
+  const descriptor =
+    definition === undefined ? undefined : CATALOG_DESCRIPTORS_BY_ALIAS.get(definition.name);
+  if (descriptor === undefined) throw new TypeError("OpenCode tool is missing from the catalog");
+  return descriptor;
+}
+
+function toolDescription(action: GeneratedToolAction): string {
+  return toolCatalogDescriptor(action).description;
+}
+
+// Read from the tool's own catalog descriptor, never from a list of actions restated here.
+function toolClientTimeoutMs(action: GeneratedToolAction): number {
+  return openCodeToolClientTimeoutMs(toolCatalogDescriptor(action).bounds.maxDurationMs);
+}
+
+function toolApprovalProofSource(): readonly string[] {
+  return [
+    "function ciObservationPermission(approvalProof) {",
+    '  if (!approvalProof) throw new Error("keiko-tool-invalid");',
+    "  return {",
+    '    patterns: ["ci"], metadata: { kind: "command-execution", actionClass: "command-execution", reasonCode: "approval-required", actionKind: "ci-observe", scopeLabel: "workspace-scope", risk: "low", policyReason: "approval-required", commandLabel: "ci", ...approvalProof },',
+    "  };",
+    "}",
+    "function toolApprovalRequired(request) {",
+    "  const mode = process.env.KEIKO_CODING_MODE;",
+    '  if (request.action === "git" && request.operation === "ci") return mode === "governed-assist" || mode === "supervised-coding";',
+    '  return mode === "governed-assist" && ["verification", "command"].includes(request.action);',
+    "}",
+    "async function toolApprovalTarget(request) {",
+    '  if (request.action === "verification" && request.verifierId === "targeted-test") {',
+    '    if (typeof request.targetPath !== "string") throw new Error("keiko-tool-invalid");',
+    '    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(request.targetPath));',
+    '    const targetPathHash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");',
+    "    return { targetId: `targeted-test:${targetPathHash}`, targetPathHash };",
+    "  }",
+    '  if (request.action === "verification") return { targetId: request.verifierId };',
+    '  if (request.action === "command") return { targetId: request.commandId };',
+    '  return request.action === "git" && request.operation === "ci" ? { targetId: "ci" } : undefined;',
+    "}",
+    "async function toolApprovalProof(request) {",
+    "  if (!toolApprovalRequired(request)) return;",
+    "  const runId = process.env.KEIKO_CODING_RUN_ID;",
+    "  const target = await toolApprovalTarget(request);",
+    '  if (!runId || !target || typeof target.targetId !== "string") throw new Error("keiko-tool-invalid");',
+    "  const { targetId, targetPathHash } = target;",
+    '  const payload = JSON.stringify(["coding-tool-approval-v1", runId, request.action, request.actionId, request.idempotencyKey, targetId]);',
+    '  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));',
+    '  const approvalDigest = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");',
+    "  return { actionId: request.actionId, idempotencyKey: request.idempotencyKey, approvalId: request.actionId, approvalDigest, ...(targetPathHash ? { targetPathHash } : {}) };",
+    "}",
+  ];
+}
+
+function governedPermissionSource(version: "v1" | "v2" = "v1"): readonly string[] {
   return [
     `const governedPermission = ${JSON.stringify(OPENCODE_GOVERNED_ACTION_PERMISSION)};`,
     "function editPermission(args) {",
@@ -897,6 +1320,7 @@ function governedPermissionSource(): readonly string[] {
     String.raw`  const deletedLines = patch.split("\n").filter((line) => line.startsWith("-") && !line.startsWith("---")).length;`,
     "  return {",
     "    patterns,",
+    "    baseDigests: files.map((file) => ({ file: file.file, expectedContentHash: file.expectedContentHash })),",
     '    metadata: { kind: "workspace-write", actionClass: "workspace-write", reasonCode: "approval-required", actionKind: "file-edit", scopeLabel: "workspace-scope", risk: "medium", policyReason: "approval-required", targetPath: patterns[0], allowedRelativePaths: patterns, fileCount: patterns.length, addedLines, deletedLines },',
     "  };",
     "}",
@@ -906,27 +1330,50 @@ function governedPermissionSource(): readonly string[] {
     '    patterns: [args.verifierId], metadata: { kind: "command-execution", actionClass: "command-execution", reasonCode: "approval-required", actionKind: "verification-command", scopeLabel: "workspace-scope", risk: "low", policyReason: "approval-required", commandLabel: args.verifierId, ...approvalProof },',
     "  };",
     "}",
-    "async function toolApprovalProof(request) {",
-    '  if (process.env.KEIKO_CODING_MODE !== "governed-assist" || !["verification", "command"].includes(request.action)) return;',
-    "  const runId = process.env.KEIKO_CODING_RUN_ID;",
-    '  const targetId = request.action === "verification" ? request.verifierId : request.commandId;',
-    '  if (!runId || typeof targetId !== "string") throw new Error("keiko-tool-invalid");',
-    '  const payload = JSON.stringify(["coding-tool-approval-v1", runId, request.action, request.actionId, request.idempotencyKey, targetId]);',
-    '  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payload));',
-    '  const approvalDigest = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");',
-    "  return { actionId: request.actionId, idempotencyKey: request.idempotencyKey, approvalId: request.actionId, approvalDigest };",
-    "}",
+    ...toolApprovalProofSource(),
     "async function askForGovernedPermission(args, context, approvalProof) {",
-    '  if (process.env.KEIKO_CODING_MODE !== "governed-assist") return;',
-    '  const request = action === "edit" ? editPermission(args) : action === "verification" ? verificationPermission(args, approvalProof) : undefined;',
+    "  const mode = process.env.KEIKO_CODING_MODE;",
+    "  let request;",
+    '  if (mode === "governed-assist" && action === "edit") request = editPermission(args);',
+    '  else if (mode === "governed-assist" && action === "verification") request = verificationPermission(args, approvalProof);',
+    '  else if ((mode === "governed-assist" || mode === "supervised-coding") && action === "git-ci") request = ciObservationPermission(approvalProof);',
     "  if (!request) return;",
-    "  await context.ask({",
-    "    permission: governedPermission,",
-    "    patterns: request.patterns,",
-    "    always: [],",
-    "    metadata: { ...request.metadata, expiresAt: new Date(Date.now() + 300000).toISOString() },",
-    "  });",
+    // The ask expires with the one human-decision wait every governed layer budgets (PR #3452 review).
+    `  const metadata = { ...request.metadata, expiresAt: new Date(Date.now() + ${String(GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS)}).toISOString() };`,
+    ...(version === "v1"
+      ? [
+          "  await context.ask({ permission: governedPermission, patterns: request.patterns, always: [], metadata });",
+        ]
+      : v2GovernedAskSource()),
     "}",
+  ];
+}
+
+// V2 plugin tools have no native ask API: the ask goes to Keiko's governed approval lane over the
+// tool facade transport, and a stale changeset base comes back as the edit's own refusal (#3612).
+function v2GovernedAskSource(): readonly string[] {
+  return [
+    "  const endpoint = process.env.KEIKO_TOOL_FACADE_URL;",
+    "  const capability = process.env.KEIKO_TOOL_FACADE_CAPABILITY;",
+    "  const runId = process.env.KEIKO_CODING_RUN_ID;",
+    '  if (!endpoint || !capability || !runId) throw new Error("keiko-tool-unavailable");',
+    "  const seed = `${context.sessionID}:${context.id}`;",
+    '  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(seed));',
+    '  const id = "per_" + Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("").slice(0, 32);',
+    // #3612: the ask names its tool call and, for an edit, the changeset's base digests, so the
+    // server can settle the call with the decision and refuse a stale base before any human.
+    "  const bases = request.baseDigests ? { baseDigests: request.baseDigests } : {};",
+    "  const body = JSON.stringify({ action: 'permission-request', runId, actionId: seed, properties: { id, sessionID: context.sessionID, permission: governedPermission, patterns: request.patterns, always: [], metadata }, ...bases });",
+    `  const response = await fetch(endpoint, { method: "POST", redirect: "manual", signal: AbortSignal.timeout(${String(GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS + GOVERNED_TOOL_SETTLEMENT_GRACE_MS)}), headers: { Authorization: "Bearer " + capability, "Content-Type": "application/json" }, body });`,
+    "  if (response.status === 409) return staleBaseResult(response);",
+    '  if (!response.ok || response.type === "opaqueredirect") throw new Error("keiko-tool-denied");',
+    "}",
+    // The edit's own refusal result, which the tool returns in place of the call (#3612).
+    "async function staleBaseResult(response) {",
+    "  const text = await response.text();",
+    '  if (text.length > MAX_RESPONSE_BYTES) throw new Error("keiko-tool-oversized");',
+    '  if (!validResult(JSON.parse(text))) throw new Error("keiko-tool-invalid");',
+    "  return text;",
   ];
 }
 
@@ -934,17 +1381,26 @@ function governedPermissionSource(): readonly string[] {
 function toolSource(
   action: GeneratedToolAction,
   schemas: Readonly<Record<string, Readonly<Record<string, unknown>>>>,
+  name?: string,
+  version: "v1" | "v2" = "v1",
 ): string {
   const argumentNames = Object.keys(schemas);
+  // The literal (non-model-supplied) wire fields for a fixed-shape git/delivery action, e.g.
+  // `{ operation: "stage", phase: "propose" }`. `git-execute` builds its wire `action` and these
+  // fields entirely from the model-supplied `kind` at call time instead (see the `wireAction`
+  // override below), so it deliberately keeps the descriptive `action` literal here.
+  const wire = wireRequestFor(action) ?? { action, literal: {} };
   return [
-    "const MAX_RESPONSE_BYTES = 262144;",
-    `const TIMEOUT_MS = ${String(OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS)};`,
+    `const MAX_RESPONSE_BYTES = ${String(CODING_TOOL_MAX_BODY_BYTES)};`,
+    `const TIMEOUT_MS = ${String(toolClientTimeoutMs(action))};`,
     `const action = ${JSON.stringify(action)};`,
+    `const wireAction = ${JSON.stringify(wire.action)};`,
+    `const literalFields = ${JSON.stringify(wire.literal)};`,
     `const argumentNames = ${JSON.stringify(argumentNames)};`,
     `const inputSchemas = ${JSON.stringify(schemas)};`,
     "function validResult(value) {",
     '  if (!value || typeof value !== "object" || Array.isArray(value)) return false;',
-    '  if (!["completed", "failed", "denied", "invalid", "cancelled", "busy", "observed"].includes(value.status)) return false;',
+    '  if (!["completed", "failed", "denied", "invalid", "cancelled", "timeout", "busy", "observed"].includes(value.status)) return false;',
     '  if ((action !== "read" && action !== "discover" && action !== "egress") || value.status !== "completed") return true;',
     "  const read = value.read;",
     '  if (!read || typeof read !== "object" || Array.isArray(read) || typeof read.text !== "string" || !Number.isSafeInteger(read.byteCount) || !/^[a-f0-9]{64}$/.test(read.digest)) return false;',
@@ -952,23 +1408,50 @@ function toolSource(
     "  if (!Number.isSafeInteger(read.totalLines) || read.totalLines < 0) return false;",
     "  return read.nextStartLine === undefined || (Number.isSafeInteger(read.nextStartLine) && read.nextStartLine >= 2);",
     "}",
-    "export default {",
-    `  description: ${JSON.stringify(toolDescription(action))},`,
-    "  args: inputSchemas,",
-    "  async execute(args, context) {",
+    ...toolSourceRegistration(action, name, version),
     "    const endpoint = process.env.KEIKO_TOOL_FACADE_URL;",
     "    const capability = process.env.KEIKO_TOOL_FACADE_CAPABILITY;",
     '    if (!endpoint || !capability) throw new Error("keiko-tool-unavailable");',
-    "    const identity = `${context.sessionID}:${context.callID || context.messageID}`;",
-    "    const request = { action, actionId: identity, idempotencyKey: identity };",
+    version === "v2"
+      ? "    const identity = `${context.sessionID}:${context.id}`;"
+      : "    const identity = `${context.sessionID}:${context.callID || context.messageID}`;",
+    "    const request = { action: wireAction, actionId: identity, idempotencyKey: identity, ...literalFields };",
     "    for (const name of argumentNames) request[name] = args[name];",
+    '    if (action === "verification" && request.targetPath === "") delete request.targetPath;',
+    // git-execute is the one action whose wire shape depends on a model-supplied argument
+    // (`kind`): redeeming a stage proposal posts `{action:"git",operation:"stage",...}` while
+    // redeeming a commit/push/pull-request proposal posts `{action:"delivery",intent:kind,...}`.
+    // `kind` itself is never a wire field -- codingToolIpc.ts's exact-key parsers would reject it.
+    '    if (action === "git-execute") {',
+    '      request.action = args.kind === "stage" ? "git" : "delivery";',
+    '      request.phase = "execute";',
+    '      if (args.kind === "stage") request.operation = "stage";',
+    "      else request.intent = args.kind;",
+    "      delete request.kind;",
+    "    }",
+    // repository-search is the one action whose wire shape nests the model-supplied arguments:
+    // codingToolIpc.ts's `searchRequest` parser requires the exact keys
+    // `["action","actionId","idempotencyKey","repositoryRequest"]`, so the flat fields the loop
+    // above just set are moved under `repositoryRequest` (with the fixed `kind: "search"`) and
+    // removed from the top level rather than left alongside it.
+    '    if (action === "repository-search") {',
+    '      request.repositoryRequest = { kind: "search", mode: args.mode, query: args.query, caseSensitive: args.caseSensitive, includeGlobs: args.includeGlobs, excludeGlobs: args.excludeGlobs, maxResults: args.maxResults };',
+    "      for (const name of argumentNames) delete request[name];",
+    "    }",
     "    const approvalProof = await toolApprovalProof(request);",
-    "    await askForGovernedPermission(args, context, approvalProof);",
+    ...(version === "v1"
+      ? ["    await askForGovernedPermission(args, context, approvalProof);"]
+      : [
+          "    const refusal = await askForGovernedPermission(args, context, approvalProof);",
+          "    if (refusal !== undefined) return { content: refusal, metadata: {} };",
+        ]),
     "    if (approvalProof) request.approvalProof = { approvalId: approvalProof.approvalId, approvalDigest: approvalProof.approvalDigest };",
     "    const body = JSON.stringify(request);",
     "    const controller = new AbortController();",
     "    const abort = () => controller.abort();",
-    '    context.abort.addEventListener("abort", abort, { once: true });',
+    ...(version === "v1"
+      ? ['    context.abort.addEventListener("abort", abort, { once: true });']
+      : []),
     "    const timeout = setTimeout(abort, TIMEOUT_MS);",
     "    try {",
     '      const response = await fetch(endpoint, { method: "POST", redirect: "manual", signal: controller.signal, headers: { Authorization: `Bearer ${capability}`, "Content-Type": "application/json" }, body });',
@@ -989,13 +1472,44 @@ function toolSource(
     '      const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);',
     "      const result = JSON.parse(text);",
     '      if (!validResult(result)) throw new Error("keiko-tool-invalid");',
-    "      return { title: action, output: text, metadata: {} };",
+    version === "v2"
+      ? "      return { content: text, metadata: {} };"
+      : "      return { title: action, output: text, metadata: {} };",
     "    } finally {",
     "      clearTimeout(timeout);",
-    '      context.abort.removeEventListener("abort", abort);',
+    ...(version === "v1" ? ['      context.abort.removeEventListener("abort", abort);'] : []),
     "    }",
     "  },",
+    ...(version === "v2" ? ["      });", "    });", "  },"] : []),
     "};",
-    ...governedPermissionSource(),
+    ...governedPermissionSource(version),
   ].join("\n");
+}
+
+function toolSourceRegistration(
+  action: GeneratedToolAction,
+  name: string | undefined,
+  version: "v1" | "v2",
+): readonly string[] {
+  if (version === "v1") {
+    return [
+      "export default {",
+      `  description: ${JSON.stringify(toolDescription(action))},`,
+      "  args: inputSchemas,",
+      "  async execute(args, context) {",
+    ];
+  }
+  const pluginId = `keiko.${name ?? action}`;
+  return [
+    "export default {",
+    `  id: ${JSON.stringify(pluginId)},`,
+    "  async setup(ctx) {",
+    "    await ctx.tool.transform((editor) => {",
+    "      editor.add({",
+    `        name: ${JSON.stringify(name)},`,
+    `        description: ${JSON.stringify(toolDescription(action))},`,
+    "        input: { type: 'object', properties: inputSchemas, required: argumentNames, additionalProperties: false },",
+    `        options: { permission: ${JSON.stringify(name)}, codemode: false },`,
+    "        async execute(args, context) {",
+  ];
 }

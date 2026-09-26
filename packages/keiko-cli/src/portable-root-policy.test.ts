@@ -17,4 +17,14 @@ describe("portable managed-root policy", () => {
       assertManagedRootAllowed("/Users/keiko/.keiko/managed", "/Users/keiko/.keiko", "windows-x64");
     }).toThrow("separate from .keiko runtime state");
   });
+
+  it("rejects runtime state inside the managed root", () => {
+    expect(() => {
+      assertManagedRootAllowed(
+        "/Users/keiko/Applications/Keiko",
+        "/Users/keiko/Applications/Keiko/.keiko",
+        "windows-x64",
+      );
+    }).toThrow("separate from .keiko runtime state");
+  });
 });

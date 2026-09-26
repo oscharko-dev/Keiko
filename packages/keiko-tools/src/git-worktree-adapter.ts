@@ -19,6 +19,7 @@
 // idempotency and drift inference and are never persisted into evidence (mirrors `readStagedPaths`).
 
 import { isAbsolute, resolve } from "node:path";
+import { isSafeGitRefName } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import type { CommandResult, CommandRule, SandboxPolicy } from "./types.js";
 import { DEFAULT_SANDBOX_POLICY } from "./types.js";
 import {
@@ -28,8 +29,9 @@ import {
   type HomeProvider,
   type RunCommandDeps,
   type SpawnFn,
+  type CommandTerminationEvidence,
 } from "./exec.js";
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 
 // The dedicated worktree-lifecycle allowlist. `worktree` covers add/list/remove/prune (the second
 // token is fixed by the builder, never caller-supplied); `rev-parse` and `show-ref` are read-only
@@ -96,24 +98,10 @@ function hasControlOrNul(value: string): boolean {
   return false;
 }
 
-const UNSAFE_REF_PREFIXES: readonly string[] = ["-", "/", "."];
-const UNSAFE_REF_SUFFIXES: readonly string[] = ["/", ".", ".lock"];
-const UNSAFE_REF_SUBSTRINGS: readonly string[] = ["..", "//", "@{"];
-
-// Conservative git ref-name allowlist. Stricter than `git check-ref-format` on purpose: refs Keiko
-// creates are server-derived, so we only need to accept the deterministic shape we emit and reject
-// anything that could be an option, a path traversal, or a refspec/glob metacharacter.
-export function isSafeGitRefName(value: string): boolean {
-  if (value.length === 0 || value.length > 255 || hasControlOrNul(value)) return false;
-  if (UNSAFE_REF_PREFIXES.some((prefix) => value.startsWith(prefix))) return false;
-  if (UNSAFE_REF_SUFFIXES.some((suffix) => value.endsWith(suffix))) return false;
-  if (UNSAFE_REF_SUBSTRINGS.some((part) => value.includes(part))) return false;
-  // Allowed: letters, digits, and a bounded punctuation set used by our `keiko/task/<id>` scheme.
-  if (!/^[A-Za-z0-9._\-/]+$/u.test(value)) return false;
-  // No git ref metacharacters: space ~ ^ : ? * [ \ are excluded by the allowlist above; this also
-  // rejects them defensively for readers of this predicate.
-  return !/[~^:?*[\\ ]/u.test(value);
-}
+// The ref predicate now has exactly one definition, in keiko-contracts, so the layers that validate
+// a ref before it reaches git share this layer's formula instead of a weaker copy of it. Imported
+// and re-exported here because this module is where every existing caller already reaches it.
+export { isSafeGitRefName };
 
 // A worktree path operand must be an absolute path with no control bytes and must not begin with a
 // dash (so it cannot be parsed as an option). Containment inside the managed root is enforced by the
@@ -337,6 +325,7 @@ export interface GitWorktreeAdapter {
 
 export interface NodeGitWorktreeAdapterDeps {
   readonly workspace: WorkspaceInfo;
+  readonly fs?: WorkspaceFs | undefined;
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly now?: (() => number) | undefined;
   readonly spawn?: SpawnFn | undefined;
@@ -345,6 +334,10 @@ export interface NodeGitWorktreeAdapterDeps {
   readonly home?: HomeProvider | undefined;
   readonly signal?: AbortSignal | undefined;
   readonly timeoutMs?: number | undefined;
+  // The termination-evidence port for every runCommand this lane performs (RunCommandDeps
+  // deps-level seam, exec.ts): production composition boundaries wire it once so no call on the
+  // lane is silently unobservable (PR #3354 review, comment 3887021650).
+  readonly onTerminated?: ((evidence: CommandTerminationEvidence) => void) | undefined;
 }
 
 interface AdapterContext {
@@ -381,10 +374,12 @@ function buildAdapterContext(deps: NodeGitWorktreeAdapterDeps): AdapterContext {
       spawn: deps.spawn ?? nodeSpawnFn,
       processEnv: structuredCommandEnvironment(deps.processEnv ?? process.env, policy),
       now: deps.now ?? Date.now,
+      ...(deps.fs === undefined ? {} : { fs: deps.fs }),
       ...(deps.resolveExecutable !== undefined
         ? { resolveExecutable: deps.resolveExecutable }
         : {}),
       ...(deps.home !== undefined ? { home: deps.home } : {}),
+      ...(deps.onTerminated !== undefined ? { onTerminated: deps.onTerminated } : {}),
     },
     signal: deps.signal ?? new AbortController().signal,
     timeoutMs: deps.timeoutMs,

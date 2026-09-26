@@ -1,11 +1,11 @@
 "use client";
 
 import { useCallback, useState } from "react";
+import type { QualityIntelligenceRetentionPolicyId } from "@oscharko-dev/keiko-contracts";
 import {
   QUALITY_INTELLIGENCE_DEFAULT_RETENTION_POLICY_ID,
   resolveQualityIntelligenceRetentionPolicyId,
-  type QualityIntelligenceRetentionPolicyId,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 
 export const QI_RETENTION_POLICY_STORAGE_KEY = "keiko.quality-intelligence.retention-policy";
 

@@ -22,6 +22,14 @@ import {
 } from "./agent-run-governance.js";
 import { editorAgentAuthorityRegistry } from "./editor/agentAuthorityRegistry.js";
 import type { VerificationReport } from "@oscharko-dev/keiko-verification";
+import type { NetworkIsolationProbe } from "./editor/verificationExecution.js";
+import { closeFileServerLogSinks } from "./observability/index.js";
+import { writeToolCatalogQualificationObservation } from "../../../scripts/lib/tool-catalog-qualification-observation.mjs";
+import {
+  expectActivityLogProof,
+  persistedActivityLogLines,
+  readPersistedActivityLog,
+} from "../../../tests/support/activity-log-proof.js";
 
 const REJECT_MODEL: ModelPort = {
   call: (): Promise<NormalizedResponse> =>
@@ -165,9 +173,40 @@ describe("startRun verify dispatch", () => {
 
     expect(verificationExecutor).toHaveBeenCalledOnce();
     expect(verificationExecutor).toHaveBeenCalledWith(
-      expect.objectContaining({ probeCwd: workspaceRoot }),
+      expect.objectContaining({ probeCwd: workspaceRoot, correlationId: result.runId }),
     );
     expect(registry.get(result.runId)?.report).toBe(report);
+  });
+
+  it("persists workspace lifecycle with the harness run correlation", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-harness-verify-log-"));
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+    try {
+      const request = ok(
+        parseRunRequest(
+          JSON.stringify({
+            taskType: "verify",
+            modelId: "m",
+            input: { workspaceRoot },
+          }),
+        ),
+      );
+      const result = startRun({ request, model: REJECT_MODEL, registry }, (value) => value);
+      await waitForTerminal(result.runId);
+      const events = persistedActivityLogLines(
+        readPersistedActivityLog(stateDir),
+        "editor.verification.workspace",
+      ).map((line) => expectActivityLogProof("editor.verification.workspace.emitted-line", line));
+      expect(events.map((event) => [event.correlationId, event.state])).toEqual([
+        [result.runId, "waiting"],
+        [result.runId, "acquired"],
+        [result.runId, "released"],
+      ]);
+    } finally {
+      closeFileServerLogSinks();
+      vi.unstubAllEnvs();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("returns a synchronous {runId, fingerprint} and registers the run", () => {
@@ -200,7 +239,12 @@ describe("startRun verify dispatch", () => {
     await waitForTerminal(result.runId);
     const record = registry.get(result.runId);
     expect(record).toBeDefined();
+    // The fixture workspace declares no verification step, so the orchestrator reports the whole
+    // verification as skipped (KEIKO-0848). That is a verdict the run reached, not a broken run:
+    // the run completes and the completion event carries the honest overall status.
     expect(record?.status).toBe("completed");
+    const completed = record?.sink.buffered().find((e) => e.type === "run:completed");
+    expect(completed).toMatchObject({ report: "verify overall=skipped" });
   });
 
   it("emits a run:started SSE event with taskType=verify before the run completes", () => {
@@ -292,5 +336,397 @@ describe("startRun explain-plan dispatch", () => {
     await waitForTerminal(result.runId);
     expect(prompt).toContain("--- src/discounts.ts ---");
     expect(prompt).toContain("export const discount = 100;");
+  });
+
+  // 2895 audit KEIKO-0902: dispatchExplain used to inject compactionPort: serverHarnessContextCompactor
+  // even though explain-plan is structurally single-call and read-only, so the port could never fire
+  // (harness-context-compactor.ts's turns.length < 2 precondition always declines). Wiring an
+  // unreachable port invites a future reader to believe this path is compaction-covered when it is
+  // not, so it was removed. This test spies on the real, unmocked keiko-harness createSession to
+  // capture the exact deps object dispatchExplain constructs, proving no compactionPort key reaches
+  // it at all — it must fail if the injection is reinstated.
+  it("does not inject a compactionPort (explain-plan is structurally single-call and read-only)", async () => {
+    mkdirSync(join(workspaceRoot, "src"));
+    writeFileSync(join(workspaceRoot, "src", "discounts.ts"), "export const discount = 100;\n");
+    vi.resetModules();
+    const actualHarness = await vi.importActual<typeof import("@oscharko-dev/keiko-harness")>(
+      "@oscharko-dev/keiko-harness",
+    );
+    const capturedDeps: Parameters<typeof actualHarness.createSession>[2][] = [];
+    vi.doMock("@oscharko-dev/keiko-harness", () => ({
+      ...actualHarness,
+      createSession: (
+        ...args: Parameters<typeof actualHarness.createSession>
+      ): ReturnType<typeof actualHarness.createSession> => {
+        capturedDeps.push(args[2]);
+        return actualHarness.createSession(...args);
+      },
+    }));
+    try {
+      const { startRun: startRunFresh } = await import("./run-engine.js");
+      const model: ModelPort = {
+        call: (request): Promise<NormalizedResponse> =>
+          Promise.resolve({
+            modelId: request.modelId,
+            content: "grounded explanation",
+            finishReason: "stop",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "req",
+              promptTokens: 1,
+              completionTokens: 1,
+              latencyMs: 1,
+              costClass: "low",
+            },
+          }),
+      };
+      const request = ok(
+        parseRunRequest(
+          JSON.stringify({
+            taskType: "explain-plan",
+            modelId: "m",
+            input: { workspaceRoot, filePath: "src/discounts.ts" },
+          }),
+        ),
+      );
+      const result = startRunFresh({ request, model, registry }, (v) => v);
+      await waitForTerminal(result.runId);
+      expect(capturedDeps).toHaveLength(1);
+      expect(capturedDeps[0]).not.toHaveProperty("compactionPort");
+    } finally {
+      vi.doUnmock("@oscharko-dev/keiko-harness");
+      vi.resetModules();
+    }
+  });
+
+  // #3409 catalog-B audit: dispatchExplain must stay the documented nonproductive dry-run
+  // composition (docs/architecture/governed-tool-migration.md rows `cli-composition`/
+  // `server-composition`; ADR-0175 D1 assigns bound/ready/offer/dispatch to server composition
+  // #3413, not this harness). Spies on the real, unmocked createSession/AgentConfig to prove: no
+  // `bindToolCatalog` factory reaches HarnessDeps (session.ts would otherwise bind a productive
+  // catalog once dryRun flips), the config stays `dryRun: true`, and the composed ToolPort is the
+  // real DryRunToolPort — which advertises the compiled legacy-native catalog for honest discovery
+  // yet refuses every one of those tools with a closed reason. A regression that wires a
+  // productive bindToolCatalog or flips dryRun to false without an Authority Envelope fails this.
+  it("composes explain-plan as the documented nonproductive dry-run readiness mode", async () => {
+    mkdirSync(join(workspaceRoot, "src"));
+    writeFileSync(join(workspaceRoot, "src", "discounts.ts"), "export const discount = 100;\n");
+    vi.resetModules();
+    const actualHarness = await vi.importActual<typeof import("@oscharko-dev/keiko-harness")>(
+      "@oscharko-dev/keiko-harness",
+    );
+    const capturedConfigs: Parameters<typeof actualHarness.createSession>[1][] = [];
+    const capturedDeps: Parameters<typeof actualHarness.createSession>[2][] = [];
+    vi.doMock("@oscharko-dev/keiko-harness", () => ({
+      ...actualHarness,
+      createSession: (
+        ...args: Parameters<typeof actualHarness.createSession>
+      ): ReturnType<typeof actualHarness.createSession> => {
+        capturedConfigs.push(args[1]);
+        capturedDeps.push(args[2]);
+        return actualHarness.createSession(...args);
+      },
+    }));
+    try {
+      const { startRun: startRunFresh } = await import("./run-engine.js");
+      const model: ModelPort = {
+        call: (request): Promise<NormalizedResponse> =>
+          Promise.resolve({
+            modelId: request.modelId,
+            content: "grounded explanation",
+            finishReason: "stop",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "req",
+              promptTokens: 1,
+              completionTokens: 1,
+              latencyMs: 1,
+              costClass: "low",
+            },
+          }),
+      };
+      const request = ok(
+        parseRunRequest(
+          JSON.stringify({
+            taskType: "explain-plan",
+            modelId: "m",
+            input: { workspaceRoot, filePath: "src/discounts.ts" },
+          }),
+        ),
+      );
+      const result = startRunFresh({ request, model, registry }, (v) => v);
+      await waitForTerminal(result.runId);
+      expect(capturedConfigs).toHaveLength(1);
+      expect(capturedConfigs[0]?.dryRun).toBe(true);
+      expect(capturedDeps).toHaveLength(1);
+      const deps = capturedDeps[0];
+      expect(deps).not.toHaveProperty("bindToolCatalog");
+      expect(deps?.tools).toBeInstanceOf(actualHarness.DryRunToolPort);
+      const advertised = deps?.tools.listTools() ?? [];
+      expect(advertised.length).toBeGreaterThan(0);
+      const first = advertised[0];
+      if (first === undefined) throw new Error("expected an advertised legacy tool");
+      await expect(
+        deps?.tools.execute({
+          toolCallId: "tc-explain",
+          toolName: first.name,
+          arguments: {},
+          signal: new AbortController().signal,
+        }),
+      ).rejects.toThrow("unavailable");
+      writeToolCatalogQualificationObservation({
+        consumer: "cli-server-sdk",
+        component: "server",
+        binding: (
+          deps?.tools as InstanceType<typeof actualHarness.DryRunToolPort>
+        ).catalogBinding(),
+        terminalStatus: "unavailable",
+        settlementCount: 0,
+        proof: { kind: "closed-unavailable" },
+      });
+    } finally {
+      vi.doUnmock("@oscharko-dev/keiko-harness");
+      vi.resetModules();
+    }
+  });
+});
+
+describe("probeNetworkIsolationSafely", () => {
+  afterEach(() => {
+    vi.doUnmock("./editor/verificationExecution.js");
+    vi.resetModules();
+  });
+
+  it("fails closed (false) instead of throwing when the underlying probe throws", async () => {
+    // The probe touches the filesystem/OS to detect a sandbox backend; a governed run's
+    // verification step must still get an answer rather than crash the whole dispatch if that
+    // probe itself faults for an unexpected reason (a workspace root deleted mid-run, etc.).
+    // Spreading the actual module (rather than replacing it outright) keeps
+    // executeVerificationEnforced -- run-engine.ts's OTHER import from this same module -- real, so
+    // this mock cannot mask a break in that unrelated import.
+    vi.resetModules();
+    const actualVerification = await vi.importActual<
+      typeof import("./editor/verificationExecution.js")
+    >("./editor/verificationExecution.js");
+    vi.doMock("./editor/verificationExecution.js", () => ({
+      ...actualVerification,
+      probeNetworkIsolation: (): never => {
+        throw new Error("probe backend detection failed");
+      },
+    }));
+    const { probeNetworkIsolationSafely: probeSafely } = await import("./run-engine.js");
+    expect(probeSafely("/nonexistent/workspace")).toBe(false);
+  });
+
+  it("threads the dispatching run's own id into the failure diagnostic instead of a disconnected mint", async () => {
+    // ADR-0173 D5 / g12: dispatchWorkflow/applyRun both have a runId in scope when they call this
+    // probe; the probe failure diagnostic must carry THAT id (via the default stderr sink, which
+    // this test observes through console.error) rather than a fresh randomUUID() unrelated to the
+    // run whose verification enforcement it affects.
+    vi.resetModules();
+    const actualVerification = await vi.importActual<
+      typeof import("./editor/verificationExecution.js")
+    >("./editor/verificationExecution.js");
+    vi.doMock("./editor/verificationExecution.js", () => ({
+      ...actualVerification,
+      probeNetworkIsolation: (): never => {
+        throw new Error("probe backend detection failed");
+      },
+    }));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const { probeNetworkIsolationSafely: probeSafely } = await import("./run-engine.js");
+      const runId = `run-${randomUUID()}`;
+      expect(probeSafely("/nonexistent/workspace", runId)).toBe(false);
+      expect(consoleError).toHaveBeenCalledTimes(1);
+      const line = consoleError.mock.calls[0]?.[0] as string;
+      const record = JSON.parse(line.slice(line.indexOf("{"))) as { correlationId?: unknown };
+      expect(record.correlationId).toBe(runId);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it.each([true, false])(
+    "passes through the real probe's available:%s without swallowing it",
+    async (available) => {
+      vi.resetModules();
+      const actualVerification = await vi.importActual<
+        typeof import("./editor/verificationExecution.js")
+      >("./editor/verificationExecution.js");
+      vi.doMock("./editor/verificationExecution.js", () => ({
+        ...actualVerification,
+        probeNetworkIsolation: (): NetworkIsolationProbe => ({
+          available,
+          backend: "test-backend",
+        }),
+      }));
+      const { probeNetworkIsolationSafely: probeSafely } = await import("./run-engine.js");
+      expect(probeSafely(workspaceRoot)).toBe(available);
+    },
+  );
+});
+
+describe("applyRun — verification egress probe threading", () => {
+  afterEach(() => {
+    vi.doUnmock("@oscharko-dev/keiko-workflows");
+    vi.resetModules();
+  });
+
+  it("threads a real verificationEnforcedNetworkAvailable into the replayed apply, like the initial dispatch does", async () => {
+    // dispatchWorkflow (the initial background run) and applyRun (replaying an accepted snapshot,
+    // run-handlers.ts's gated apply path) both reach the SAME verify stage; without this, apply's
+    // network:"none" verification steps are denied even on hosts the probe would have enforced on.
+    vi.resetModules();
+    let capturedDeps: Record<string, unknown> | undefined;
+    const actualWorkflows = await vi.importActual<typeof import("@oscharko-dev/keiko-workflows")>(
+      "@oscharko-dev/keiko-workflows",
+    );
+    vi.doMock("@oscharko-dev/keiko-workflows", () => ({
+      ...actualWorkflows,
+      generateUnitTests: (_input: unknown, deps: Record<string, unknown>): Promise<unknown> => {
+        capturedDeps = deps;
+        return Promise.resolve({ status: "completed" });
+      },
+    }));
+    const { applyRun: apply } = await import("./run-engine.js");
+
+    await apply(
+      { kind: "unit-tests", payload: { workspaceRoot }, limits: undefined },
+      { call: () => Promise.reject(new Error("unused")) },
+      "m",
+      (value) => value,
+    );
+
+    expect(capturedDeps).toBeDefined();
+    expect(typeof capturedDeps?.verificationEnforcedNetworkAvailable).toBe("boolean");
+  });
+
+  it("threads the replayed run's own runId into a probe failure during apply", async () => {
+    // ADR-0173 D5 / g12: run-handlers.ts's gated apply path always has the run's own runId in
+    // scope (RunRecord.runId); a probe failure during the replayed verify stage must carry it
+    // rather than a disconnected randomUUID().
+    vi.resetModules();
+    const actualWorkflows = await vi.importActual<typeof import("@oscharko-dev/keiko-workflows")>(
+      "@oscharko-dev/keiko-workflows",
+    );
+    vi.doMock("@oscharko-dev/keiko-workflows", () => ({
+      ...actualWorkflows,
+      generateUnitTests: (): Promise<unknown> => Promise.resolve({ status: "completed" }),
+    }));
+    const actualVerification = await vi.importActual<
+      typeof import("./editor/verificationExecution.js")
+    >("./editor/verificationExecution.js");
+    vi.doMock("./editor/verificationExecution.js", () => ({
+      ...actualVerification,
+      probeNetworkIsolation: (): never => {
+        throw new Error("probe backend detection failed");
+      },
+    }));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const { applyRun: apply } = await import("./run-engine.js");
+      const runId = `run-${randomUUID()}`;
+
+      await apply(
+        { kind: "unit-tests", payload: { workspaceRoot }, limits: undefined },
+        { call: () => Promise.reject(new Error("unused")) },
+        "m",
+        (value) => value,
+        undefined,
+        runId,
+      );
+
+      expect(consoleError).toHaveBeenCalledTimes(1);
+      const line = consoleError.mock.calls[0]?.[0] as string;
+      const record = JSON.parse(line.slice(line.indexOf("{"))) as { correlationId?: unknown };
+      expect(record.correlationId).toBe(runId);
+    } finally {
+      consoleError.mockRestore();
+      vi.doUnmock("./editor/verificationExecution.js");
+    }
+  });
+});
+
+// #2902 w4b: before the QueueEventSink terminal-event tee, a run's terminal outcome was fanned
+// out to SSE writers ONLY. If no writer was ever attached — a closed browser tab, a connection
+// that dropped before the run finished — the outcome reached nobody, and once the sink's ring
+// buffer was evicted it left no trace anywhere, including `server.log`. This suite proves the
+// forced-failure case leaves a durable, run-id-keyed trace even with zero SSE consumers.
+describe("run terminal outcome reaches server.log without any SSE consumer (#2902 w4b)", () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), "keiko-run-engine-diagnostics-"));
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+    // The diagnostic sink also writes one line to stderr; that track is covered elsewhere
+    // (diagnostics-log.activity-log.test.ts). Silence it here so the test output stays clean.
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    closeFileServerLogSinks();
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  function readServerLogLines(): readonly Record<string, unknown>[] {
+    const raw = readPersistedActivityLog(stateDir);
+    return raw
+      .split("\n")
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+  }
+
+  // Polls the RUN REGISTRY (never the sink) for a terminal status — attaching a writer to the
+  // sink, even a throwaway one, would defeat the very scenario this test proves: nobody ever
+  // subscribed to this run's SSE stream.
+  async function waitForRegistryTerminal(runId: string): Promise<void> {
+    await vi.waitFor(() => {
+      const record = registry.get(runId);
+      if (record === undefined || record.status === "running") {
+        throw new Error("run has not reached a terminal state yet");
+      }
+    });
+  }
+
+  it("writes a structured diagnostic for a forced explain-plan failure, keyed by the run's id, with no SSE writer ever attached", async () => {
+    writeFileSync(join(workspaceRoot, "README.md"), "fixture\n");
+    const failingModel: ModelPort = {
+      call: (): Promise<NormalizedResponse> => Promise.reject(new Error("forced model failure")),
+    };
+    const request = ok(
+      parseRunRequest(
+        JSON.stringify({
+          taskType: "explain-plan",
+          modelId: "m",
+          input: { workspaceRoot, filePath: "README.md" },
+        }),
+      ),
+    );
+
+    const result = startRun({ request, model: failingModel, registry }, (value) => value);
+    // No `record.sink.attach(...)` call anywhere in this test — the run's SSE stream has zero
+    // consumers for its entire lifetime, exactly like a closed browser tab.
+    await waitForRegistryTerminal(result.runId);
+
+    expect(registry.get(result.runId)?.status).toBe("failed");
+
+    const diagnosticLine = readServerLogLines().find(
+      (line) =>
+        line.op === "server.diagnostic.failure" &&
+        line.diagnosticOperation === "harness.run.failed" &&
+        line.correlationId === result.runId,
+    );
+    expect(diagnosticLine).toMatchObject({
+      op: "server.diagnostic.failure",
+      correlationId: result.runId,
+      diagnosticOperation: "harness.run.failed",
+      diagnosticErrorClass: "HarnessRunFailed",
+      errorKind: "internal",
+    });
   });
 });

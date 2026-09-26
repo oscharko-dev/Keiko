@@ -1,4 +1,4 @@
-export { createEditorDirtyCloseIntent } from "@oscharko-dev/keiko-contracts";
+export { createEditorDirtyCloseIntent } from "@oscharko-dev/keiko-contracts/runtime/editor-dirty-close";
 export type {
   EditorDirtyCloseDecision,
   EditorDirtyCloseIntent,

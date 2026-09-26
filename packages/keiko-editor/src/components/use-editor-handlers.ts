@@ -51,6 +51,7 @@ import type {
   EditorFormattingResponse,
   EditorHoverResponse,
   EditorInlineCompletionResponse,
+  EditorLanguageId,
   EditorReferencesResponse,
   EditorSignatureHelpResponse,
   EditorSymbolsResponse,
@@ -81,12 +82,14 @@ import {
   attachRetainedEditorModel,
   EditorModelOwnershipError,
   updateRetainedEditorModelProtection,
+  writeRetainedEditorModelValue,
   type EditorModelProtection,
   type RetainedEditorModelAttachment,
   type RetainedEditorModel,
   type RetainedEditorModelEditor,
   type RetainedEditorModelNamespace,
 } from "./editor-model-registry.js";
+import { HOST_EDIT_IGNORED_NOTICE, MODEL_OWNERSHIP_CHANGED_NOTICE } from "./runtime-notice.js";
 
 export interface EditorHandlers {
   readonly onChange: OnChange;
@@ -197,10 +200,11 @@ function applyRevealRequest(
   const editor = refs.editorRef.current;
   if (editor === null || revealRequest === undefined) return;
   const monacoRange = editorRangeToMonaco(revealRequest.range);
+  const startLineNumber = Math.max(1, monacoRange.startLineNumber);
   const safeRange = {
-    startLineNumber: Math.max(1, monacoRange.startLineNumber),
+    startLineNumber,
     startColumn: 1,
-    endLineNumber: Math.max(monacoRange.startLineNumber, monacoRange.endLineNumber),
+    endLineNumber: Math.max(startLineNumber, monacoRange.endLineNumber),
     endColumn: Math.max(1, monacoRange.endColumn),
   };
   clearRevealDecoration(refs);
@@ -315,6 +319,17 @@ function emitHostEditFallback(
   );
 }
 
+// The controlled value sync may have already written this exact text (the host updates its
+// buffer state and the host-edit request in the same commit). Re-executing a whole-model
+// replacement with identical text would push a second, empty undo stop — a keyboard undo
+// would then appear to do nothing before restoring the pre-edit buffer (#1394 pin).
+function modelAlreadyHoldsHostEdit(
+  editor: NonNullable<EditorRefs["editorRef"]["current"]>,
+  text: string,
+): boolean {
+  return editor.getModel?.()?.getValue() === text;
+}
+
 function applyHostEditRequest(
   request: NonNullable<KeikoCodeEditorProps["hostEditRequest"]>,
   refs: EditorRefs,
@@ -327,6 +342,7 @@ function applyHostEditRequest(
     emitHostEditFallback(request, onContentChange);
     return;
   }
+  if (modelAlreadyHoldsHostEdit(editor, request.text)) return;
   programmaticChangeRef.current = { text: request.text, origin: request.origin };
   editor.pushUndoStop?.();
   const applied = editor.executeEdits("keiko.host-edit", [{ range, text: request.text }]);
@@ -341,22 +357,61 @@ function useHostEditRequest(
   props: KeikoCodeEditorProps,
   refs: EditorRefs,
   programmaticChangeRef: ProgrammaticEditorChangeRef,
+  readOnly: boolean,
 ): void {
   const handledRequestIdRef = useRef<string | null>(null);
   useEffect(() => {
     const request = props.hostEditRequest;
     if (request === undefined || handledRequestIdRef.current === request.id) return;
-    const applyIfMounted = (): void => {
-      if (refs.editorRef.current === null || handledRequestIdRef.current === request.id) return;
+    if (readOnly) {
       handledRequestIdRef.current = request.id;
-      applyHostEditRequest(request, refs, props.onContentChange, programmaticChangeRef);
-    };
-    if (refs.editorRef.current === null) {
-      queueMicrotask(applyIfMounted);
+      props.onRuntimeError?.(HOST_EDIT_IGNORED_NOTICE);
       return;
     }
-    applyIfMounted();
-  }, [programmaticChangeRef, props.hostEditRequest, props.onContentChange, refs]);
+    // Monaco's onMount resolves through @monaco-editor/react's async loader, not same-tick, so a
+    // single retry is not enough (KEIKO-0033) -- poll every frame, mirroring
+    // useControlledModelValueSync's syncWhenMounted, until the editor actually mounts.
+    let frame: number | null = null;
+    let cancelled = false;
+    const applyIfMounted = (): boolean => {
+      if (refs.editorRef.current === null) return false;
+      if (handledRequestIdRef.current === request.id) return true;
+      handledRequestIdRef.current = request.id;
+      applyHostEditRequest(request, refs, props.onContentChange, programmaticChangeRef);
+      return true;
+    };
+    const pollUntilMounted = (): void => {
+      if (cancelled || applyIfMounted()) return;
+      frame = window.requestAnimationFrame(pollUntilMounted);
+    };
+    pollUntilMounted();
+    return (): void => {
+      cancelled = true;
+      if (frame !== null) window.cancelAnimationFrame(frame);
+    };
+  }, [
+    programmaticChangeRef,
+    props.hostEditRequest,
+    props.onContentChange,
+    props.onRuntimeError,
+    readOnly,
+    refs,
+  ]);
+}
+
+// The text of the host-edit request that currently owns the model transition, or undefined when
+// no request owns it. A request owns the transition from the commit that posts it until the host
+// buffer has reconciled once (`expected === request.text`); a handled one-shot request may
+// legitimately stay in props afterwards, so ownership must expire with the transition rather
+// than persist for the request's lifetime (#3071 review).
+function owningHostEditText(
+  reconciledIdRef: RefObject<string | null>,
+  hostEdit: KeikoCodeEditorProps["hostEditRequest"],
+  expected: string,
+): string | undefined {
+  if (hostEdit === undefined) return undefined;
+  if (expected === hostEdit.text) reconciledIdRef.current = hostEdit.id;
+  return reconciledIdRef.current === hostEdit.id ? undefined : hostEdit.text;
 }
 
 function useControlledModelValueSync(
@@ -364,8 +419,10 @@ function useControlledModelValueSync(
   refs: EditorRefs,
   programmaticChangeRef: ProgrammaticEditorChangeRef,
 ): void {
+  const reconciledHostEditIdRef = useRef<string | null>(null);
   useEffect(() => {
     const expected = props.buffer.content.text;
+    const ownedText = owningHostEditText(reconciledHostEditIdRef, props.hostEditRequest, expected);
     const syncChange: ProgrammaticEditorChange =
       props.fileModel.lastChangeOrigin === null
         ? { text: expected, suppress: true }
@@ -376,8 +433,16 @@ function useControlledModelValueSync(
       const model = refs.editorRef.current?.getModel?.();
       if (model === undefined || model === null) return false;
       if (model.getValue() === expected || model.setValue === undefined) return true;
+      // A host-edit request that has just written the model owns this transition; the host's
+      // buffer state (`expected`) catches up on its own commit. Writing the stale `expected`
+      // back now would put a new → old → new pair on the undo stack, so the second keyboard
+      // undo would return to the host-edit text instead of moving further back (#3071 review).
+      if (ownedText !== undefined && model.getValue() === ownedText) return true;
       programmaticChangeRef.current = syncChange;
-      model.setValue(expected);
+      // Same-document programmatic updates (an agent-applied edit, a format result, a restore)
+      // must stay on the browser undo stack (#1394 pin); document switches never pass through
+      // here — they rebuild the model via the file identity key.
+      writeRetainedEditorModelValue(model, expected);
       queueMicrotask(() => {
         if (programmaticChangeRef.current === syncChange) programmaticChangeRef.current = null;
       });
@@ -397,6 +462,8 @@ function useControlledModelValueSync(
     props.buffer.content.text,
     props.fileModel.identity.uri,
     props.fileModel.lastChangeOrigin,
+    props.hostEditRequest?.id,
+    props.hostEditRequest?.text,
     refs,
   ]);
 }
@@ -711,7 +778,7 @@ function buildCallHierarchyWiring(
         ? Promise.reject(new Error("call-hierarchy resolver unavailable"))
         : live(query, signal);
     },
-    documentLanguage: latestProps.current.fileModel.identity.language,
+    documentLanguage: (): EditorLanguageId => latestProps.current.fileModel.identity.language,
     streamId,
     newRequestId: createEditorRequestId,
     labels: { command: labels.command },
@@ -792,9 +859,14 @@ function buildGitGutterWiring(
     degraded,
     labels: gutter.labels,
     onPeek: (peek): void => latestProps.current.editorGitGutter?.onPeek(peek),
-    resolve: (): Promise<EditorGitGutterChanges> => {
+    // KEIKO-0897: the git-gutter resolver now carries an AbortSignal so the bridge can cancel
+    // a stale request. Forward the signal to the host implementation; the fallback branch has
+    // nothing to cancel so it ignores the signal.
+    resolve: (signal: AbortSignal): Promise<EditorGitGutterChanges> => {
       const live = latestProps.current.editorGitGutter;
-      return live === undefined ? Promise.resolve({ staged: [], unstaged: [] }) : live.resolve();
+      return live === undefined
+        ? Promise.resolve({ staged: [], unstaged: [] })
+        : live.resolve(signal);
     },
     onError: (message) => latestProps.current.onRuntimeError?.(message),
   };
@@ -1037,9 +1109,7 @@ function attachRegistryModel(args: {
   } catch (error: unknown) {
     if (!(error instanceof EditorModelOwnershipError)) throw error;
     retainedEditor.setModel?.(null);
-    args.props.onRuntimeError?.(
-      "Editor model ownership changed; the previous workspace buffer was not reused.",
-    );
+    args.props.onRuntimeError?.(MODEL_OWNERSHIP_CHANGED_NOTICE);
     return null;
   }
 }
@@ -1391,7 +1461,7 @@ export function useEditorHandlers(
     refs.debugBridgeRef.current?.refresh();
   }, [refs.debugBridgeRef]);
   useUnmountDisposal(refs);
-  useHostEditRequest(props, refs, programmaticChangeRef);
+  useHostEditRequest(props, refs, programmaticChangeRef, readOnly);
   useModelAttachmentSync(props, refs);
   useControlledModelValueSync(props, refs, programmaticChangeRef);
   useRevealRequest(props, refs);

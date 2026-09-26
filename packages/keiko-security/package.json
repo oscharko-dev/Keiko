@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-security",
-  "version": "0.2.15",
+  "version": "1.1.9",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal workspace package: shared Keiko security primitives (redaction, safe error shaping, secret collection, content hashing, trust-boundary helpers). Not published independently.",
@@ -67,9 +67,29 @@
       "types": "./dist/fs-hardening.d.ts",
       "import": "./dist/fs-hardening.js"
     },
+    "./fs-atomic-rename": {
+      "types": "./dist/fs-atomic-rename.d.ts",
+      "import": "./dist/fs-atomic-rename.js"
+    },
+    "./portable-tree-attestation": {
+      "types": "./dist/portable-tree-attestation.d.ts",
+      "import": "./dist/portable-tree-attestation.js"
+    },
+    "./portable-release-trust": {
+      "types": "./dist/portable-release-trust.d.ts",
+      "import": "./dist/portable-release-trust.js"
+    },
+    "./macos-keychain": {
+      "types": "./dist/macos-keychain.d.ts",
+      "import": "./dist/macos-keychain.js"
+    },
     "./sqlite-corruption": {
       "types": "./dist/sqlite-corruption.d.ts",
       "import": "./dist/sqlite-corruption.js"
+    },
+    "./windows-local-volume": {
+      "types": "./dist/windows-local-volume.d.ts",
+      "import": "./dist/windows-local-volume.js"
     }
   },
   "scripts": {
@@ -82,10 +102,10 @@
   ],
   "sideEffects": false,
   "engines": {
-    "node": ">=24.18.0 <25"
+    "node": ">=24.18.0 <25 || >=26.3.0 <27"
   },
   "dependencies": {
-    "@oscharko-dev/keiko-contracts": "0.2.15"
+    "@oscharko-dev/keiko-contracts": "1.1.9"
   },
   "private": true
 }

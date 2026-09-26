@@ -2,7 +2,8 @@
 
 ## Status
 
-Proposed
+Accepted (retroactive record; see docs/context-engineering/decision-log.md, MILESTONE COMPLETE,
+commits fb6e9439/8cdf2d69).
 
 ## Version
 
@@ -79,9 +80,12 @@ before PR2 is merged.
 > validator requires `sourceRef` OR `inferred===true` (an unsourced, non-inferred fact is rejected) —
 > every factual claim points to a source or is explicitly an inference. (3) `ContextUserConstraint`'s
 > field is `statement` (not `constraint`). (4) `ContextPreservedFact` and `ContextAssumption` carry
-> mutually-exclusive `?: never` discriminants (`rationale`/`confidence` on the fact; `sourceRef`/
-> `inferred` on the assumption) so neither is structurally assignable to the other — the anti-poisoning
-> separation is compile-time enforced, not merely "no shared base".
+> mutually-exclusive `?: never` discriminants (`rationale`/`confidence` on the assumption; `sourceRef`/
+> `inferred` on the fact), so the two record types remain structurally separate. The shipped
+> `inferred` marker nevertheless makes a `ContextPreservedFact` non-verbatim; every fact-labeled
+> consumer therefore uses the shared `partitionContextPreservedFacts` projection, which routes only
+> `inferred !== true` entries to a fact label and labels the remaining entries as inferred. The flag is
+> explicit provenance, not sufficient anti-poisoning enforcement by itself.
 
 The PR1 stub (`context-engineering.ts:134–147`) carries `schemaVersion`, `laneId`, `reason`,
 `itemsBefore`, `itemsAfter`, `tokensBefore`, `tokensAfter`, `summaryRefHash?`, and
@@ -96,10 +100,14 @@ monster), all in `context-engineering.ts` or its validation companion, with a si
 // ─── Provenance reference (the atomic source pointer) ─────── [PR2, additive]
 // A stable, content-addressable pointer to a single authoritative source. No raw text,
 // no absolute paths — only stable IDs plus an optional relative workspace path and line
-// range for repo-file items. The contentHash field is the output of fileContentHash
-// (keiko-workspace/src/stableId.ts) at the time compaction ran; a hash mismatch
-// between compaction time and rehydration time means the source has changed and the
-// compacted summary MAY be stale.
+// range for repo-file items. The contentHash field is the output of hashExcerptContent
+// (keiko-workspace/src/stableId.ts), hashing the EXCERPT the ref points at — not the whole
+// file — at the time compaction ran; a hash mismatch between compaction time and
+// rehydration time means that excerpt has changed and the compacted summary MAY be stale.
+// CORRECTED (post-PR2-W1): the live producer (compaction-helpers.ts's enrichRef) uses
+// hashExcerptContent so invalidation fires on a change to the referenced range rather than
+// anywhere in the file; this section originally named fileContentHash (the coarser,
+// whole-file hash that ContextInvalidationKey.contentHash below still correctly uses).
 export type ContextProvenanceRefKind =
   | "repo-file"       // rehydrate via readExcerpt; scopePath + lineRange required
   | "tool-result"     // raw tool call output; rehydrate from tool-result id only
@@ -115,8 +123,8 @@ export interface ContextProvenanceRef {
   // Closed line range [startLine, endLine] (1-indexed, inclusive). Present only when kind ===
   // "repo-file" AND a line range was recorded. Prefer line ranges over whole-file rehydration.
   readonly lineRange?: { readonly startLine: number; readonly endLine: number } | undefined;
-  // SHA-256 hex of the file content at compaction time. Present only when kind === "repo-file"
-  // and fileContentHash ran successfully. A mismatch at rehydration time signals invalidation.
+  // SHA-256 hex of the EXCERPT content at compaction time. Present only when kind === "repo-file"
+  // and hashExcerptContent ran successfully. A mismatch at rehydration time signals invalidation.
   readonly contentHash?: string | undefined;
   // Stable evidence atom id (evidenceAtomStableId output). Present when kind === "evidence-atom".
   readonly evidenceAtomId?: string | undefined;
@@ -183,8 +191,9 @@ export interface ContextCompactionRecord {
   readonly orderedAt?: number | undefined;
   // Source spans that were compacted: message ids, tool-result ids, file paths + hashes, evidence ids.
   readonly sourceSpans?: readonly ContextProvenanceRef[] | undefined;
-  // Durable facts extracted from the compacted content. Typed ContextPreservedFact[] — cannot
-  // accidentally contain ContextAssumption (separate type, not a discriminated union).
+  // Durable entries extracted from the compacted content. Typed ContextPreservedFact[] — cannot
+  // accidentally contain ContextAssumption (separate type, not a discriminated union). An entry
+  // marked inferred is not a verbatim fact and must be projected through the shared partition.
   readonly preservedFacts?: readonly ContextPreservedFact[] | undefined;
   // Uncertain model-derived inferences. Structurally separate from preservedFacts.
   readonly assumptions?: readonly ContextAssumption[] | undefined;
@@ -262,7 +271,8 @@ export interface ContextRehydrationHandle {
   // Deny-checked by the rehydration caller before passing to readExcerpt.
   readonly scopePath?: string | undefined;
   readonly lineRange?: { readonly startLine: number; readonly endLine: number } | undefined;
-  // Content hash recorded at compaction time (output of fileContentHash).
+  // Content hash recorded at compaction time (output of hashExcerptContent — the EXCERPT, not
+  // the whole file; see the PR2-W1 implementation note above D2, which this now matches).
   readonly contentHash?: string | undefined;
   // For kind === "evidence-atom": the stable atom id.
   readonly evidenceAtomId?: string | undefined;
@@ -497,10 +507,14 @@ and assumptions share one array.
   A caller that iterates over "preserved facts" and doesn't check the flag silently treats
   assumptions as authoritative. The milestone requirement explicitly states that assumptions
   "MUST NEVER be promoted to trusted facts." A boolean flag is convention, not enforcement.
-- **Why rejected**: structural separation is the load-bearing guarantee. Two distinct types
-  (`ContextPreservedFact` and `ContextAssumption`) make the compiler reject a misassignment.
-  The cost is two type definitions instead of one; the benefit is a compile-time invariant
-  rather than a runtime-checked convention.
+- **Why rejected**: structural separation remains the load-bearing guarantee for actual
+  `ContextAssumption` values. Two distinct types (`ContextPreservedFact` and
+  `ContextAssumption`) make the compiler reject that misassignment. The shipped additive
+  `ContextPreservedFact.inferred` provenance marker is not this rejected union: it retains the
+  separate assumption type for compatibility while representing an unsourced inferred entry. Its
+  presence creates a consumer-side trust boundary, so the shared `partitionContextPreservedFacts`
+  projection is mandatory before every fact-labeled presentation. The flag is therefore not relied
+  on as a convention; the shared projection enforces its presentation semantics for every consumer.
 
 ### Alternative 2: Store compaction records as workspace files under .keiko/compaction/
 

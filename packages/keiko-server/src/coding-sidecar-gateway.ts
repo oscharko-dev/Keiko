@@ -1,7 +1,25 @@
-import { randomUUID } from "node:crypto";
+import { gatewaySpendRejectionReason } from "./gateway-spend-budget.js";
+import { CodingRuntimeLaunchRejectedError } from "./coding-runtime/launchFailure.js";
 import {
+  AuthenticationError,
+  CircuitOpenError,
+  ContextOverflowError,
+  MalformedToolCallError,
+  ModelRefusalError,
+  ProviderEmptyAnswerError,
+  ProviderError,
+  ProviderOutputExhaustedError,
+  RateLimitError,
+  TimeoutError,
+  TransportError,
+} from "@oscharko-dev/keiko-security/errors/gateway";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  findConfiguredCapability,
   resolveCodingSafeSidecarGatewayProfile,
+  ResponseRedactionError,
   type Gateway,
+  type GatewayCallRequest,
   type GatewayConfig,
   type GatewayRequest,
   type GatewayStreamChunk,
@@ -10,29 +28,201 @@ import {
   type ToolDefinition,
 } from "@oscharko-dev/keiko-model-gateway";
 import {
-  estimateTokensForSegments,
-  validateGatewaySamplingParameters,
-  type CodingWorkbenchModelSource,
-  type CodingWorkbenchSidecarGatewayRunMetadata,
-  type CodingWorkbenchSidecarGatewayResult,
+  countGatewayPromptTokens,
+  type ModelTokenAccounting,
+} from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
+import { gatewayRouteDeadlineMs } from "./gateway-route-deadline.js";
+import type {
+  CodingWorkbenchModelSource,
+  CodingWorkbenchSidecarGatewayRunMetadata,
+  CodingWorkbenchSidecarGatewayResult,
+  CodingWorkbenchSidecarGatewayUnavailableReason,
+  ModelReasoningEffort,
 } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+import { CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import type {
+  CodingWorkbenchRuntimeSnapshot,
+  CodingWorkbenchTurnFailureCode,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  MODEL_REASONING_EFFORTS,
+  validateGatewaySamplingParameters,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import {
   currentGateway,
   currentGatewayConfig,
   currentGatewayVerification,
   type UiHandlerDeps,
 } from "./deps.js";
-import { OPENCODE_RUNTIME_MODEL_ALIAS } from "./coding-runtime/opencodeLaunchProfile.js";
-import { hasExactOpenCodeVisibleToolContract } from "./coding-runtime/opencodeToolSchemas.js";
-import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import {
+  OPENCODE_RUNTIME_MODEL_ALIAS,
+  OPENCODE_RUNTIME_READINESS_PROMPT,
+} from "./coding-runtime/opencodeLaunchProfile.js";
+import {
+  createOpenCodeGatewayToolCatalogAdvertisement,
+  opencodeGatewayOfferLifetimeMs,
+  hasExactOpenCodeVisibleToolContract,
+  OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
+  type OpenCodeGatewayHandlerCoverage,
+} from "./coding-runtime/opencodeToolSchemas.js";
+import type { OpenCodeOptionalToolName } from "./coding-runtime/opencodeLaunchProfile.js";
+import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import {
+  describeError,
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+} from "./diagnostics-log.js";
 import { readJsonObject } from "./files.js";
+import { safetyMarginTokensFor } from "@oscharko-dev/keiko-contracts/context-engineering";
+import {
+  ensureCodingWorkbenchContextWindows,
+  isAnyCodingWorkbenchProbePending,
+  isCodingWorkbenchProbePending,
+} from "./gateway-readiness.js";
+import { getServerLogger } from "./observability/index.js";
 import { STREAMING, errorBody, type RouteContext, type RouteResult } from "./routes.js";
+import {
+  sseBackpressureReporter,
+  type SseBackpressureSignal,
+  writeOrDestroy,
+} from "./sse-write.js";
 import { startSseHeartbeat } from "./sse.js";
+import { createCanonicalOpenCodeHandlerCoverage } from "./tool-catalog/catalogToolFacadeBridge.js";
 
 const ENABLE_TOKENS = new Set(["1", "true", "on", "yes", "enabled"]);
 const CODING_SIDECAR_DISABLED_ENV = "KEIKO_CODING_SIDECAR_DISABLED";
+// KEIKO-0681: bounded concurrency for the coding-sidecar gateway chat/completions route,
+// mirroring MAX_ACTIVE_CHAT_STREAMS_ENV in chat-stream-handlers.ts. Independent counter
+// (not shared with desktop chat) so a bulkhead on one path does not starve the other. Rejected
+// callers get a JSON 429 BEFORE any SSE header, so an SDK client can transparently retry.
+export const MAX_ACTIVE_CODING_GATEWAY_REQUESTS_ENV = "KEIKO_CODING_SIDECAR_MAX_ACTIVE_REQUESTS";
+const DEFAULT_MAX_ACTIVE_CODING_GATEWAY_REQUESTS = 16;
+const HARD_MAX_ACTIVE_CODING_GATEWAY_REQUESTS = 64;
+let activeCodingGatewayRequests = 0;
+
+function maxActiveCodingGatewayRequests(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env[MAX_ACTIVE_CODING_GATEWAY_REQUESTS_ENV];
+  if (raw === undefined || raw.trim().length === 0)
+    return DEFAULT_MAX_ACTIVE_CODING_GATEWAY_REQUESTS;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 1) return DEFAULT_MAX_ACTIVE_CODING_GATEWAY_REQUESTS;
+  return Math.min(parsed, HARD_MAX_ACTIVE_CODING_GATEWAY_REQUESTS);
+}
+
+// Test seam: not exported via index.ts. Module state; parallel test files each get their own
+// module instance, so a reset keeps cases order-independent.
+export function _resetActiveCodingGatewayRequestsForTests(): void {
+  activeCodingGatewayRequests = 0;
+}
+
+/**
+ * One outstanding runtime prompt-token reservation (#3384 wave-3 W3-3 "needs"). Mirrors
+ * The exactly-once settlement guard: `reserveGatewayPromptBudget` books the
+ * pre-call ESTIMATE against the run's real authority-level prompt budget
+ * (`agentAuthorityRegistry.ts`'s ledger, via `runtimeAuthorityService.ts`), and this reservation
+ * must be settled exactly once against the provider's REAL reported usage once known, so the
+ * envelope reflects N calls' worth of real usage instead of N estimates.
+ */
+interface PromptTokenReservation {
+  readonly capability: string;
+  readonly reservedPromptTokens: number;
+  settled: boolean;
+  settlement?: PromptTokenSettlement;
+}
+
+interface PromptTokenSettlement {
+  readonly promptTokens: number;
+  readonly source: "provider-reported" | "reserved-estimate" | "released-unspent";
+  readonly status: "settled" | "retained-after-refusal" | "unverified" | "not-wired";
+}
+
+function observedPromptSettlement(
+  outcome: unknown,
+  selected: PromptTokenSettlement,
+  unverified: PromptTokenSettlement,
+): PromptTokenSettlement {
+  if (!isRecord(outcome)) return unverified;
+  if (outcome.ok === true) return selected;
+  if (outcome.ok === false) return { ...unverified, status: "retained-after-refusal" };
+  return unverified;
+}
+
+/**
+ * Settles a runtime prompt-token reservation. `actualPromptTokens` is the provider's real reported
+ * usage when known; when the outcome is uncertain (dispatched but no usage was ever observed — a
+ * mid-flight failure or cancellation) the full reserved estimate is kept as spent, matching
+ * the shared Model Gateway spend ledger's conservative-accounting rule. A no-op past the first call, so callers
+ * may settle defensively from more than one exit path. Absent `settlePromptTokens` on the injected
+ * authenticator (not every deployment wires it) is a silent no-op, never a failure.
+ */
+function settlePromptTokenReservation(
+  deps: UiHandlerDeps,
+  reservation: PromptTokenReservation,
+  actualPromptTokens?: number,
+): PromptTokenSettlement {
+  const providerReported = actualPromptTokens !== undefined && actualPromptTokens > 0;
+  return applyPromptTokenSettlement(deps, reservation, {
+    promptTokens: providerReported ? actualPromptTokens : reservation.reservedPromptTokens,
+    source: providerReported ? "provider-reported" : "reserved-estimate",
+  });
+}
+
+/**
+ * Releases a reservation whose provider call never ran — the client would not take the opening
+ * SSE frame, so the buffered path never called the chat factory and the streamed path never pulled
+ * the gateway's generator. The conservative rule above keeps the estimate only for a call that WAS
+ * dispatched; here nothing was spent, so the whole reservation goes back to the run's budget
+ * (#3602 review). Same idempotence and same not-wired fallback as a settlement.
+ */
+function releasePromptTokenReservation(
+  deps: UiHandlerDeps,
+  reservation: PromptTokenReservation,
+): PromptTokenSettlement {
+  return applyPromptTokenSettlement(deps, reservation, {
+    promptTokens: 0,
+    source: "released-unspent",
+  });
+}
+
+function applyPromptTokenSettlement(
+  deps: UiHandlerDeps,
+  reservation: PromptTokenReservation,
+  usage: Pick<PromptTokenSettlement, "promptTokens" | "source">,
+): PromptTokenSettlement {
+  if (reservation.settled) {
+    if (reservation.settlement === undefined) throw new TypeError("missing prompt settlement");
+    return reservation.settlement;
+  }
+  reservation.settled = true;
+  const unverified: PromptTokenSettlement = {
+    promptTokens: reservation.reservedPromptTokens,
+    source: "reserved-estimate",
+    status: "unverified",
+  };
+  const selected: PromptTokenSettlement = { ...usage, status: "settled" };
+  reservation.settlement = unverified;
+  const authenticator = runtimeCapabilityAuthenticator(deps);
+  if (authenticator?.settlePromptTokens === undefined) {
+    reservation.settlement = { ...selected, status: "not-wired" };
+    return reservation.settlement;
+  }
+  const outcome = authenticator.settlePromptTokens(
+    reservation.capability,
+    reservation.reservedPromptTokens,
+    usage.promptTokens,
+  );
+  reservation.settlement = observedPromptSettlement(outcome, selected, unverified);
+  return reservation.settlement;
+}
+
 const CODING_SIDECAR_GATEWAY_ERROR_CODE = "CODING_SIDECAR_UNAVAILABLE";
 const CODING_SIDECAR_GATEWAY_ROUTE = "POST /api/coding-sidecar/gateway/chat/completions";
+const CODING_SAFE_SIDECAR_GATEWAY_PROFILE_ID = "coding-safe-openai-compatible";
 const BUFFERED_STREAM_HEARTBEAT_MS = 5_000;
 const OUTPUT_BYTES_PER_TOKEN_LIMIT = 4;
 // The #2680 live-probe fingerprint (many model requests, zero keiko_* facade calls) becomes
@@ -41,14 +231,550 @@ const OUTPUT_BYTES_PER_TOKEN_LIMIT = 4;
 // within their first rounds.
 const TOOL_ADOPTION_GAP_MESSAGE_THRESHOLD = 9;
 const GOVERNED_TOOL_NAME_PREFIX = "keiko_";
+const MODEL_REASONING_EFFORT_SET: ReadonlySet<string> = new Set(MODEL_REASONING_EFFORTS);
+
+const CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.gateway.request-validated",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-gateway.logValidatedRequestBounds",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    maxRequestBytes: { type: "integer", dataClass: "count", required: true },
+    maxPromptTokens: { type: "integer", dataClass: "count", required: true },
+    estimatedPromptTokens: { type: "integer", dataClass: "count", required: true },
+    // #3591 (1.1.7): the output allowance sent with this request, clamped to the window that
+    // remains after the prompt — the value an output-exhausted turn has to be read against.
+    maxOutputTokens: { type: "integer", dataClass: "count", required: false },
+    inputMessageCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-sidecar-gateway-request"],
+  proofIds: ["coding-sidecar.gateway.request-validated.line"],
+  releaseImpact: "patch",
+});
+
+const CODING_SIDECAR_GATEWAY_READINESS_INSUFFICIENT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.gateway.readiness-insufficient",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-gateway.gatewayReadinessProjection",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "model-context-window-insufficient",
+        "no-tool-calling",
+        "tool-calling-unverified",
+        "model-verification-pending",
+      ],
+    },
+    maxPromptTokens: { type: "integer", dataClass: "count", required: false },
+    minimumRequiredPromptTokens: { type: "integer", dataClass: "count", required: false },
+    probeMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["passive", "pending"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "capability",
+  failureClasses: ["coding-sidecar-gateway-readiness"],
+  proofIds: ["coding-sidecar.gateway.readiness-insufficient.line"],
+  releaseImpact: "patch",
+});
+
+const CODING_SIDECAR_GATEWAY_TOOL_AVAILABILITY_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.gateway.tool-availability",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-gateway.resolveToolCatalogHandlerCoverage",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    handlerSetDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    unavailableOptionalTools: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: true,
+      maxItems: 4,
+      values: ["keiko_research_fetch", "keiko_skill_discover", "keiko_skill", "keiko_child_agent"],
+    },
+    unavailableOptionalToolCount: { type: "integer", dataClass: "count", required: true },
+    offeredOptionalTools: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: true,
+      maxItems: 4,
+      values: ["keiko_research_fetch", "keiko_skill_discover", "keiko_skill", "keiko_child_agent"],
+    },
+    offeredOptionalToolCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["coding-sidecar-tool-availability"],
+  proofIds: ["coding-sidecar.gateway.tool-availability.line"],
+  releaseImpact: "patch",
+});
+
+// #3390 closeout (AGENTS.md §8): every rejection this route can hand back gets ONE body-free
+// activity-log line carrying the REASON, so a defect is reconstructable from the log alone instead
+// of only the opaque HTTP status the client saw. `reason` is this closed vocabulary — never a raw
+// message — and is threaded through every 400/403 rejection path below via `logGatewayRejection`.
+// The readiness projection (`/api/coding-sidecar/gateway/profile`) demoting an otherwise
+// "available" profile because its context window cannot survive a real request gets its own op:
+// it is not a per-request rejection, it is a standing state of the profile itself.
+
+type CodingSidecarGatewayRejectionReason =
+  | "request-too-large"
+  | "body-not-json"
+  | "body-empty-messages"
+  | "message-shape-invalid"
+  | "content-part-unsupported"
+  | "tools-not-openai-compatible"
+  | "invalid-sampling"
+  | "input-messages-exceeded"
+  | "prompt-tokens-exceeded"
+  | "invalid-model"
+  | "tool-contract-drift"
+  | "tool-contract-missing"
+  | "tool-contract-empty"
+  | "origin-not-allowed"
+  | "runtime-prompt-budget-denied"
+  | "capability-authenticator-unavailable"
+  | "capability-missing"
+  | "capability-invalid"
+  | "spend-bound-unavailable"
+  | "spend-ledger-unavailable"
+  | "spend-budget-invalid"
+  | "spend-pricing-unavailable"
+  | "spend-budget-exceeded"
+  | "unclassified-rejection";
+
+const CODING_SIDECAR_GATEWAY_REJECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.gateway.rejected",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-gateway.logGatewayRejection",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "request-too-large",
+        "body-not-json",
+        "body-empty-messages",
+        "message-shape-invalid",
+        "content-part-unsupported",
+        "tools-not-openai-compatible",
+        "invalid-sampling",
+        "input-messages-exceeded",
+        "prompt-tokens-exceeded",
+        "invalid-model",
+        "tool-contract-drift",
+        "tool-contract-missing",
+        "tool-contract-empty",
+        "origin-not-allowed",
+        "runtime-prompt-budget-denied",
+        "capability-authenticator-unavailable",
+        "capability-missing",
+        "capability-invalid",
+        "spend-bound-unavailable",
+        "spend-ledger-unavailable",
+        "spend-budget-invalid",
+        "spend-pricing-unavailable",
+        "spend-budget-exceeded",
+        "unclassified-rejection",
+      ],
+    },
+    runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    expectedToolCount: { type: "integer", dataClass: "count", required: false },
+    receivedToolCount: { type: "integer", dataClass: "count", required: false },
+    unexpectedToolCount: { type: "integer", dataClass: "count", required: false },
+    missingToolCount: { type: "integer", dataClass: "count", required: false },
+    toolMismatchSha256: {
+      type: "string",
+      dataClass: "digest",
+      required: false,
+      maxLength: 64,
+    },
+    estimatedPromptTokens: { type: "integer", dataClass: "count", required: false },
+    maxPromptTokens: { type: "integer", dataClass: "count", required: false },
+    // #3591 review: the bound the prompt was actually admitted against — `maxPromptTokens` less
+    // the safety margin and the minimum output allowance (`admissiblePromptTokens`).
+    admissiblePromptTokens: { type: "integer", dataClass: "count", required: false },
+    inputMessageCount: { type: "integer", dataClass: "count", required: false },
+    maxInputMessages: { type: "integer", dataClass: "count", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-sidecar-gateway-rejection"],
+  proofIds: ["coding-sidecar.gateway.rejected.line"],
+  releaseImpact: "patch",
+});
+
+const CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.gateway.turn-failed",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-gateway.reportGatewayTurnFailure",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    revision: { type: "integer", dataClass: "count", required: true },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["running", "paused"],
+    },
+    failureCode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "provider-failed",
+        "stream-incomplete",
+        "turn-rejected",
+        "output-exhausted",
+        "empty-answer",
+        "invalid-tool-call",
+      ],
+    },
+    published: { type: "boolean", dataClass: "closed-enum", required: true },
+    publicationReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "published",
+        "event-hub-unavailable",
+        "terminal-run",
+        "invalid-event",
+        "sequence-exhausted",
+        "capacity-pressure",
+      ],
+    },
+    // The Keiko-code frames and cause classes of the failure, when the turn failed on an error
+    // (PR #3617 review): a model-answer failure writes no error-level diagnostic, so this line is
+    // where its frames live.
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-sidecar-gateway-turn-failure"],
+  proofIds: ["coding-sidecar.gateway.turn-failed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_SIDECAR_GATEWAY_USAGE_SETTLED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.gateway.usage-settled",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-gateway.logGatewayCompletionUsage",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    completionTokens: { type: "integer", dataClass: "count", required: true },
+    promptTokens: { type: "integer", dataClass: "count", required: true },
+    // `released-unspent`: the provider call never ran, the whole reservation went back (#3602).
+    promptSource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["provider-reported", "reserved-estimate", "released-unspent"],
+    },
+    promptSettlementStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["settled", "retained-after-refusal", "unverified", "not-wired"],
+    },
+    outputBytes: { type: "integer", dataClass: "count", required: true },
+    source: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["provider-reported", "streamed-byte-estimate", "output-byte-estimate"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-sidecar-gateway-request"],
+  proofIds: ["coding-sidecar.gateway.usage-settled.line"],
+  releaseImpact: "patch",
+});
+
+const CODING_SIDECAR_GATEWAY_OUTCOME_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.gateway.outcome",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-gateway.recordGatewayOutcome",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["accepted", "cancelled", "failed", "output-limit"],
+    },
+    completionTokens: { type: "integer", dataClass: "count", required: true },
+    outputBytes: { type: "integer", dataClass: "count", required: true },
+    // The route backstop armed for this turn (#3602 review); absent on lines written before 1.1.7.
+    deadlineMs: { type: "integer", dataClass: "duration", required: false },
+    // On a cancelled outcome only: which armed abort source ended the turn, so a stall that ran into
+    // the backstop, or a slow client the shared SSE path killed, never reads like a client that left.
+    cancellationCause: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["client-disconnect", "route-deadline", "backpressure-killed", "run-stopped"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-sidecar-gateway-request"],
+  proofIds: ["coding-sidecar.gateway.outcome.line"],
+  releaseImpact: "patch",
+});
+
+type GatewayRejectionEvidence = Partial<{
+  readonly expectedToolCount: number;
+  readonly receivedToolCount: number;
+  readonly unexpectedToolCount: number;
+  readonly missingToolCount: number;
+  readonly toolMismatchSha256: string;
+  readonly estimatedPromptTokens: number;
+  readonly maxPromptTokens: number;
+  readonly admissiblePromptTokens: number;
+  readonly inputMessageCount: number;
+  readonly maxInputMessages: number;
+}>;
+
+function gatewayRejectionErrorKind(
+  reason: CodingSidecarGatewayRejectionReason,
+):
+  | "invalid-request"
+  | "validation-failed"
+  | "permission-denied"
+  | "authority-denied"
+  | "unavailable" {
+  if (reason === "capability-missing" || reason === "capability-invalid") {
+    return "permission-denied";
+  }
+  if (
+    reason === "origin-not-allowed" ||
+    reason === "runtime-prompt-budget-denied" ||
+    reason === "spend-budget-exceeded" ||
+    reason.startsWith("tool-contract-")
+  ) {
+    return "authority-denied";
+  }
+  if (reason.includes("unavailable") || reason === "spend-ledger-unavailable") {
+    return "unavailable";
+  }
+  return reason === "unclassified-rejection" ? "validation-failed" : "invalid-request";
+}
+
+/** Body-free: `reason` is closed, `runId` and every `extra` field are counts/ids, never text. */
+function logGatewayRejection(
+  ctx: RouteContext,
+  runId: string | undefined,
+  status: number,
+  reason: CodingSidecarGatewayRejectionReason,
+  evidence: GatewayRejectionEvidence = {},
+): void {
+  getServerLogger().warn(
+    activityLogEvent(
+      CODING_SIDECAR_GATEWAY_REJECTED_OPERATION,
+      {
+        correlationId: correlationIdOrUnknown(ctx.correlationId),
+        ...(runId === undefined ? {} : { parentCorrelationId: runId }),
+        status,
+        errorKind: gatewayRejectionErrorKind(reason),
+      },
+      {
+        reason,
+        ...(runId === undefined ? {} : { runId }),
+        ...evidence,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+// One row per message literal `badRequest`/`validationErrorForChatRequest` actually builds — a
+// message change and this table must move together. A future unmatched shape receives the explicit
+// `unclassified-rejection` reason instead of borrowing one of these known meanings.
+const BAD_REQUEST_MESSAGE_REASONS: readonly {
+  readonly test: (message: string) => boolean;
+  readonly reason: CodingSidecarGatewayRejectionReason;
+}[] = [
+  {
+    test: (message) =>
+      message === "Request body is not valid JSON." ||
+      message === "Request body must be a JSON object.",
+    reason: "body-not-json",
+  },
+  {
+    test: (message) => message.startsWith("Request body messages exceed profile maxInputMessages"),
+    reason: "input-messages-exceeded",
+  },
+  {
+    test: (message) =>
+      message.startsWith("Request body estimated prompt tokens exceed profile maxPromptTokens"),
+    reason: "prompt-tokens-exceeded",
+  },
+  {
+    test: (message) => message === "Request body tools must be OpenAI-compatible function tools.",
+    reason: "tools-not-openai-compatible",
+  },
+  {
+    test: (message) => message === "Request body must include a non-empty messages array.",
+    reason: "body-empty-messages",
+  },
+  {
+    test: (message) => message.startsWith("Request body messages must be well-formed"),
+    reason: "message-shape-invalid",
+  },
+  {
+    test: (message) =>
+      message === "Request body message content included an unsupported content part.",
+    reason: "content-part-unsupported",
+  },
+  {
+    test: (message) =>
+      message.startsWith("Request body temperature") || message.startsWith("Request body top_p"),
+    reason: "invalid-sampling",
+  },
+];
+
+function badRequestErrorFields(result: RouteResult): {
+  readonly code: string | undefined;
+  readonly message: string | undefined;
+} {
+  const error = isRecord(result.body) ? result.body.error : undefined;
+  return {
+    code: isRecord(error) && typeof error.code === "string" ? error.code : undefined,
+    message: isRecord(error) && typeof error.message === "string" ? error.message : undefined,
+  };
+}
+
+/**
+ * Classifies a rejection this file itself built (`badRequest`/`readJsonObject`/invalid-model)
+ * into the closed reason vocabulary above by its fixed `code`/message shape.
+ */
+function classifyBadRequestReason(result: RouteResult): CodingSidecarGatewayRejectionReason {
+  const { code, message } = badRequestErrorFields(result);
+  if (code === "PAYLOAD_TOO_LARGE") return "request-too-large";
+  if (code === "INVALID_MODEL") return "invalid-model";
+  if (message === undefined) return "unclassified-rejection";
+  return (
+    BAD_REQUEST_MESSAGE_REASONS.find(({ test }) => test(message))?.reason ??
+    "unclassified-rejection"
+  );
+}
+
+// Test seam: keeps the future/unknown classification directly provable without inventing a
+// production parser branch that does not exist yet.
+export function _classifyBadRequestReasonForTests(
+  result: RouteResult,
+): CodingSidecarGatewayRejectionReason {
+  return classifyBadRequestReason(result);
+}
+
+function isModelReasoningEffort(value: unknown): value is ModelReasoningEffort {
+  return typeof value === "string" && MODEL_REASONING_EFFORT_SET.has(value);
+}
 
 export interface OpenCodeGatewayReadinessRegistry {
   readonly claim: (runId: string) => boolean;
+  readonly verifyObserved: (runId: string) => void;
   readonly isVerified: (runId: string) => boolean;
   readonly waitForObservedRequest: (runId: string, signal: AbortSignal) => Promise<boolean>;
+  /**
+   * Ends a run's pending gateway challenge at once when the route refused its request: a
+   * deterministic 400 cannot turn into an observed request later, so the handshake must not wait
+   * out the start timeout for it (#3603). A run without a pending challenge is unaffected.
+   */
+  readonly refuseChallenge: (runId: string) => void;
   /** True only on the first call per run — bounds the adoption-gap diagnostic to one per run. */
   readonly noteAdoptionGapDiagnosed: (runId: string) => boolean;
   readonly clear: (runId: string, preserveVerification?: boolean) => void;
+}
+
+// A run's one pending challenge wait: an observed request ends it with true; a refused request, a
+// clear, the start signal, or a newer wait for the same run ends it with false and disarms the run.
+function pendingChallengeWait(
+  runId: string,
+  signal: AbortSignal,
+  armed: Set<string>,
+  waiters: Map<string, (result: boolean) => void>,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const settle = (result: boolean): void => {
+      signal.removeEventListener("abort", abort);
+      if (waiters.get(runId) === settle) waiters.delete(runId);
+      if (!result) armed.delete(runId);
+      resolve(result);
+    };
+    const abort = (): void => {
+      settle(false);
+    };
+    waiters.set(runId, settle);
+    signal.addEventListener("abort", abort, { once: true });
+  });
 }
 
 export function createOpenCodeGatewayReadinessRegistry(): OpenCodeGatewayReadinessRegistry {
@@ -56,32 +782,28 @@ export function createOpenCodeGatewayReadinessRegistry(): OpenCodeGatewayReadine
   const armed = new Set<string>();
   const adoptionGapDiagnosed = new Set<string>();
   const waiters = new Map<string, (result: boolean) => void>();
+  const verifyObserved = (runId: string): void => {
+    observed.add(runId);
+    waiters.get(runId)?.(true);
+  };
   return {
     claim: (runId): boolean => {
       if (!armed.delete(runId)) return false;
-      observed.add(runId);
-      waiters.get(runId)?.(true);
+      verifyObserved(runId);
       return true;
     },
+    verifyObserved,
     isVerified: (runId): boolean => observed.has(runId),
     waitForObservedRequest: (runId, signal): Promise<boolean> => {
       if (observed.has(runId)) return Promise.resolve(true);
       if (signal.aborted) return Promise.resolve(false);
       waiters.get(runId)?.(false);
       armed.add(runId);
-      return new Promise((resolve) => {
-        const settle = (result: boolean): void => {
-          signal.removeEventListener("abort", abort);
-          if (waiters.get(runId) === settle) waiters.delete(runId);
-          if (!result) armed.delete(runId);
-          resolve(result);
-        };
-        const abort = (): void => {
-          settle(false);
-        };
-        waiters.set(runId, settle);
-        signal.addEventListener("abort", abort, { once: true });
-      });
+      return pendingChallengeWait(runId, signal, armed, waiters);
+    },
+    refuseChallenge: (runId): void => {
+      if (!armed.delete(runId)) return;
+      waiters.get(runId)?.(false);
     },
     noteAdoptionGapDiagnosed: (runId): boolean => {
       if (adoptionGapDiagnosed.has(runId)) return false;
@@ -178,13 +900,15 @@ function chatFactoryFor(deps: UiHandlerDeps, gateway: Gateway): CodingSidecarGat
 
 function defaultChatFactoryFor(gateway: Gateway): CodingSidecarGatewayChatFactory {
   return (_config, modelId) => {
-    return (request: GatewayRequest) => gateway.chat({ ...request, modelId });
+    return (request: GatewayRequest) =>
+      gateway.chat({ ...request, modelId, latencyProfile: "coding-workbench" });
   };
 }
 
 function defaultChatStreamFactoryFor(gateway: Gateway): CodingSidecarGatewayChatStreamFactory {
   return (_config, modelId) => {
-    return (request: GatewayRequest) => gateway.chatStream({ ...request, modelId });
+    return (request: GatewayRequest) =>
+      gateway.chatStream({ ...request, modelId, latencyProfile: "coding-workbench" });
   };
 }
 
@@ -202,26 +926,74 @@ function unavailableError(): RouteResult {
   };
 }
 
-function parseMessageEntry(value: unknown): CodingSidecarGatewayChatMessage | undefined {
+type ParsedMessagePiece<T> =
+  | { readonly kind: "ok"; readonly value: T }
+  | { readonly kind: "content-part-unsupported" }
+  | { readonly kind: "invalid" };
+
+/**
+ * OpenAI-compatible content part accepted from the model: `{type:"text", text}` only. A bare
+ * single-part prompt still arrives as `content: string`, but when the server sends a multi-part
+ * prompt (opencodeHttpClient.ts `promptParts`: the task text plus the issue context as a
+ * synthetic part), OpenCode's AI-SDK provider re-shapes the outgoing user message as an OpenAI
+ * content-part ARRAY instead (#3390). Every other content-part type (image_url, input_audio,
+ * file, or anything unrecognized) is rejected closed, never silently dropped.
+ */
+function isTextContentPart(
+  value: unknown,
+): value is { readonly type: "text"; readonly text: string } {
+  return isRecord(value) && value.type === "text" && typeof value.text === "string";
+}
+
+/**
+ * Collapses an accepted OpenAI content-part array to the single string the Model Gateway core
+ * consumes, joining parts with a blank line. The synthetic issue-context part is untrusted
+ * repository data, so it is kept inside the same user turn it arrived in rather than becoming a
+ * second, unaccounted-for message. Part count and total byte size ride on the existing
+ * `readJsonObject` request-body budget already enforced before this runs — no new limit is added.
+ */
+function parseMessageContent(value: unknown): ParsedMessagePiece<string> {
+  if (typeof value === "string") return { kind: "ok", value };
+  if (!Array.isArray(value) || value.length === 0) return { kind: "invalid" };
+  const texts: string[] = [];
+  for (const part of value) {
+    if (isTextContentPart(part)) {
+      texts.push(part.text);
+      continue;
+    }
+    if (isRecord(part) && typeof part.type === "string")
+      return { kind: "content-part-unsupported" };
+    return { kind: "invalid" };
+  }
+  return { kind: "ok", value: texts.join("\n\n") };
+}
+
+function parseMessageEntry(value: unknown): ParsedMessagePiece<CodingSidecarGatewayChatMessage> {
   const base = parseMessageBase(value);
-  if (base === undefined) return undefined;
-  const continuation = parseMessageContinuation(value, base.role);
-  if (continuation === undefined) return undefined;
-  return {
-    ...base,
-    ...continuation,
-  };
+  if (base.kind !== "ok") return base;
+  const continuation = parseMessageContinuation(value, base.value.role);
+  if (continuation === undefined) return { kind: "invalid" };
+  return { kind: "ok", value: { ...base.value, ...continuation } };
 }
 
 function parseMessageBase(
   value: unknown,
-): Pick<CodingSidecarGatewayChatMessage, "role" | "content"> | undefined {
-  if (!isRecord(value) || typeof value.role !== "string" || typeof value.content !== "string") {
-    return undefined;
+): ParsedMessagePiece<Pick<CodingSidecarGatewayChatMessage, "role" | "content">> {
+  if (
+    !isRecord(value) ||
+    typeof value.role !== "string" ||
+    !isCodingSidecarGatewayChatRole(value.role)
+  ) {
+    return { kind: "invalid" };
   }
-  return isCodingSidecarGatewayChatRole(value.role)
-    ? { role: value.role, content: value.content }
-    : undefined;
+  const content =
+    value.content === null &&
+    value.role === "assistant" &&
+    parseContinuationToolCalls(value.tool_calls) !== undefined
+      ? { kind: "ok" as const, value: "" }
+      : parseMessageContent(value.content);
+  if (content.kind !== "ok") return content;
+  return { kind: "ok", value: { role: value.role, content: content.value } };
 }
 
 function parseMessageContinuation(
@@ -284,17 +1056,31 @@ function parseContinuationToolCall(value: unknown): NormalizedToolCall | undefin
   }
 }
 
-function parseMessages(value: unknown): readonly CodingSidecarGatewayChatMessage[] | undefined {
+/**
+ * Distinguishes the two 400 reasons an unusable `messages` array can hand back (#3390): `undefined`
+ * for the array being missing/empty (`body-empty-messages`), a `RouteResult` when entries were
+ * present but at least one was unparsable — `content-part-unsupported` for a recognized-but-closed
+ * content part, `message-shape-invalid` (carrying only the total entry COUNT, never any entry's
+ * content) for every other malformed shape.
+ */
+function parseMessages(
+  value: unknown,
+): readonly CodingSidecarGatewayChatMessage[] | RouteResult | undefined {
   if (!Array.isArray(value) || value.length === 0) {
     return undefined;
   }
   const messages: CodingSidecarGatewayChatMessage[] = [];
   for (const entry of value) {
-    const message = parseMessageEntry(entry);
-    if (message === undefined) {
-      return undefined;
+    const parsed = parseMessageEntry(entry);
+    if (parsed.kind === "content-part-unsupported") {
+      return badRequest("Request body message content included an unsupported content part.");
     }
-    messages.push(message);
+    if (parsed.kind === "invalid") {
+      return badRequest(
+        `Request body messages must be well-formed chat messages (entries: ${String(value.length)}).`,
+      );
+    }
+    messages.push(parsed.value);
   }
   return messages;
 }
@@ -351,20 +1137,120 @@ function isMatchingModelAlias(
     : model === undefined || model === modelAlias;
 }
 
+/**
+ * The exact managed set is advertised through the catalog, never forwarded raw: the model-gateway
+ * bridge (packages/keiko-model-gateway/src/toolCatalogBridge.ts) derives its actual `tools` from a
+ * `toolCatalog` projection and rejects any request that also carries a handwritten `tools` field
+ * alongside a "bound" advertisement. `isExactManagedToolSet` is the same trust-boundary check
+ * `runtimeGatewayAdmissionResponse` already applies to the incoming sidecar request below, so the
+ * advertisement and the admission gate are provably the same source (ADR-0175 D1/D4).
+ */
+/** The per-request facts the tool-catalog advertisement is minted from. */
+interface GatewayToolCatalogOffer {
+  readonly coverage: OpenCodeGatewayHandlerCoverage | undefined;
+  readonly offerLifetimeMs: number;
+}
+
+function toolCatalogFor(
+  tools: readonly ToolDefinition[] | undefined,
+  offer: GatewayToolCatalogOffer,
+): GatewayCallRequest["toolCatalog"] {
+  return isExactManagedToolSet(tools)
+    ? createOpenCodeGatewayToolCatalogAdvertisement(
+        Date.now(),
+        offer.coverage,
+        offer.offerLifetimeMs,
+      )
+    : undefined;
+}
+
+function toolRequestFields(
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+  offer: GatewayToolCatalogOffer,
+): Pick<GatewayCallRequest, "toolCatalog"> {
+  const toolCatalog = toolCatalogFor(parsed.tools, offer);
+  if (toolCatalog !== undefined) return { toolCatalog };
+  return {};
+}
+
+const OPENCODE_OPTIONAL_TOOL_NAMES: ReadonlySet<string> = new Set<OpenCodeOptionalToolName>([
+  "keiko_research_fetch",
+  "keiko_skill_discover",
+  "keiko_skill",
+  "keiko_child_agent",
+]);
+
+/**
+ * #3384 wave-3 W3-1 redirect (reviewer 3941816393 / B1): `createOpenCodeGatewayToolCatalogAdvertisement`'s
+ * `offered`/`readiness`/`handlerSetDigest` previously reflected the catalog's static declarations
+ * only -- every tool always "ready" regardless of whether its handler is actually bound for this run
+ * (#3413-AC1/#3414-AC4/AC9). `runtimeCapabilityAuthenticator(deps)?.unavailableOptionalTools` is the
+ * real per-run fact (`productionManagedWorktreeTools.ts`'s `deriveOptionalToolAvailability`, wired
+ * through `productionCodingRuntimeResolver.ts` the same way `reservePromptTokens`/
+ * `settlePromptTokens` already are). The catalog's thirteen mandatory tools are never gated by this
+ * check -- only the three optional tools (`keiko_research_fetch`/`keiko_skill`/`keiko_child_agent`)
+ * can ever be reported unavailable -- so a structural (no-coverage) first pass is used only to learn
+ * the compiled projection's real tool ids/aliases, never to decide readiness itself. Absent
+ * capability info (no run bound, or an older composition that has not wired this yet) preserves the
+ * advertisement's prior, structural-only behaviour byte-for-byte.
+ */
+function resolveToolCatalogHandlerCoverage(
+  deps: UiHandlerDeps,
+  runId: string,
+  correlationId: string | undefined,
+): OpenCodeGatewayHandlerCoverage | undefined {
+  const unavailable = runtimeCapabilityAuthenticator(deps)?.unavailableOptionalTools?.(runId);
+  if (unavailable === undefined) return undefined;
+  const unavailableOptionalTools = [...OPENCODE_OPTIONAL_TOOL_NAMES]
+    .filter((name): name is OpenCodeOptionalToolName =>
+      unavailable.has(name as OpenCodeOptionalToolName),
+    )
+    .sort(compareStrings);
+  const offeredOptionalTools = [...OPENCODE_OPTIONAL_TOOL_NAMES]
+    .filter(
+      (name): name is OpenCodeOptionalToolName =>
+        !unavailable.has(name as OpenCodeOptionalToolName),
+    )
+    .sort(compareStrings);
+  const coverage = createCanonicalOpenCodeHandlerCoverage(unavailable);
+  getServerLogger().info(
+    activityLogEvent(
+      CODING_SIDECAR_GATEWAY_TOOL_AVAILABILITY_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      {
+        runId,
+        handlerSetDigest: coverage.handlerSetDigest,
+        unavailableOptionalTools,
+        unavailableOptionalToolCount: unavailableOptionalTools.length,
+        offeredOptionalTools,
+        offeredOptionalToolCount: offeredOptionalTools.length,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+  return coverage;
+}
+
 function buildChatRequest(
   parsed: CodingSidecarGatewayChatCompletionRequest,
   modelAlias: string,
   cancellationSignal: AbortSignal,
   maxOutputTokens: number,
-): GatewayRequest {
+  correlationId: string | undefined,
+  reasoningEffort: ModelReasoningEffort | undefined,
+  toolCatalogOffer: GatewayToolCatalogOffer,
+): GatewayCallRequest {
   return {
     modelId: modelAlias,
     messages: parsed.messages,
-    ...(parsed.tools === undefined ? {} : { tools: parsed.tools }),
+    ...toolRequestFields(parsed, toolCatalogOffer),
     ...(parsed.temperature === undefined ? {} : { temperature: parsed.temperature }),
     ...(parsed.top_p === undefined ? {} : { topP: parsed.top_p }),
     cancellationSignal,
     maxOutputTokens,
+    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+    logContext: { correlationId },
   };
 }
 
@@ -374,6 +1260,9 @@ function parseChatRequest(
   const messages = parseMessages(body.messages);
   if (messages === undefined) {
     return undefined;
+  }
+  if (isRouteResult(messages)) {
+    return messages;
   }
   const tools = parseTools(body.tools);
   if (isRouteResult(tools)) {
@@ -445,7 +1334,11 @@ function currentModelSource(deps: UiHandlerDeps): CodingWorkbenchModelSource {
   );
 }
 
-function resolveGatewayProfile(deps: UiHandlerDeps): ResolvedGatewayProfile {
+function resolveGatewayProfile(
+  deps: UiHandlerDeps,
+  selectedModelId?: string,
+  verificationAtMs?: number,
+): ResolvedGatewayProfile {
   const config = currentGatewayConfig(deps);
   const gateway = config === undefined ? undefined : currentGateway(deps);
   const modelSource = currentModelSource(deps);
@@ -457,6 +1350,10 @@ function resolveGatewayProfile(deps: UiHandlerDeps): ResolvedGatewayProfile {
     // probe must not lock out a gateway that answers now — a request that cannot be served fails on
     // its own live error, while the projection is what a surface is allowed to CLAIM.
     gatewayVerification: currentGatewayVerification(deps),
+    ...(selectedModelId === undefined ? {} : { modelId: selectedModelId }),
+    // An admitted run's calls judge the tool-calling proof as of its admission (F73); the profile
+    // projection and every new run judge it now.
+    ...(verificationAtMs === undefined ? {} : { verificationAtMs }),
   });
   return { config, gateway, modelSource, result };
 }
@@ -484,13 +1381,42 @@ function emitGatewayEvidenceAggregationDiagnostic(deps: UiHandlerDeps, runId: st
   });
 }
 
+// A cancelled outcome names the abort source that ended the turn. Without an aborted source it is
+// the transport path — an SSE or terminal write found the response gone before its `close`
+// listener ran — which is the client leaving, never the deadline.
+function gatewayOutcomeCancellationCause(
+  cancellation: GatewayRequestCancellation,
+  outcome: CodingSidecarGatewayRunOutcome,
+): { readonly cancellationCause: CodingSidecarGatewayCancellationCause } | undefined {
+  if (outcome !== "cancelled") return undefined;
+  return { cancellationCause: cancellation.cause() ?? "client-disconnect" };
+}
+
 function recordGatewayOutcome(
+  ctx: RouteContext,
   deps: UiHandlerDeps,
   runId: string,
+  cancellation: GatewayRequestCancellation,
   outcome: CodingSidecarGatewayRunOutcome,
   completionTokens: number,
   outputBytes: number,
 ): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CODING_SIDECAR_GATEWAY_OUTCOME_OPERATION,
+      { correlationId: correlationIdOrUnknown(ctx.correlationId), parentCorrelationId: runId },
+      {
+        runId,
+        outcome,
+        completionTokens,
+        outputBytes,
+        deadlineMs: cancellation.deadlineMs,
+        ...gatewayOutcomeCancellationCause(cancellation, outcome),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
   try {
     void Promise.resolve(
       evidenceAggregator(deps)?.record({ runId, outcome, completionTokens, outputBytes }),
@@ -568,24 +1494,47 @@ function samplingValidationMessage(
   return `Request body ${issue.message.replace("topP", "top_p")}.`;
 }
 
-function promptTokenEstimate(parsed: CodingSidecarGatewayChatCompletionRequest): number {
-  const segments = parsed.messages.map((message) => `${message.role}\n${message.content}`);
-  if (parsed.tools === undefined) {
-    return estimateTokensForSegments(segments);
-  }
-  return estimateTokensForSegments([...segments, JSON.stringify(parsed.tools)]);
+function promptTokenEstimate(
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+  accounting: ModelTokenAccounting | undefined,
+): number {
+  return countGatewayPromptTokens(parsed, accounting);
 }
 
-function budgetValidationMessage(
+function promptTokenAccounting(profile: AvailableGatewayProfile): ModelTokenAccounting | undefined {
+  return findConfiguredCapability(profile.config, profile.result.modelAlias)?.tokenAccounting;
+}
+
+interface OpenAiCompatibleContextOverflowBody {
+  readonly error: {
+    readonly code: "context_length_exceeded";
+    readonly message: string;
+  };
+}
+
+function openAiCompatibleContextOverflowBody(message: string): OpenAiCompatibleContextOverflowBody {
+  return { error: { code: "context_length_exceeded", message } };
+}
+
+function contextOverflowRequest(message: string): RouteResult {
+  return { status: 400, body: openAiCompatibleContextOverflowBody(message) };
+}
+
+function budgetValidationError(
   parsed: CodingSidecarGatewayChatCompletionRequest,
   runMetadata: CodingWorkbenchSidecarGatewayRunMetadata,
-): string | undefined {
+  estimatedPromptTokens: number,
+): RouteResult | undefined {
   if (parsed.messages.length > runMetadata.maxInputMessages) {
-    return `Request body messages exceed profile maxInputMessages (${String(runMetadata.maxInputMessages)}).`;
+    return contextOverflowRequest(
+      `Request body messages exceed profile maxInputMessages (${String(runMetadata.maxInputMessages)}).`,
+    );
   }
-  const estimatedPromptTokens = promptTokenEstimate(parsed);
-  if (estimatedPromptTokens > runMetadata.maxPromptTokens) {
-    return `Request body estimated prompt tokens exceed profile maxPromptTokens (${String(runMetadata.maxPromptTokens)}).`;
+  const admissible = admissiblePromptTokens(runMetadata);
+  if (estimatedPromptTokens > admissible) {
+    return contextOverflowRequest(
+      `Request body estimated prompt tokens exceed profile maxPromptTokens (${String(runMetadata.maxPromptTokens)}) less the reserved output allowance (${String(admissible)} admissible).`,
+    );
   }
   return undefined;
 }
@@ -613,6 +1562,7 @@ function validationErrorForChatRequest(
   modelAlias: string,
   runMetadata: CodingWorkbenchSidecarGatewayRunMetadata,
   runtimeAuthenticated: boolean,
+  estimatedPromptTokens: number,
 ): RouteResult | undefined {
   if (isRouteResult(parsed)) {
     return parsed;
@@ -621,10 +1571,8 @@ function validationErrorForChatRequest(
   if (invalidSamplingMessage !== undefined) {
     return badRequest(invalidSamplingMessage);
   }
-  const invalidBudgetMessage = budgetValidationMessage(parsed, runMetadata);
-  if (invalidBudgetMessage !== undefined) {
-    return badRequest(invalidBudgetMessage);
-  }
+  const invalidBudget = budgetValidationError(parsed, runMetadata, estimatedPromptTokens);
+  if (invalidBudget !== undefined) return invalidBudget;
   if (!isMatchingModelAlias(parsed.model, modelAlias, runtimeAuthenticated)) {
     return {
       status: 400,
@@ -634,15 +1582,47 @@ function validationErrorForChatRequest(
   return undefined;
 }
 
+function gatewayDiagnosticCorrelation(
+  ctx: RouteContext,
+  runId: string,
+): { readonly correlationId: string; readonly parentCorrelationId?: string } {
+  const correlationId = ctx.correlationId ?? runId;
+  return correlationId === runId
+    ? { correlationId }
+    : { correlationId, parentCorrelationId: runId };
+}
+
+// A turn the model ended without a usable answer -- nothing at all, reasoning until its output budget
+// ran out, or a tool call that never parsed or matched its schema -- is the model's answer, not a
+// server fault: the warn-level turn-failed line names it. An error-level diagnostic opened a support
+// incident for every such turn; a lab run of the 1.1.8 candidate behind a LiteLLM hosted_vllm route
+// opened one on its first empty answer.
+const MODEL_ANSWER_FAILURES: ReadonlySet<CodingWorkbenchTurnFailureCode> = new Set([
+  "output-exhausted",
+  "empty-answer",
+  "invalid-tool-call",
+]);
+
+function isModelAnswerFailure(error: unknown): boolean {
+  const cause = modelTurnFailureCode(error);
+  return cause !== undefined && MODEL_ANSWER_FAILURES.has(cause);
+}
+
+// A model-answer failure writes no error-level diagnostic only when its warn-level turn-failed line
+// was written. A run no longer running or paused gets no such line, so the diagnostic keeps the
+// failure's class and frames (PR #3617 review).
 function emitGatewayFailureDiagnostic(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   error: unknown,
+  runId: string,
+  turnFailureRecorded: boolean,
 ): void {
+  if (turnFailureRecorded && isModelAnswerFailure(error)) return;
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
-      correlationId: ctx.correlationId ?? "unknown",
+      ...gatewayDiagnosticCorrelation(ctx, runId),
       operation: CODING_SIDECAR_GATEWAY_ROUTE,
       source: "coding-sidecar-gateway.chat",
       error,
@@ -651,12 +1631,130 @@ function emitGatewayFailureDiagnostic(
   );
 }
 
+/** Writes the run's turn-failed line; false for a run that is no longer running or paused. */
+function reportGatewayTurnFailure(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  runId: string,
+  failureCode: CodingWorkbenchTurnFailureCode,
+  error?: unknown,
+): boolean {
+  const snapshot = deps.codingRuntimeOrchestrator?.getSnapshot(runId);
+  if (snapshot?.state !== "running" && snapshot?.state !== "paused") return false;
+  const publicationReason = gatewayTurnFailurePublication(deps, runId, snapshot, failureCode);
+  const run = { revision: snapshot.revision, state: snapshot.state };
+  logGatewayTurnFailure(ctx, runId, run, failureCode, publicationReason, error);
+  return true;
+}
+
+type GatewayFailurePublicationReason =
+  | "published"
+  | "event-hub-unavailable"
+  | "invalid-event"
+  | "sequence-exhausted"
+  | "capacity-pressure"
+  | "terminal-run";
+
+function gatewayTurnFailurePublication(
+  deps: UiHandlerDeps,
+  runId: string,
+  snapshot: CodingWorkbenchRuntimeSnapshot,
+  failureCode: CodingWorkbenchTurnFailureCode,
+): GatewayFailurePublicationReason {
+  const publication = deps.codingRuntimeEventHub?.publishTurnFailure(
+    runId,
+    snapshot.state,
+    snapshot.revision,
+    failureCode,
+  );
+  const publicationReason =
+    publication?.ok === true ? "published" : (publication?.reason ?? "event-hub-unavailable");
+  return publicationReason;
+}
+
+function logGatewayTurnFailure(
+  ctx: RouteContext,
+  runId: string,
+  { revision, state }: { readonly revision: number; readonly state: "running" | "paused" },
+  failureCode: CodingWorkbenchTurnFailureCode,
+  publicationReason: GatewayFailurePublicationReason,
+  error: unknown,
+): void {
+  const { frames, causeChain } = describeError(error);
+  getServerLogger().warn(
+    activityLogEvent(
+      CODING_SIDECAR_GATEWAY_TURN_FAILED_OPERATION,
+      {
+        ...gatewayDiagnosticCorrelation(ctx, runId),
+        errorKind: failureCode === "turn-rejected" ? "validation-failed" : "unavailable",
+      },
+      {
+        runId,
+        revision,
+        state,
+        failureCode,
+        published: publicationReason === "published",
+        publicationReason,
+        ...(error === undefined || frames === undefined ? {} : { frames }),
+        ...(error === undefined || causeChain === undefined ? {} : { causeChain }),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+// The causes the buffered and the streamed path name the same way. Both output-budget exhaustion
+// and an empty answer are HTTP 200 provider errors, so they are resolved before any status check.
+function modelTurnFailureCode(error: unknown): CodingWorkbenchTurnFailureCode | undefined {
+  // The gateway's own redaction refused an answer nested too deep to walk: a Workbench guard
+  // rejected the turn, whether or not a tool was called, so it is no invalid tool call and keeps
+  // its error-level diagnostic (PR #3617 review). It extends MalformedToolCallError, so it is named
+  // before that check.
+  if (
+    error instanceof ContextOverflowError ||
+    error instanceof ModelRefusalError ||
+    error instanceof ResponseRedactionError
+  )
+    return "turn-rejected";
+  if (error instanceof ProviderOutputExhaustedError) return "output-exhausted";
+  if (error instanceof ProviderEmptyAnswerError) return "empty-answer";
+  if (error instanceof MalformedToolCallError) return "invalid-tool-call";
+  return undefined;
+}
+
+function gatewayTurnFailureCode(error: unknown): CodingWorkbenchTurnFailureCode {
+  const modelCause = modelTurnFailureCode(error);
+  if (modelCause !== undefined) return modelCause;
+  if (
+    error instanceof TimeoutError ||
+    error instanceof TransportError ||
+    (error instanceof ProviderError && error.httpStatus === 200)
+  )
+    return "stream-incomplete";
+  return "provider-failed";
+}
+
+function gatewayStreamFailureCode(error: unknown): CodingWorkbenchTurnFailureCode {
+  if (gatewaySpendRejectionReason(error) !== undefined) return "turn-rejected";
+  const modelCause = modelTurnFailureCode(error);
+  if (modelCause !== undefined) return modelCause;
+  if (
+    error instanceof AuthenticationError ||
+    error instanceof RateLimitError ||
+    error instanceof CircuitOpenError ||
+    (error instanceof ProviderError && error.httpStatus !== 200)
+  )
+    return "provider-failed";
+  return "stream-incomplete";
+}
+
 /**
  * A mid-stream failure aborts an in-flight coding turn. Before this the cause went into a bare
  * `catch {}` — the pattern AGENTS.md §7 forbids — leaving `settleGatewayStreamError` to emit the SSE
  * error frame with nothing recorded anywhere, on the coding path. The frame and the run outcome are
- * unchanged; only the redacted cause is added, keyed by the request correlation id and separated from
- * the pre-stream failure by `source` so an operator can tell "the stream never opened" from "the
+ * unchanged; only the redacted cause is added, keyed by the request and linked to its run,
+ * separated from the pre-stream failure by `source` so an operator can tell "the stream never opened" from "the
  * stream died after N deltas". `partialUsage` rides along through `serverDiagnosticFromError`, so an
  * interrupted turn's accumulated token counts stay visible instead of vanishing with the error.
  */
@@ -664,11 +1762,14 @@ function emitGatewayStreamFailureDiagnostic(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   error: unknown,
+  runId: string,
+  turnFailureRecorded: boolean,
 ): void {
+  if (turnFailureRecorded && isModelAnswerFailure(error)) return;
   emitServerDiagnostic(
     deps.diagnostics,
     serverDiagnosticFromError({
-      correlationId: ctx.correlationId ?? "unknown",
+      ...gatewayDiagnosticCorrelation(ctx, runId),
       operation: CODING_SIDECAR_GATEWAY_ROUTE,
       source: "coding-sidecar-gateway.stream",
       error,
@@ -682,7 +1783,18 @@ interface RuntimeCapabilityAuthenticator {
   readonly authenticate: (capability: string, audience: "model-gateway" | "tool-facade") => unknown;
   readonly reservePromptTokens?:
     ((capability: string, promptTokens: number) => unknown) | undefined;
+  readonly settlePromptTokens?:
+    | ((capability: string, reservedPromptTokens: number, actualPromptTokens: number) => unknown)
+    | undefined;
+  // #3384 wave-3 W3-1 redirect (reviewer 3941816393 / B1): the real per-run fact behind the
+  // outgoing tool-catalog advertisement's readiness (#3413-AC1/#3414-AC4/AC9). `undefined` for a
+  // runId this capability has no record of (or an authenticator that predates this wiring)
+  // preserves the advertisement's prior, structural-only behaviour.
+  readonly unavailableOptionalTools?:
+    ((runId: string) => ReadonlySet<OpenCodeOptionalToolName> | undefined) | undefined;
 }
+
+type RuntimeAdapterKind = "model-gateway-sidecar" | "codex-cli-adapter";
 
 function runtimeCapabilityAuthenticator(
   deps: UiHandlerDeps,
@@ -690,11 +1802,47 @@ function runtimeCapabilityAuthenticator(
   return deps.runtimeCapabilityAuthenticator;
 }
 
-function authenticatedRuntimeRunId(value: unknown): string | undefined {
+interface AuthenticatedRuntimeBinding {
+  readonly runId: string;
+  readonly adapterKind?: RuntimeAdapterKind | undefined;
+  readonly modelProfileId?: string | undefined;
+  readonly reasoningEffort?: ModelReasoningEffort | undefined;
+  // When the run was admitted (its capability issued): a sidecar call judges the model's
+  // tool-calling proof as of this instant, so a proof that ages out mid-run cannot strand the run
+  // (coding run 24, F73).
+  readonly admittedAtMs?: number | undefined;
+}
+
+function authenticatedRuntimeBinding(value: unknown): AuthenticatedRuntimeBinding | undefined {
   if (!isRecord(value) || value.ok !== true || !isRecord(value.binding)) return undefined;
-  return typeof value.binding.runId === "string" && value.binding.runId.length > 0
-    ? value.binding.runId
-    : undefined;
+  if (typeof value.binding.runId !== "string" || value.binding.runId.length === 0) return undefined;
+  return {
+    runId: value.binding.runId,
+    ...optionalBindingFields(value.binding),
+    ...(isAdmissionInstant(value.issuedAtMs) ? { admittedAtMs: value.issuedAtMs } : {}),
+  };
+}
+
+function optionalBindingFields(
+  binding: Readonly<Record<string, unknown>>,
+): Omit<AuthenticatedRuntimeBinding, "runId" | "admittedAtMs"> {
+  const adapterKind = runtimeAdapterKind(binding.adapterKind);
+  const effort = binding.reasoningEffort;
+  return {
+    ...(adapterKind === undefined ? {} : { adapterKind }),
+    ...(typeof binding.modelProfileId === "string"
+      ? { modelProfileId: binding.modelProfileId }
+      : {}),
+    ...(isModelReasoningEffort(effort) ? { reasoningEffort: effort } : {}),
+  };
+}
+
+function isAdmissionInstant(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function runtimeAdapterKind(value: unknown): RuntimeAdapterKind | undefined {
+  return value === "model-gateway-sidecar" || value === "codex-cli-adapter" ? value : undefined;
 }
 
 function promptReservationRunId(value: unknown): string | undefined {
@@ -733,16 +1881,66 @@ function isAdmittedManagedToolSet(
   );
 }
 
+function isRuntimeReadinessProbe(parsed: CodingSidecarGatewayChatCompletionRequest): boolean {
+  const readiness = parsed.messages.at(-1);
+  return (
+    readiness?.role === "user" &&
+    readiness.content === OPENCODE_RUNTIME_READINESS_PROMPT &&
+    parsed.messages.slice(0, -1).every((message) => message.role === "system")
+  );
+}
+
+function toolContractRejectionReason(tools: readonly ToolDefinition[] | undefined): {
+  readonly code: string;
+  readonly reason: CodingSidecarGatewayRejectionReason;
+} {
+  if (tools === undefined) {
+    return { code: "CODING_GATEWAY_TOOL_CONTRACT_MISSING", reason: "tool-contract-missing" };
+  }
+  if (tools.length === 0) {
+    return { code: "CODING_GATEWAY_TOOL_CONTRACT_EMPTY", reason: "tool-contract-empty" };
+  }
+  return { code: "CODING_GATEWAY_TOOL_CONTRACT_DRIFT", reason: "tool-contract-drift" };
+}
+
+/**
+ * Identifiers only — the mismatching tool NAMES, never a schema or a body — so the activity-log
+ * line this feeds stays body-free (AGENTS.md §8) while still naming exactly which tools drifted.
+ */
+function toolNameSetDigest(names: readonly string[]): string {
+  const hash = createHash("sha256");
+  hash.update("keiko.coding-sidecar.tool-mismatch.v1\0");
+  for (const name of [...names].sort(compareStrings)) hash.update(`${String(name.length)}:${name}`);
+  return hash.digest("hex");
+}
+
+function toolContractMismatch(
+  tools: readonly ToolDefinition[] | undefined,
+): GatewayRejectionEvidence {
+  const expected = new Set<string>(OPENCODE_MODEL_VISIBLE_TOOL_NAMES);
+  const received = new Set(tools?.map((tool) => tool.name) ?? []);
+  const unexpected = [...received].filter((name) => !expected.has(name));
+  const missing = [...expected].filter((name) => !received.has(name));
+  return {
+    expectedToolCount: expected.size,
+    receivedToolCount: received.size,
+    unexpectedToolCount: unexpected.length,
+    missingToolCount: missing.length,
+    toolMismatchSha256: toolNameSetDigest([...unexpected, "--missing--", ...missing]),
+  };
+}
+
 function emitGatewayToolContractDiagnostic(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-  tools: readonly ToolDefinition[] | undefined,
+  runId: string,
+  parsed: CodingSidecarGatewayChatCompletionRequest,
 ): void {
-  let code = "CODING_GATEWAY_TOOL_CONTRACT_DRIFT";
-  if (tools === undefined) code = "CODING_GATEWAY_TOOL_CONTRACT_MISSING";
-  else if (tools.length === 0) code = "CODING_GATEWAY_TOOL_CONTRACT_EMPTY";
+  const { tools } = parsed;
+  const { code, reason } = toolContractRejectionReason(tools);
   emitServerDiagnostic(deps.diagnostics, {
-    correlationId: ctx.correlationId ?? "unknown",
+    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    parentCorrelationId: runId,
     timestamp: new Date(Date.now()).toISOString(),
     operation: CODING_SIDECAR_GATEWAY_ROUTE,
     source: "coding-sidecar-gateway.tool-contract",
@@ -750,6 +1948,23 @@ function emitGatewayToolContractDiagnostic(
     message: "coding-sidecar-gateway-tool-contract-rejected",
     code,
   });
+  logGatewayRejection(ctx, runId, 403, reason, toolContractMismatch(tools));
+  refuseReadinessChallenge(deps, runId, parsed);
+  reportGatewayTurnFailure(ctx, deps, runId, "turn-rejected");
+}
+
+// Ends a pending readiness challenge at once when the route refused the challenge's own request: a
+// deterministic refusal of the readiness prompt cannot turn into an observed request later (#3603).
+// A refused side request, a title or compaction call the runtime sends meanwhile, leaves the
+// challenge waiting for the readiness prompt (PR #3617 review).
+function refuseReadinessChallenge(
+  deps: UiHandlerDeps,
+  runId: string,
+  parsed: CodingSidecarGatewayChatCompletionRequest | undefined,
+): void {
+  if (parsed !== undefined && isRuntimeReadinessProbe(parsed)) {
+    gatewayReadinessRegistry(deps)?.refuseChallenge(runId);
+  }
 }
 
 /**
@@ -781,7 +1996,7 @@ function noteToolAdoptionGap(
   if (!hasToolAdoptionGapFingerprint(messages)) return;
   if (gatewayReadinessRegistry(deps)?.noteAdoptionGapDiagnosed(runId) === false) return;
   emitServerDiagnostic(deps.diagnostics, {
-    correlationId: ctx.correlationId ?? "unknown",
+    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
     timestamp: new Date(Date.now()).toISOString(),
     operation: CODING_SIDECAR_GATEWAY_ROUTE,
     source: "coding-sidecar-gateway.tool-adoption",
@@ -802,41 +2017,110 @@ function unauthorizedGatewayRequest(): RouteResult {
   };
 }
 
+interface AuthenticatedGatewayRequest {
+  readonly runtimeAuthenticated: boolean;
+  readonly runId: string;
+  readonly capability: string;
+  readonly adapterKind?: RuntimeAdapterKind | undefined;
+  readonly modelProfileId?: string | undefined;
+  readonly reasoningEffort?: ModelReasoningEffort | undefined;
+  readonly admittedAtMs?: number | undefined;
+}
+
+// The optional facts a runtime capability carries onto the authenticated request.
+function runtimeBindingFields(
+  binding: AuthenticatedRuntimeBinding,
+): Omit<AuthenticatedGatewayRequest, "runtimeAuthenticated" | "runId" | "capability"> {
+  return {
+    ...(binding.adapterKind === undefined ? {} : { adapterKind: binding.adapterKind }),
+    ...(binding.modelProfileId === undefined ? {} : { modelProfileId: binding.modelProfileId }),
+    ...(binding.reasoningEffort === undefined ? {} : { reasoningEffort: binding.reasoningEffort }),
+    ...(binding.admittedAtMs === undefined ? {} : { admittedAtMs: binding.admittedAtMs }),
+  };
+}
+
 function authenticateGatewayRequest(
   ctx: RouteContext,
   deps: UiHandlerDeps,
-):
-  | { readonly runtimeAuthenticated: false; readonly runId: string; readonly capability: string }
-  | { readonly runtimeAuthenticated: true; readonly runId: string; readonly capability: string }
-  | RouteResult {
-  if (hasOrigin(ctx)) return forbiddenGatewayRequest();
+): AuthenticatedGatewayRequest | RouteResult {
+  if (hasOrigin(ctx)) {
+    // No runId yet — this refusal happens before capability authentication resolves one.
+    logGatewayRejection(ctx, undefined, 403, "origin-not-allowed");
+    return forbiddenGatewayRequest();
+  }
   const authenticator = runtimeCapabilityAuthenticator(deps);
   const capability = bearerCapability(ctx);
-  if (authenticator === undefined || capability === undefined) return unauthorizedGatewayRequest();
-  const runId = authenticatedRuntimeRunId(authenticator.authenticate(capability, "model-gateway"));
-  if (runId === undefined) {
+  if (authenticator === undefined) {
+    // No runId yet — capability authentication never ran.
+    logGatewayRejection(ctx, undefined, 401, "capability-authenticator-unavailable");
+    return unauthorizedGatewayRequest();
+  }
+  if (capability === undefined) {
+    logGatewayRejection(ctx, undefined, 401, "capability-missing");
+    return unauthorizedGatewayRequest();
+  }
+  const binding = authenticatedRuntimeBinding(
+    authenticator.authenticate(capability, "model-gateway"),
+  );
+  if (binding === undefined) {
+    // No runId available — the presented capability failed to bind to a runtime.
+    logGatewayRejection(ctx, undefined, 401, "capability-invalid");
     return unauthorizedGatewayRequest();
   }
   // Runtime launch wires the readiness registry. Other callers still require the
   // same bound bearer, but do not claim the one-shot OpenCode readiness challenge.
   return {
-    runtimeAuthenticated: gatewayReadinessRegistry(deps) !== undefined,
-    runId,
+    runtimeAuthenticated:
+      binding.adapterKind === "model-gateway-sidecar" ||
+      gatewayReadinessRegistry(deps) !== undefined,
+    runId: binding.runId,
     capability,
+    ...runtimeBindingFields(binding),
   };
+}
+
+// The profile an authenticated request is served under: its run's model, with the tool-calling proof
+// judged as of the run's admission (F73).
+function resolveAuthenticatedGatewayProfile(
+  deps: UiHandlerDeps,
+  authentication: AuthenticatedGatewayRequest,
+): ResolvedGatewayProfile {
+  return resolveGatewayProfile(
+    deps,
+    gatewayProfileModelIdForAuthentication(authentication),
+    authentication.admittedAtMs,
+  );
+}
+
+function gatewayProfileModelIdForAuthentication(
+  authentication: AuthenticatedGatewayRequest,
+): string | undefined {
+  return isRuntimeTransportProfileId(authentication.modelProfileId)
+    ? undefined
+    : authentication.modelProfileId;
+}
+
+function isRuntimeTransportProfileId(modelProfileId: string | undefined): boolean {
+  return (
+    modelProfileId === undefined ||
+    modelProfileId === OPENCODE_RUNTIME_MODEL_ALIAS ||
+    modelProfileId === CODING_SAFE_SIDECAR_GATEWAY_PROFILE_ID
+  );
 }
 
 function reserveGatewayPromptBudget(
   deps: UiHandlerDeps,
   capability: string,
   runId: string,
-  parsed: CodingSidecarGatewayChatCompletionRequest,
-): boolean {
+  reservedPromptTokens: number,
+): PromptTokenReservation | undefined {
   const reserved = runtimeCapabilityAuthenticator(deps)?.reservePromptTokens?.(
     capability,
-    promptTokenEstimate(parsed),
+    reservedPromptTokens,
   );
-  return promptReservationRunId(reserved) === runId;
+  return promptReservationRunId(reserved) === runId
+    ? { capability, reservedPromptTokens, settled: false }
+    : undefined;
 }
 
 function isAvailableGatewayProfile(
@@ -850,20 +2134,133 @@ function isAvailableGatewayProfile(
 }
 
 function unavailableGatewayProfile(
-  _ctx: RouteContext,
-  _deps: UiHandlerDeps,
-  _resolved: ResolvedGatewayProfile,
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  resolved: ResolvedGatewayProfile,
+  authentication: AuthenticatedGatewayRequest,
 ): RouteResult {
+  const selectedModelId = gatewayProfileModelIdForAuthentication(authentication);
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: authentication.runtimeAuthenticated
+      ? authentication.runId
+      : (ctx.correlationId ?? UNKNOWN_CORRELATION_ID),
+    timestamp: new Date(Date.now()).toISOString(),
+    operation: CODING_SIDECAR_GATEWAY_ROUTE,
+    source: "coding-sidecar-gateway.chat",
+    errorClass: "CodingSidecarGatewayUnavailable",
+    message: "coding-sidecar-gateway-profile-unavailable",
+    code: unavailableGatewayProfileCode(resolved, selectedModelId, authentication),
+  });
+  reportGatewayTurnFailure(ctx, deps, authentication.runId, "turn-rejected");
   return unavailableError();
+}
+
+function unavailableGatewayProfileCode(
+  resolved: ResolvedGatewayProfile,
+  selectedModelId: string | undefined,
+  authentication: AuthenticatedGatewayRequest,
+): string {
+  const reason = unavailableGatewayReason(resolved);
+  const config = resolved.config === undefined ? "missing-config" : "configured";
+  const gateway = resolved.gateway === undefined ? "missing-gateway" : "configured";
+  const source =
+    resolved.modelSource === "chatgpt-codex-subscription-profile"
+      ? "subscription"
+      : "model-gateway";
+  const selector = gatewaySelectorKind(selectedModelId);
+  const authority = gatewayAuthorityKind(authentication);
+  return `status=unavailable:reason=${reason}:config=${config}:gateway=${gateway}:source=${source}:selector=${selector}:authority=${authority}`;
+}
+
+function gatewaySelectorKind(selectedModelId: string | undefined): string {
+  if (selectedModelId === undefined) return "absent";
+  if (selectedModelId === OPENCODE_RUNTIME_MODEL_ALIAS) return "runtime-alias";
+  if (selectedModelId === CODING_SAFE_SIDECAR_GATEWAY_PROFILE_ID) return "runtime-profile";
+  return "provider-model";
+}
+
+function gatewayAuthorityKind(authentication: AuthenticatedGatewayRequest): string {
+  if (authentication.adapterKind === "model-gateway-sidecar") return "sidecar";
+  if (authentication.runtimeAuthenticated) return "runtime";
+  return "gateway";
+}
+
+function unavailableGatewayReason(
+  resolved: ResolvedGatewayProfile,
+): CodingWorkbenchSidecarGatewayUnavailableReason {
+  return resolved.result.status === "unavailable" ? resolved.result.reason : "missing-provider";
+}
+
+/** Which of the four armed abort sources ended a cancelled turn; the outcome line's closed value. */
+type CodingSidecarGatewayCancellationCause =
+  "client-disconnect" | "route-deadline" | "backpressure-killed" | "run-stopped";
+
+// The sidecar's SSE frames go through the server's shared protective write path (`writeOrDestroy`):
+// a frame the client is not draining aborts this controller, reports the body-free backpressure
+// diagnostic and destroys the socket, exactly as every other SSE route does. The controller is one
+// of the request's abort sources, so the outcome line can name the kill instead of guessing.
+interface SidecarSseTransport {
+  readonly backpressure: AbortController;
+  readonly onBackpressure: (signal: SseBackpressureSignal) => void;
+  /**
+   * The one id the outcome line, the backpressure diagnostic and the `sse.stream.closed` line
+   * share, so a termination can be joined across its evidence: the request's own correlation id,
+   * or the sanctioned `UNKNOWN_CORRELATION_ID` fallback — never a fresh mint on one line only.
+   */
+  readonly correlationId: string;
+}
+
+function sidecarSseTransport(ctx: RouteContext, deps: UiHandlerDeps): SidecarSseTransport {
+  const correlationId = correlationIdOrUnknown(ctx.correlationId);
+  return {
+    backpressure: new AbortController(),
+    onBackpressure: sseBackpressureReporter(deps, "coding-sidecar-gateway", correlationId),
+    correlationId,
+  };
 }
 
 interface GatewayRequestCancellation {
   readonly signal: AbortSignal;
+  /** The route backstop armed for this request, recorded on the outcome line. */
+  readonly deadlineMs: number;
+  readonly transport: SidecarSseTransport;
+  /** The source that aborted first, or undefined while nothing has aborted. */
+  readonly cause: () => CodingSidecarGatewayCancellationCause | undefined;
   readonly dispose: () => void;
 }
 
-function requestDeadlineMs(config: GatewayConfig, modelId: string): number {
-  return config.providers.find((provider) => provider.modelId === modelId)?.timeoutMs ?? 30_000;
+interface GatewayCancellationSources {
+  readonly client: AbortSignal;
+  readonly deadline: AbortSignal;
+  readonly backpressure: AbortSignal;
+}
+
+// `AbortSignal.any` carries the reason of the source that aborted first, so a client that leaves
+// after the deadline already fired still reads as the deadline, never the other way round.
+function gatewayCancellationCause(
+  signal: AbortSignal,
+  sources: GatewayCancellationSources,
+): CodingSidecarGatewayCancellationCause | undefined {
+  if (!signal.aborted) return undefined;
+  if (signal.reason === sources.client.reason) return "client-disconnect";
+  if (signal.reason === sources.deadline.reason) return "route-deadline";
+  if (signal.reason === sources.backpressure.reason) return "backpressure-killed";
+  return "run-stopped";
+}
+
+// The route's deadline is a backstop BEHIND the gateway's own end-to-end budget, never the budget
+// itself (`gateway-route-deadline.ts`, shared with the commit draft since the #3602 review). It used
+// to be the provider's per-attempt `timeoutMs`: the first attempt that hung spent it, and this
+// deadline, armed before the gateway started its own clock, aborted the retry the gateway had just
+// scheduled, so a provider timeout surfaced as a cancellation nobody had asked for and failed the
+// run (coding run 23, 2026-09-11).
+export function codingSidecarGatewayRequestDeadlineMs(
+  config: GatewayConfig,
+  modelId: string,
+): number {
+  // The sidecar reaches the gateway both ways — a buffered `chat()` answer or a `chatStream()`
+  // read — so its backstop sits behind the longer of the two budgets.
+  return gatewayRouteDeadlineMs(config, modelId, ["buffered", "streamed"]);
 }
 
 function gatewayRequestCancellation(
@@ -879,13 +2276,21 @@ function gatewayRequestCancellation(
   };
   ctx.req.once("aborted", abortClient);
   ctx.res.once("close", abortClient);
-  const deadline = AbortSignal.timeout(requestDeadlineMs(config, modelId));
+  const deadlineMs = codingSidecarGatewayRequestDeadlineMs(config, modelId);
+  const deadline = AbortSignal.timeout(deadlineMs);
+  const transport = sidecarSseTransport(ctx, deps);
   const runSignal = cancellationRegistry(deps)?.signalFor(runId);
-  const signals = [client.signal, deadline, runSignal].filter(
+  const signals = [client.signal, deadline, transport.backpressure.signal, runSignal].filter(
     (signal): signal is AbortSignal => signal !== undefined,
   );
+  const signal = AbortSignal.any(signals);
+  const sources = { client: client.signal, deadline, backpressure: transport.backpressure.signal };
   return {
-    signal: AbortSignal.any(signals),
+    signal,
+    deadlineMs,
+    transport,
+    cause: (): CodingSidecarGatewayCancellationCause | undefined =>
+      gatewayCancellationCause(signal, sources),
     dispose: (): void => {
       ctx.req.removeListener("aborted", abortClient);
       ctx.res.removeListener("close", abortClient);
@@ -897,11 +2302,45 @@ interface GatewayChatDelivery {
   readonly modelAlias: string;
   readonly maxOutputTokens: number;
   readonly upstreamStreamingSupported: boolean;
+  readonly reasoningEffort?: ModelReasoningEffort | undefined;
+  readonly promptTokenReservation: PromptTokenReservation;
+  readonly toolCatalogCoverage: OpenCodeGatewayHandlerCoverage | undefined;
+  // How long the per-request tool-catalog offer stays bindable: the request deadline the gateway
+  // enforces for this model plus the bridge's settlement grace (`opencodeGatewayOfferLifetimeMs`),
+  // so a legitimately long generation never comes back to an expired offer.
+  readonly offerLifetimeMs: number;
 }
 
 interface PinnedGatewayBinding {
   readonly config: GatewayConfig;
   readonly gateway: Gateway;
+}
+
+interface GatewayChatDispatchContext {
+  readonly deps: UiHandlerDeps;
+  readonly binding: PinnedGatewayBinding;
+  readonly modelAlias: string;
+  readonly request: GatewayRequest;
+  readonly runId: string;
+  readonly cancellation: GatewayRequestCancellation;
+  readonly promptTokenReservation: PromptTokenReservation;
+}
+
+function requestForGatewayDelivery(
+  ctx: RouteContext,
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+  delivery: GatewayChatDelivery,
+  signal: AbortSignal,
+): GatewayCallRequest {
+  return buildChatRequest(
+    parsed,
+    delivery.modelAlias,
+    signal,
+    delivery.maxOutputTokens,
+    ctx.correlationId,
+    delivery.reasoningEffort,
+    { coverage: delivery.toolCatalogCoverage, offerLifetimeMs: delivery.offerLifetimeMs },
+  );
 }
 
 async function executeGatewayChat(
@@ -912,109 +2351,233 @@ async function executeGatewayChat(
   runId: string,
   delivery: GatewayChatDelivery,
 ): Promise<RouteResult | typeof STREAMING> {
-  const { modelAlias, maxOutputTokens, upstreamStreamingSupported } = delivery;
-  const cancellation = gatewayRequestCancellation(ctx, deps, binding.config, modelAlias, runId);
-  const request = buildChatRequest(parsed, modelAlias, cancellation.signal, maxOutputTokens);
-  let bufferedStream: BufferedOpenAiStreamSession | undefined;
+  const cancellation = gatewayRequestCancellation(
+    ctx,
+    deps,
+    binding.config,
+    delivery.modelAlias,
+    runId,
+  );
   try {
-    if (parsed.stream && upstreamStreamingSupported) {
-      return await streamGatewayChat(
-        ctx,
-        deps,
-        binding,
-        modelAlias,
-        request,
-        runId,
-        cancellation.signal,
-      );
-    }
-    if (parsed.stream) bufferedStream = beginBufferedOpenAiStream(ctx, modelAlias);
-    return await executeBufferedGatewayChat(
-      deps,
-      binding,
-      modelAlias,
-      request,
-      runId,
-      cancellation.signal,
-      bufferedStream,
-    );
-  } catch (error) {
-    recordGatewayOutcome(deps, runId, cancellation.signal.aborted ? "cancelled" : "failed", 0, 0);
-    emitGatewayFailureDiagnostic(ctx, deps, error);
-    return bufferedStream === undefined
-      ? unavailableError()
-      : settleBufferedOpenAiStreamError(bufferedStream, "error");
+    return await dispatchGatewayChat(ctx, deps, binding, parsed, runId, delivery, cancellation);
   } finally {
     cancellation.dispose();
   }
 }
 
-async function executeBufferedGatewayChat(
+// Extracted so `executeGatewayChat` stays under AGENTS.md §6's 50-line ceiling.
+async function dispatchGatewayChat(
+  ctx: RouteContext,
   deps: UiHandlerDeps,
   binding: PinnedGatewayBinding,
-  modelAlias: string,
-  request: GatewayRequest,
+  parsed: CodingSidecarGatewayChatCompletionRequest,
   runId: string,
-  cancellationSignal: AbortSignal,
+  delivery: GatewayChatDelivery,
+  cancellation: GatewayRequestCancellation,
+): Promise<RouteResult | typeof STREAMING> {
+  const { modelAlias, upstreamStreamingSupported } = delivery;
+  const request = requestForGatewayDelivery(ctx, parsed, delivery, cancellation.signal);
+  const dispatch = {
+    deps,
+    binding,
+    modelAlias,
+    request,
+    runId,
+    cancellation,
+    promptTokenReservation: delivery.promptTokenReservation,
+  } satisfies GatewayChatDispatchContext;
+  let bufferedStream: BufferedOpenAiStreamSession | undefined;
+  try {
+    if (parsed.stream && upstreamStreamingSupported) {
+      return await streamGatewayChat(ctx, dispatch);
+    }
+    if (parsed.stream) {
+      bufferedStream = beginBufferedOpenAiStream(ctx, modelAlias, cancellation.transport);
+      if (bufferedStream === undefined) return settleUndeliverableBufferedStream(ctx, dispatch);
+    }
+    return await executeBufferedGatewayChat(ctx, dispatch, bufferedStream);
+  } catch (error) {
+    return settleFailedGatewayChat(ctx, deps, runId, cancellation, error, delivery, bufferedStream);
+  }
+}
+
+// The opening frame never reached the client — the shared path killed the stream, or the response
+// was already gone — so no provider call is started for an answer nobody can receive, exactly as
+// `beginGatewayStream` ends the streamed path (#3602 review). The outcome names the abort source.
+function settleUndeliverableBufferedStream(
+  ctx: RouteContext,
+  dispatch: GatewayChatDispatchContext,
+): typeof STREAMING {
+  const { deps, runId, cancellation, promptTokenReservation } = dispatch;
+  recordGatewayOutcome(ctx, deps, runId, cancellation, "cancelled", 0, 0);
+  releaseUndispatchedPromptBudget(ctx, deps, runId, promptTokenReservation);
+  return STREAMING;
+}
+
+// A handshake the client would not take leaves no provider call behind, so the reservation is
+// released rather than kept as spent, and the usage line records the release (zero prompt tokens,
+// `released-unspent`) so the ledger movement is reconstructible from the log.
+function releaseUndispatchedPromptBudget(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  runId: string,
+  reservation: PromptTokenReservation,
+): void {
+  const settlement = releasePromptTokenReservation(deps, reservation);
+  logGatewayCompletionUsage(
+    ctx,
+    runId,
+    { completionTokens: 0, outputBytes: 0 },
+    "output-byte-estimate",
+    settlement,
+  );
+}
+
+// Extracted so `executeGatewayChat` stays under AGENTS.md §6's 50-line ceiling.
+function settleFailedGatewayChat(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  runId: string,
+  cancellation: GatewayRequestCancellation,
+  error: unknown,
+  delivery: Pick<GatewayChatDelivery, "promptTokenReservation">,
+  bufferedStream: BufferedOpenAiStreamSession | undefined,
+): RouteResult | typeof STREAMING {
+  const cancelled = cancellation.signal.aborted;
+  recordGatewayOutcome(ctx, deps, runId, cancellation, cancelled ? "cancelled" : "failed", 0, 0);
+  const spendReason = gatewaySpendRejectionReason(error);
+  const turnFailureRecorded =
+    !cancelled &&
+    reportGatewayTurnFailure(
+      ctx,
+      deps,
+      runId,
+      spendReason === undefined ? gatewayTurnFailureCode(error) : "turn-rejected",
+      error,
+    );
+  emitGatewayFailureDiagnostic(ctx, deps, error, runId, turnFailureRecorded);
+  settlePromptTokenReservation(deps, delivery.promptTokenReservation);
+  if (spendReason !== undefined && bufferedStream === undefined) {
+    logGatewayRejection(ctx, runId, 403, spendReason);
+    return forbiddenGatewayRequest();
+  }
+  return bufferedStream === undefined
+    ? unavailableError()
+    : settleBufferedOpenAiStreamError(bufferedStream, "error");
+}
+
+async function executeBufferedGatewayChat(
+  ctx: RouteContext,
+  dispatch: GatewayChatDispatchContext,
   stream: BufferedOpenAiStreamSession | undefined,
 ): Promise<RouteResult | typeof STREAMING> {
+  const { deps, binding, modelAlias, request, runId, cancellation, promptTokenReservation } =
+    dispatch;
   const response = await chatFactoryFor(deps, binding.gateway)(binding.config, modelAlias)(request);
-  const metrics = outputMetrics(response);
-  if (cancellationSignal.aborted) {
-    recordGatewayOutcome(deps, runId, "cancelled", metrics.completionTokens, metrics.outputBytes);
+  const promptSettlement = settlePromptTokenReservation(
+    deps,
+    promptTokenReservation,
+    response.usage.promptTokens,
+  );
+  const output = outputMetrics(response);
+  const usage = completionUsage(response, output.outputBytes, 0);
+  const metrics = { ...output, completionTokens: usage.completionTokens };
+  const settledResponse = {
+    ...response,
+    usage: { ...response.usage, completionTokens: usage.completionTokens },
+  };
+  logGatewayCompletionUsage(ctx, runId, metrics, usage.source, promptSettlement);
+  const record = (outcome: CodingSidecarGatewayRunOutcome): void => {
+    recordGatewayOutcome(
+      ctx,
+      deps,
+      runId,
+      cancellation,
+      outcome,
+      metrics.completionTokens,
+      metrics.outputBytes,
+    );
+  };
+  if (cancellation.signal.aborted) {
+    record("cancelled");
     return stream === undefined
       ? unavailableError()
       : settleBufferedOpenAiStreamError(stream, "error");
   }
   if (exceedsOutputBudget(metrics, request.maxOutputTokens ?? 1)) {
-    recordGatewayOutcome(
-      deps,
-      runId,
-      "output-limit",
-      metrics.completionTokens,
-      metrics.outputBytes,
-    );
+    record("output-limit");
     return stream === undefined
       ? unavailableError()
       : settleBufferedOpenAiStreamError(stream, "length");
   }
-  recordGatewayOutcome(deps, runId, "accepted", metrics.completionTokens, metrics.outputBytes);
-  return stream === undefined
-    ? openAiResponse(modelAlias, response)
-    : completeBufferedOpenAiStream(stream, response);
+  return deliverBufferedGatewayAnswer(ctx, modelAlias, stream, settledResponse, record);
+}
+
+function deliverBufferedGatewayAnswer(
+  ctx: RouteContext,
+  modelAlias: string,
+  stream: BufferedOpenAiStreamSession | undefined,
+  response: NormalizedResponse,
+  record: (outcome: CodingSidecarGatewayRunOutcome) => void,
+): RouteResult | typeof STREAMING {
+  if (stream === undefined) {
+    record("accepted");
+    return openAiResponse(modelAlias, response);
+  }
+  completeBufferedOpenAiStream(stream, response);
+  record(ctx.res.writableEnded && !ctx.res.destroyed ? "accepted" : "cancelled");
+  return STREAMING;
 }
 
 // Closed stream state machine keeps iterator, cancellation, and SSE backpressure transitions together.
 async function streamGatewayChat(
   ctx: RouteContext,
-  deps: UiHandlerDeps,
-  binding: PinnedGatewayBinding,
-  modelId: string,
-  request: GatewayRequest,
-  runId: string,
-  cancellationSignal: AbortSignal,
+  dispatch: GatewayChatDispatchContext,
 ): Promise<RouteResult | typeof STREAMING> {
+  const { deps, binding, modelAlias, request, runId, promptTokenReservation } = dispatch;
   let iterator: AsyncIterator<GatewayStreamChunk>;
   try {
     iterator = chatStreamFactoryFor(deps, binding.gateway)(
       binding.config,
-      modelId,
+      modelAlias,
     )(request)[Symbol.asyncIterator]();
   } catch (error) {
-    recordGatewayOutcome(deps, runId, "failed", 0, 0);
-    emitGatewayFailureDiagnostic(ctx, deps, error);
+    recordGatewayOutcome(ctx, deps, runId, dispatch.cancellation, "failed", 0, 0);
+    const turnFailureRecorded = reportGatewayTurnFailure(
+      ctx,
+      deps,
+      runId,
+      gatewayTurnFailureCode(error),
+      error,
+    );
+    emitGatewayFailureDiagnostic(ctx, deps, error, runId, turnFailureRecorded);
+    settlePromptTokenReservation(deps, promptTokenReservation);
     return unavailableError();
   }
-  const session = createGatewayStreamSession(
-    ctx,
-    deps,
-    modelId,
-    request,
-    runId,
-    cancellationSignal,
-    iterator,
-  );
-  if (!beginGatewayStream(session)) return STREAMING;
+  const session = createGatewayStreamSession(ctx, dispatch, iterator);
+  try {
+    if (beginGatewayStream(session)) {
+      await pumpGatewayStreamWithCancellation(deps, session);
+    } else {
+      // The gateway's stream is an async generator: nothing was sent before the first pull, and
+      // the handshake failed before it, so the reservation is released, not kept as spent.
+      releaseUndispatchedPromptBudget(ctx, deps, runId, promptTokenReservation);
+    }
+    return STREAMING;
+  } finally {
+    // Every exit path above returns/throws without necessarily having observed real usage
+    // (cancelled before the first chunk, mid-stream failure, or budget/cancellation cutoff).
+    // Idempotent: a no-op once `streamGatewayResponse` has already settled with real usage.
+    settlePromptTokenReservation(session.deps, session.promptTokenReservation);
+  }
+}
+
+async function pumpGatewayStreamWithCancellation(
+  deps: UiHandlerDeps,
+  session: GatewayStreamSession,
+): Promise<void> {
+  const { cancellation, iterator } = session;
+  const cancellationSignal = cancellation.signal;
   const cancelIterator = (): void => {
     void iterator.return?.();
   };
@@ -1022,12 +2585,26 @@ async function streamGatewayChat(
   try {
     await pumpGatewayStream(session);
   } catch (error) {
-    emitGatewayStreamFailureDiagnostic(ctx, deps, error);
+    const turnFailureRecorded =
+      !cancellationSignal.aborted &&
+      reportGatewayTurnFailure(
+        session.ctx,
+        deps,
+        session.runId,
+        gatewayStreamFailureCode(error),
+        error,
+      );
+    emitGatewayStreamFailureDiagnostic(
+      session.ctx,
+      deps,
+      error,
+      session.runId,
+      turnFailureRecorded,
+    );
     settleGatewayStreamError(session);
   } finally {
     cancellationSignal.removeEventListener("abort", cancelIterator);
   }
-  return STREAMING;
 }
 
 interface GatewayStreamSession {
@@ -1038,8 +2615,9 @@ interface GatewayStreamSession {
   readonly modelId: string;
   readonly request: GatewayRequest;
   readonly runId: string;
-  readonly cancellationSignal: AbortSignal;
+  readonly cancellation: GatewayRequestCancellation;
   readonly iterator: AsyncIterator<GatewayStreamChunk>;
+  readonly promptTokenReservation: PromptTokenReservation;
   readonly metrics: {
     completionTokens: number;
     promptTokens: number;
@@ -1050,23 +2628,21 @@ interface GatewayStreamSession {
 
 function createGatewayStreamSession(
   ctx: RouteContext,
-  deps: UiHandlerDeps,
-  modelId: string,
-  request: GatewayRequest,
-  runId: string,
-  cancellationSignal: AbortSignal,
+  dispatch: GatewayChatDispatchContext,
   iterator: AsyncIterator<GatewayStreamChunk>,
 ): GatewayStreamSession {
+  const { deps, modelAlias, request, runId, cancellation, promptTokenReservation } = dispatch;
   return {
     ctx,
     deps,
     id: `chatcmpl-${randomUUID()}`,
     created: Math.floor(Date.now() / 1000),
-    modelId,
+    modelId: modelAlias,
     request,
     runId,
-    cancellationSignal,
+    cancellation,
     iterator,
+    promptTokenReservation,
     metrics: {
       completionTokens: 0,
       promptTokens: 0,
@@ -1084,7 +2660,12 @@ function beginGatewayStream(session: GatewayStreamSession): boolean {
     "Cache-Control": "no-store",
     Connection: "keep-alive",
   });
-  if (!writeOpenAiSse(ctx, openAiStreamChunk(id, created, modelId, { role: "assistant" }, null))) {
+  const opened = writeOpenAiSse(
+    ctx,
+    openAiStreamChunk(id, created, modelId, { role: "assistant" }, null),
+    session.cancellation.transport,
+  );
+  if (!opened) {
     ctx.res.destroy();
     recordSessionOutcome(session, "cancelled");
     return false;
@@ -1096,20 +2677,25 @@ function recordSessionOutcome(
   session: GatewayStreamSession,
   outcome: CodingSidecarGatewayRunOutcome,
 ): void {
-  const { deps, runId, metrics } = session;
-  recordGatewayOutcome(deps, runId, outcome, metrics.completionTokens, metrics.outputBytes);
+  const { ctx, deps, runId, cancellation, metrics } = session;
+  recordGatewayOutcome(
+    ctx,
+    deps,
+    runId,
+    cancellation,
+    outcome,
+    metrics.completionTokens,
+    metrics.outputBytes,
+  );
 }
 
 function writeSessionTerminal(
   session: GatewayStreamSession,
   finishReason: NormalizedResponse["finishReason"],
 ): void {
-  const { ctx, id, created, modelId, metrics } = session;
+  const { ctx, id, created, modelId, metrics, cancellation } = session;
   writeStreamTerminal(
-    ctx,
-    id,
-    created,
-    modelId,
+    { ctx, id, created, modelId, transport: cancellation.transport },
     finishReason,
     metrics.promptTokens,
     metrics.completionTokens,
@@ -1117,7 +2703,8 @@ function writeSessionTerminal(
 }
 
 async function pumpGatewayStream(session: GatewayStreamSession): Promise<void> {
-  const { cancellationSignal, iterator } = session;
+  const { cancellation, iterator } = session;
+  const cancellationSignal = cancellation.signal;
   for (;;) {
     if (isGatewayRequestCancelled(cancellationSignal)) {
       await iterator.return?.();
@@ -1138,8 +2725,8 @@ async function pumpGatewayStream(session: GatewayStreamSession): Promise<void> {
     await streamGatewayResponse(session, chunk.response);
     return;
   }
-  recordSessionOutcome(session, "failed");
-  writeSessionTerminal(session, "error");
+  // A stream without a terminal response must reach the shared diagnostic and turn-event path.
+  throw new ProviderError("provider stream ended without a terminal response", 200);
 }
 
 /** Returns true when the stream may continue with the next chunk. */
@@ -1156,7 +2743,12 @@ async function streamGatewayDelta(session: GatewayStreamSession, token: string):
     writeSessionTerminal(session, "length");
     return false;
   }
-  if (!writeOpenAiSse(ctx, openAiStreamChunk(id, created, modelId, { content: token }, null))) {
+  const wrote = writeOpenAiSse(
+    ctx,
+    openAiStreamChunk(id, created, modelId, { content: token }, null),
+    session.cancellation.transport,
+  );
+  if (!wrote) {
     ctx.res.destroy();
     await iterator.return?.();
     recordSessionOutcome(session, "cancelled");
@@ -1169,12 +2761,17 @@ async function streamGatewayResponse(
   session: GatewayStreamSession,
   response: NormalizedResponse,
 ): Promise<void> {
-  const { ctx, id, created, modelId, request, iterator, metrics } = session;
+  const { ctx, id, created, modelId, request, iterator, metrics, promptTokenReservation } = session;
   const outcome = outputMetrics(response);
-  metrics.completionTokens = outcome.completionTokens;
-  metrics.outputBytes = outcome.outputBytes;
+  metrics.outputBytes = Math.max(outcome.outputBytes, metrics.outputBytes);
   metrics.promptTokens = response.usage.promptTokens;
-  if (exceedsOutputBudget(outcome, request.maxOutputTokens ?? 1)) {
+  const promptSettlement = settlePromptTokenReservation(
+    session.deps,
+    promptTokenReservation,
+    response.usage.promptTokens,
+  );
+  settleStreamCompletionUsage(session, response, outcome, promptSettlement);
+  if (exceedsOutputBudget(metrics, request.maxOutputTokens ?? 1)) {
     await iterator.return?.();
     recordSessionOutcome(session, "output-limit");
     writeSessionTerminal(session, "length");
@@ -1190,6 +2787,7 @@ async function streamGatewayResponse(
         { tool_calls: openAiToolCalls(response.toolCalls) },
         null,
       ),
+      session.cancellation.transport,
     );
     if (!wrote) {
       ctx.res.destroy();
@@ -1198,12 +2796,89 @@ async function streamGatewayResponse(
       return;
     }
   }
-  recordSessionOutcome(session, "accepted");
   writeSessionTerminal(session, response.finishReason);
+  recordSessionOutcome(
+    session,
+    ctx.res.writableEnded && !ctx.res.destroyed ? "accepted" : "cancelled",
+  );
+}
+
+function settleStreamCompletionUsage(
+  session: GatewayStreamSession,
+  response: NormalizedResponse,
+  outcome: ReturnType<typeof outputMetrics>,
+  promptSettlement: PromptTokenSettlement,
+): void {
+  const { metrics, ctx, runId } = session;
+  const usage = completionUsage(response, outcome.outputBytes, metrics.completionTokens);
+  metrics.completionTokens = usage.completionTokens;
+  logGatewayCompletionUsage(
+    ctx,
+    runId,
+    {
+      completionTokens: metrics.completionTokens,
+      outputBytes: Math.max(outcome.outputBytes, metrics.outputBytes),
+    },
+    usage.source,
+    promptSettlement,
+  );
+}
+
+type CompletionUsageSource =
+  "provider-reported" | "streamed-byte-estimate" | "output-byte-estimate";
+
+function completionUsage(
+  response: NormalizedResponse,
+  outputBytes: number,
+  streamedCompletionTokens: number,
+): { readonly completionTokens: number; readonly source: CompletionUsageSource } {
+  if (response.usage.completionTokens > 0) {
+    return { completionTokens: response.usage.completionTokens, source: "provider-reported" };
+  }
+  if (response.toolCalls.length > 0 || response.structuredOutput !== null) {
+    return {
+      completionTokens: Math.ceil(outputBytes / OUTPUT_BYTES_PER_TOKEN_LIMIT),
+      source: "output-byte-estimate",
+    };
+  }
+  if (streamedCompletionTokens > 0) {
+    return { completionTokens: streamedCompletionTokens, source: "streamed-byte-estimate" };
+  }
+  const hasOutput = response.content.length > 0;
+  return {
+    completionTokens: hasOutput ? Math.ceil(outputBytes / OUTPUT_BYTES_PER_TOKEN_LIMIT) : 0,
+    source: "output-byte-estimate",
+  };
+}
+
+function logGatewayCompletionUsage(
+  ctx: RouteContext,
+  runId: string,
+  metrics: { readonly completionTokens: number; readonly outputBytes: number },
+  source: CompletionUsageSource,
+  promptSettlement: PromptTokenSettlement,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CODING_SIDECAR_GATEWAY_USAGE_SETTLED_OPERATION,
+      { correlationId: correlationIdOrUnknown(ctx.correlationId), parentCorrelationId: runId },
+      {
+        runId,
+        completionTokens: metrics.completionTokens,
+        promptTokens: promptSettlement.promptTokens,
+        promptSource: promptSettlement.source,
+        promptSettlementStatus: promptSettlement.status,
+        outputBytes: metrics.outputBytes,
+        source,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
 }
 
 function settleGatewayStreamError(session: GatewayStreamSession): void {
-  if (!session.cancellationSignal.aborted) {
+  if (!session.cancellation.signal.aborted) {
     recordSessionOutcome(session, "failed");
     writeSessionTerminal(session, "error");
   } else {
@@ -1215,18 +2890,25 @@ function isGatewayRequestCancelled(signal: AbortSignal): boolean {
   return signal.aborted;
 }
 
-interface BufferedOpenAiStreamSession {
+/** What a terminal chunk needs to know about its stream; both session shapes carry it. */
+interface OpenAiSseStreamIdentity {
   readonly ctx: RouteContext;
   readonly id: string;
   readonly created: number;
   readonly modelId: string;
+  readonly transport: SidecarSseTransport;
+}
+
+interface BufferedOpenAiStreamSession extends OpenAiSseStreamIdentity {
   readonly stopHeartbeat: () => void;
 }
 
+/** Returns undefined when the opening SSE frame could not be delivered; the response is destroyed. */
 function beginBufferedOpenAiStream(
   ctx: RouteContext,
   modelId: string,
-): BufferedOpenAiStreamSession {
+  transport: SidecarSseTransport,
+): BufferedOpenAiStreamSession | undefined {
   const id = `chatcmpl-${randomUUID()}`;
   const created = Math.floor(Date.now() / 1000);
   ctx.res.writeHead(200, {
@@ -1234,15 +2916,26 @@ function beginBufferedOpenAiStream(
     "Cache-Control": "no-store",
     Connection: "keep-alive",
   });
-  if (!writeOpenAiSse(ctx, openAiStreamChunk(id, created, modelId, { role: "assistant" }, null))) {
+  const opened = writeOpenAiSse(
+    ctx,
+    openAiStreamChunk(id, created, modelId, { role: "assistant" }, null),
+    transport,
+  );
+  if (!opened) {
     ctx.res.destroy();
+    return undefined;
   }
   return {
     ctx,
     id,
     created,
     modelId,
-    stopHeartbeat: startSseHeartbeat(ctx.res, BUFFERED_STREAM_HEARTBEAT_MS),
+    transport,
+    stopHeartbeat: startSseHeartbeat(ctx.res, BUFFERED_STREAM_HEARTBEAT_MS, undefined, {
+      controller: transport.backpressure,
+      onBackpressure: transport.onBackpressure,
+      correlationId: transport.correlationId,
+    }),
   };
 }
 
@@ -1250,7 +2943,7 @@ function completeBufferedOpenAiStream(
   session: BufferedOpenAiStreamSession,
   response: NormalizedResponse,
 ): typeof STREAMING {
-  const { ctx, id, created, modelId, stopHeartbeat } = session;
+  const { ctx, id, created, modelId, transport, stopHeartbeat } = session;
   stopHeartbeat();
   if (response.content.length > 0 || response.toolCalls.length > 0) {
     const wrote = writeOpenAiSse(
@@ -1267,6 +2960,7 @@ function completeBufferedOpenAiStream(
         },
         null,
       ),
+      transport,
     );
     if (!wrote) {
       ctx.res.destroy();
@@ -1274,10 +2968,7 @@ function completeBufferedOpenAiStream(
     }
   }
   writeStreamTerminal(
-    ctx,
-    id,
-    created,
-    modelId,
+    session,
     response.finishReason,
     response.usage.promptTokens,
     response.usage.completionTokens,
@@ -1289,49 +2980,63 @@ function settleBufferedOpenAiStreamError(
   session: BufferedOpenAiStreamSession,
   finishReason: "error" | "length",
 ): typeof STREAMING {
-  const { ctx, id, created, modelId, stopHeartbeat } = session;
-  stopHeartbeat();
-  writeStreamTerminal(ctx, id, created, modelId, finishReason, 0, 0);
+  session.stopHeartbeat();
+  writeStreamTerminal(session, finishReason, 0, 0);
   return STREAMING;
 }
 
 function bufferedOpenAiStream(
   ctx: RouteContext,
+  deps: UiHandlerDeps,
   modelId: string,
   response: NormalizedResponse,
 ): typeof STREAMING {
-  return completeBufferedOpenAiStream(beginBufferedOpenAiStream(ctx, modelId), response);
+  const session = beginBufferedOpenAiStream(ctx, modelId, sidecarSseTransport(ctx, deps));
+  return session === undefined ? STREAMING : completeBufferedOpenAiStream(session, response);
 }
 
-function writeOpenAiSse(ctx: RouteContext, payload: Readonly<Record<string, unknown>>): boolean {
-  if (!ctx.res.writableEnded && !ctx.res.destroyed) {
-    return ctx.res.write(`data: ${JSON.stringify(payload)}\n\n`);
-  }
-  return false;
+// False means the frame did not reach the client: either the response was already gone (the
+// client's own `close` is the abort source that names it) or the shared path killed the stream for
+// backpressure (its controller is). A caller that sees false stops producing; it never resumes.
+function writeOpenAiSse(
+  ctx: RouteContext,
+  payload: Readonly<Record<string, unknown>>,
+  transport: SidecarSseTransport,
+): boolean {
+  if (ctx.res.writableEnded || ctx.res.destroyed) return false;
+  return writeOrDestroy(
+    ctx.res,
+    `data: ${JSON.stringify(payload)}\n\n`,
+    transport.backpressure,
+    transport.onBackpressure,
+    transport.correlationId,
+  );
 }
 
 function writeStreamTerminal(
-  ctx: RouteContext,
-  id: string,
-  created: number,
-  modelId: string,
+  stream: OpenAiSseStreamIdentity,
   finishReason: NormalizedResponse["finishReason"],
   promptTokens: number,
   completionTokens: number,
 ): void {
-  writeOpenAiSse(ctx, openAiStreamChunk(id, created, modelId, {}, finishReason));
-  writeOpenAiSse(ctx, {
-    id,
-    object: "chat.completion.chunk",
-    created,
-    model: modelId,
-    choices: [],
-    usage: {
-      prompt_tokens: promptTokens,
-      completion_tokens: completionTokens,
-      total_tokens: promptTokens + completionTokens,
+  const { ctx, id, created, modelId, transport } = stream;
+  writeOpenAiSse(ctx, openAiStreamChunk(id, created, modelId, {}, finishReason), transport);
+  writeOpenAiSse(
+    ctx,
+    {
+      id,
+      object: "chat.completion.chunk",
+      created,
+      model: modelId,
+      choices: [],
+      usage: {
+        prompt_tokens: promptTokens,
+        completion_tokens: completionTokens,
+        total_tokens: promptTokens + completionTokens,
+      },
     },
-  });
+    transport,
+  );
   if (!ctx.res.writableEnded && !ctx.res.destroyed) ctx.res.end("data: [DONE]\n\n");
 }
 
@@ -1351,11 +3056,199 @@ function openAiStreamChunk(
   };
 }
 
-export function handleCodingSidecarGatewayProfile(
-  _ctx: RouteContext,
+/**
+ * Readiness dimension (#3390 closeout): a profile can be "available" per the stored config and
+ * probe yet still be unusable — its `runMetadata.maxPromptTokens` (derived from the capability via
+ * `deriveContextProfileFromCapability`) can sit below what a coding run's fixed system prompt and
+ * governed tool schemas alone need. That capability reports itself ready and then dies on the
+ * FIRST gateway call. This demotes the readiness projection before a run ever starts, WITHOUT
+ * touching the live admission gate below (`isAvailableGatewayProfile`) — an already-minted run's
+ * requests keep failing exactly as before, unchanged by this readiness-only check.
+ */
+function gatewayReadinessProjection(
+  ctx: RouteContext,
   deps: UiHandlerDeps,
-): RouteResult {
-  return { status: 200, body: resolveGatewayProfile(deps).result };
+): CodingWorkbenchSidecarGatewayResult {
+  const result = resolveGatewayProfile(deps).result;
+  if (codingContextFits(result)) return result;
+  const shortfall =
+    result.status === "available" ? "model-context-window-insufficient" : result.reason;
+  if (
+    shortfall !== "model-context-window-insufficient" &&
+    shortfall !== "no-tool-calling" &&
+    shortfall !== "tool-calling-unverified"
+  )
+    return result;
+  // #3591 (1.1.7): while the automatic probe is still running against a slow gateway the shortfall
+  // is not a verdict. The profile says so, and the Workbench re-reads it instead of refusing.
+  const pending = readinessProbePending(deps, result, shortfall);
+  const reason: CodingWorkbenchReadinessShortfall = pending
+    ? "model-verification-pending"
+    : shortfall;
+  logReadinessShortfall(ctx, result, reason, pending);
+  // An open verification replaces the stored shortfall for an unavailable projection too (an
+  // unverified tool-calling proof whose probe is still running), or the Workbench would stop
+  // reading and keep the refusal until an unrelated refresh.
+  if (result.status === "available" || pending) return { status: "unavailable", reason };
+  return result;
+}
+
+// One owner for the rule a coding run's prompt needs: the readiness projection of the default model
+// and the start of a run with a model chosen in the picker both read it (#3603).
+function codingContextFits(result: CodingWorkbenchSidecarGatewayResult): boolean {
+  return (
+    result.status === "available" &&
+    result.runMetadata.maxPromptTokens >= CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS
+  );
+}
+
+/**
+ * Why an available coding profile cannot hold a coding run's prompt, or undefined when it can
+ * (#3603). While the automatic probe that could raise the window is still running, the shortfall
+ * is not a verdict yet; the start then names the pending verification instead.
+ */
+export function codingContextShortfall(
+  config: GatewayConfig | undefined,
+  result: Extract<CodingWorkbenchSidecarGatewayResult, { readonly status: "available" }>,
+): "model-context-window-insufficient" | "model-verification-pending" | undefined {
+  if (codingContextFits(result)) return undefined;
+  return config !== undefined && isCodingWorkbenchProbePending(config, result.modelAlias)
+    ? "model-verification-pending"
+    : "model-context-window-insufficient";
+}
+
+/**
+ * The profile a coding run starts with, for the model chosen in the picker or the default one. A
+ * model the gateway does not admit right now is a typed refusal that names the sidecar's reason
+ * (#3565 Observation 17), never a bare Error the orchestrator can only report as
+ * `authority-resolution-failed`; so is a model whose window cannot hold the run's prompt (#3603).
+ */
+export function admitCodingRunModel(
+  config: GatewayConfig | undefined,
+  modelId: string | undefined,
+  reasoningEffort: ModelReasoningEffort | undefined,
+): { readonly profileId: string; readonly reasoningEffort?: ModelReasoningEffort } {
+  const resolved = resolveCodingSafeSidecarGatewayProfile(config, {
+    ...(modelId === undefined ? {} : { modelId }),
+  });
+  if (resolved.status !== "available" || config === undefined) {
+    throw new CodingRuntimeLaunchRejectedError(
+      "model-unavailable",
+      false,
+      resolved.status === "available" ? "missing-config" : resolved.reason,
+    );
+  }
+  const contextShortfall = codingContextShortfall(config, resolved);
+  if (contextShortfall !== undefined) {
+    throw new CodingRuntimeLaunchRejectedError("model-unavailable", false, contextShortfall);
+  }
+  return {
+    profileId: resolved.modelAlias,
+    ...admittedReasoningEffort(config, resolved.modelAlias, reasoningEffort),
+  };
+}
+
+function admittedReasoningEffort(
+  config: GatewayConfig,
+  modelAlias: string,
+  reasoningEffort: ModelReasoningEffort | undefined,
+): { readonly reasoningEffort?: ModelReasoningEffort } {
+  if (reasoningEffort === undefined) return {};
+  const efforts = findConfiguredCapability(config, modelAlias)?.reasoningEfforts;
+  if (efforts?.includes(reasoningEffort) !== true) {
+    throw new CodingRuntimeLaunchRejectedError(
+      "model-unavailable",
+      false,
+      "reasoning-effort-unavailable",
+    );
+  }
+  return { reasoningEffort };
+}
+
+type CodingWorkbenchReadinessShortfall =
+  | "model-context-window-insufficient"
+  | "no-tool-calling"
+  | "tool-calling-unverified"
+  | "model-verification-pending";
+
+function readinessProbePending(
+  deps: UiHandlerDeps,
+  result: CodingWorkbenchSidecarGatewayResult,
+  shortfall: CodingWorkbenchReadinessShortfall,
+): boolean {
+  if (shortfall === "no-tool-calling") return false;
+  const config = currentGatewayConfig(deps);
+  if (config === undefined) return false;
+  // An unavailable projection (an unverified tool-calling proof) names no model: its verification
+  // is open while any model the Workbench could still elect has an open probe.
+  return result.status === "available"
+    ? isCodingWorkbenchProbePending(config, result.modelAlias)
+    : isAnyCodingWorkbenchProbePending(config);
+}
+
+function logReadinessShortfall(
+  ctx: RouteContext,
+  result: CodingWorkbenchSidecarGatewayResult,
+  reason: CodingWorkbenchReadinessShortfall,
+  pending: boolean,
+): void {
+  getServerLogger().warn(
+    activityLogEvent(
+      CODING_SIDECAR_GATEWAY_READINESS_INSUFFICIENT_OPERATION,
+      {
+        correlationId: correlationIdOrUnknown(ctx.correlationId),
+        errorKind: "unavailable",
+      },
+      {
+        reason,
+        probeMode: pending ? "pending" : "passive",
+        ...(result.status === "available"
+          ? {
+              maxPromptTokens: result.runMetadata.maxPromptTokens,
+              minimumRequiredPromptTokens: CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS,
+            }
+          : {}),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+export async function handleCodingSidecarGatewayProfile(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  // What Keiko can determine itself it determines itself: a model whose gateway declared no token
+  // limits gets its context window proven here, before the projection judges it.
+  const elected = resolveGatewayProfile(deps).result;
+  // Only while the gateway is the usable source: a subscription source, a disabled policy or a
+  // missing configuration must never cause a paid provider probe (ADR-0124 D5).
+  if (elected.status === "available" || elected.reason === "tool-calling-unverified") {
+    // #3591 (1.1.7): the browser reads this profile with a 15 s deadline while a probe against a
+    // slow gateway may take minutes. Wait a bounded moment for the elected model's proof; past it,
+    // answer with the projection (`model-verification-pending` while the probe runs) and let
+    // the Workbench read again — never leave the read hanging until the browser gives up.
+    await Promise.race([
+      ensureCodingWorkbenchContextWindows(
+        deps,
+        elected.status === "available" ? elected.modelAlias : undefined,
+        ctx.correlationId,
+      ),
+      boundedProfileWait(),
+    ]);
+  }
+  return { status: 200, body: gatewayReadinessProjection(ctx, deps) };
+}
+
+// Under the browser's 15 s read deadline for this profile (keiko-ui `DEFAULT_READ_TIMEOUT_MS`).
+export const PROFILE_PROBE_WAIT_MS = 8_000;
+
+function boundedProfileWait(): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, PROFILE_PROBE_WAIT_MS);
+    timer.unref();
+  });
 }
 
 function upstreamGatewayStreamingSupported(
@@ -1365,46 +3258,275 @@ function upstreamGatewayStreamingSupported(
   return advertisedSupport || deps.codingSidecarGatewayChatStreamFactory !== undefined;
 }
 
+/** A single explicit result shape for `runtimeGatewayAdmissionResponse`: every branch returns an
+ * object literal discriminated on `kind`, instead of mixing a `RouteResult`/`STREAMING` payload
+ * with a bare `undefined` "proceed" signal. */
+type RuntimeGatewayAdmission =
+  | { readonly kind: "handled"; readonly result: RouteResult | typeof STREAMING }
+  | { readonly kind: "proceed" };
+
+/** The unmanaged-tool-contract rejection applies before authentication is even known, so it stays
+ * its own check: extracting it keeps `runtimeGatewayAdmissionResponse` and
+ * `authenticatedGatewayAdmission` each under the complexity ceiling instead of one function
+ * carrying every branch. */
+function rejectUnmanagedGatewayToolContract(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+  authentication: AuthenticatedGatewayRequest,
+): RouteResult | undefined {
+  const declaresTools = parsed.tools !== undefined && parsed.tools.length > 0;
+  if (!declaresTools || isExactManagedToolSet(parsed.tools)) return undefined;
+  emitGatewayToolContractDiagnostic(ctx, deps, authentication.runId, parsed);
+  return forbiddenGatewayRequest();
+}
+
+function runtimeGatewayAdmissionResponse(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+  authentication: AuthenticatedGatewayRequest,
+  modelAlias: string,
+): RuntimeGatewayAdmission {
+  const contractRejection = rejectUnmanagedGatewayToolContract(ctx, deps, parsed, authentication);
+  if (contractRejection !== undefined) return { kind: "handled", result: contractRejection };
+  if (!authentication.runtimeAuthenticated) return { kind: "proceed" };
+  return authenticatedGatewayAdmission(ctx, deps, parsed, authentication, modelAlias);
+}
+
+function authenticatedGatewayAdmission(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  parsed: CodingSidecarGatewayChatCompletionRequest,
+  authentication: AuthenticatedGatewayRequest,
+  modelAlias: string,
+): RuntimeGatewayAdmission {
+  const registry = gatewayReadinessRegistry(deps);
+  if (!isAdmittedManagedToolSet(parsed.tools, registry, authentication.runId)) {
+    emitGatewayToolContractDiagnostic(ctx, deps, authentication.runId, parsed);
+    return { kind: "handled", result: forbiddenGatewayRequest() };
+  }
+  if (
+    isExactManagedToolSet(parsed.tools) &&
+    isRuntimeReadinessProbe(parsed) &&
+    registry?.claim(authentication.runId) === true
+  ) {
+    return {
+      kind: "handled",
+      result: fixedReadinessResponse(ctx, deps, modelAlias, parsed.stream === true),
+    };
+  }
+  if (isExactManagedToolSet(parsed.tools)) registry?.verifyObserved(authentication.runId);
+  noteToolAdoptionGap(ctx, deps, authentication.runId, parsed.messages);
+  return { kind: "proceed" };
+}
+
 export async function handleCodingSidecarGatewayChatCompletions(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult | typeof STREAMING> {
-  const resolved = resolveGatewayProfile(deps);
-  if (!isAvailableGatewayProfile(resolved)) return unavailableGatewayProfile(ctx, deps, resolved);
-  const authentication = authenticateGatewayRequest(ctx, deps);
-  if (isRouteResult(authentication)) return authentication;
+  // KEIKO-0681: fail-closed concurrency bulkhead. Reject with a JSON 429 BEFORE any SSE header,
+  // BEFORE authentication, and BEFORE any upstream connection so a burst of requests cannot fan
+  // out unbounded upstream connections. Defense-in-depth on top of the singleton-run governance
+  // gate in codingRuntimeOrchestrator.ts.
+  if (activeCodingGatewayRequests >= maxActiveCodingGatewayRequests()) {
+    return {
+      status: 429,
+      body: errorBody(
+        "TOO_MANY_CODING_GATEWAY_REQUESTS",
+        "Too many concurrent coding-sidecar gateway requests; retry shortly.",
+        ctx.correlationId,
+      ),
+    };
+  }
+  activeCodingGatewayRequests += 1;
+  try {
+    return await runHandleCodingSidecarGatewayChatCompletions(ctx, deps);
+  } finally {
+    activeCodingGatewayRequests -= 1;
+  }
+}
+
+function logChatRequestRejection(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  runId: string,
+  validationError: RouteResult,
+  observed?: {
+    readonly parsed: CodingSidecarGatewayChatCompletionRequest;
+    readonly bounds: CodingWorkbenchSidecarGatewayRunMetadata;
+    readonly estimatedPromptTokens: number;
+  },
+): void {
+  const reason = classifyBadRequestReason(validationError);
+  const boundedEvidence =
+    observed !== undefined &&
+    (reason === "input-messages-exceeded" || reason === "prompt-tokens-exceeded")
+      ? {
+          estimatedPromptTokens: observed.estimatedPromptTokens,
+          maxPromptTokens: observed.bounds.maxPromptTokens,
+          admissiblePromptTokens: admissiblePromptTokens(observed.bounds),
+          inputMessageCount: observed.parsed.messages.length,
+          maxInputMessages: observed.bounds.maxInputMessages,
+        }
+      : undefined;
+  logGatewayRejection(ctx, runId, validationError.status, reason, boundedEvidence);
+  refuseReadinessChallenge(deps, runId, observed?.parsed);
+  reportGatewayTurnFailure(ctx, deps, runId, "turn-rejected");
+}
+
+interface ValidatedChatRequest {
+  readonly parsed: CodingSidecarGatewayChatCompletionRequest;
+  readonly estimatedPromptTokens: number;
+}
+
+async function readValidatedChatRequest(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  resolved: AvailableGatewayProfile,
+  authentication: AuthenticatedGatewayRequest,
+): Promise<RouteResult | ValidatedChatRequest> {
   const parsed = await readChatCompletionRequest(ctx, resolved.result.runMetadata.maxRequestBytes);
+  const estimatedPromptTokens = isRouteResult(parsed)
+    ? 0
+    : promptTokenEstimate(parsed, promptTokenAccounting(resolved));
   const validationError = validationErrorForChatRequest(
     parsed,
     resolved.result.modelAlias,
     resolved.result.runMetadata,
     authentication.runtimeAuthenticated,
+    estimatedPromptTokens,
   );
   if (validationError !== undefined) {
+    logChatRequestRejection(
+      ctx,
+      deps,
+      authentication.runId,
+      validationError,
+      isRouteResult(parsed)
+        ? undefined
+        : { parsed, bounds: resolved.result.runMetadata, estimatedPromptTokens },
+    );
     return validationError;
   }
-  if (isRouteResult(parsed)) {
-    return parsed;
-  }
-  if (authentication.runtimeAuthenticated) {
-    const registry = gatewayReadinessRegistry(deps);
-    if (!isAdmittedManagedToolSet(parsed.tools, registry, authentication.runId)) {
-      emitGatewayToolContractDiagnostic(ctx, deps, parsed.tools);
-      return forbiddenGatewayRequest();
-    }
-    if (isExactManagedToolSet(parsed.tools) && registry?.claim(authentication.runId) === true) {
-      return fixedReadinessResponse(ctx, resolved.result.modelAlias, parsed.stream === true);
-    }
-    noteToolAdoptionGap(ctx, deps, authentication.runId, parsed.messages);
-  }
-  return executeBudgetedGatewayChat(ctx, deps, resolved, parsed, authentication, {
-    modelAlias: resolved.result.modelAlias,
-    maxOutputTokens: resolved.result.runMetadata.maxOutputTokens,
-    upstreamStreamingSupported: upstreamGatewayStreamingSupported(
-      deps,
-      resolved.result.supportsStreaming,
+  if (isRouteResult(parsed)) return parsed;
+  return { parsed, estimatedPromptTokens };
+}
+
+async function runHandleCodingSidecarGatewayChatCompletions(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult | typeof STREAMING> {
+  const authentication = authenticateGatewayRequest(ctx, deps);
+  if (isRouteResult(authentication)) return authentication;
+  const resolved = resolveAuthenticatedGatewayProfile(deps, authentication);
+  if (!isAvailableGatewayProfile(resolved))
+    return unavailableGatewayProfile(ctx, deps, resolved, authentication);
+  const validated = await readValidatedChatRequest(ctx, deps, resolved, authentication);
+  if (isRouteResult(validated)) return validated;
+  const { parsed, estimatedPromptTokens } = validated;
+  logValidatedRequestBounds(
+    ctx,
+    authentication.runId,
+    parsed,
+    resolved.result.runMetadata,
+    estimatedPromptTokens,
+  );
+  const admission = runtimeGatewayAdmissionResponse(
+    ctx,
+    deps,
+    parsed,
+    authentication,
+    resolved.result.modelAlias,
+  );
+  if (admission.kind === "handled") return admission.result;
+  return executeBudgetedGatewayChat(
+    ctx,
+    deps,
+    resolved,
+    parsed,
+    authentication,
+    estimatedPromptTokens,
+    {
+      modelAlias: resolved.result.modelAlias,
+      maxOutputTokens: admittedOutputTokens(resolved.result.runMetadata, estimatedPromptTokens),
+      upstreamStreamingSupported: upstreamGatewayStreamingSupported(
+        deps,
+        resolved.result.supportsStreaming,
+      ),
+      ...(authentication.reasoningEffort === undefined
+        ? {}
+        : { reasoningEffort: authentication.reasoningEffort }),
+    },
+  );
+}
+
+// #3591 (1.1.7): the run's output reserve (8k for an undeclared limit) is a reserve against the
+// whole window, and `maxPromptTokens` IS that whole window. A prompt close to the window would
+// leave the provider a request larger than its window, so the allowance actually sent is what
+// remains after the prompt and the safety margin — and the least allowance that still lets the
+// model answer (and report an exhausted budget instead of failing silently) is reserved at
+// admission, never added on top of a prompt that already fills the window.
+export const MINIMUM_ADMITTED_OUTPUT_TOKENS = 512;
+
+type OutputBounds = Pick<
+  CodingWorkbenchSidecarGatewayRunMetadata,
+  "maxPromptTokens" | "maxOutputTokens"
+>;
+
+// What a prompt must leave free of `maxPromptTokens`: the window's safety margin plus the minimum
+// allowance (or the whole reserve, when that is smaller).
+function reservedWindowTokens(bounds: OutputBounds): number {
+  return (
+    safetyMarginTokensFor(bounds.maxPromptTokens, bounds.maxOutputTokens) +
+    Math.min(MINIMUM_ADMITTED_OUTPUT_TOKENS, bounds.maxOutputTokens)
+  );
+}
+
+// Review of #3591 (P1): admission used to check the prompt against `maxPromptTokens` alone while
+// the allowance floored at 512, so a prompt just under the window was sent WITH 512 output tokens
+// — past the window the probe had proven, and the provider refused the turn. The prompt must
+// leave the margin and the minimum allowance free, or the turn is refused before any call.
+export function admissiblePromptTokens(bounds: OutputBounds): number {
+  return bounds.maxPromptTokens - reservedWindowTokens(bounds);
+}
+
+// The allowance an ADMITTED turn sends: the run's reserve, shrunk to what the prompt leaves after
+// the safety margin. Admission (`admissiblePromptTokens`) guarantees at least the minimum.
+export function admittedOutputTokens(bounds: OutputBounds, estimatedPromptTokens: number): number {
+  const remaining =
+    bounds.maxPromptTokens -
+    estimatedPromptTokens -
+    safetyMarginTokensFor(bounds.maxPromptTokens, bounds.maxOutputTokens);
+  return Math.min(bounds.maxOutputTokens, remaining);
+}
+
+function logValidatedRequestBounds(
+  ctx: RouteContext,
+  runId: string,
+  request: CodingSidecarGatewayChatCompletionRequest,
+  bounds: CodingWorkbenchSidecarGatewayRunMetadata,
+  estimatedPromptTokens: number,
+): void {
+  getServerLogger().info(
+    activityLogEvent(
+      CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION,
+      {
+        correlationId: correlationIdOrUnknown(ctx.correlationId),
+        parentCorrelationId: runId,
+      },
+      {
+        runId,
+        maxRequestBytes: bounds.maxRequestBytes,
+        maxPromptTokens: bounds.maxPromptTokens,
+        estimatedPromptTokens,
+        maxOutputTokens: admittedOutputTokens(bounds, estimatedPromptTokens),
+        inputMessageCount: request.messages.length,
+        completeness: "complete",
+        loss: "none",
+      },
     ),
-  });
+  );
 }
 
 function executeBudgetedGatewayChat(
@@ -1413,20 +3535,41 @@ function executeBudgetedGatewayChat(
   binding: PinnedGatewayBinding,
   parsed: CodingSidecarGatewayChatCompletionRequest,
   authentication: { readonly capability: string; readonly runId: string },
+  estimatedPromptTokens: number,
   profile: {
     readonly modelAlias: string;
     readonly maxOutputTokens: number;
     readonly upstreamStreamingSupported: boolean;
   },
 ): Promise<RouteResult | typeof STREAMING> {
-  if (!reserveGatewayPromptBudget(deps, authentication.capability, authentication.runId, parsed)) {
+  const promptTokenReservation = reserveGatewayPromptBudget(
+    deps,
+    authentication.capability,
+    authentication.runId,
+    estimatedPromptTokens,
+  );
+  if (promptTokenReservation === undefined) {
+    logGatewayRejection(ctx, authentication.runId, 403, "runtime-prompt-budget-denied");
+    reportGatewayTurnFailure(ctx, deps, authentication.runId, "turn-rejected");
     return Promise.resolve(forbiddenGatewayRequest());
   }
-  return executeGatewayChat(ctx, deps, binding, parsed, authentication.runId, profile);
+  return executeGatewayChat(ctx, deps, binding, parsed, authentication.runId, {
+    ...profile,
+    promptTokenReservation,
+    toolCatalogCoverage: resolveToolCatalogHandlerCoverage(
+      deps,
+      authentication.runId,
+      ctx.correlationId,
+    ),
+    offerLifetimeMs: opencodeGatewayOfferLifetimeMs(
+      codingSidecarGatewayRequestDeadlineMs(binding.config, profile.modelAlias),
+    ),
+  });
 }
 
 function fixedReadinessResponse(
   ctx: RouteContext,
+  deps: UiHandlerDeps,
   modelId: string,
   stream: boolean,
 ): RouteResult | typeof STREAMING {
@@ -1444,5 +3587,7 @@ function fixedReadinessResponse(
       costClass: "low",
     },
   };
-  return stream ? bufferedOpenAiStream(ctx, modelId, response) : openAiResponse(modelId, response);
+  return stream
+    ? bufferedOpenAiStream(ctx, deps, modelId, response)
+    : openAiResponse(modelId, response);
 }

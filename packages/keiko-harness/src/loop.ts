@@ -7,7 +7,12 @@ import { contextBytes, type RunContext, type StateStep } from "./context.js";
 import { handleModelCall, handleToolCall } from "./executor.js";
 import { handlePatchProposal, handleReporting, handleVerification } from "./patcher.js";
 import { handleContextSelection, handlePlanning } from "./planner.js";
-import { TERMINAL_STATES, type HarnessStateName, type RunOutcome } from "./types.js";
+import {
+  isTerminalHarnessState,
+  type HarnessFailure,
+  type HarnessStateName,
+  type RunOutcome,
+} from "./types.js";
 
 const MAX_LOOP_STEPS = 10_000; // absolute safety net; bounded states make this unreachable.
 
@@ -21,6 +26,33 @@ function checkWallTime(ctx: RunContext): StateStep | null {
     return { to: "limit-exceeded", reason: "maxWallTimeMs exceeded" };
   }
   return null;
+}
+
+// A handler may have already recorded why the run is stopping for a reason UNRELATED to the
+// deadline: a real failure (onModelError's HARNESS_MODEL_ERROR) or a real abort (cancelled). Those
+// two outcomes are the run's own decision and must not be relabelled. An ordinary successful
+// completion is NOT protected: the wall-time budget is a hard cap, so a model port that never
+// errors and only exceeds the budget must still resolve to limit-exceeded even when the dispatch
+// that finishes the run lands in one hop with no further loop iteration to catch it.
+const PROTECTED_POST_DISPATCH_STATES: ReadonlySet<HarnessStateName> = new Set([
+  "failed",
+  "cancelled",
+]);
+
+// Post-dispatch the deadline may have passed while a handler was running. Detecting it here must
+// not overwrite a protected outcome above, and the failure slot is only claimed while still
+// unclaimed. A non-protected step past the deadline still terminates the run rather than
+// continuing (including a step that already reached a terminal, non-protected state like
+// "completed" — see PROTECTED_POST_DISPATCH_STATES above).
+function checkWallTimePostDispatch(ctx: RunContext, dispatched: StateStep): StateStep | null {
+  if (PROTECTED_POST_DISPATCH_STATES.has(dispatched.to)) {
+    return null;
+  }
+  if (ctx.clock.now() - ctx.startedAt <= ctx.limits.maxWallTimeMs) {
+    return null;
+  }
+  ctx.failure ??= toFailure(HARNESS_CODES.LIMIT_WALL_TIME, "wall-time budget exhausted");
+  return { to: "limit-exceeded", reason: "maxWallTimeMs exceeded" };
 }
 
 // Limit checks evaluated when re-entering planning (iterations) plus the wall-time gate for
@@ -37,6 +69,68 @@ function checkLoopLimits(ctx: RunContext): StateStep | null {
   return null;
 }
 
+// KEIKO-0726 (#3323): before checkModelCallLimits hard-fails on context-size alone, give an
+// injected HarnessCompactionPort one attempt to evict/compact history and bring the run back
+// under budget. No port injected (every caller predating KEIKO-0726) => returns false and the
+// hard-fail below is byte-identical to before. The port's own contract requires it to be total,
+// but production wiring may still throw in violation of that contract or hand back a result that
+// does not actually fit — both are treated as "could not compact" rather than trusted blindly, so
+// this can never be MORE permissive than doing nothing: a broken or over-optimistic port degrades
+// to the unchanged hard-fail, it never lets an over-budget run through.
+//
+// Reconciliation with HarnessShaperPort (executor.ts, ADR-0055 D4): that port narrowly recompacts
+// individual tool-role messages, reactively, at tool-result insertion time, which is disjoint from
+// this port's scope (the whole accumulating history at model-call re-entry) — the two are invoked
+// at different points in the loop on different message sets and never compete over the same edit.
+function tryCompact(ctx: RunContext): boolean {
+  if (ctx.compactionPort === undefined) {
+    return false;
+  }
+  const bytesBefore = contextBytes(ctx.messages);
+  const messagesBefore = ctx.messages.length;
+  let result: ReturnType<NonNullable<RunContext["compactionPort"]>>;
+  try {
+    result = ctx.compactionPort({
+      messages: ctx.messages,
+      maxContextBytes: ctx.limits.maxContextBytes,
+    });
+  } catch {
+    return false;
+  }
+  if (result === undefined) {
+    return false;
+  }
+  const bytesAfter = contextBytes(result.messages);
+  if (bytesAfter > ctx.limits.maxContextBytes) {
+    return false;
+  }
+  ctx.messages = [...result.messages];
+  // messagesEvicted, when the port reports it, is the real eviction count. Net array-length
+  // shrinkage undercounts whenever the port also INSERTS a placeholder (e.g. a merged eviction
+  // notice) in place of the messages it removed. The port is untrusted, same posture as the byte
+  // re-validation above: only a well-formed, plausible count is used, otherwise fall back to the
+  // net-shrinkage figure this loop always had.
+  const netShrink = Math.max(0, messagesBefore - ctx.messages.length);
+  const reported = result.messagesEvicted;
+  const messagesDropped =
+    typeof reported === "number" &&
+    Number.isInteger(reported) &&
+    reported >= 0 &&
+    reported <= messagesBefore
+      ? reported
+      : netShrink;
+  // KEIKO-0726 (#3323): body-free observability signal (AGENTS.md §8 Rule 1) — counts and byte
+  // totals only, never message content. Emitted through the harness's existing instrumentation
+  // port (ctx.emitter), exactly like every other structured audit event this loop already emits.
+  ctx.emitter.emit({
+    type: "context:compacted",
+    messagesDropped,
+    bytesBefore,
+    bytesAfter,
+  });
+  return true;
+}
+
 // Context-size and model-call-count checks, evaluated at every model-call entry so the
 // limit bounds calls that follow tool-call (not only the initial context-selection path).
 function checkModelCallLimits(ctx: RunContext): StateStep | null {
@@ -45,14 +139,17 @@ function checkModelCallLimits(ctx: RunContext): StateStep | null {
     return { to: "limit-exceeded", reason: "maxModelCalls exceeded" };
   }
   const bytes = contextBytes(ctx.messages);
-  if (bytes > ctx.limits.maxContextBytes) {
-    ctx.failure = toFailure(
-      HARNESS_CODES.LIMIT_CONTEXT_SIZE,
-      `context ${String(bytes)} bytes exceeds limit ${String(ctx.limits.maxContextBytes)}`,
-    );
-    return { to: "limit-exceeded", reason: "maxContextBytes exceeded" };
+  if (bytes <= ctx.limits.maxContextBytes) {
+    return null;
   }
-  return null;
+  if (tryCompact(ctx)) {
+    return null;
+  }
+  ctx.failure = toFailure(
+    HARNESS_CODES.LIMIT_CONTEXT_SIZE,
+    `context ${String(bytes)} bytes exceeds limit ${String(ctx.limits.maxContextBytes)}`,
+  );
+  return { to: "limit-exceeded", reason: "maxContextBytes exceeded" };
 }
 
 // Per-state-entry guards: abort is honoured before any state; call-count limits are
@@ -121,6 +218,23 @@ function transition(ctx: RunContext, from: HarnessStateName, step: StateStep): H
   return step.to;
 }
 
+// Ties a terminal outcome to its failure record: only "failed"/"limit-exceeded" ever carry one,
+// synthesizing the HARNESS_INTERNAL fallback when that state was reached without ctx.failure being
+// set. Exported so session.ts's buildResult can apply the identical rule to the RunResult it
+// returns — the emitted event stream (emitTerminal, below) and the returned RunResult can then
+// never disagree about whether a run failed, even if something else (e.g. a raced wall-time
+// deadline callback) writes to ctx.failure after the run has already reached a non-failure
+// terminal state (KEIKO-0774).
+export function terminalFailure(
+  ctx: Pick<RunContext, "failure">,
+  state: HarnessStateName,
+): HarnessFailure | undefined {
+  if (state !== "failed" && state !== "limit-exceeded") {
+    return undefined;
+  }
+  return ctx.failure ?? toFailure(HARNESS_CODES.INTERNAL, "run failed without a failure record");
+}
+
 function emitTerminal(ctx: RunContext, state: HarnessStateName): void {
   if (state === "completed") {
     ctx.emitter.emit({
@@ -138,9 +252,11 @@ function emitTerminal(ctx: RunContext, state: HarnessStateName): void {
     });
     return;
   }
-  if (state === "failed" || state === "limit-exceeded") {
-    const failure =
-      ctx.failure ?? toFailure(HARNESS_CODES.INTERNAL, "run failed without a failure record");
+  const failure = terminalFailure(ctx, state);
+  // terminalFailure returns undefined only for a non-failure state; this branch is reached only
+  // for "failed"/"limit-exceeded" (the two states not handled above), so failure is always defined
+  // here. The check keeps the compiler honest without a non-null assertion.
+  if (failure !== undefined) {
     ctx.failure = failure;
     ctx.emitter.emit({ type: "run:failed", failure, atState: state });
   }
@@ -152,7 +268,7 @@ export async function runLoop(ctx: RunContext): Promise<RunOutcome> {
     to: "planning",
     reason: "task validated",
   });
-  for (let step = 0; step < MAX_LOOP_STEPS && !TERMINAL_STATES.has(state); step += 1) {
+  for (let step = 0; step < MAX_LOOP_STEPS && !isTerminalHarnessState(state); step += 1) {
     if (ctx.signal.aborted) {
       state = transition(ctx, state, abortStep("abort detected at top of loop"));
       break;
@@ -163,10 +279,10 @@ export async function runLoop(ctx: RunContext): Promise<RunOutcome> {
       continue;
     }
     const dispatched = await dispatch(ctx, state);
-    const postDispatchGuard = checkWallTime(ctx);
+    const postDispatchGuard = checkWallTimePostDispatch(ctx, dispatched);
     state = transition(ctx, state, postDispatchGuard ?? dispatched);
   }
-  if (!TERMINAL_STATES.has(state)) {
+  if (!isTerminalHarnessState(state)) {
     ctx.failure = toFailure(HARNESS_CODES.INTERNAL, "state-machine safety step limit exceeded");
     state = transition(ctx, state, {
       to: "failed",

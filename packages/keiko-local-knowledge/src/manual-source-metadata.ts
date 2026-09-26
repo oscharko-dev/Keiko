@@ -8,7 +8,7 @@ import type {
   KnowledgeSource,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
-import { isSafeStorageReference } from "@oscharko-dev/keiko-contracts";
+import { isSafeStorageReference } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-paths";
 
 import { listCapsuleSources } from "./source-lifecycle.js";
 import type { KnowledgeStore } from "./store.js";

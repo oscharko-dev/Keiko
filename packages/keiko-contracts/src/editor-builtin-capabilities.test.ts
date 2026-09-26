@@ -132,6 +132,14 @@ describe("editorBuiltinCapability", () => {
     expect(editorBuiltinCapability("")).toBeNull();
     expect(editorBuiltinCapability("plaintext")).toBeNull();
   });
+
+  it.each(["constructor", "toString", "__proto__", "hasOwnProperty", "valueOf"])(
+    "prototype-chain: returns null on %s (KEIKO-0657)",
+    (protoKey) => {
+      expect(editorBuiltinCapability(protoKey)).toBeNull();
+      expect(isBuiltinFormattingAvailable(protoKey)).toBe(false);
+    },
+  );
 });
 
 describe("editorBuiltinDocumentFormatting", () => {

@@ -17,8 +17,12 @@ on:
       - feat/epic-built-in-editor-2285-M11
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
+      - epic/updater-reliability
       - "release/**"
   pull_request:
+    # Metadata is merge-relevant evidence: the review-suppression gate reads the PR title/body, and
+    # a base retarget changes the candidate boundary. `edited` therefore must produce a fresh
+    # required verdict even though it does not change repository bytes.
     types: [opened, reopened, synchronize, ready_for_review, edited]
     branches:
       - dev
@@ -35,6 +39,7 @@ on:
       - feat/epic-built-in-editor-2285-M11
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
+      - epic/updater-reliability
       - "release/**"
   # ADR-0139 D7: every required workflow also validates merge-queue groups so a human can
   # enable GitHub's merge queue without agents re-racing a moving dev branch.
@@ -57,7 +62,10 @@ permissions: {}
 # indistinguishable from a real defect, and that evidence binds an integration commit nothing else
 # re-measures (Issue #2704).
 concurrency:
-  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  # Code-head and metadata events cannot displace one another before either starts. Each class
+  # coalesces independently per PR; pushes supersede stale code evidence, while repeated metadata
+  # edits supersede stale metadata evidence. Non-PR integration runs remain groups of one.
+  group: ci-${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.event.pull_request.number, github.event.action == 'edited' && 'metadata' || 'code-head') || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -69,7 +77,38 @@ jobs:
       - name: Confirm dev branch gate
         run: |
           case "${GITHUB_REF}:${GITHUB_BASE_REF}" in
-            refs/heads/dev: | refs/heads/feat/dev: | refs/heads/feat/epic-open-code-engine-in-keiko-2473: | refs/heads/feat/keiko-editor: | refs/heads/feat/keiko-agent-native-editor-foundation-and-runtime: | refs/heads/feat/prompt-enhancer-1307: | refs/heads/feat/keiko-establish-governed-end-to-end-git-delivery: | refs/heads/feat/keiko-voice-digital-twin: | refs/heads/feat/keiko-isolated-task-workspaces: | refs/heads/feat/keiko-colleague-like-voice-dialogue-mode: | refs/heads/feat/keiko-repository-centered-desktop-workflow: | refs/heads/feat/epic-built-in-editor-2285-M11: | refs/heads/feat/epic-memoria-viva-2538: | refs/heads/epic/coding-workbench-opencode-codex: | refs/heads/release/*: | *:dev | *:feat/dev | *:feat/epic-open-code-engine-in-keiko-2473 | *:feat/keiko-editor | *:feat/keiko-agent-native-editor-foundation-and-runtime | *:feat/prompt-enhancer-1307 | *:feat/keiko-establish-governed-end-to-end-git-delivery | *:feat/keiko-voice-digital-twin | *:feat/keiko-isolated-task-workspaces | *:feat/keiko-colleague-like-voice-dialogue-mode | *:feat/keiko-repository-centered-desktop-workflow | *:feat/epic-built-in-editor-2285-M11 | *:feat/epic-memoria-viva-2538 | *:epic/coding-workbench-opencode-codex | *:release/*)
+            refs/heads/dev: \
+            | refs/heads/feat/dev: \
+            | refs/heads/feat/epic-open-code-engine-in-keiko-2473: \
+            | refs/heads/feat/keiko-editor: \
+            | refs/heads/feat/keiko-agent-native-editor-foundation-and-runtime: \
+            | refs/heads/feat/prompt-enhancer-1307: \
+            | refs/heads/feat/keiko-establish-governed-end-to-end-git-delivery: \
+            | refs/heads/feat/keiko-voice-digital-twin: \
+            | refs/heads/feat/keiko-isolated-task-workspaces: \
+            | refs/heads/feat/keiko-colleague-like-voice-dialogue-mode: \
+            | refs/heads/feat/keiko-repository-centered-desktop-workflow: \
+            | refs/heads/feat/epic-built-in-editor-2285-M11: \
+            | refs/heads/feat/epic-memoria-viva-2538: \
+            | refs/heads/epic/coding-workbench-opencode-codex: \
+            | refs/heads/epic/updater-reliability: \
+            | refs/heads/release/*: \
+            | *:dev \
+            | *:feat/dev \
+            | *:feat/epic-open-code-engine-in-keiko-2473 \
+            | *:feat/keiko-editor \
+            | *:feat/keiko-agent-native-editor-foundation-and-runtime \
+            | *:feat/prompt-enhancer-1307 \
+            | *:feat/keiko-establish-governed-end-to-end-git-delivery \
+            | *:feat/keiko-voice-digital-twin \
+            | *:feat/keiko-isolated-task-workspaces \
+            | *:feat/keiko-colleague-like-voice-dialogue-mode \
+            | *:feat/keiko-repository-centered-desktop-workflow \
+            | *:feat/epic-built-in-editor-2285-M11 \
+            | *:feat/epic-memoria-viva-2538 \
+            | *:epic/coding-workbench-opencode-codex \
+            | *:epic/updater-reliability \
+            | *:release/*)
               echo "Protected or integration branch gate satisfied."
               ;;
             *)
@@ -88,6 +127,8 @@ jobs:
       contents: read
     outputs:
       documentation-only: ${{ steps.classify.outputs.documentation-only }}
+      windows-relevant: ${{ steps.classify.outputs.windows-relevant }}
+      cross-platform-os: ${{ steps.classify.outputs.cross-platform-os }}
     steps:
       # The classifier decides whether the cross-platform matrix runs, so a pull request must not be
       # able to edit its own classifier and suppress the native install checks (CWE-807). The code
@@ -109,10 +150,75 @@ jobs:
           set -euo pipefail
           if [ -f scripts/check-documentation-only-change.mjs ]; then
             node scripts/check-documentation-only-change.mjs
+            missing_windows_relevant=false
+            missing_cross_platform_os=false
+            if ! grep -q '^windows-relevant=' "${GITHUB_OUTPUT}"; then
+              missing_windows_relevant=true
+            fi
+            if ! grep -q '^cross-platform-os=' "${GITHUB_OUTPUT}"; then
+              missing_cross_platform_os=true
+            fi
+            {
+              if [[ "${missing_windows_relevant}" == "true" ]]; then
+                echo "windows-relevant=true"
+              fi
+              if [[ "${missing_cross_platform_os}" == "true" ]]; then
+                echo 'cross-platform-os=["ubuntu-latest","macos-latest","windows-latest"]'
+              fi
+            } >> "${GITHUB_OUTPUT}"
           else
             echo "documentation-only-change: false — the base revision has no classifier yet"
-            echo "documentation-only=false" >> "${GITHUB_OUTPUT}"
+            {
+              echo "documentation-only=false"
+              echo "windows-relevant=true"
+              echo 'cross-platform-os=["ubuntu-latest","macos-latest","windows-latest"]'
+            } >> "${GITHUB_OUTPUT}"
           fi
+
+  # Reuse proven evidence; never re-measure identical bytes.
+  #
+  # `dev` is protected with linear history and signed squash merges, and branch protection only
+  # integrates a head that is up to date with its base. The squash commit that lands therefore
+  # carries a new commit sha but the IDENTICAL tree sha as the pull-request head the required
+  # matrix already measured — and a tree sha is the recursive content hash of the entire worktree,
+  # workflow files included. Re-running the matrix on that tree cannot discover anything the
+  # pull-request run did not already see. It can only re-roll flaky infrastructure and paint an
+  # already-verified tree red: 15 of the last 100 `dev` runs failed exactly that way, each after
+  # ~48 minutes, while 100 of 100 carried a tree a green pull-request run had already proven.
+  #
+  # Every uncertainty resolves to `false` and runs the full matrix — see
+  # scripts/resolve-verified-tree-evidence.mjs for the closed list, and ADR-0178 for the decision.
+  verified-tree:
+    name: Verified tree
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    outputs:
+      tree-verified: ${{ steps.resolve.outputs.tree-verified }}
+      evidence-run-id: ${{ steps.resolve.outputs.evidence-run-id }}
+      evidence-head-sha: ${{ steps.resolve.outputs.evidence-head-sha }}
+      evidence-tree-sha: ${{ steps.resolve.outputs.evidence-tree-sha }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - id: resolve
+        env:
+          KEIKO_EVENT_NAME: ${{ github.event_name }}
+          KEIKO_HEAD_SHA: ${{ github.sha }}
+          KEIKO_REPOSITORY: ${{ github.repository }}
+          KEIKO_TOKEN: ${{ github.token }}
+          KEIKO_WORKFLOW_FILE: ci.yml
+        run: node scripts/resolve-verified-tree-evidence.mjs
 
   # Zero-tolerance semantic-clone gate. Fallow compares only files changed since the immutable
   # event base, so this closes the renamed-variable clone class without charging every pull request
@@ -120,6 +226,8 @@ jobs:
   # runs in parallel with the much larger core/coverage jobs.
   semantic-duplication:
     name: Semantic duplication
+    needs: verified-tree
+    if: ${{ always() && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -142,7 +250,13 @@ jobs:
         env:
           QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
           QUALITY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: node scripts/resolve-quality-range.mjs >> "$GITHUB_OUTPUT"
+          # A branch-creating push delivers the zero SHA as its before-pointer; the fallback ref
+          # bounds the range at the merge-base with dev so EVERY commit introduced by the branch
+          # creation is scanned (fetch-depth 0 clones only the triggering ref, hence the fetch).
+          QUALITY_FALLBACK_BASE_REF: origin/dev
+        run: |
+          git fetch --no-tags --quiet origin dev
+          node scripts/resolve-quality-range.mjs >> "$GITHUB_OUTPUT"
       - name: Reject semantic clone groups introduced by this change
         env:
           QUALITY_BASE_SHA: ${{ steps.quality-range.outputs.base }}
@@ -188,7 +302,13 @@ jobs:
         env:
           QUALITY_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
           QUALITY_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-        run: node scripts/resolve-quality-range.mjs >> "$GITHUB_OUTPUT"
+          # A branch-creating push delivers the zero SHA as its before-pointer; the fallback ref
+          # bounds the range at the merge-base with dev so EVERY commit introduced by the branch
+          # creation is scanned (fetch-depth 0 clones only the triggering ref, hence the fetch).
+          QUALITY_FALLBACK_BASE_REF: origin/dev
+        run: |
+          git fetch --no-tags --quiet origin dev
+          node scripts/resolve-quality-range.mjs >> "$GITHUB_OUTPUT"
       - name: Reject secrets introduced anywhere in the pull-request history
         env:
           QUALITY_BASE_SHA: ${{ steps.quality-range.outputs.base }}
@@ -196,10 +316,48 @@ jobs:
         run: |
           "${RUNNER_TEMP}/gitleaks" git --redact=100 --no-banner --timeout=120 \
             --log-opts="${QUALITY_BASE_SHA}..${QUALITY_HEAD_SHA}" .
+      - name: Reject secrets the squash merge would introduce
+        env:
+          QUALITY_BASE_SHA: ${{ steps.quality-range.outputs.base }}
+          QUALITY_HEAD_SHA: ${{ steps.quality-range.outputs.head }}
+          # `git commit-tree` needs a committer identity; a runner has none configured. These are
+          # for a probe object that is never pushed, referenced or kept -- only scanned.
+          GIT_AUTHOR_NAME: keiko-ci
+          GIT_AUTHOR_EMAIL: ci@keiko.invalid
+          GIT_COMMITTER_NAME: keiko-ci
+          GIT_COMMITTER_EMAIL: ci@keiko.invalid
+        # The step above walks the branch HISTORY. `dev` takes signed SQUASH merges, so what lands
+        # is ONE new commit whose SHA cannot be known before the merge and is therefore in no
+        # `.gitleaks.toml` allowlist. Any exemption bound to a branch commit still applies to the
+        # history walk and stops applying the instant the branch squashes -- so a pull request goes
+        # green while `dev` fails on byte-identical content. That is exactly how #3452 went green
+        # and d1889bf54 then failed `Secret scan` on one exempted test fixture in
+        # `codingToolFacade.dependencyFailure.test.ts`. The fixture is named by file, never quoted
+        # here: this step caught that very quotation on its own first run, which is the behaviour
+        # it exists for -- a secret-shaped literal newly introduced by a diff, whatever the file.
+        #
+        # This scans the squash EQUIVALENT: the head tree committed onto the base, one commit, the
+        # exact shape the merge produces. The probe SHA is likewise in no allowlist, by
+        # construction, so a commit-bound exemption fails here the same way it will fail on `dev`.
+        # Path- and regex-scoped allowlists and `gitleaks:allow` markers keep working untouched,
+        # which is what makes disarming a fixture at its source the repair this step steers toward.
+        run: |
+          set -euo pipefail
+          tree=$(git rev-parse "${QUALITY_HEAD_SHA}^{tree}")
+          squash=$(git commit-tree "$tree" -p "${QUALITY_BASE_SHA}" -m "squash-equivalent secret scan probe")
+          echo "Scanning the squash-equivalent commit ${squash} (${QUALITY_BASE_SHA}..${squash})."
+          "${RUNNER_TEMP}/gitleaks" git --redact=100 --no-banner --timeout=120 \
+            --log-opts="${QUALITY_BASE_SHA}..${squash}" .
 
   core-quality:
     name: Core quality
+    needs: verified-tree
+    if: ${{ always() && needs.verified-tree.outputs.tree-verified != 'true' }}
     runs-on: ubuntu-latest
+    # Bounded per .coderabbit.yaml's workflow policy. The job has run 11m50s-12m10s across recent
+    # dev runs, so 30 minutes is ~2.5x headroom: generous against runner variance, still a bound
+    # that turns a hung step into a failure instead of the platform-default six hours.
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -207,27 +365,37 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.ref }}
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - run: npm ci --ignore-scripts
-      - name: Install sandbox isolation backend (bubblewrap)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap
-          # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor; bubblewrap (and the
-          # unshare fallback) need them to create the network namespace. Relax it for the runner so
-          # the enforced-egress proof below actually exercises the isolation boundary (ADR-0043).
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor; bubblewrap (and the
+      # unshare fallback) need them to create the network namespace. Relax it for the runner so
+      # the enforced-egress proof below actually exercises the isolation boundary (ADR-0043).
+      - name: Setup Linux sandbox isolation
+        uses: ./.github/actions/setup-sandbox-isolation
       - name: Enforced sandbox egress proof (ADR-0043 / #1202)
         # NOT gated by the feat/keiko-editor branch skip: the assured pre-filter executes untrusted
         # model-generated code, so the deny-by-default egress boundary must be proven on every run.
         # The egress test fails the job if an outbound connection from inside network:"none" succeeds.
-        run: npm --workspace @oscharko-dev/keiko-sandbox test
+        # keiko-sandbox imports the shared NetworkGatewayPolicy guard from keiko-contracts at runtime
+        # (ADR-0043 D11), and its real Linux gateway proof executes the assembled bridge entry point.
+        # `npm run typecheck` builds every package but runs later, so build the dependency and the
+        # sandbox package here before the focused proof (AGENTS.md §2).
+        run: |
+          npm --workspace @oscharko-dev/keiko-contracts run build
+          npm --workspace @oscharko-dev/keiko-sandbox run build
+          npm --workspace @oscharko-dev/keiko-sandbox test
       - name: Verify Keiko Editor package
         run: |
           npm --workspace @oscharko-dev/keiko-editor run build
@@ -236,10 +404,22 @@ jobs:
       - run: npm run typecheck
       - run: npm run check:version-consistency
       - run: npm run check:dependency-hygiene
+      # Issue #2777: npm reports a peer-invalid graph as an advisory `npm ls` exit code that no gate
+      # read, so PR #3290 could land ESLint 10 against plugins declaring `eslint@^9` peers without a
+      # check turning red. npm stays the authority on peer validity — this asks it rather than
+      # restating it. Peer validity is ALL this answers: `npm ls` exits 0 on a second ESLint that
+      # satisfies its own workspace's range, so the duplicate-install half of the same invariant is
+      # owned by check:dependency-hygiene above, not by this step.
+      - run: npm run check:eslint-lane
+      # Binds the #2296 closeout document to the resolved graph and the pinned workflow
+      # actions, so a recorded dependency disposition cannot quietly stop describing this
+      # checkout the way epic #2291's prose matrix did.
+      - run: npm run check:dependency-currency
       # Makes each OSV waiver's "not shipped" claim executable: an ID-wide suppression must never
       # hide the same advisory once it reaches a dependency Keiko distributes.
       - run: npm run check:osv-waiver-scope
       - run: npm run check:knip
+      - run: npm run check:browser-baseline
       - run: npm run check:external-quality-config
       - run: npm run check:review-bot-suppression
       - run: npm run check:release-required-workflows
@@ -247,7 +427,7 @@ jobs:
       - run: npm run check:git-client-evidence
       - run: npm run lint
         env:
-          NODE_OPTIONS: --max-old-space-size=6144
+          NODE_OPTIONS: --max-old-space-size=12288
       - run: npm run format:check
       - name: UI i18n guard
         env:
@@ -261,15 +441,21 @@ jobs:
           fi
           npm run check:ui-i18n
       - run: npm run check:adr-index
-      - name: End-to-end suite wiring gate (#2629)
+      - name: End-to-end suite wiring gate (#2629, #2955)
+        # Runs after `npm run typecheck` (which builds packages) on purpose: since #2955 the gate
+        # resolves every /api literal in tests/e2e against the server's REAL API_ROUTES table, read
+        # from packages/keiko-server/dist. Move this step above the build and it fails closed with
+        # "could not be loaded" rather than silently skipping the invariant.
         run: npm run check:e2e-suite-wiring
-      - run: npm run arch:check
-      - run: npm run arch:check:negative
       - name: Quality Intelligence supply-chain gate
         run: npm run check:qi-supply-chain
-      - name: Retrieval latency gate (enterprise retrieval M3)
+      - name: Lexical workspace-search latency gate (enterprise retrieval M3)
         # Runs after `npm run typecheck` (which builds packages), so the compiled keiko-workspace
         # dist the gate imports is present. Deterministic fixture + generous p95 ceiling.
+        # KEIKO-0234: this covers the LEXICAL keiko-workspace searchText engine only. ANN semantic
+        # retrieval (ADR-0164) is gated separately by `check:knowledge-m2-closeout` in this same
+        # workflow, whose ann-active proof KEIKO-0362 gave absolute build/query ceilings against the
+        # production timeouts. A green run HERE says nothing about that path either way.
         run: npm run check:retrieval-latency
       - name: Retrieval quality gate (enterprise retrieval M4)
         # Same compiled workspace surface as the latency gate; evaluates top-k quality, line-level
@@ -281,6 +467,19 @@ jobs:
         # PROVES the gate is non-vacuous by asserting an injected ranking/reranker regression drops
         # below the floors. Uses the compiled keiko-server dist built by `npm run typecheck` above.
         run: npm run check:grounded-retrieval-quality
+      - name: Grounded retrieval latency gate (audit KEIKO-0053)
+        # The LATENCY counterpart of the quality gate above: same real semantic + RRF + rerank path,
+        # extended through the real citation-reconciliation and claim-entailment pass, timed. The
+        # provider ports and the entailment judge are deterministic stubs, so this measures
+        # code-path cost and never model-serving variance. Generous p50/p95 ceilings, plus an
+        # injected per-judge-call delay that MUST breach the p95 budget so the gate proves it can
+        # fail. Uses the compiled keiko-server dist built by `npm run typecheck` above.
+        #
+        # Bounded explicitly: this step runs a real pipeline in a loop, so a hang inside it would
+        # otherwise burn the workflow-level default before the required check reports. 15 minutes is
+        # far above the measured budget (warmup + 12 iterations + one probe, ~35ms each).
+        timeout-minutes: 15
+        run: npm run check:grounded-retrieval-latency
       - name: Grounded faithfulness gate (RB-4, GEN-AI-EVAL-003)
         # Scores the real citation-reconciliation + abstention logic over scripted answerer variants
         # (faithful / hallucinated-citation / confident-over-empty / refusal). Fails closed if a
@@ -299,6 +498,14 @@ jobs:
         # dependency-review policy and check:workspace-supply-chain reject — so it is fetched here
         # and verified against a pinned SHA-256, the same way the Sonar Scanner CLI is obtained.
         run: npm run provision:usearch
+      - name: Activity Log implementation gate
+        # The one documented local command, run unchanged (after the USearch runtime, which a
+        # scenario may drive). Over the full registered inventory it composes registry/inventory
+        # drift with proof and scenario resolution (check:op-catalog), the curated scenario matrix
+        # (test:activity-log-scenarios), the error-observability probes of the REAL built BFF,
+        # arch:check with its negative fixtures, and check:release-impact. It builds the packages
+        # first, so no check judges stale output, and runs every check even after one fails.
+        run: npm run check:activity-log
       - name: Knowledge M2 closeout gate (Knowledge M2.8, Epic #2556)
         # The wave's anti-false-green artifact. Re-runs the six substrate proofs (ANN activation,
         # one reranker transport importer, the evaluation fold, the retrieval-context wire snapshot,
@@ -306,13 +513,6 @@ jobs:
         # and compares the committed docs/qa/knowledge-m2-substrate-evidence.md against a freshly
         # rendered one, failing closed on drift. Uses the compiled dist built by `npm run typecheck`.
         run: npm run check:knowledge-m2-closeout
-      - name: Server error observability gate (RB-6, GEN-OBS-DIAGNOSTICS-901)
-        # Drives the REAL built BFF: forces a handler throw and asserts the top-level catch returns an
-        # opaque 500 that carries a correlation id (body + X-Keiko-Correlation-Id header), routes the
-        # redacted cause to the operator diagnostic sink keyed by that id, never leaks the raw cause,
-        # and honours a UI-supplied id. Goes RED against a bare `.catch(() => {})` that drops the id or
-        # the diagnostic. Uses the compiled keiko-server dist built by `npm run typecheck` above.
-        run: npm run check:error-observability
       - name: Context quality gate (ADR-0052, context-engineering PR1)
         # Runs after `npm run typecheck` (which builds packages), so the compiled keiko-contracts,
         # keiko-workflows, keiko-workspace, and keiko-security dist the gate imports are present —
@@ -324,10 +524,15 @@ jobs:
           npm run build:ui
           npm run check:editor-bundle-size -- --require-static-export
           npm run check:editor-release-evidence
+          npm run check:update-ui-evidence
       - name: Package surface and installable smoke
+        timeout-minutes: 45
         run: |
           npm run build
           npm run prepare:bin
+          # Seeds the offline smoke registry BEFORE the prune below deletes the native optional
+          # packages; a seed taken afterwards would serve stubs where the host binding belongs.
+          npm run provision:smoke
           npm run prune:package-build-artifacts
           npm run prune:package-native-optionals
           npm run check:package-surface
@@ -342,7 +547,13 @@ jobs:
   # compare a third of the suite against the whole suite's floors.
   coverage-packages:
     name: Coverage shard (packages ${{ matrix.shard }}/3)
+    needs: verified-tree
+    # The coverage chain feeds the SonarCloud analysis, which files under the branch the scanner
+    # names: a proven tree's pull-request analysis never advances `dev`'s branch history. So this
+    # chain runs on every push to `dev` even when the tree is proven (ADR-0178 D1, 2026-09-25).
+    if: ${{ always() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     strategy:
@@ -356,15 +567,19 @@ jobs:
           # Unchanged from the serial job: package tests read real repository history.
           fetch-depth: 0
           persist-credentials: false
-          # Pinned to the run's immutable commit, not the moving ref the single job could safely
-          # use: five checkouts now feed one merged verdict, and `refs/pull/N/merge` is rewritten
-          # whenever the head or base moves. Skew would have the shards measure one tree while the
-          # gates and the scanner judge another, with nothing to detect it (Issue #2704).
+          # PR/push runs use their immutable commit. Manual Sonar runs bind this producer to `dev`
+          # so its coverage cannot be mixed with a scanner checkout from another revision.
           ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Restore the npm download cache
@@ -384,13 +599,10 @@ jobs:
           path: ~/.npm
           key: npm-cache-${{ runner.os }}-node24.18.0-${{ hashFiles('package-lock.json') }}
       - run: npm ci --ignore-scripts
-      - name: Install sandbox isolation backend (bubblewrap)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap
-          # Coverage executes the same live isolation proofs as the core test job. Ubuntu 24.04
-          # otherwise exposes bubblewrap while AppArmor prevents it from creating the namespace.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      # Coverage executes the same live isolation proofs as the core test job. Ubuntu 24.04
+      # otherwise exposes bubblewrap while AppArmor prevents it from creating the namespace.
+      - name: Setup Linux sandbox isolation
+        uses: ./.github/actions/setup-sandbox-isolation
       - name: Restore the provisioned USearch runtime
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -441,8 +653,12 @@ jobs:
         with:
           name: coverage-blob-packages-${{ matrix.shard }}
           # Vitest names a sharded blob `blob-<index>-<count>.json`, so the three uploads merge into
-          # one directory without collision. `.vitest-reports` is a dot directory and
-          # upload-artifact skips those unless told otherwise.
+          # one directory without collision. That per-shard name is exactly what an explicit
+          # `--outputFile.blob` destroys: a set output path wins verbatim, so all three shards write
+          # the one same file and `merge-multiple` keeps only the last of them -- two thirds of the
+          # measurement, silently. The shard script therefore passes no output path and this follows
+          # the reporter default. Vitest 4 writes `.vitest-reports`; the temporary Vitest 5 line
+          # used `.vitest/blob`, so this path is deliberately pinned to the governed major.
           path: .vitest-reports/
           include-hidden-files: true
           if-no-files-found: error
@@ -450,7 +666,11 @@ jobs:
 
   coverage-ui:
     name: Coverage suite (keiko-ui)
+    needs: verified-tree
+    # Runs on every push to `dev` even for a proven tree: see coverage-packages (ADR-0178 D1).
+    if: ${{ always() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -458,15 +678,19 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          # Pinned to the run's immutable commit, not the moving ref the single job could safely
-          # use: five checkouts now feed one merged verdict, and `refs/pull/N/merge` is rewritten
-          # whenever the head or base moves. Skew would have the shards measure one tree while the
-          # gates and the scanner judge another, with nothing to detect it (Issue #2704).
+          # PR/push runs use their immutable commit. Manual Sonar runs bind this producer to `dev`
+          # so its coverage cannot be mixed with a scanner checkout from another revision.
           ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Restore the npm download cache
@@ -476,11 +700,8 @@ jobs:
           path: ~/.npm
           key: npm-cache-${{ runner.os }}-node24.18.0-${{ hashFiles('package-lock.json') }}
       - run: npm ci --ignore-scripts
-      - name: Install sandbox isolation backend (bubblewrap)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Setup Linux sandbox isolation
+        uses: ./.github/actions/setup-sandbox-isolation
       - name: Restore the provisioned USearch runtime
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -516,7 +737,11 @@ jobs:
 
   coverage-scripts:
     name: Coverage suite (scripts)
+    needs: verified-tree
+    # Runs on every push to `dev` even for a proven tree: see coverage-packages (ADR-0178 D1).
+    if: ${{ always() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
@@ -524,15 +749,19 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          # Pinned to the run's immutable commit, not the moving ref the single job could safely
-          # use: five checkouts now feed one merged verdict, and `refs/pull/N/merge` is rewritten
-          # whenever the head or base moves. Skew would have the shards measure one tree while the
-          # gates and the scanner judge another, with nothing to detect it (Issue #2704).
+          # PR/push runs use their immutable commit. Manual Sonar runs bind this producer to `dev`
+          # so its coverage cannot be mixed with a scanner checkout from another revision.
           ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Restore the npm download cache
@@ -542,11 +771,8 @@ jobs:
           path: ~/.npm
           key: npm-cache-${{ runner.os }}-node24.18.0-${{ hashFiles('package-lock.json') }}
       - run: npm ci --ignore-scripts
-      - name: Install sandbox isolation backend (bubblewrap)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - name: Setup Linux sandbox isolation
+        uses: ./.github/actions/setup-sandbox-isolation
       - name: Restore the provisioned USearch runtime
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -572,6 +798,11 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # KEIKO-1021: the SonarCloud-scope `if:` condition is duplicated at ci.yml:755, 770, 782,
+  # and 796 (four coupled sites in this job). GitHub Actions has no `if:`-level variable
+  # interpolation, so the four expressions must be edited together. Any change to one — adding a
+  # trigger, restricting a branch, or narrowing a base_ref — must be applied to all four to keep
+  # the coverage-sonar scope coherent across the job's four gated steps.
   coverage-sonar:
     name: Coverage and SonarCloud
     # `always()` is load-bearing. Without it a failing shard would leave this job SKIPPED, and a
@@ -579,12 +810,22 @@ jobs:
     # The first step below turns every non-success shard result — failure, cancelled AND skipped —
     # into a red context. ADR-0135 D3 is unaffected: this job is not itself a required check; it is
     # the dependency the required `ci` aggregate already observes (Issue #2704).
-    if: ${{ always() }}
+    # On a push to `dev` this analysis runs even for a proven tree (ADR-0178 D1, 2026-09-25):
+    # SonarCloud files an analysis under the branch or pull request the scanner names, so five days
+    # of reused pull-request evidence had left `dev`'s overview, new-code period and version events
+    # at the last full run. The `ci` aggregate treats its `success` as an always-on gate that ran
+    # and fails closed on any other state, so a red `dev` analysis turns the run red.
+    if: ${{ always() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}
     needs:
+      - verified-tree
       - coverage-packages
       - coverage-scripts
       - coverage-ui
     runs-on: ubuntu-latest
+    # One full hosted scan currently takes about 15 minutes. ADR-0139 D6 permits three attempts
+    # with 30/60-second backoff, so 50 minutes bounds the designed worst case without killing the
+    # final permitted attempt.
+    timeout-minutes: 50
     permissions:
       contents: read
     steps:
@@ -622,6 +863,12 @@ jobs:
         with:
           node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Restore and maintain the npm download cache
@@ -639,8 +886,10 @@ jobs:
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          # The blob reporter's own default directory, so `test:coverage:packages:shard` followed
-          # by `test:coverage:packages:merge` composes locally too, with no artifact relocation.
+          # The reporter default directory the shard script writes to, so that script followed by
+          # `test:coverage:packages:merge` composes locally too, with no artifact relocation. Named
+          # rather than pinned through `--outputFile.blob`: an explicit output path would collapse
+          # the three per-shard blob names into one.
           path: .vitest-reports
           pattern: coverage-blob-packages-*
           merge-multiple: true
@@ -685,6 +934,16 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=3072
         run: npm run test:coverage:packages:merge
+      - name: Discard the shard blobs now that the merged coverage exists
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        # The blobs are vitest's intermediate shard state, fully consumed by the merge above:
+        # `coverage/packages/lcov.info` is what every later step reads. Leaving them in the
+        # workspace puts ~12MB JSON files inside `sonar.sources=.`, and the scanner's
+        # "is bigger than 20MB" WARN fails `check-sonar-analysis-log.mjs --require-full-analysis`
+        # closed (PR #3452). Removing them keeps the approved analysis scope untouched -- widening
+        # `sonar.exclusions` would move a reviewed scope pin to hide a file that simply has no
+        # business being there once the merge has run.
+        run: rm -rf .vitest-reports
       - name: Coverage quality gates
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run check:coverage:quality
@@ -757,6 +1016,8 @@ jobs:
               -Dsonar.projectBaseDir="$GITHUB_WORKSPACE" \
               -Dsonar.projectVersion="${STEPS_SONAR_VERSION_OUTPUTS_VERSION}" \
               -Dsonar.scm.revision="${SONAR_HEAD_SHA}" \
+              -Dsonar.analysisCache.enabled=false \
+              -Dsonar.sensor.cache.enable=false \
               -Dsonar.qualitygate.wait=true \
               -Dsonar.working.directory="$RUNNER_TEMP/sonar-work" \
               2>&1 | tee "$RUNNER_TEMP/sonar-scanner.log"
@@ -765,7 +1026,7 @@ jobs:
             if [ "$scanner_status" -eq 0 ]; then
               break
             fi
-            if ! grep -qE "Gateway Timeout|Bad Gateway|Service Unavailable|Failed to query JRE metadata|connect timed out|Connection reset|Quality Gate check timeout exceeded" "$RUNNER_TEMP/sonar-scanner.log"; then
+            if ! grep -qE "Gateway Timeout|Bad Gateway|Service (Temporarily )?Unavailable|Failed to query JRE metadata|connect timed out|Connection reset|Quality Gate check timeout exceeded" "$RUNNER_TEMP/sonar-scanner.log"; then
               break
             fi
             if [ "$attempt" -lt 3 ]; then
@@ -773,12 +1034,13 @@ jobs:
               sleep $((attempt * 30))
             fi
           done
-          node scripts/check-sonar-analysis-log.mjs --log "$RUNNER_TEMP/sonar-scanner.log"
-          echo "status=$scanner_status" >> "$GITHUB_OUTPUT"
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-            exit 0
-          fi
           exit "$scanner_status"
+      - name: Verify Sonar full-analysis evidence
+        if: ${{ always() && steps.sonar-scan.outcome != 'skipped' }}
+        run: >-
+          node scripts/check-sonar-analysis-log.mjs
+          --log "$RUNNER_TEMP/sonar-scanner.log"
+          --require-full-analysis
       - name: Verify SonarCloud Banking Grade PR evidence
         if: ${{ github.event_name == 'pull_request' && github.base_ref == 'dev' }}
         env:
@@ -800,30 +1062,91 @@ jobs:
     needs:
       - change-scope
       - protected-branch-gate
+      - verified-tree
+      - build-scan-sbom-smoke
       - core-quality
       - coverage-sonar
       - cross-platform-smoke
+      - node-26-compatibility
       - secret-scan
       - semantic-duplication
+      - ui
     runs-on: ubuntu-latest
     permissions: {}
     steps:
       - name: Aggregate required CI results fail closed
         env:
+          BUILD_SCAN_SBOM_SMOKE_RESULT: ${{ needs.build-scan-sbom-smoke.result }}
+          CHANGE_SCOPE_RESULT: ${{ needs.change-scope.result }}
           CORE_QUALITY_RESULT: ${{ needs.core-quality.result }}
           COVERAGE_SONAR_RESULT: ${{ needs.coverage-sonar.result }}
           CROSS_PLATFORM_RESULT: ${{ needs.cross-platform-smoke.result }}
           DOCUMENTATION_ONLY: ${{ needs.change-scope.outputs.documentation-only }}
+          EDITOR_FAST_PR: ${{ github.event_name == 'pull_request' && github.base_ref == 'feat/keiko-editor' }}
+          NODE_26_COMPATIBILITY_RESULT: ${{ needs.node-26-compatibility.result }}
           PROTECTED_BRANCH_RESULT: ${{ needs.protected-branch-gate.result }}
           SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
           SEMANTIC_DUPLICATION_RESULT: ${{ needs.semantic-duplication.result }}
+          UI_RESULT: ${{ needs.ui.result }}
+          TREE_VERIFIED: ${{ needs.verified-tree.outputs.tree-verified }}
+          TREE_EVIDENCE_RUN_ID: ${{ needs.verified-tree.outputs.evidence-run-id }}
+          TREE_EVIDENCE_HEAD_SHA: ${{ needs.verified-tree.outputs.evidence-head-sha }}
+          TREE_EVIDENCE_TREE_SHA: ${{ needs.verified-tree.outputs.evidence-tree-sha }}
+          VERIFIED_TREE_RESULT: ${{ needs.verified-tree.result }}
         run: |
-          for result in "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$COVERAGE_SONAR_RESULT" "$SECRET_SCAN_RESULT" "$SEMANTIC_DUPLICATION_RESULT"; do
+          # One sanctioned reuse: this commit's tree is byte-identical to a pull-request head whose
+          # own required matrix concluded success, with no job of that matrix skipped. The resolver
+          # proved that before any gate was skipped here, and answers `false` on every uncertainty
+          # (ADR-0178). Re-measuring an identical tree cannot add evidence — it can only re-roll
+          # infrastructure flake against a tree that is already proven.
+          if [ "${TREE_VERIFIED:-}" = "true" ]; then
+            # A job can publish an output and fail afterwards, so the claim is only as good as the
+            # job that made it. Checked here as well as after the loop: the reuse branch exits 0.
+            if [ "${VERIFIED_TREE_RESULT:-}" != "success" ]; then
+              echo "Tree reuse claimed by a resolver that did not succeed (${VERIFIED_TREE_RESULT:-unset})."
+              exit 1
+            fi
+            if [ -z "${TREE_EVIDENCE_RUN_ID:-}" ] || [ -z "${TREE_EVIDENCE_TREE_SHA:-}" ] ||
+              [ -z "${TREE_EVIDENCE_HEAD_SHA:-}" ]; then
+              echo "Tree reuse claimed without complete evidence identity."
+              exit 1
+            fi
+            # Reuse never stands in for a gate that did not cleanly skip or pass HERE. `skipped` is
+            # the state the guard produces; `success` is an always-on gate that ran anyway. Anything
+            # else — failure, cancelled, an empty result, an unknown state — fails closed.
+            for named in "CHANGE_SCOPE:${CHANGE_SCOPE_RESULT:-}" "PROTECTED_BRANCH:${PROTECTED_BRANCH_RESULT:-}" \
+                         "CORE_QUALITY:${CORE_QUALITY_RESULT:-}" "COVERAGE_SONAR:${COVERAGE_SONAR_RESULT:-}" \
+                         "SECRET_SCAN:${SECRET_SCAN_RESULT:-}" "SEMANTIC_DUPLICATION:${SEMANTIC_DUPLICATION_RESULT:-}" \
+                         "UI:${UI_RESULT:-}" "BUILD_SCAN_SBOM_SMOKE:${BUILD_SCAN_SBOM_SMOKE_RESULT:-}" \
+                         "CROSS_PLATFORM:${CROSS_PLATFORM_RESULT:-}" "NODE_26:${NODE_26_COMPATIBILITY_RESULT:-}"; do
+              state="${named#*:}"
+              if [ "$state" != "skipped" ] && [ "$state" != "success" ]; then
+                echo "Gate did not skip or pass despite reusable tree evidence: ${named%%:*} ($state)"
+                exit 1
+              fi
+            done
+            echo "Tree ${TREE_EVIDENCE_TREE_SHA:-} already proven by run ${TREE_EVIDENCE_RUN_ID:-} on head ${TREE_EVIDENCE_HEAD_SHA:-}."
+            echo "All required CI dependencies satisfied by that run's evidence."
+            exit 0
+          fi
+          for result in "$CHANGE_SCOPE_RESULT" "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$COVERAGE_SONAR_RESULT" "$SECRET_SCAN_RESULT" "$SEMANTIC_DUPLICATION_RESULT" "$UI_RESULT"; do
             if [ "$result" != "success" ]; then
               echo "Required CI dependency did not succeed: $result"
               exit 1
             fi
           done
+          # The package/release job is intentionally skipped only for early feat/keiko-editor PRs.
+          # On dev, release, push, merge-group, and manual runs it is mandatory and aggregated.
+          if [ "$BUILD_SCAN_SBOM_SMOKE_RESULT" = "skipped" ]; then
+            if [ "$EDITOR_FAST_PR" != "true" ]; then
+              echo "Build, scan, SBOM, smoke was skipped outside an editor fast-path PR."
+              exit 1
+            fi
+            echo "Build, scan, SBOM, smoke skipped: editor fast-path PR."
+          elif [ "$BUILD_SCAN_SBOM_SMOKE_RESULT" != "success" ]; then
+            echo "Required CI dependency did not succeed: $BUILD_SCAN_SBOM_SMOKE_RESULT"
+            exit 1
+          fi
           # The cross-platform matrix is the only dependency allowed to be skipped, and only when the
           # change-scope job classified this change set as documentation-only. Any other skip — a
           # cancellation, a dependency failure, a mistaken condition — still fails closed.
@@ -837,14 +1160,32 @@ jobs:
             echo "Required CI dependency did not succeed: $CROSS_PLATFORM_RESULT"
             exit 1
           fi
+          if [ "$NODE_26_COMPATIBILITY_RESULT" = "skipped" ]; then
+            if [ "$DOCUMENTATION_ONLY" != "true" ]; then
+              echo "Node 26 compatibility was skipped without a documentation-only change set."
+              exit 1
+            fi
+            echo "Node 26 compatibility skipped: documentation-only change set."
+          elif [ "$NODE_26_COMPATIBILITY_RESULT" != "success" ]; then
+            echo "Required CI dependency did not succeed: $NODE_26_COMPATIBILITY_RESULT"
+            exit 1
+          fi
+          # The resolver is never reusable evidence, so it is aggregated on every run. It is checked
+          # after the loop above so that loop keeps emitting the exact message its pins bind.
+          if [ "${VERIFIED_TREE_RESULT:-}" != "success" ]; then
+            echo "Required CI dependency did not succeed: verified-tree (${VERIFIED_TREE_RESULT:-unset})"
+            exit 1
+          fi
           echo "All required CI dependencies succeeded."
 
   build-scan-sbom-smoke:
     name: Build, scan, SBOM, smoke
     # Keep early feature-branch PRs fast. These release/package gates still run on merges to
     # feat/keiko-editor, on dev/release PRs, and on manual workflow_dispatch runs.
-    if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+    if: ${{ always() && (github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor') && needs.verified-tree.outputs.tree-verified != 'true' }}
+    needs: verified-tree
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       attestations: write
       contents: read
@@ -853,10 +1194,17 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - run: npm ci --ignore-scripts
@@ -867,6 +1215,11 @@ jobs:
           npm run prepare:bin
           npm run build:ui
           npm run check:editor-release-evidence
+      - name: Prepare the offline smoke (pinned Yarn + vendor seed) (#3130/#3134)
+        # The only step in the smoke flow that may reach the package-manager host. The child call
+        # is already bounded inside the script; this bounds anything outside it.
+        timeout-minutes: 10
+        run: npm run provision:smoke
       - name: Installable-package smoke (Issue #169 AC2)
         run: npm run smoke:install
       - name: Installable-package smoke with optional dependencies
@@ -881,11 +1234,20 @@ jobs:
         # advisories are surfaced by the OSV lane instead, where they can be triaged individually
         # with a recorded reason and expiry (osv-scanner.toml) rather than blocking every pull
         # request on a transitive lint dependency that never reaches a user.
-        run: npm audit --audit-level=high --omit=dev
+        run: node scripts/run-npm-audit-with-retry.mjs --audit-level=high --omit=dev
       - name: Generate CycloneDX SBOM
         run: npm sbom --sbom-format cyclonedx --omit dev > sbom.cdx.json
       - name: Workspace SBOM and license gate (Issue #169 AC4)
         run: npm run check:workspace-supply-chain
+      - name: Third-party install-script approvals (KEIKO-0314)
+        # Reads two local JSON files with Node builtins and makes no network call, so this bounds a
+        # stall rather than a download; without it the job's own limit is the only ceiling.
+        timeout-minutes: 1
+        # .npmrc's strict-allow-scripts already fails `npm ci` closed on an unapproved script, but
+        # only for what resolves on THIS runner, and npm 11.16.0 ignores a pinned name@version key
+        # for unrs-resolver so its approval has to be unpinned — which would bless any future
+        # version. This reads package-lock.json instead: every platform's tree, exact versions.
+        run: npm run check:install-script-approvals
       - name: Smoke - help exits 0
         run: node dist/cli/index.js --help
       - name: Smoke - version exits 0
@@ -930,38 +1292,96 @@ jobs:
     # Roughly half of a run's weighted runner minutes (macOS bills 10x, Windows 2x). A change that
     # touches no code, manifest, lockfile, workflow or test cannot alter how the product builds and
     # installs on another operating system.
-    needs: change-scope
-    # `always()` is load-bearing: without it a change-scope job that fails for its own reasons —
-    # checkout, runner, a broken script — skips this matrix, and the `ci` aggregate then rejects a
-    # skip no documentation-only verdict authorized. The classifier is fail-open by construction, so
-    # its own failure must mean "run everything", never "run nothing and block the merge".
-    if: ${{ always() && needs.change-scope.outputs.documentation-only != 'true' }}
-    # The Node.js 24 baseline must execute, typecheck, build, and install on every supported desktop
-    # OS. The complete hermetic suite remains in the Linux `ci` job because many security fixtures
-    # intentionally model POSIX paths, Bash, and symlinks. Keep fail-fast:false so one platform
-    # result never masks another.
+    needs: [change-scope, verified-tree]
+    # `always()` is load-bearing: without it a change-scope job that fails for its own reasons would
+    # skip this matrix. The aggregate still fails closed on the classifier failure; running the matrix
+    # preserves diagnostic evidence instead of hiding a second defect behind the first one.
+    if: ${{ always() && needs.change-scope.outputs.documentation-only != 'true' && needs.verified-tree.outputs.tree-verified != 'true' }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # Windows is part of the same full release proof as Linux and macOS. The matrix omits only
+        # the Windows leg for PRs that the trusted base-revision classifier has positively identified
+        # as non-Windows-relevant. Every non-PR event receives the full fail-open matrix.
+        os: ${{ fromJSON(needs.change-scope.outputs.cross-platform-os) }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - run: npm ci --ignore-scripts
+      - name: Verify productive native sources on macOS
+        if: runner.os == 'macOS'
+        run: npm run check:native:macos
+      - name: Setup Linux sandbox isolation
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/setup-sandbox-isolation
+      - name: Typecheck the complete package graph
+        run: npm run typecheck
+      - name: Build
+        run: npm run build
+      # Two separate steps (not one multi-line run): on the Windows runner the default shell is
+      # PowerShell, which only surfaces the exit code of the LAST line of a multi-line `run`; as
+      # discrete steps each command's failure fails the job on every OS.
+      - name: Prepare packaged CLI
+        run: npm run prepare:bin
+      - name: Build UI (static export)
+        run: npm run build:ui
+      - name: Prepare the offline smoke (pinned Yarn + vendor seed) (#3130)
+        # The only step in the smoke flow that may reach the package-manager host. The child call
+        # is already bounded inside the script; this bounds anything outside it.
+        timeout-minutes: 10
+        run: npm run provision:smoke
+      - name: Installable-package smoke (Issue #169 AC2 / #284 AC4 cross-platform)
+        env:
+          # Pack the dist already built by the steps above instead of re-running the Linux-oriented
+          # `prepack` publish gate (arch-check / package-surface / supply-chain shell out to npx/npm
+          # in ways that are not Windows-portable — a separate concern from artifact portability).
+          # The gating `build-scan-sbom-smoke` job keeps the full prepack pack on Linux.
+          KEIKO_SMOKE_PACK_IGNORE_SCRIPTS: "1"
+        run: npm run smoke:install
+      - name: Installable-package smoke with native optional dependencies
+        env:
+          KEIKO_SMOKE_PACK_IGNORE_SCRIPTS: "1"
+        run: npm run smoke:install:optional
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         if: runner.os == 'Windows'
         with:
           dotnet-version: "8.0.x"
-      - name: Verify governed Node.js and npm toolchain
-        run: node scripts/check-runtime-toolchain.mjs --exact
-      - run: npm ci --ignore-scripts
+      - name: Verify the Windows portable handoff protocol fixture
+        if: runner.os == 'Windows'
+        # KHP v3 uses Windows path semantics. Run the full plan suite on a genuine Windows host so
+        # its native-consumer golden bytes cannot remain covered only by a skipped cross-host case.
+        run: node node_modules/vitest/vitest.mjs run packages/keiko-server/src/update-portable-handoff-plan.test.ts packages/keiko-server/src/update-portable-handoff-receipts.test.ts
+      - name: Verify Git executable Windows reparse containment
+        if: runner.os == 'Windows'
+        # Direct execution is deliberate: Vitest exits zero when every selected test is skipped.
+        # This smoke asserts the real host is Win32, creates a genuine directory junction, and calls
+        # the production resolver, so the required Windows lane cannot pass without executing it.
+        run: node scripts/__tests__/windows-git-reparse-smoke.mjs
+      - name: Smoke the Windows command spawn wrapper
+        if: runner.os == 'Windows'
+        # #3350: on modern Node a `.cmd`/`.bat` target spawned with shell:false raises EINVAL, so
+        # every agent `npm`/`npx` call would fail. This exercises the real cmd.exe wrapper against
+        # an adversarial argument matrix on genuine Windows.
+        timeout-minutes: 10
+        run: node scripts/__tests__/windows-cmd-spawn-smoke.mjs
       - name: Configure MSVC for native quality analysis
         if: runner.os == 'Windows'
         shell: pwsh
@@ -979,37 +1399,64 @@ jobs:
             if (-not $line) { throw "MSVC environment did not define $name" }
             $line | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           }
-      - name: Verify productive native sources on macOS
-        if: runner.os == 'macOS'
-        run: npm run check:native:macos
       - name: Verify productive native sources on Windows
         if: runner.os == 'Windows'
         run: npm run check:native:windows
-      - name: Install Linux sandbox isolation backend
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Smoke the Windows setup bootstrap
+        if: runner.os == 'Windows'
+        # #2992: build the real Keiko-owned native setup bootstrap and exercise fresh install,
+        # existing-install revalidation, launch failure, tamper rejection, and adversarial arguments.
+        timeout-minutes: 20
+        run: node scripts/__tests__/windows-setup-bootstrap-smoke.mjs
+
+  node-26-compatibility:
+    name: Node 26 compatibility
+    needs: [change-scope, verified-tree]
+    if: ${{ always() && needs.change-scope.outputs.documentation-only != 'true' && needs.verified-tree.outputs.tree-verified != 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "26.8.1"
+          package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - run: npm ci --ignore-scripts
+      - name: Provision the approved USearch native runtime
+        run: npm run provision:usearch
+      - name: Setup Linux sandbox isolation
+        uses: ./.github/actions/setup-sandbox-isolation
       - name: Typecheck the complete package graph
         run: npm run typecheck
-      - name: Build
-        run: npm run build
-      # Two separate steps (not one multi-line run): on the Windows runner the default shell is
-      # PowerShell, which only surfaces the exit code of the LAST line of a multi-line `run`; as
-      # discrete steps each command's failure fails the job on every OS.
+      - name: Run the complete hermetic test suite
+        run: npm test
       - name: Prepare packaged CLI
         run: npm run prepare:bin
       - name: Build UI (static export)
         run: npm run build:ui
-      - name: Installable-package smoke (Issue #169 AC2 / #284 AC4 cross-platform)
-        env:
-          # Pack the dist already built by the steps above instead of re-running the Linux-oriented
-          # `prepack` publish gate (arch-check / package-surface / supply-chain shell out to npx/npm
-          # in ways that are not Windows-portable — a separate concern from artifact portability).
-          # The gating `build-scan-sbom-smoke` job keeps the full prepack pack on Linux.
-          KEIKO_SMOKE_PACK_IGNORE_SCRIPTS: "1"
-        run: npm run smoke:install
+      - name: Prepare the offline smoke (pinned Yarn + vendor seed) (#3130/#3134)
+        # The optional install smoke consumes the same seeded, bounded registry as every other
+        # installable-package lane. Node 26 no longer bundles Corepack, so copy the lockfile-
+        # verified package into the Node runtime trust root and expose its fixed shim there.
+        timeout-minutes: 10
+        run: |
+          COREPACK_BIN="$(node scripts/prepare-trusted-corepack.mjs)"
+          printf '%s\n' "$COREPACK_BIN" >> "$GITHUB_PATH"
+          export PATH="$COREPACK_BIN:$PATH"
+          npm run provision:smoke
       - name: Installable-package smoke with native optional dependencies
         env:
           KEIKO_SMOKE_PACK_IGNORE_SCRIPTS: "1"
@@ -1017,6 +1464,9 @@ jobs:
 
   ui:
     name: ui
+    needs: verified-tree
+    if: ${{ always() && needs.verified-tree.outputs.tree-verified != 'true' }}
+    timeout-minutes: 45
     runs-on: ubuntu-latest
     permissions:
       attestations: write
@@ -1029,29 +1479,56 @@ jobs:
           # Keep that commit reachable instead of relying on the default single-commit checkout.
           fetch-depth: 0
           persist-credentials: false
+          ref: ${{ github.sha }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
           package-manager-cache: false
+      - name: Verify pull-request merge candidate consistency
+        if: ${{ github.event_name == 'pull_request' }}
+        env:
+          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-ci-merge-candidate.mjs
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install workspaces (single root lockfile after #167)
         run: npm ci --ignore-scripts
-      - name: Install sandbox isolation backend (bubblewrap)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y bubblewrap
-          # The #2215 real-BFF E2E executes verification commands through the same mandatory
-          # network:none boundary as production. Ubuntu 24.04 restricts unprivileged user
-          # namespaces via AppArmor, so enable the proven Bubblewrap path exactly as the required
-          # ci job does; never weaken the verification runner to inherited networking for tests.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      # The #2215 real-BFF E2E executes verification commands through the same mandatory
+      # network:none boundary as production. Ubuntu 24.04 restricts unprivileged user
+      # namespaces via AppArmor, so enable the proven Bubblewrap path exactly as the required
+      # ci job does; never weaken the verification runner to inherited networking for tests.
+      - name: Setup Linux sandbox isolation
+        uses: ./.github/actions/setup-sandbox-isolation
       - name: Build internal packages so contracts dist resolves for UI tsc
         run: npm run build:packages
+      # Provenance checks are deterministic and do not need browsers. Keep them before audits,
+      # lint, UI compilation, and every E2E so stale evidence fails in minutes rather than after
+      # the complete Chromium/Firefox/WebKit sequence.
+      - name: Validate tool-catalog performance evidence
+        run: npm run check:tool-catalog-performance
+      - name: Validate immutable editor D12 performance evidence
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+        env:
+          KEIKO_PERF_EVIDENCE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: npm run check:perf-evidence:editor
+      - name: Validate workspace performance evidence freshness
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+        env:
+          KEIKO_PERF_EVIDENCE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: npm run check:perf-evidence:workspace
+      - name: Validate coding runtime performance evidence
+        if: >-
+          hashFiles('docs/release/2952-coding-runtime-calibration.json',
+          'docs/release/2952-coding-runtime-perf-evidence.json',
+          'scripts/coding-runtime-performance-budget.json') != ''
+        env:
+          KEIKO_PERF_EVIDENCE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: npm run check:perf-evidence:coding-runtime
       - name: Security audit UI dependencies (moderate and above)
         # Same shipped-graph scope as the audit in the build job; the UI's dev toolchain (eslint,
         # next lint plugins) is not part of the static export this job builds.
-        run: npm audit --audit-level=moderate --omit=dev --workspace @oscharko-dev/keiko-ui
+        run: node scripts/run-npm-audit-with-retry.mjs --audit-level=moderate --omit=dev --workspace=@oscharko-dev/keiko-ui
       - name: Lint UI
         run: npm run lint --workspace @oscharko-dev/keiko-ui
       - name: Typecheck UI
@@ -1070,14 +1547,51 @@ jobs:
       # 88-strict release target that `check:coverage:quality` still evaluates on every pull request.
       - name: Install Playwright browser
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
-        # chromium is the reference browser for the smoke + perf-evidence suites. The
-        # workspace-performance webkit project is a local-only cross-browser aid: headless WebKit on CI
-        # software-renders and mis-batches events, so both its timing and write-coalescing budgets are
-        # environment artifacts (all CI perf-evidence runs are scoped to --project=chromium).
-        run: npx --ignore-scripts playwright@1.62.0 install --with-deps chromium
+        # Chromium remains the reference browser for perf evidence. Firefox and WebKit run the same
+        # required functional @smoke journeys: Gecko covers a real second engine and Playwright's
+        # patched Linux WebKit is the executable Safari proxy. It is not byte-identical to Safari on
+        # Apple platforms, so this lane makes no Safari-only OS/media integration claim.
+        # The LOCKFILE-resolved CLI, not `npx playwright@<version>`: a pinned version literal here is
+        # a second source of truth that silently drifts from `package-lock.json` (it already said
+        # 1.62.0 while the lockfile resolved 1.62.1). Browser revisions are chosen by the Playwright
+        # version, so a mismatch installs browsers the runner's own test library never asked for and
+        # decouples the CI evidence from the dependency graph the tests actually execute against.
+        # `npm ci` above already installed this binary at the locked version.
+        run: ./node_modules/.bin/playwright install --with-deps chromium firefox webkit
       - name: Release smoke E2E
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:e2e:smoke
+      - name: Governed updater real-BFF outage E2E (#3405)
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        timeout-minutes: 10
+        run: |
+          npm run check:update-ui-evidence
+          npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage
+      # Same @smoke journeys on Gecko. Kept a SEPARATE step so a Firefox-only failure is
+      # attributable at a glance instead of hiding inside the Chromium run's report.
+      - name: Release smoke E2E (Firefox)
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        timeout-minutes: 20
+        run: npm run test:e2e:smoke:firefox
+      # Same functional @smoke journeys on WebKit. This is a Safari engine proxy, not evidence for
+      # Apple-platform integration that Playwright's patched Linux runtime cannot reproduce.
+      - name: Release smoke E2E (WebKit Safari proxy)
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        timeout-minutes: 20
+        run: npm run test:e2e:smoke:webkit
+      # The Playwright config records a trace for every failed test (`trace: "retain-on-failure"`),
+      # and until now the runner threw it away: a browser smoke failure left only the truncated call
+      # log in the check annotation, so the same failure had to be re-run to be understood. AGENTS.md
+      # section 8 makes that gap the first defect to fix — evidence must let the defect be rebuilt
+      # without the machine it happened on. Uploaded only on failure, so a green run carries no cost.
+      - name: Upload browser smoke traces on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-smoke-traces
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Editor run, verify, problems E2E (#2215)
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:e2e:editor-run-verification-2215
@@ -1092,21 +1606,6 @@ jobs:
         run: |
           rm -f docs/release/1580-workspace-perf-evidence.json
           npm run test:e2e:workspace-perf
-      # The editor document is the immutable D12 baseline/candidate comparison measured on the PR
-      # candidate. Its source-tree and toolchain bindings (ADR-0139 D2: measured surfaces only)
-      # make it valid across the signed squash and across merge-queue integration.
-      - name: Validate immutable editor D12 performance evidence
-        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
-        # The base ref scopes the measurement-toolchain freshness check to diffs that actually move
-        # the ruler. Integrity, budgets and the pinned-baseline anchor are checked unconditionally;
-        # only the "was this measured with the current toolchain" question is the responsibility of
-        # the change that altered it, not of every other open pull request (ADR-0139 D10).
-        env:
-          # merge_group carries no pull_request payload; its base sha lives under merge_group.
-          # Without this the merge queue would see an empty base ref, fall back to evaluating the
-          # digest unconditionally, and reintroduce exactly the cross-PR blocking this removes.
-          KEIKO_PERF_EVIDENCE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-        run: npm run check:perf-evidence:editor
       - name: Performance evidence freshness + budget gate
         if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         run: npm run check:perf-evidence

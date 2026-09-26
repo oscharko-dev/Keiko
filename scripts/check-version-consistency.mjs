@@ -3,13 +3,18 @@
 // Asserts:
 //   1. Every workspace package (packages/*/package.json) reports the same version as the
 //      root package.json's "version" field (the 0.2.0 baseline finalised in #427).
-//   2. The KEIKO_PRODUCT_VERSION constant in @oscharko-dev/keiko-contracts/src/index.ts
+//   2. The KEIKO_PRODUCT_VERSION constant in @oscharko-dev/keiko-contracts/src/version.ts
 //      matches that same root version.
 //   3. Every exported KEIKO_*_VERSION package/product constant under packages/*/src matches that
 //      package's package.json version. Schema/event versions use non-KEIKO names and stay separate.
 //   4. Issue #426's removed shim/duplicate paths stay removed: src/sdk/** and the local
 //      _sdk-version.ts mirrors under packages/keiko-cli/src and packages/keiko-server/src.
 //   5. packages/keiko-sdk/src/index.ts directly re-exports KEIKO_PRODUCT_VERSION as SDK_VERSION.
+//   6. package-lock.json's root and workspace entries, and every dependency pin one workspace
+//      package holds on another, carry that same version. The 1.0.0 cut was written by hand and
+//      left the lockfile's 26 workspace entries at 0.3.17 while every manifest said 1.0.0; nothing
+//      here noticed until Socket diffed the next version's pull request. scripts/set-version.mjs
+//      is the command that moves all of it at once.
 //
 // Runs in the prepack chain after the build steps. This validates the source/build inputs the
 // publish path depends on; tarball contents are separately enforced by check:package-surface and
@@ -19,18 +24,19 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { readJsonFile } from "./lib/json.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const failures = [];
 const APPROVED_ROOT_SRC_FILES = ["src/cli/index.ts", "src/index.ts"];
 const APPROVED_ROOT_SRC_SHA256 = new Map([
   ["src/index.ts", "751c1c0fae45a8bf68ba099ecd0706a74d64661f8fc1b9bd7f05d4abd1beb20b"],
-  ["src/cli/index.ts", "6e9df226e26117da62b3e3324216dacf4a56fd13e0a87ed52f8262a969c86402"],
+  // The bin facade owns installation-dependent paths and the final process disposition. It binds
+  // those paths to the executing package through the CLI's tested normalization/evidence helper,
+  // and its natural exit lets late detached-helper security events finish their activity-log
+  // drain. The hash is re-pinned to this reviewed content; the next unreviewed edit still fails.
+  ["src/cli/index.ts", "72fe0ca5e2041e4fdb79dc409ce3d331c2a3430489105f2c98c4e86f7081a273"],
 ]);
-
-function readJson(path) {
-  return JSON.parse(readFileSync(path, "utf8"));
-}
 
 function listFilesRecursively(rootDir, prefix = "") {
   const dirPath = join(rootDir, prefix);
@@ -93,7 +99,7 @@ function fail(message) {
   failures.push(message);
 }
 
-const rootManifest = readJson(join(repoRoot, "package.json"));
+const rootManifest = readJsonFile(join(repoRoot, "package.json"));
 const expected = rootManifest.version;
 if (typeof expected !== "string" || expected.length === 0) {
   console.error("version-consistency: root package.json has no version field.");
@@ -101,16 +107,18 @@ if (typeof expected !== "string" || expected.length === 0) {
 }
 
 const packagesDir = join(repoRoot, "packages");
+const workspaceManifests = [];
 for (const name of readdirSync(packagesDir)) {
   const pkgDir = join(packagesDir, name);
   if (!statSync(pkgDir).isDirectory()) continue;
   const manifestPath = join(pkgDir, "package.json");
   let manifest;
   try {
-    manifest = readJson(manifestPath);
+    manifest = readJsonFile(manifestPath);
   } catch {
     continue;
   }
+  workspaceManifests.push({ dir: name, label: `${name}/package.json`, manifest });
   if (manifest.version !== expected) {
     fail(`${name}: version ${manifest.version} does not match root ${expected}`);
   }
@@ -133,13 +141,57 @@ for (const name of readdirSync(packagesDir)) {
   }
 }
 
-const contractsIndex = readFileSync(
-  join(repoRoot, "packages", "keiko-contracts", "src", "index.ts"),
+const DEPENDENCY_FIELDS = [
+  "dependencies",
+  "devDependencies",
+  "optionalDependencies",
+  "peerDependencies",
+];
+const workspaceNames = new Set(workspaceManifests.map(({ manifest }) => manifest.name));
+
+function checkWorkspacePins(label, manifest) {
+  for (const field of DEPENDENCY_FIELDS) {
+    for (const [dependency, pin] of Object.entries(manifest[field] ?? {})) {
+      if (workspaceNames.has(dependency) && pin !== expected) {
+        fail(`${label}: dependency ${dependency} is pinned to ${pin}, but root is ${expected}`);
+      }
+    }
+  }
+}
+
+checkWorkspacePins("package.json", rootManifest);
+for (const { label, manifest } of workspaceManifests) checkWorkspacePins(label, manifest);
+
+const lockPath = join(repoRoot, "package-lock.json");
+if (!existsSync(lockPath)) {
+  fail("package-lock.json is missing.");
+} else {
+  const lock = readJsonFile(lockPath);
+  const lockRootVersion = lock.packages?.[""]?.version;
+  if (lockRootVersion !== expected) {
+    fail(`package-lock.json: root entry is ${lockRootVersion}, but root is ${expected}`);
+  }
+  // A workspace the lockfile does not list at all was never refreshed; the loop below could not see it.
+  for (const { dir } of workspaceManifests) {
+    if (!Object.hasOwn(lock.packages ?? {}, `packages/${dir}`)) {
+      fail(`package-lock.json: packages/${dir} has no entry, so the lockfile was not refreshed`);
+    }
+  }
+  for (const [path, entry] of Object.entries(lock.packages ?? {})) {
+    if (!path.startsWith("packages/") || path.includes("/node_modules/")) continue;
+    if (entry.version !== expected) {
+      fail(`package-lock.json: ${path} is ${entry.version}, but root is ${expected}`);
+    }
+  }
+}
+
+const contractsVersion = readFileSync(
+  join(repoRoot, "packages", "keiko-contracts", "src", "version.ts"),
   "utf8",
 );
-const constMatch = /KEIKO_PRODUCT_VERSION\s*=\s*"([^"]+)"\s+as\s+const/.exec(contractsIndex);
+const constMatch = /KEIKO_PRODUCT_VERSION\s*=\s*"([^"]+)"\s+as\s+const/.exec(contractsVersion);
 if (constMatch === null) {
-  fail("keiko-contracts: KEIKO_PRODUCT_VERSION constant not found in src/index.ts");
+  fail("keiko-contracts: KEIKO_PRODUCT_VERSION constant not found in src/version.ts");
 } else if (constMatch[1] !== expected) {
   fail(`keiko-contracts KEIKO_PRODUCT_VERSION ${constMatch[1]} does not match root ${expected}`);
 }
@@ -175,13 +227,13 @@ for (const [relativePath, approvedHash] of APPROVED_ROOT_SRC_SHA256) {
 const sdkIndexPath = join(repoRoot, "packages", "keiko-sdk", "src", "index.ts");
 const sdkIndex = readFileSync(sdkIndexPath, "utf8");
 if (
-  !/^import\s+\{\s*KEIKO_PRODUCT_VERSION\s*\}\s+from\s+"@oscharko-dev\/keiko-contracts";$/m.test(
+  !/^import\s+\{\s*KEIKO_PRODUCT_VERSION\s*\}\s+from\s+"@oscharko-dev\/keiko-contracts\/runtime\/version";$/m.test(
     sdkIndex,
   )
 ) {
   fail(
     "packages/keiko-sdk/src/index.ts: missing KEIKO_PRODUCT_VERSION import from " +
-      "@oscharko-dev/keiko-contracts.",
+      "@oscharko-dev/keiko-contracts/runtime/version.",
   );
 }
 if (
@@ -202,5 +254,5 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `version-consistency: PASS — every workspace package and exported KEIKO_*_VERSION constant reports ${expected}.`,
+  `version-consistency: PASS — every workspace package, pin, lockfile entry and exported KEIKO_*_VERSION constant reports ${expected}.`,
 );

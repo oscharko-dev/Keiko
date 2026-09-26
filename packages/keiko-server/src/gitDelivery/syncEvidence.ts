@@ -16,6 +16,7 @@ import { deepRedactStrings } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import { randomUUID } from "node:crypto";
+import { isValidCorrelationId } from "../correlation.js";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -78,15 +79,25 @@ export interface RecordGitSyncEvidenceOptions {
 // The previous default was `console.error("…", error)` — the raw error object on a channel no
 // production assembly overrode, so a failed evidence write was invisible AND could carry the very
 // content this ledger redacts. Routed through the server's single redacted diagnostic sink instead.
-function reportPersistFailure(options: RecordGitSyncEvidenceOptions, error: unknown): void {
+function reportPersistFailure(
+  options: RecordGitSyncEvidenceOptions,
+  runId: string,
+  error: unknown,
+): void {
   if (options.onPersistError !== undefined) {
     options.onPersistError(error);
     return;
   }
+  // Reuses the date-bucket runId the write itself targeted (ADR-0173 D5 / g12, mirroring
+  // mutationEvidenceLedger.ts's `evidenceCorrelationId`) rather than a disconnected fresh mint, so
+  // an operator can join this diagnostic back to the SAME bucket's other evidence. Re-validated
+  // against `isValidCorrelationId` even though this module derives the shape itself: a future
+  // change to the runId format must not silently become an unshaped correlation id.
+  const correlationId = isValidCorrelationId(runId) ? runId : randomUUID();
   emitServerDiagnostic(
     options.diagnostics,
     serverDiagnosticFromError({
-      correlationId: randomUUID(),
+      correlationId,
       operation: "gitDelivery.syncEvidence.persist",
       source: "gitDelivery.syncEvidence",
       error,
@@ -165,6 +176,6 @@ export function recordGitSyncEvidence(
   try {
     appendRecord(options.evidenceStore, runId, safe, cap);
   } catch (error) {
-    reportPersistFailure(options, error);
+    reportPersistFailure(options, runId, error);
   }
 }

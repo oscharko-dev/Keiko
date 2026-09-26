@@ -1,3 +1,12 @@
+import type {
+  CodingWorkbenchActionClass,
+  CodingWorkbenchApprovalRisk,
+  CodingWorkbenchConnectorScope,
+  CodingWorkbenchPermissionRequestKind,
+  CodingWorkbenchRuntimeHealth,
+  CodingWorkbenchSupervisedActionKind,
+  CodingWorkbenchSupervisedPolicyReason,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_APPROVAL_RISKS,
@@ -6,14 +15,7 @@ import {
   CODING_WORKBENCH_RUNTIME_HEALTH_STATES,
   CODING_WORKBENCH_SUPERVISED_ACTION_KINDS,
   CODING_WORKBENCH_SUPERVISED_POLICY_REASONS,
-  type CodingWorkbenchActionClass,
-  type CodingWorkbenchApprovalRisk,
-  type CodingWorkbenchConnectorScope,
-  type CodingWorkbenchPermissionRequestKind,
-  type CodingWorkbenchRuntimeHealth,
-  type CodingWorkbenchSupervisedActionKind,
-  type CodingWorkbenchSupervisedPolicyReason,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   parseSupervisedCodingApprovalClaim,
   type SupervisedCodingApprovalClaim,
@@ -38,6 +40,7 @@ export interface SidecarPermissionEvent {
   readonly idempotencyKey?: string | undefined;
   readonly approvalId?: string | undefined;
   readonly approvalDigest?: string | undefined;
+  readonly targetPathHash?: string | undefined;
   readonly targetPath?: string | undefined;
   readonly allowedRelativePaths?: readonly string[] | undefined;
   readonly fileCount?: number | undefined;
@@ -167,15 +170,27 @@ function optionalMutationMetadata(
   record: Record<string, unknown>,
 ): Partial<SidecarPermissionEvent> | undefined {
   const approvalDigest = optionalApprovalDigest(record);
-  if (approvalDigest === undefined) return undefined;
+  const targetPathHash = optionalTargetPathHash(record);
+  if (approvalDigest === undefined || targetPathHash === undefined) return undefined;
   return {
     ...optionalStringField(record, "actionId"),
     ...optionalStringField(record, "idempotencyKey"),
     ...optionalStringField(record, "approvalId"),
     ...approvalDigest,
+    ...targetPathHash,
     ...optionalApprovalToken(record),
     ...optionalBooleanField(record, "operatorStopped"),
   };
+}
+
+function optionalTargetPathHash(
+  record: Record<string, unknown>,
+): { readonly targetPathHash?: string } | undefined {
+  if (!Object.hasOwn(record, "targetPathHash")) return {};
+  const value = record.targetPathHash;
+  return typeof value === "string" && APPROVAL_DIGEST_PATTERN.test(value)
+    ? { targetPathHash: value }
+    : undefined;
 }
 
 function optionalApprovalDigest(

@@ -21,7 +21,7 @@
 // the envelope shape is anchored on the QI contracts.
 
 import type { ContextEntry, ContextPack } from "@oscharko-dev/keiko-contracts";
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 
 import { planSourceMix, type SourceMixPlan } from "./sourceMixPlanning.js";
 

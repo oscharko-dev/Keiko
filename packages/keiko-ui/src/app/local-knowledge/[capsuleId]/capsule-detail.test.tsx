@@ -23,7 +23,7 @@ import type {
 import {
   DEFAULT_EXTRACTION_CAPABILITY_AVAILABILITY,
   DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
 import {
   translateLocalKnowledge,
   unsupportedGuidanceText,

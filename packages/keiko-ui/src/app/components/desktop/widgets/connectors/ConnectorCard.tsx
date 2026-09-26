@@ -4,7 +4,7 @@
 
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ApiError } from "@/lib/api";
 import { useTranslate } from "@/lib/i18n";
 import { toSafeIsoString } from "@/lib/format";
@@ -127,14 +127,38 @@ function DeleteConfirm({
   readonly onConfirm: () => void;
 }): ReactNode {
   const t = useTranslate();
+  const confirmMessageId = useId();
+  // Mirror AgentGateCard: cancel is the safe destructive default, so focus it on mount and let
+  // Escape invoke the same handler (KEIKO-0508). aria-labelledby carries the existing translated
+  // confirm copy instead of a hardcoded "delete-connector" label the reader never sees.
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    cancelRef.current?.focus();
+  }, []);
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    // Codex on PR #3089: an in-flight delete disables the visible Cancel button but Escape used
+    // to still call onCancel, hiding the confirmation while the request was still running and
+    // re-exposing CardActions' undisabled Manage/Delete controls. Ignore Escape while busy.
+    if (event.key === "Escape" && !busy) {
+      event.stopPropagation();
+      onCancel();
+    }
+  };
   return (
-    <div className="acx-notice" data-tone="danger" role="alertdialog" aria-label="delete-connector">
-      <span>{t("atlassianConnectors.delete.confirm")}</span>
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- Escape-to-cancel on the alertdialog container mirrors the Cancel button for keyboard users
+    <div
+      className="acx-notice"
+      data-tone="danger"
+      role="alertdialog"
+      aria-labelledby={confirmMessageId}
+      onKeyDown={handleKeyDown}
+    >
+      <span id={confirmMessageId}>{t("atlassianConnectors.delete.confirm")}</span>
       <div className="acx-actions">
         <button type="button" className="lk-btn lk-btn-danger" disabled={busy} onClick={onConfirm}>
           {t("atlassianConnectors.delete.confirmButton")}
         </button>
-        <button type="button" className="lk-btn" disabled={busy} onClick={onCancel}>
+        <button ref={cancelRef} type="button" className="lk-btn" disabled={busy} onClick={onCancel}>
           {t("atlassianConnectors.delete.cancel")}
         </button>
       </div>

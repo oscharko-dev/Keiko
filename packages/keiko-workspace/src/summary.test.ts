@@ -5,6 +5,7 @@ import type { ContextPack, DiscoveryStats, WorkspaceInfo } from "./types.js";
 function workspace(): WorkspaceInfo {
   return {
     root: "/ws",
+    selectedRoot: "/ws",
     name: "demo",
     version: "1.0.0",
     testFramework: "vitest",

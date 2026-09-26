@@ -1,8 +1,11 @@
-import { describe, expect, it } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  __resetWorkspaceWalkCacheForTests,
+  __workspaceWalkCacheEntryForTests,
+  __workspaceWalkCacheSizeForTests,
   handleConfig,
   handleModels,
   handleVoiceCapability,
@@ -13,7 +16,10 @@ import {
   isVoiceDictationCapable,
   isVoiceRealtimeCapable,
   workspaceErrorStatus,
+  WORKSPACE_WALK_CACHE_MAX_ENTRIES,
+  WORKSPACE_WALK_CACHE_TTL_MS,
 } from "./read-handlers.js";
+import * as keikoWorkspaceModule from "@oscharko-dev/keiko-workspace";
 import { WORKSPACE_CODES } from "@oscharko-dev/keiko-workspace";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
 import { DEFAULT_GROUNDING_LIMITS } from "@oscharko-dev/keiko-contracts/bff-wire";
@@ -27,9 +33,11 @@ import {
   InvalidRunIdError,
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
+import { probeVerifiedGatewayConfig } from "./_support.js";
 
 function ctx(path: string, params: Record<string, string> = {}): RouteContext {
   return {
+    correlationId: undefined,
     req: {} as RouteContext["req"],
     res: {} as RouteContext["res"],
     params,
@@ -80,7 +88,17 @@ function createWorkspaceFixture(): string {
   );
   writeFileSync(join(root, "src", "index.ts"), "export const x = 1;\n", "utf8");
   writeFileSync(join(root, "tests", "index.test.ts"), "it('ok', () => {});\n", "utf8");
+  // Deliberately NOT realpath'd: a user selects the path the platform hands them, and on macOS
+  // `os.tmpdir()` lives under the `/var` -> `/private/var` alias. Keeping the fixture lexical is
+  // what proves an ordinary alias-reached project is still admitted rather than answered 403.
   return root;
+}
+
+// The workspace layer admits a root through realpath, so the detected root — the value every
+// response reports and the key the walk cache uses — is the canonical one. Derive it from the
+// production entry point instead of restating the platform alias rule as a second formula here.
+function canonicalRootOf(dir: string): string {
+  return keikoWorkspaceModule.detectWorkspace(dir).root;
 }
 
 function depsWith(overrides: Partial<UiHandlerDeps>): UiHandlerDeps {
@@ -185,6 +203,52 @@ describe("GET /api/config", () => {
 });
 
 describe("GET /api/models", () => {
+  // Relocated pin (0.3.11 → 0.3.12): the invariant is unchanged — only a CURRENT-generation
+  // observation may project readiness, and a config re-save structurally invalidates it. What
+  // changed is the projection of "never probed": tri-state ABSENT instead of a hard false,
+  // because collapsing unknown into not-ready emptied the UI's model picker after every process
+  // restart until a manual probe plus reload (customer field incident). An OBSERVED not-ready
+  // still projects false.
+  it("projects unknown, true, false, then unknown as observations arrive and go stale", () => {
+    const gatewayConfig = probeVerifiedGatewayConfig(SAMPLE_CONFIG);
+    gatewayConfig.clearVerifiedCapability("example-chat-model");
+    const deps = depsWith({ gatewayConfig });
+    const projectedReady = (): boolean | undefined => {
+      const result = handleModels(ctx("/api/models"), deps);
+      const body = result.body as { models: { conversationReady?: boolean }[] };
+      return body.models[0]?.conversationReady;
+    };
+    const projectedFieldPresent = (): boolean => {
+      const result = handleModels(ctx("/api/models"), deps);
+      const body = result.body as { models: Record<string, unknown>[] };
+      return "conversationReady" in (body.models[0] ?? {});
+    };
+
+    // Never probed in this process: UNKNOWN — the field is absent, never a synthetic false.
+    expect(projectedFieldPresent()).toBe(false);
+    gatewayConfig.recordVerifiedCapability(
+      "example-chat-model",
+      { conversationReady: true },
+      "2026-08-16T00:00:00.000Z",
+      gatewayConfig.generation(),
+    );
+    expect(projectedReady()).toBe(true);
+
+    // An OBSERVED not-ready projects an explicit false — tri-state, not fail-open.
+    gatewayConfig.recordVerifiedCapability(
+      "example-chat-model",
+      { conversationReady: false },
+      "2026-08-16T00:00:01.000Z",
+      gatewayConfig.generation(),
+    );
+    expect(projectedReady()).toBe(false);
+    expect(projectedFieldPresent()).toBe(true);
+
+    // A config re-save bumps the generation: every observation is stale → back to UNKNOWN.
+    gatewayConfig.set(SAMPLE_CONFIG, true);
+    expect(projectedFieldPresent()).toBe(false);
+  });
+
   it("returns only configured models", () => {
     const result = handleModels(
       ctx("/api/models"),
@@ -483,11 +547,104 @@ describe("GET /api/workflows", () => {
   });
 });
 
-describe("GET /api/workspace", () => {
-  it("returns a workspace summary and redacts the response body", () => {
+describe("GET /api/workspace — walk cache (KEIKO-0253)", () => {
+  it("reuses the previous walk within the TTL window instead of re-walking the tree", async () => {
+    __resetWorkspaceWalkCacheForTests();
     const root = createWorkspaceFixture();
     try {
-      const result = handleWorkspace(
+      const deps = depsWithRegisteredProject(root);
+      const cacheKey = canonicalRootOf(root);
+      await handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps);
+      // Cache populated after the first call.
+      expect(__workspaceWalkCacheSizeForTests()).toBe(1);
+      const firstWalk = __workspaceWalkCacheEntryForTests(cacheKey);
+      expect(firstWalk).toBeDefined();
+      await handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps);
+      // The second call must not repopulate the cache with a new walk — its cached entry stays
+      // referentially identical, which is only true when the fs walk was skipped.
+      const secondWalk = __workspaceWalkCacheEntryForTests(cacheKey);
+      expect(secondWalk).toBe(firstWalk);
+      expect(__workspaceWalkCacheSizeForTests()).toBe(1);
+    } finally {
+      __resetWorkspaceWalkCacheForTests();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("re-walks the tree once the TTL window has elapsed", async () => {
+    __resetWorkspaceWalkCacheForTests();
+    const root = createWorkspaceFixture();
+    const walkSpy = vi.spyOn(keikoWorkspaceModule, "discoverWithStatsAsync");
+    let clock = 1_700_000_000_000;
+    const now = (): number => clock;
+    try {
+      const deps = depsWithRegisteredProject(root);
+      await handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps, now);
+      expect(walkSpy).toHaveBeenCalledTimes(1);
+      // Cross the TTL boundary: the entry stored at `clock` expires at `clock + TTL`, so landing
+      // one millisecond past that must be treated as expired, never reused.
+      clock += WORKSPACE_WALK_CACHE_TTL_MS + 1;
+      await handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps, now);
+      expect(walkSpy).toHaveBeenCalledTimes(2);
+      // The cache still holds exactly one entry for this root — the stale one was replaced, not
+      // appended alongside it.
+      expect(__workspaceWalkCacheSizeForTests()).toBe(1);
+    } finally {
+      walkSpy.mockRestore();
+      __resetWorkspaceWalkCacheForTests();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("never lets the cache grow past WORKSPACE_WALK_CACHE_MAX_ENTRIES distinct roots", async () => {
+    __resetWorkspaceWalkCacheForTests();
+    const roots: string[] = [];
+    try {
+      const extraRoots = 8;
+      for (let i = 0; i < WORKSPACE_WALK_CACHE_MAX_ENTRIES + extraRoots; i += 1) {
+        const root = createWorkspaceFixture();
+        roots.push(root);
+        const deps = depsWithRegisteredProject(root);
+        await handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps);
+        expect(__workspaceWalkCacheSizeForTests()).toBeLessThanOrEqual(
+          WORKSPACE_WALK_CACHE_MAX_ENTRIES,
+        );
+      }
+      expect(__workspaceWalkCacheSizeForTests()).toBeLessThanOrEqual(
+        WORKSPACE_WALK_CACHE_MAX_ENTRIES,
+      );
+    } finally {
+      __resetWorkspaceWalkCacheForTests();
+      for (const root of roots) rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("coalesces concurrent cache misses into one asynchronous workspace walk", async () => {
+    __resetWorkspaceWalkCacheForTests();
+    const root = createWorkspaceFixture();
+    const walkSpy = vi.spyOn(keikoWorkspaceModule, "discoverWithStatsAsync");
+    try {
+      const deps = depsWithRegisteredProject(root);
+      const [first, second] = await Promise.all([
+        handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps),
+        handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps),
+      ]);
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      expect(walkSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      walkSpy.mockRestore();
+      __resetWorkspaceWalkCacheForTests();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("GET /api/workspace", () => {
+  it("returns a workspace summary and redacts the response body", async () => {
+    const root = createWorkspaceFixture();
+    try {
+      const result = await handleWorkspace(
         ctx(`/api/workspace?dir=${encodeURIComponent(root)}`),
         depsWithRegisteredProject(root, { redactor: redactTopSecret }),
       );
@@ -499,6 +656,9 @@ describe("GET /api/workspace", () => {
           context?: { entries: { path: string; excerpt: string }[] };
         };
       };
+      // The summary is the client-facing projection, so it reports the path the caller registered
+      // — the value a client may hand straight back as `dir` — not the canonical root that only
+      // filesystem effects bind to.
       expect(body.summary.root).toBe(root);
       expect(body.summary.name).toBe("[REDACTED]");
       expect(body.summary.context).toBeUndefined();
@@ -508,10 +668,45 @@ describe("GET /api/workspace", () => {
     }
   });
 
-  it("includes a context pack when task or budget is provided", () => {
+  // A user registers the path the platform handed them, which routinely differs from its realpath:
+  // macOS resolves `/var` and `/tmp` under `/private`, and any project reached through a symlinked
+  // parent behaves the same on every platform. The symlink here is explicit so the case is
+  // falsifiable on Linux too, where `os.tmpdir()` is usually not aliased and the assertion would
+  // otherwise be inert exactly where CI runs it.
+  it("keeps the registered identity for a project reached through a symlinked root", async () => {
+    const real = createWorkspaceFixture();
+    const alias = `${real}-alias`;
+    symlinkSync(real, alias, "dir");
+    try {
+      const deps = depsWithRegisteredProject(alias);
+      // Guard against a silently inert case: the aliased root MUST differ from its canonical form,
+      // otherwise the assertions below prove nothing about the two identities.
+      expect(canonicalRootOf(alias)).not.toBe(alias);
+      const result = await handleWorkspace(
+        ctx(`/api/workspace?dir=${encodeURIComponent(alias)}`),
+        deps,
+      );
+      expect(result.status).toBe(200);
+      const body = result.body as { summary: { root: string } };
+      expect(body.summary.root).toBe(alias);
+      // The identity the response reports has to survive a round trip: a client that hands
+      // `summary.root` straight back as `dir` must still be a registered project, which the
+      // canonical root never is.
+      const echoed = await handleWorkspace(
+        ctx(`/api/workspace?dir=${encodeURIComponent(body.summary.root)}`),
+        deps,
+      );
+      expect(echoed.status).toBe(200);
+    } finally {
+      rmSync(alias, { force: true });
+      rmSync(real, { recursive: true, force: true });
+    }
+  });
+
+  it("includes a context pack when task or budget is provided", async () => {
     const root = createWorkspaceFixture();
     try {
-      const result = handleWorkspace(
+      const result = await handleWorkspace(
         ctx(`/api/workspace?dir=${encodeURIComponent(root)}&task=src/index.ts&budget=128`),
         depsWithRegisteredProject(root, { redactor: redactTopSecret }),
       );
@@ -536,8 +731,8 @@ describe("GET /api/workspace", () => {
 
   it.each(["0", "00", "1.5", "+1", "１２", "9007199254740992"])(
     "rejects invalid or unsafe budget syntax: %s",
-    (budget) => {
-      const result = handleWorkspace(
+    async (budget) => {
+      const result = await handleWorkspace(
         ctx(`/api/workspace?budget=${encodeURIComponent(budget)}`),
         depsWith({}),
       );
@@ -546,16 +741,16 @@ describe("GET /api/workspace", () => {
     },
   );
 
-  it("requires an explicit workspace dir", () => {
-    const result = handleWorkspace(ctx("/api/workspace"), depsWith({}));
+  it("requires an explicit workspace dir", async () => {
+    const result = await handleWorkspace(ctx("/api/workspace"), depsWith({}));
     expect(result.status).toBe(400);
     expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
   });
 
-  it("rejects workspace reads for unregistered projects", () => {
+  it("rejects workspace reads for unregistered projects", async () => {
     const root = createWorkspaceFixture();
     try {
-      const result = handleWorkspace(
+      const result = await handleWorkspace(
         ctx(`/api/workspace?dir=${encodeURIComponent(root)}`),
         depsWith({}),
       );
@@ -566,8 +761,8 @@ describe("GET /api/workspace", () => {
     }
   });
 
-  it("rejects non-local workspace path forms with BAD_REQUEST", () => {
-    const result = handleWorkspace(
+  it("rejects non-local workspace path forms with BAD_REQUEST", async () => {
+    const result = await handleWorkspace(
       ctx("/api/workspace?dir=https%3A%2F%2Fexample.test"),
       depsWith({}),
     );
@@ -575,12 +770,15 @@ describe("GET /api/workspace", () => {
     expect(result.body).toMatchObject({ error: { code: "BAD_REQUEST" } });
   });
 
-  it("surfaces safe workspace errors for missing workspaces", () => {
+  it("surfaces safe workspace errors for missing workspaces", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-ui-missing-"));
     try {
       const deps = depsWithRegisteredProject(root);
       rmSync(root, { recursive: true, force: true });
-      const result = handleWorkspace(ctx(`/api/workspace?dir=${encodeURIComponent(root)}`), deps);
+      const result = await handleWorkspace(
+        ctx(`/api/workspace?dir=${encodeURIComponent(root)}`),
+        deps,
+      );
       expect(result.status).toBe(404);
       expect(result.body).toMatchObject({
         error: {
@@ -594,12 +792,12 @@ describe("GET /api/workspace", () => {
     }
   });
 
-  it("rejects a registered nested directory inside a parent workspace", () => {
+  it("rejects a registered nested directory inside a parent workspace", async () => {
     const root = createWorkspaceFixture();
     const nested = join(root, "nested");
     mkdirSync(nested, { recursive: true });
     try {
-      const result = handleWorkspace(
+      const result = await handleWorkspace(
         ctx(`/api/workspace?dir=${encodeURIComponent(nested)}`),
         depsWithRegisteredProject(nested),
       );
@@ -612,6 +810,31 @@ describe("GET /api/workspace", () => {
       });
       expect(JSON.stringify(result.body)).not.toContain(root);
       expect(JSON.stringify(result.body)).not.toContain("context");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  // Registration is a structural path check, so a user can register a directory that sits under an
+  // always-denied segment. Root admission — not the registration record — decides that case, and it
+  // must answer PATH_DENIED instead of summarizing the tree.
+  it("denies a registered root that lives under an always-denied segment", async () => {
+    const root = createWorkspaceFixture();
+    const denied = join(root, "node_modules");
+    mkdirSync(denied, { recursive: true });
+    try {
+      const result = await handleWorkspace(
+        ctx(`/api/workspace?dir=${encodeURIComponent(denied)}`),
+        depsWithRegisteredProject(denied),
+      );
+      expect(result.status).toBe(400);
+      expect(result.body).toMatchObject({
+        error: {
+          code: "WORKSPACE_PATH_DENIED",
+          message: "The workspace path is denied by policy.",
+        },
+      });
+      expect(JSON.stringify(result.body)).not.toContain(root);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -716,6 +939,84 @@ describe("GET /api/evidence", () => {
     const entries = (result.body as { entries: { runId: string }[] }).entries;
     expect(entries).toHaveLength(1);
     expect(entries[0]?.runId).toBe(expectedRunId);
+  });
+
+  it("still serves the healthy runs when one stored manifest is unreadable", () => {
+    // The ledger is the product's primary governance surface; one foreign file in the evidence
+    // directory must not turn it into an empty page or an opaque 500 (KEIKO-0106).
+    const store = storeFrom([
+      manifestJson("run-a", "generate-unit-tests", "completed", Date.parse("2026-05-01T10:00:00Z")),
+      manifestJson("run-b", "investigate-bug", "failed", Date.parse("2026-05-02T10:00:00Z")),
+    ]);
+    const withBadEntry: EvidenceStore = {
+      ...store,
+      list: () => ["run-a", "run-b", "run-legacy"],
+      get: (runId) =>
+        runId === "run-legacy" ? JSON.stringify({ evidenceSchemaVersion: "2" }) : store.get(runId),
+    };
+    const result = handleEvidenceList(
+      ctx("/api/evidence"),
+      depsWith({ evidenceStore: withBadEntry }),
+    );
+    expect(result.status).toBe(200);
+    const entries = (result.body as { entries: { runId: string }[] }).entries;
+    expect(entries.map((entry) => entry.runId)).toEqual(["run-a", "run-b"]);
+  });
+
+  it.each([
+    ["EvidenceReadError", new EvidenceReadError("store I/O failure"), "EVIDENCE_READ"],
+    ["EvidenceSchemaError", new EvidenceSchemaError("unsupported version", "9"), "EVIDENCE_SCHEMA"],
+  ])(
+    "maps an unexpected %s from the store itself to a 422, as defense in depth",
+    (_label, thrown, code) => {
+      // listEvidence already skips a single bad MANIFEST (the case above): this proves the
+      // route's OWN mapping fires for a fault listEvidence's per-entry skip does not cover — an
+      // error the store itself raises (e.g. a directory-listing I/O failure), matching what the
+      // sibling handleEvidenceDetail already guarantees.
+      const failingStore: EvidenceStore = {
+        put: () => "",
+        list: () => {
+          throw thrown;
+        },
+        get: () => undefined,
+        delete: () => undefined,
+      };
+      const result = handleEvidenceList(
+        ctx("/api/evidence"),
+        depsWith({ evidenceStore: failingStore }),
+      );
+      expect(result.status).toBe(422);
+      expect(result.body).toMatchObject({ error: { code } });
+    },
+  );
+
+  it("never echoes the underlying fs error's absolute path back to the client", () => {
+    // EvidenceReadError wraps whatever the real fs call raised (e.g. store.ts's getManifest:
+    // "cannot read evidence manifest: " + error.message), and a raw EACCES/ENOENT message quotes
+    // the path it failed on — .keiko/evidence's absolute location must never leave the server.
+    const secretPath = "/Users/realuser/secret-workspace/.keiko/evidence/run-x.json";
+    const leaking = (): never => {
+      throw new EvidenceReadError(`cannot read evidence manifest: EACCES, open '${secretPath}'`);
+    };
+    const failingStore: EvidenceStore = {
+      put: () => "",
+      list: leaking,
+      get: leaking,
+      delete: () => undefined,
+    };
+    const listResult = handleEvidenceList(
+      ctx("/api/evidence"),
+      depsWith({ evidenceStore: failingStore }),
+    );
+    expect(listResult.status).toBe(422);
+    expect(JSON.stringify(listResult.body)).not.toContain(secretPath);
+
+    const detailResult = handleEvidenceDetail(
+      ctx("/api/evidence/run-x", { runId: "run-x" }),
+      depsWith({ evidenceStore: failingStore }),
+    );
+    expect(detailResult.status).toBe(422);
+    expect(JSON.stringify(detailResult.body)).not.toContain(secretPath);
   });
 
   it("filters by model and workspace metadata", () => {

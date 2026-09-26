@@ -46,13 +46,13 @@ import type {
   KnowledgeSourceId,
   RetrievalReference,
 } from "@oscharko-dev/keiko-contracts";
+import { classifyDocumentationTarget } from "@oscharko-dev/keiko-contracts/runtime/documentation-browser";
 import {
-  classifyDocumentationTarget,
   KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_REASON_CODES,
   KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_SCHEMA_VERSION,
   isKnowledgePodRetrievalActivitySafeText,
   validateKnowledgePodRetrievalActivity,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-retrieval-activity";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/text-safety";
 import {
   CancelledError,
@@ -89,8 +89,17 @@ import {
   missingCitationMarker,
   reconcileNumericCitations,
   unsupportedNumericCitationMarker,
+  type NumericEntailmentEvidence,
 } from "./grounded-faithfulness.js";
+import { createEntailmentStage } from "./grounded-entailment-stage.js";
 import { persistGroundedExchange } from "./grounded-message-persistence.js";
+import {
+  assertConversationReadinessAdmission,
+  captureConversationReadinessAdmission,
+  mappedConversationReadinessError,
+  withConversationReadinessAdmission,
+  type ConversationReadinessAdmission,
+} from "./conversation-readiness-admission.js";
 
 export const DEFAULT_REFERENCE_BUDGET = DEFAULT_GROUNDING_LIMITS.referenceBudget;
 export const MAX_EXCERPT_CHARS = DEFAULT_GROUNDING_LIMITS.maxExcerptChars;
@@ -178,8 +187,12 @@ export function openStoreForDeps(deps: UiHandlerDeps): {
 
 function hashString32(value: string): string {
   let hash = 0x811c9dc5;
-  for (let i = 0; i < value.length; i += 1) {
-    hash ^= value.charCodeAt(i);
+  // FNV-1a over Unicode code points: for...of iterates by code point, so an astral character
+  // contributes exactly once (indexing with codePointAt(i) would consume the pair at the high
+  // surrogate and then hash the low surrogate AGAIN on the next index). Ids derived here are
+  // ephemeral wire scope identifiers, so the point-based stream is safe to standardize on.
+  for (const ch of value) {
+    hash ^= ch.codePointAt(0) ?? 0;
     hash = Math.imul(hash, 0x01000193);
   }
   return (hash >>> 0).toString(16).padStart(8, "0");
@@ -568,36 +581,54 @@ export function projectLocalKnowledgeCitation(
   };
 }
 
+interface RenderedReferenceLines {
+  readonly lines: readonly string[];
+  readonly numericEvidence: readonly NumericEntailmentEvidence[];
+}
+
 function buildReferenceLines(
   input: AnswerGeneratorInput,
   store: KnowledgeStore,
   redactExcerpt: (value: string) => string,
   limits: ReturnType<typeof currentGroundingLimits>,
-): readonly string[] {
+): RenderedReferenceLines {
   const lines: string[] = [];
+  const numericEvidence: NumericEntailmentEvidence[] = [];
   const references = input.references.slice(0, limits.maxPromptReferences);
-  // GRD-001: strip Trojan-source / invisible format chars before redaction so reordered or
-  // hidden instructions in indexed document text never reach the model or the rendered wire.
-  const safeRedact = (value: string): string => redactExcerpt(stripUnsafeFormatChars(value));
   for (let i = 0; i < references.length; i += 1) {
     const reference = references[i];
     if (reference === undefined) continue;
-    const label = renderCitationLabel(reference.citation, safeRedact);
-    // Redact secret-shaped strings out of document excerpts before they reach the model,
-    // matching the hybrid grounded-ask path (grounded-qa-hybrid.ts). Without this the
-    // single-connector path would forward raw document content (e.g. an embedded API key)
-    // verbatim to the configured gateway.
-    const excerpt = safeRedact(
-      readCitationExcerpt(store, reference.capsuleId, reference.citation, limits.maxExcerptChars),
-    );
-    lines.push(`[${String(i + 1)}] ${label}`);
-    if (excerpt.length > 0) {
-      lines.push("```text", excerpt, "```");
-    } else {
-      lines.push("(No excerpt text available for this citation.)");
-    }
+    const rendered = renderConnectorEvidence(reference, store, redactExcerpt, limits);
+    const marker = i + 1;
+    const block = `[${String(marker)}] ${rendered.label}\n\`\`\`text\n${rendered.excerpt}\n\`\`\``;
+    lines.push(block);
+    numericEvidence.push({ marker, excerptText: block });
   }
-  return lines;
+  return { lines, numericEvidence };
+}
+
+interface RenderedConnectorEvidence {
+  readonly label: string;
+  readonly excerpt: string;
+}
+
+function renderConnectorEvidence(
+  reference: RetrievalReference,
+  store: KnowledgeStore,
+  redactExcerpt: (value: string) => string,
+  limits: ReturnType<typeof currentGroundingLimits>,
+): RenderedConnectorEvidence {
+  // GRD-001: strip Trojan-source / invisible format chars before redaction so reordered or
+  // hidden instructions in indexed document text never reach the model or the rendered wire.
+  const safeRedact = (value: string): string => redactExcerpt(stripUnsafeFormatChars(value));
+  const label = renderCitationLabel(reference.citation, safeRedact);
+  const excerpt = safeRedact(
+    readCitationExcerpt(store, reference.capsuleId, reference.citation, limits.maxExcerptChars),
+  );
+  return {
+    label,
+    excerpt: excerpt.length > 0 ? excerpt : "(No excerpt text available for this citation.)",
+  };
 }
 
 function localKnowledgePromptSummary(input: AnswerGeneratorInput): string {
@@ -613,8 +644,11 @@ function buildLocalKnowledgeMessages(
   store: KnowledgeStore,
   redactExcerpt: (value: string) => string,
   limits: ReturnType<typeof currentGroundingLimits>,
-): readonly { readonly role: "system" | "user"; readonly content: string }[] {
-  const lines = buildReferenceLines(input, store, redactExcerpt, limits);
+): {
+  readonly messages: readonly { readonly role: "system" | "user"; readonly content: string }[];
+  readonly numericEvidence: readonly NumericEntailmentEvidence[];
+} {
+  const rendered = buildReferenceLines(input, store, redactExcerpt, limits);
   const repairInstruction =
     input.citationRepair === true
       ? [
@@ -622,7 +656,7 @@ function buildLocalKnowledgeMessages(
           "The previous answer was rejected because it did not use valid inline [n] citations. Rewrite the answer now. Every factual sentence must include at least one matching [n] marker from the supplied citations. Do not invent citations.",
         ]
       : [];
-  return [
+  const messages = [
     {
       role: "system",
       content: LOCAL_KNOWLEDGE_SYSTEM_PROMPT,
@@ -635,14 +669,17 @@ function buildLocalKnowledgeMessages(
         localKnowledgePromptSummary(input),
         "",
         "Citations:",
-        ...lines,
+        ...rendered.lines,
         ...repairInstruction,
       ].join("\n"),
     },
-  ];
+  ] as const;
+  return { messages, numericEvidence: rendered.numericEvidence };
 }
 
 class StoreBackedAnswerGenerator implements AnswerGenerator {
+  private renderedNumericEvidence: readonly NumericEntailmentEvidence[] = [];
+
   public constructor(
     private readonly model: ModelPort,
     private readonly modelId: string,
@@ -650,20 +687,24 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     private readonly auditSink: ReturnType<typeof createSqliteAuditSink>,
     private readonly redactExcerpt: (value: string) => string,
     private readonly limits: ReturnType<typeof currentGroundingLimits>,
+    private readonly correlationId: string | undefined,
   ) {}
 
   public async generate(input: AnswerGeneratorInput): Promise<string> {
+    const rendered = buildLocalKnowledgeMessages(
+      input.query.answerQuestion ?? input.query.text,
+      input,
+      this.store,
+      this.redactExcerpt,
+      this.limits,
+    );
+    this.renderedNumericEvidence = rendered.numericEvidence;
     const response = await this.model.call(
       {
         modelId: this.modelId,
-        messages: buildLocalKnowledgeMessages(
-          input.query.answerQuestion ?? input.query.text,
-          input,
-          this.store,
-          this.redactExcerpt,
-          this.limits,
-        ),
+        messages: rendered.messages,
         stream: false,
+        logContext: { correlationId: this.correlationId },
       },
       input.signal ?? new AbortController().signal,
     );
@@ -684,6 +725,10 @@ class StoreBackedAnswerGenerator implements AnswerGenerator {
     const content = response.content.trim();
     assertUsableAssistantContent(content, this.modelId);
     return content;
+  }
+
+  public numericEntailmentEvidence(): readonly NumericEntailmentEvidence[] {
+    return this.renderedNumericEvidence;
   }
 }
 
@@ -741,7 +786,11 @@ function uniqueQueryVariants(variants: readonly string[]): readonly string[] {
   return out;
 }
 
-function createBroadQueryTransformer(model: ModelPort, modelId: string): QueryTransformer {
+function createBroadQueryTransformer(
+  model: ModelPort,
+  modelId: string,
+  correlationId: string | undefined,
+): QueryTransformer {
   return {
     rewrite: async ({ query, maxVariants, signal }): Promise<readonly string[]> => {
       try {
@@ -764,6 +813,7 @@ function createBroadQueryTransformer(model: ModelPort, modelId: string): QueryTr
               },
             ],
             stream: false,
+            logContext: { correlationId },
           },
           queryTransformSignal(signal),
         );
@@ -1276,7 +1326,12 @@ function buildStateFailureAnswer(input: {
   } satisfies GroundedAnswer;
 }
 
-function resolveModel(deps: UiHandlerDeps, modelId: string): ModelPort | RouteResult {
+function resolveModel(
+  deps: UiHandlerDeps,
+  modelId: string,
+  readinessAdmission: ConversationReadinessAdmission,
+): ModelPort | RouteResult {
+  assertConversationReadinessAdmission(deps, readinessAdmission, modelId);
   const config = currentGatewayConfig(deps);
   const capability =
     config === undefined ? findCapability(modelId) : findConfiguredCapability(config, modelId);
@@ -1286,11 +1341,11 @@ function resolveModel(deps: UiHandlerDeps, modelId: string): ModelPort | RouteRe
       body: errorBody("BAD_REQUEST", "modelId must be a configured chat model id."),
     };
   }
-  const model = deps.modelPortFactory(modelId);
-  if (model === undefined) {
+  const resolvedModel = deps.modelPortFactory(modelId);
+  if (resolvedModel === undefined) {
     return { status: 400, body: errorBody("NO_MODEL", "No model provider is configured.") };
   }
-  return model;
+  return withConversationReadinessAdmission(resolvedModel, modelId, readinessAdmission, deps);
 }
 
 function redactText(deps: UiHandlerDeps, value: string): string {
@@ -2071,7 +2126,10 @@ export function tryBuildKnowledgePodRetrievalActivity(input: {
     emitServerDiagnostic(
       input.diagnostics,
       serverDiagnosticFromError({
-        correlationId: "unknown",
+        // No request id is in scope here; a fixed label that satisfies the canonical correlation-id
+        // shape keeps the record joinable by its operation instead of being replaced by the sink's
+        // content-free marker (`"unknown"` is shorter than the shape's minimum).
+        correlationId: "retrieval-activity-uncorrelated",
         operation: "retrieval-activity.tryBuild",
         source: "retrieval-activity.tryBuild",
         error,
@@ -2145,15 +2203,89 @@ function persistRedactedGroundedExchange(
   );
 }
 
-function persistScopedGroundedAnswer(
-  chat: Chat,
-  input: AskInput,
-  deps: UiHandlerDeps,
-  env: { readonly store: KnowledgeStore },
-  selected: SelectedLocalKnowledgeScope,
+async function appendLocalKnowledgeNumericEntailment(
+  answer: GroundedAnswer,
   result: ScopedGroundedResult,
-  startedAt: number,
-): GroundedAnswer {
+  numericEvidence: readonly NumericEntailmentEvidence[],
+  selected: SelectedLocalKnowledgeScope,
+  context: ScopedGroundedAnswerContext & { readonly modelId: string },
+  deps: UiHandlerDeps,
+): Promise<GroundedAnswer> {
+  if (
+    result.noEvidence ||
+    result.answerOnlyContextUsed === true ||
+    result.references.length === 0
+  ) {
+    return answer;
+  }
+  const stage = createEntailmentStage(
+    deps,
+    selected.capsules,
+    context.modelId,
+    {
+      diagnostics: deps.diagnostics,
+      ...(context.correlationId === undefined ? {} : { correlationId: context.correlationId }),
+    },
+    context.signal,
+  );
+  if (stage === undefined) return answer;
+  const markers = await stage.evaluateNumeric(result.answer, numericEvidence, Date.now());
+  if (context.signal.aborted) {
+    throw new CancelledError("grounded request cancelled");
+  }
+  if (markers.length === 0) return answer;
+  return {
+    ...answer,
+    uncertainty: [
+      ...answer.uncertainty,
+      ...markers.map((marker) => ({ kind: marker.kind, claim: redactText(deps, marker.claim) })),
+    ],
+  };
+}
+
+function buildPersistedScopedAnswer(input: {
+  readonly chat: Chat;
+  readonly store: KnowledgeStore;
+  readonly selected: SelectedLocalKnowledgeScope;
+  readonly persisted: readonly [ChatMessage, ChatMessage];
+  readonly result: ScopedGroundedResult;
+  readonly elapsedMs: number;
+  readonly limits: ReturnType<typeof currentGroundingLimits>;
+  readonly sourceLookup: LocalKnowledgeCitationSourceLookup;
+  readonly deps: UiHandlerDeps;
+}): GroundedAnswer {
+  return buildLocalKnowledgeAnswer({
+    chat: input.chat,
+    store: input.store,
+    selected: input.selected,
+    persisted: input.persisted,
+    result: input.result,
+    elapsedMs: input.elapsedMs,
+    assistantContent: input.persisted[1].content,
+    limits: input.limits,
+    sourceLookup: input.sourceLookup,
+    redactLabel: (value: string): string => redactText(input.deps, value),
+    diagnostics: input.deps.diagnostics,
+  });
+}
+
+interface PersistScopedGroundedAnswerInput {
+  readonly chat: Chat;
+  readonly input: AskInput;
+  readonly deps: UiHandlerDeps;
+  readonly env: { readonly store: KnowledgeStore };
+  readonly selected: SelectedLocalKnowledgeScope;
+  readonly result: ScopedGroundedResult;
+  readonly startedAt: number;
+  readonly context: ScopedGroundedAnswerContext & { readonly modelId: string };
+  readonly numericEvidence: readonly NumericEntailmentEvidence[];
+}
+
+async function persistScopedGroundedAnswer(
+  persistedInput: PersistScopedGroundedAnswerInput,
+): Promise<GroundedAnswer> {
+  const { chat, input, deps, env, selected, result, startedAt, context, numericEvidence } =
+    persistedInput;
   const elapsedMs = Date.now() - startedAt;
   const auditSink = createSqliteAuditSink(env.store);
   const occurredAt = Date.now();
@@ -2164,28 +2296,34 @@ function persistScopedGroundedAnswer(
   const persisted = persistRedactedGroundedExchange(deps, chat, input, assistantContent);
   const sourceLookup = buildSelectedScopeSourceLookup(env.store, selected);
   const limits = currentGroundingLimits(deps);
-  const answer = buildLocalKnowledgeAnswer({
+  const answer = buildPersistedScopedAnswer({
     chat,
     store: env.store,
     selected,
     persisted,
     result,
     elapsedMs,
-    assistantContent: persisted[1].content,
     limits,
     sourceLookup,
-    redactLabel: (value: string): string => redactText(deps, value),
-    diagnostics: deps.diagnostics,
-  }) satisfies GroundedAnswer;
+    deps,
+  });
+  const finalAnswer = await appendLocalKnowledgeNumericEntailment(
+    answer,
+    result,
+    numericEvidence,
+    selected,
+    context,
+    deps,
+  );
   attachGroundedAnswerWithPreviewCitations(
     deps,
     env,
     persisted[1].id,
-    answer,
+    finalAnswer,
     result,
     sourceLookup,
   );
-  return answer;
+  return finalAnswer;
 }
 
 function createScopedAnswerGenerator(
@@ -2194,6 +2332,7 @@ function createScopedAnswerGenerator(
   deps: UiHandlerDeps,
   env: { readonly store: KnowledgeStore },
   limits: ReturnType<typeof currentGroundingLimits>,
+  correlationId: string | undefined,
 ): StoreBackedAnswerGenerator {
   return new StoreBackedAnswerGenerator(
     model,
@@ -2202,7 +2341,38 @@ function createScopedAnswerGenerator(
     createSqliteAuditSink(env.store),
     (value: string): string => redactText(deps, value),
     limits,
+    correlationId,
   );
+}
+
+// The trailing three positional parameters `runScopedGroundedAnswer` used to take (signal,
+// readinessAdmission, correlationId) bundled into one object so the function itself stays under
+// the repository's 7-parameter ceiling (Sonar S107) as ADR-0173 D5 g9's correlationId threading
+// added an 8th. Grouped together because all three travel together for the lifetime of a single
+// grounded-ask attempt, unlike `chat`/`input`/`deps`/`env`/`selected`, which each name a different
+// piece of state.
+interface ScopedGroundedAnswerContext {
+  readonly signal: AbortSignal;
+  readonly readinessAdmission: ConversationReadinessAdmission;
+  readonly correlationId: string | undefined;
+}
+
+function scopedCitationFaithfulness(
+  store: KnowledgeStore,
+  limits: ReturnType<typeof currentGroundingLimits>,
+): { readonly excerptForReference: (reference: RetrievalReference) => string } {
+  return {
+    // The faithfulness basis is the label plus the excerpt shown to the model. The label carries a
+    // repository path while the excerpt is raw source, so judging the excerpt alone drops faithful
+    // citations such as "implemented in code-parser.ts".
+    excerptForReference: (reference): string =>
+      `${renderCitationLabel(reference.citation)}\n${readCitationExcerpt(
+        store,
+        reference.capsuleId,
+        reference.citation,
+        limits.maxExcerptChars,
+      )}`,
+  };
 }
 
 async function runScopedGroundedAnswer(
@@ -2211,42 +2381,28 @@ async function runScopedGroundedAnswer(
   deps: UiHandlerDeps,
   env: Pick<ReturnType<typeof openStoreForDeps>, "store" | "vectorIndex">,
   selected: SelectedLocalKnowledgeScope,
-  signal: AbortSignal,
+  context: ScopedGroundedAnswerContext,
 ): Promise<GroundedAnswer | RouteResult> {
+  const { signal, readinessAdmission, correlationId } = context;
   const embeddingAdapter = createEmbeddingAdapter(deps);
   if ("status" in embeddingAdapter) return embeddingAdapter;
   const modelId = input.modelId ?? chat.selectedModel;
-  const model = resolveModel(deps, modelId);
+  const model = resolveModel(deps, modelId, readinessAdmission);
   if ("status" in model) return model;
   const limits = currentGroundingLimits(deps);
-  const generator = createScopedAnswerGenerator(model, modelId, deps, env, limits);
+  const generator = createScopedAnswerGenerator(model, modelId, deps, env, limits, correlationId);
   const startedAt = Date.now();
   const result = await runGroundedAnswer(
     {
       retrieval: {
         store: env.store,
         embeddingAdapter,
-        queryTransformer: createBroadQueryTransformer(model, modelId),
+        queryTransformer: createBroadQueryTransformer(model, modelId, correlationId),
         vectorIndex: env.vectorIndex,
       },
       answerGenerator: generator,
       referenceReranker: referenceRerankerForScope(deps, env.store, selected, limits),
-      citationFaithfulness: {
-        // The faithfulness basis must be everything the model was SHOWN for that reference, which
-        // is the rendered label followed by the excerpt (see renderCitations: `[n] label` then the
-        // fenced excerpt). Judging against the excerpt alone rejects citations that are perfectly
-        // faithful to the label — and for a repository pod that is the normal case, because the
-        // label carries the file path while the excerpt is raw source. An answer saying "implemented
-        // in code-parser.ts" then shares no tokens with the code body and its citation is silently
-        // dropped, leaving a bare [n] marker in the prose with nothing behind it.
-        excerptForReference: (reference): string =>
-          `${renderCitationLabel(reference.citation)}\n${readCitationExcerpt(
-            env.store,
-            reference.capsuleId,
-            reference.citation,
-            limits.maxExcerptChars,
-          )}`,
-      },
+      citationFaithfulness: scopedCitationFaithfulness(env.store, limits),
       signal,
     },
     localKnowledgeQuery(chat, input, deps),
@@ -2254,7 +2410,17 @@ async function runScopedGroundedAnswer(
   if (signal.aborted) {
     throw new CancelledError("grounded request cancelled");
   }
-  return persistScopedGroundedAnswer(chat, input, deps, env, selected, result, startedAt);
+  return await persistScopedGroundedAnswer({
+    chat,
+    input,
+    deps,
+    env,
+    selected,
+    result,
+    startedAt,
+    context: { ...context, modelId },
+    numericEvidence: generator.numericEntailmentEvidence(),
+  });
 }
 
 function stateFailureRoute(
@@ -2310,12 +2476,25 @@ export function mapGroundedAskError(error: unknown, deps: UiHandlerDeps): RouteR
   return internalError(message);
 }
 
+function localKnowledgeReadinessAdmission(
+  deps: UiHandlerDeps,
+  modelId: string,
+  readinessAdmission: ConversationReadinessAdmission | undefined,
+): ConversationReadinessAdmission | RouteResult {
+  return readinessAdmission ?? captureConversationReadinessAdmission(deps, modelId);
+}
+
 export async function handleLocalKnowledgeGroundedAsk(
   chat: Chat,
   input: AskInput,
   deps: UiHandlerDeps,
   signal: AbortSignal,
+  readinessAdmission?: ConversationReadinessAdmission,
+  correlationId?: string,
 ): Promise<RouteResult> {
+  const modelId = input.modelId ?? chat.selectedModel;
+  const effectiveAdmission = localKnowledgeReadinessAdmission(deps, modelId, readinessAdmission);
+  if ("status" in effectiveAdmission) return effectiveAdmission;
   const env = openStoreForDeps(deps);
   try {
     const selected = selectedCapsules(chat, env.store);
@@ -2325,14 +2504,18 @@ export async function handleLocalKnowledgeGroundedAsk(
       if (signal.aborted) throw new CancelledError("grounded request cancelled");
       return stateFailureRoute(chat, input, deps, env, selected, stateFailure);
     }
-    const answer = await runScopedGroundedAnswer(chat, input, deps, env, selected, signal);
+    const answer = await runScopedGroundedAnswer(chat, input, deps, env, selected, {
+      signal,
+      readinessAdmission: effectiveAdmission,
+      correlationId,
+    });
     if ("status" in answer) return answer;
     return { status: 200, body: answer };
   } catch (error) {
     if (signal.aborted) {
       return { status: 499, body: errorBody("CANCELLED", "Grounded request was cancelled.") };
     }
-    return mapGroundedAskError(error, deps);
+    return mappedConversationReadinessError(error) ?? mapGroundedAskError(error, deps);
   } finally {
     env.close();
   }

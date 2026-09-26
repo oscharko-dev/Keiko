@@ -1,14 +1,16 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
+import type {
+  CodingContextPack,
+  RetrievalContextPack,
+  RetrievalContextSourceKind,
+} from "@oscharko-dev/keiko-contracts";
 import {
   RETRIEVAL_CONTEXT_BUDGETS,
   tierForRetrievalContextSource,
-  toCodingContextWirePack,
-  type CodingContextPack,
-  type RetrievalContextPack,
-  type RetrievalContextSourceKind,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/retrieval-context";
+import { toCodingContextWirePack } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import { codingContextEvidenceRunId } from "../editor/codingContextEvidence.js";
 import { handleEditorContext } from "../editor/contextRoutes.js";
 import { generateModelCompletions } from "../editor/editorCompletionModel.js";
@@ -105,10 +107,65 @@ function postEditorContext(body: unknown): RouteContext {
   const req = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]);
   (req as { method?: string }).method = "POST";
   return {
+    correlationId: undefined,
     req: req as unknown as IncomingMessage,
     res: {} as ServerResponse,
     params: {},
     url: new URL("http://127.0.0.1/api/editor/context"),
+  };
+}
+
+function deferredProvider(
+  sourceKind: NeutralKind,
+  order: number,
+  id: string,
+): {
+  readonly provider: RetrievalContextProvider<NeutralKind>;
+  readonly started: () => boolean;
+  readonly resolve: () => void;
+} {
+  let hasStarted = false;
+  let resolveOutcome: (() => void) | undefined;
+  const outcomePromise = new Promise<void>((resolve) => {
+    resolveOutcome = resolve;
+  });
+  const provider: RetrievalContextProvider<NeutralKind> = {
+    sourceKind,
+    order,
+    requiresEmbedding: false,
+    run: async () => {
+      hasStarted = true;
+      await outcomePromise;
+      return {
+        excerpts: [
+          {
+            sourceKind,
+            id,
+            score: 1,
+            citationRef: id,
+            text: id,
+            truncated: false,
+          },
+        ],
+        omission: undefined,
+      };
+    },
+  };
+  return {
+    provider,
+    started: (): boolean => hasStarted,
+    resolve: (): void => {
+      resolveOutcome?.();
+    },
+  };
+}
+
+function throwingProvider(): RetrievalContextProvider<NeutralKind> {
+  return {
+    sourceKind: "entailment-evidence",
+    order: 5,
+    requiresEmbedding: false,
+    run: () => Promise.reject(new Error("provider blew up")),
   };
 }
 
@@ -129,6 +186,38 @@ describe("assembleRetrievalContext", () => {
     expect(forward.omissions).toEqual([
       { sourceKind: "entailment-evidence", reason: "unavailable" },
     ]);
+  });
+
+  it("degrades a throwing provider to an omission instead of aborting the pack (KEIKO-0491)", async () => {
+    const throwing = throwingProvider();
+    const succeeding = graphProvider();
+    const pack = await assemble([throwing, succeeding], Number.MAX_SAFE_INTEGER);
+    expect(pack.excerpts.map((entry) => entry.citation.id)).toEqual(["relation-a", "relation-b"]);
+    expect(pack.omissions).toEqual([{ sourceKind: "entailment-evidence", reason: "unavailable" }]);
+  });
+
+  it("runs providers concurrently so wall-clock is bounded by the slowest, not the sum (KEIKO-0307)", async () => {
+    // Deterministic barrier — no wall-clock threshold. Three providers each block until
+    // the test resolves them. If they run sequentially, only the first will have started
+    // when we probe; if they run concurrently, all three will have started before any of
+    // them resolves. We yield microtasks so run() reaches its `await outcomePromise`
+    // suspension point in each provider before probing.
+    const p1 = deferredProvider("graph-relations", 1, "p-1");
+    const p2 = deferredProvider("graph-relations", 2, "p-2");
+    const p3 = deferredProvider("graph-relations", 3, "p-3");
+    const packPromise = assemble([p1.provider, p2.provider, p3.provider], Number.MAX_SAFE_INTEGER);
+    // A single macrotask boundary is enough for every provider's `run()` to hit its await.
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(p1.started()).toBe(true);
+    expect(p2.started()).toBe(true);
+    expect(p3.started()).toBe(true);
+    p1.resolve();
+    p2.resolve();
+    p3.resolve();
+    const pack = await packPromise;
+    // Concurrency changes wall-clock, not iteration order — packCandidates orders by score
+    // and id, and the ordered append in assembleRetrievalContext preserves provider order.
+    expect(pack.excerpts.map((entry) => entry.citation.id)).toEqual(["p-1", "p-2", "p-3"]);
   });
 
   it("records embedding exclusions instead of invoking a forbidden provider", async () => {

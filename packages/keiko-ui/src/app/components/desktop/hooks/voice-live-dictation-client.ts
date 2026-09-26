@@ -8,7 +8,7 @@ import {
   DEFAULT_VOICE_PROTOCOL_TIMEOUTS,
   VOICE_PROTOCOL_VERSION,
   decodeVoiceControlMessage,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
 
 const LIVE_TRANSCRIBE_PATH = "/api/voice/transcribe/live";
 const NEGOTIATE_TIMEOUT_MS = DEFAULT_VOICE_PROTOCOL_TIMEOUTS.signalingMs;

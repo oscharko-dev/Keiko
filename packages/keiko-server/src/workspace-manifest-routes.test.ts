@@ -283,7 +283,7 @@ describe("workspace manifest routes", () => {
     expect(acceptedBody.manifest.roots.map((root) => root.canonicalRoot)).toEqual([rootA, rootB]);
   });
 
-  it("serves a manifest with its binding and 404s an unknown workspace id", async () => {
+  it("serves a manifest without a task-domain binding field and 404s an unknown workspace id", async () => {
     const manifest = await alphaManifest();
     const found = await fetch(requestUrl(`/api/workspaces/${manifest.workspaceId}`), {
       headers: { Cookie: TEST_SESSION_COOKIE },
@@ -291,10 +291,13 @@ describe("workspace manifest routes", () => {
     expect(found.status).toBe(200);
     const foundBody = (await found.json()) as {
       readonly manifest: WorkspaceManifest;
-      readonly binding: unknown;
+      readonly binding?: unknown;
     };
     expect(foundBody.manifest.workspaceId).toBe(manifest.workspaceId);
-    expect(foundBody.binding).toBeDefined();
+    // KEIKO-0538: the response no longer carries a `binding` field. The previous field
+    // repurposed WorkspaceBindingV2.taskId to hold the plain workspaceId, which risked confusion
+    // with the genuine Coding Workbench task-id domain.
+    expect(foundBody.binding).toBeUndefined();
 
     const missing = await fetch(requestUrl("/api/workspaces/ws-does-not-exist"), {
       headers: { Cookie: TEST_SESSION_COOKIE },

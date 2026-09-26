@@ -1,15 +1,17 @@
 import { pathToFileURL } from "node:url";
 
+import type {
+  LanguageServiceOperation,
+  ManagedLspLanguage,
+  ManagedLspNegotiatedCapabilitySnapshot,
+  ManagedLspPositionEncoding,
+  ManagedLspTextSync,
+} from "@oscharko-dev/keiko-contracts";
 import {
   MANAGED_LSP_CAPABILITY_SCHEMA_VERSION,
   MANAGED_LSP_SEMANTIC_TOKEN_MODIFIERS,
   MANAGED_LSP_SEMANTIC_TOKEN_TYPES,
-  type LanguageServiceOperation,
-  type ManagedLspLanguage,
-  type ManagedLspNegotiatedCapabilitySnapshot,
-  type ManagedLspPositionEncoding,
-  type ManagedLspTextSync,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-capabilities";
 
 import { LspServerRequestError } from "./lspJsonRpcClient.js";
 import {

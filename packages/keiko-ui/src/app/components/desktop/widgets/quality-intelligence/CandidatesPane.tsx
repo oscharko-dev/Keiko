@@ -14,9 +14,10 @@ import type {
   QualityIntelligenceCandidateEditableFields,
   QualityIntelligenceReviewAction,
 } from "@oscharko-dev/keiko-contracts";
-import { isTerminalReviewState } from "@oscharko-dev/keiko-contracts";
+import { isTerminalReviewState } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { useQiTranslate as useTranslate } from "./qi-i18n";
 import { CandidateEditForm } from "./CandidateEditForm";
+import { NATIVE_FIELDSET_RESET_STYLE } from "../../native-element-styles";
 import {
   CandidateQualityVerdictNote,
   ReviewBadge,
@@ -244,7 +245,11 @@ function ReviewControls({
   const primaryDescribedBy = isTerminal ? finalNoteId : describedBy;
 
   return (
-    <div className="qi-cand-actions" role="group" aria-label={t("qi.review.decision")}>
+    <fieldset
+      className="qi-cand-actions"
+      aria-label={t("qi.review.decision")}
+      style={NATIVE_FIELDSET_RESET_STYLE}
+    >
       {/* Final-state note: always mounted when terminal so aria-describedby resolves reliably.
           Visually reuses the governance-note style (same role="note", same padding/colour token). */}
       {isTerminal ? (
@@ -306,7 +311,7 @@ function ReviewControls({
           }}
         />
       ) : null}
-    </div>
+    </fieldset>
   );
 }
 

@@ -6,7 +6,7 @@ import type {
   KnowledgePodResolvedModelUsePolicy,
   KnowledgePodResolvedModelUsePolicyOperations,
 } from "@oscharko-dev/keiko-contracts";
-import { resolveKnowledgePodModelUsePolicy } from "@oscharko-dev/keiko-contracts";
+import { resolveKnowledgePodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 
 export type ScopeModelUsePolicy = KnowledgePodResolvedModelUsePolicy;
 

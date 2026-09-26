@@ -45,6 +45,8 @@ import type {
 } from "./inline-completion-telemetry.js";
 import {
   classifyResultKind,
+  composeDisposers,
+  controllerForToken,
   runLanguageBridgeCall,
   type EditorLanguageIntelligenceReporter,
 } from "./language-intelligence.js";
@@ -219,21 +221,6 @@ interface InlineProviderState {
   activeController: AbortController | null;
 }
 
-// Wires an AbortController to Monaco's cancellation token (immediate + on-request abort).
-function controllerForToken(token: MonacoCancellationToken): {
-  readonly controller: AbortController;
-  readonly cancellationSub: MonacoDisposable;
-} {
-  const controller = new AbortController();
-  if (token.isCancellationRequested) {
-    controller.abort();
-  }
-  const cancellationSub = token.onCancellationRequested(() => {
-    controller.abort();
-  });
-  return { controller, cancellationSub };
-}
-
 // Maps a kept response to ghost text, or `undefined` when there is none to offer. Recording
 // "offered" belongs here rather than in the seam: only a rendered suggestion was actually offered.
 function presentInline(
@@ -265,7 +252,12 @@ function provideInline(
   const request = buildRequest(deps, model, position, context, state.sequence);
   state.latest = request.request;
   state.activeController?.abort();
-  const { controller, cancellationSub } = controllerForToken(token);
+  // KEIKO-0908/0912 + round-3 review: after controllerForToken was updated to return
+  // {controller, dispose}, the local wireAbortController helper no longer had a distinct
+  // responsibility over the shared one — every bridge (hover, definition, references, etc.)
+  // already uses controllerForToken with a .finally(dispose) release. Consolidated here so a
+  // future onCancellationRequested contract change lands in exactly one place.
+  const { controller, dispose: disposeCancellationSub } = controllerForToken(token);
   state.activeController = controller;
   const now = deps.now ?? Date.now;
   const startedAt = now();
@@ -288,7 +280,7 @@ function provideInline(
       report: deps.report,
     },
   ).finally(() => {
-    cancellationSub.dispose();
+    disposeCancellationSub();
     if (state.activeController === controller) {
       state.activeController = null;
     }
@@ -362,16 +354,6 @@ export interface RegisterKeikoInlineCompletionProviderArgs {
   readonly debounceDelayMs: number;
   readonly telemetry?: InlineCompletionTelemetry | undefined;
   readonly report?: EditorLanguageIntelligenceReporter | undefined;
-}
-
-function composeDisposers(disposers: readonly MonacoDisposable[]): MonacoDisposable {
-  return {
-    dispose(): void {
-      for (const disposer of disposers) {
-        disposer.dispose();
-      }
-    },
-  };
 }
 
 /**

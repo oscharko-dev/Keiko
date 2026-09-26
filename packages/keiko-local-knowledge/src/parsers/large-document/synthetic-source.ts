@@ -121,7 +121,9 @@ async function* syntheticExtractWindows(
   const resumeFromPage = options.resumeFromPage ?? 0;
   const state: SyntheticState = {
     cursor: options.resumeCharacterStart ?? 0,
-    anyPageEmitted: resumeFromPage > 0,
+    // KEIKO-0172: prefer the caller-supplied flag; fall back to the `resumeFromPage > 0`
+    // proxy for pre-migration checkpoints — see progressive-pdf.ts for the shared rationale.
+    anyPageEmitted: options.resumeAnyPageEmitted ?? resumeFromPage > 0,
     objectCursor: options.resumeObjectCursor ?? 0,
     windowIndex: options.resumeWindowIndex ?? 0,
   };

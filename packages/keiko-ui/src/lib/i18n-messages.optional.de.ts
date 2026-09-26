@@ -123,6 +123,42 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
     "Remote-Änderungen in den Arbeitsbaum übernehmen? Offene Editor-Puffer werden nach erfolgreichem Git-Vorgang abgeglichen.",
   "gitClientWindow.confirm.pull.action": "Änderungen übernehmen",
   "gitClientWindow.confirm.cancel": "Abbrechen",
+  "gitClientWindow.addRepository.title": "Repository hinzufügen",
+  "gitClientWindow.addRepository.close": "Schließen",
+  "gitClientWindow.addRepository.mode": "Hinzufügemodus",
+  "gitClientWindow.addRepository.clone": "Repository klonen",
+  "gitClientWindow.addRepository.open": "Repository öffnen",
+  "gitClientWindow.addRepository.openLocal": "Lokales Repository öffnen",
+  "gitClientWindow.addRepository.repositoryUrl": "Repository-URL",
+  "gitClientWindow.addRepository.cloneDestination": "In Ordner klonen",
+  "gitClientWindow.addRepository.localPath": "Lokaler Repository-Pfad",
+  "gitClientWindow.addRepository.chooseLocal": "Lokales Repository auswählen",
+  "gitClientWindow.addRepository.pickerBusy": "Eine andere Ordnerauswahl ist bereits geöffnet.",
+  "gitClientWindow.addRepository.pickerUnsupported":
+    "Die Ordnerauswahl ist in dieser Keiko-Sitzung nicht verfügbar.",
+  "gitClientWindow.addRepository.cancel": "Abbrechen",
+  "gitClientWindow.addRepository.adding": "Wird hinzugefügt…",
+  "gitClientWindow.repository.reconnectFailed":
+    "Die Repository-Verbindung ist fehlgeschlagen: {detail}",
+  "gitClientWindow.repository.workspaceUnavailable":
+    "Dieses Repository ist derzeit mit keinem Workspace verbunden. Verbinden Sie es erneut, um fortzufahren.",
+  "gitClientWindow.repository.unavailable":
+    "Dieses lokale Repository ist nicht verfügbar. Wählen Sie ein anderes Repository aus.",
+  "gitClientWindow.history.commitUnavailable":
+    "Der angeforderte Commit ist im begrenzten Verlauf nicht verfügbar.",
+  "gitClientWindow.history.loadFailed": "Der Commit-Verlauf konnte nicht geladen werden.",
+  "gitClientWindow.history.loadMoreFailed": "Weitere Commits konnten nicht geladen werden.",
+  "gitClientWindow.history.truncated":
+    "Es werden die neuesten {count} Commits angezeigt; der Verlauf ist gekürzt.",
+  "gitClientWindow.history.loadMore": "Weitere Commits laden",
+  "gitClientWindow.history.loadingMore": "Weitere Commits werden geladen…",
+  "gitClientWindow.history.retryLoadMore": "Commits erneut laden",
+  "gitClientWindow.history.end": "Ende des Verlaufs. {count} Commits geladen.",
+  "gitClientWindow.history.paginationStatusAria": "Status der Verlaufsseiten",
+  "gitClientWindow.history.commitDetailsAria": "Commit-Details",
+  "gitClientWindow.panel.pullRequestOpened": "Pull-Request-Panel geöffnet.",
+  "gitClientWindow.panel.mergeOpened": "Merge-Panel geöffnet.",
+  "gitClientWindow.panel.diffOpened": "Änderungsansicht geöffnet.",
   "gitClientWindow.sync.editorReconciliationFailed":
     "Der Pull wurde abgeschlossen, aber Editor-Puffer müssen wiederhergestellt werden. Prüfen Sie offene Dateien, bevor Sie fortfahren.",
   "chat.turn.failed": "Beitrag fehlgeschlagen",
@@ -135,6 +171,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "chat.history.purgeWarning":
     "Diese Konversation und ihre gespeicherten Nachrichten dauerhaft löschen? Dies kann nicht rückgängig gemacht werden.",
   "chat.history.purgeFailed": "Dauerhaftes Löschen fehlgeschlagen: {detail}",
+  "chat.history.renameEmptyTitle": "Titel darf nicht leer sein.",
+  "chat.history.renameFailed": "Umbenennen fehlgeschlagen.",
+  "chat.history.deleteFailed": "Löschen fehlgeschlagen: {detail}",
+  "chat.history.restoreFailed": "Wiederherstellen fehlgeschlagen: {detail}",
   "chat.regenerate.versionSelector": "Antwortversion",
   "chat.regenerate.version": "Version {version}",
   "chat.regenerate.versionCurrent": "Version {version} (aktuell)",
@@ -293,9 +333,11 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "terminalWidget.log.ariaLabel": "Letzte Terminalereignisse",
   "commitComposer.hint.selectRepository": "Wählen Sie ein Repository zum Committen.",
   "commitComposer.hint.stageChanges":
-    "Stellen Sie Änderungen bereit, um sie in den aktuellen Branch zu committen.",
+    "Änderungen bereitstellen, um einen Commit-Entwurf vorzubereiten.",
   "commitComposer.hint.enterSummary": "Geben Sie eine Commit-Zusammenfassung ein.",
   "commitComposer.hint.waitPreview": "Warten Sie auf die Commit-Richtlinienvorschau.",
+  "commitComposer.hint.createBranchForProtected":
+    "Erstellen Sie vor dem Committen einen Arbeitsbranch für diesen geschützten Branch.",
   "commitComposer.hint.resolvePolicy":
     "Beheben Sie die nachfolgenden Commit-Richtlinienprobleme, um zu committen.",
   "commitComposer.hint.commitsStaged":
@@ -304,6 +346,11 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "commitComposer.action.merge": "Mergen…",
   "commitComposer.action.commit": "Commit",
   "commitComposer.action.commitTo": "In {branch} committen",
+  "commitComposer.action.createBranchFirst": "Zuerst Branch erstellen",
+  "commitComposer.action.useDraft": "Commit-Entwurf übernehmen",
+  "commitComposer.action.generateDraft": "Mit Keiko erzeugen",
+  "commitComposer.action.generatingDraft": "Keiko erzeugt…",
+  "commitComposer.action.copyDraft": "Commit-Entwurf kopieren",
   "commitComposer.field.summary": "Zusammenfassung",
   "commitComposer.field.summaryPlaceholder": "Kurze Zusammenfassung der Änderung",
   "commitComposer.field.description": "Beschreibung",
@@ -311,6 +358,12 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "commitComposer.preview.unavailable": "Vorschau nicht verfügbar",
   "commitComposer.preview.policyActionNeeded": "Richtlinie: Aktion erforderlich",
   "commitComposer.preview.meetsPolicy": "Erfüllt die Commit-Richtlinie",
+  "commitComposer.preview.protectedBranchTitle": "Aktueller Branch ist geschützt",
+  "commitComposer.preview.protectedBranchDetail":
+    "Erstellen Sie einen Branch von {branch}, committen Sie dort und öffnen Sie danach einen Pull Request.",
+  "commitComposer.preview.currentBranch": "dem aktuellen Branch",
+  "commitComposer.preview.policyBlocked":
+    "Dieser Commit wird durch die Repository-Richtlinie blockiert.",
   "commitComposer.preview.summary":
     "{files} bereitgestellte {fileNoun} in {areas} {areaNoun}{tests}",
   "commitComposer.preview.fileSingular": "Datei",
@@ -319,9 +372,26 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "commitComposer.preview.areaPlural": "Bereichen",
   "commitComposer.preview.touchesTestsSuffix": " · betrifft Tests",
   "commitComposer.preview.suggestedPrefix": "Empfohlenes Präfix:",
+  "commitComposer.draft.title": "Commit-Entwurf",
+  "commitComposer.draft.detail": "Prüfen oder bearbeiten Sie diese Nachricht vor dem Commit.",
+  "commitComposer.draft.subject": "Betreff",
+  "commitComposer.draft.body": "Textkörper",
+  "commitComposer.draft.generateHint":
+    "Keiko liest den ausgewählten staged Diff erst, wenn Sie diesen Button klicken.",
+  "commitComposer.draft.unavailable":
+    "Diese Repository-Richtlinie benötigt Angaben, die Keiko nicht sicher entwerfen kann.",
+  "commitComposer.error.draftTimedOut":
+    "Das Gateway hat nicht rechtzeitig geantwortet; der Entwurf wurde nicht erstellt. Versuchen Sie es erneut oder schreiben Sie die Nachricht selbst.",
+  "commitComposer.error.draftOutputExhausted":
+    "Das Modell von Keiko hat sein gesamtes Ausgabebudget mit dem Nachdenken über die Änderung verbraucht und keinen Entwurf erzeugt. Versuchen Sie es erneut oder schreiben Sie die Nachricht selbst.",
+  "commitComposer.copy.copied": "Kopiert",
+  "commitComposer.copy.failed": "Kopieren fehlgeschlagen",
   "commitComposer.preview.messageViolations": "Verstöße gegen Nachrichtenrichtlinie",
-  "commitComposer.preview.qualityWarnings": "Qualitätswarnungen",
-  "commitComposer.preview.preflightFindings": "Vorabprüfungsbefunde",
+  "commitComposer.preview.qualityWarnings": "Hinweise",
+  "commitComposer.preview.preflightFindings": "Prüfungen",
+  "commitComposer.preflight.branchProtectionUnavailable":
+    "Remote-Branch-Regeln konnten nicht gelesen werden",
+  "commitComposer.preflight.signedCommitsRequired": "Signierte Commits sind möglicherweise nötig",
   "commitComposer.warning.mixed-scope": "Gemischter Umfang — Änderungen betreffen mehrere Bereiche",
   "commitComposer.warning.wip-marker": "Work-in-Progress-Markierung im Betreff",
   "commitComposer.warning.large-change": "Große Änderung — viele Dateien bereitgestellt",
@@ -334,6 +404,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "commitComposer.violation.subject-too-long": "Die Betreffzeile ist zu lang",
   "commitComposer.violation.missing-issue-key": "Der erforderliche Issue-Schlüssel fehlt",
   "commitComposer.violation.missing-signoff": "Der Signed-off-by-Trailer fehlt",
+  "gitClientWindow.error.noRepository": "Wählen Sie zuerst ein Repository aus.",
   "promptEnhancer.error.cancelled": "Anfrage abgebrochen.",
   "promptEnhancer.error.failed":
     "Die Prompt-Verbesserung ist fehlgeschlagen. Bitte versuchen Sie es erneut.",
@@ -614,6 +685,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gitDelivery.blockerSeverity.advisory": "Hinweis",
   "gitDelivery.remediation.user-actionable": "Sie können dies beheben",
   "gitDelivery.remediation.internal": "Wird intern behandelt",
+  "gitDelivery.blockReason.authority-denied":
+    "Die Laufzeitberechtigung erlaubt diese Aktion nicht mehr",
   "gitDelivery.blockReason.policy-pack-blocked": "Durch das Richtlinienpaket abgelehnt",
   "gitDelivery.blockReason.protected-branch": "Ziel ist ein geschützter Branch",
   "gitDelivery.blockReason.provider-capability-absent": "Erforderliche Provider-Fähigkeit fehlt",
@@ -621,6 +694,10 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gitDelivery.blockReason.risk-class-ceiling":
     "Überschreitet die erlaubte Risikoklassenobergrenze",
   "gitDelivery.blockReason.no-applicable-rule": "Keine anwendbare Richtlinienregel (Fail-Closed)",
+  "gitDelivery.blockReason.approver-not-authorized":
+    "Freigebende Identität steht nicht auf der Liste der zulässigen Freigeber",
+  "gitDelivery.blockReason.head-hash-mismatch":
+    "HEAD des Arbeitsbaums stimmt nicht mit dem erwarteten Commit überein",
   "gitDelivery.policyDecision.allowed": "Erlaubt",
   "gitDelivery.policyDecision.blocked": "Blockiert",
   "gitDelivery.policyDecision.approval-gated": "Genehmigung erforderlich",
@@ -628,6 +705,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gitDelivery.recoveryHint.retry": "Aktion erneut versuchen",
   "gitDelivery.recoveryHint.stage-changes": "Änderungen bereitstellen",
   "gitDelivery.recoveryHint.configure-upstream": "Upstream-Branch konfigurieren",
+  "gitDelivery.recoveryHint.configure-signing": "Commit-Signierung konfigurieren",
   "gitDelivery.recoveryHint.resolve-conflicts": "Konflikte lösen",
   "gitDelivery.recoveryHint.abort-in-progress-operation": "Laufende Operation abbrechen",
   "gitDelivery.recoveryHint.request-approval": "Genehmigung anfordern",
@@ -741,6 +819,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "searchPanel.replace.noPreviewComputed": "Es wurde noch keine Ersetzungsvorschau berechnet.",
   "searchPanel.replace.omittedSuffix": " {count} Dateien ausgelassen.",
   "searchPanel.replace.rootPrefixedStatus": "{rootLabel}: {message}",
+  "searchPanel.replace.searchLimitSuffix":
+    " Die Suche hat nicht jeden Treffer erfasst; diese Vorschau ist möglicherweise unvollständig.",
   "searchPanel.replace.summary": "{editCount} Ersetzungen in {fileCount} Dateien.{omitted}",
   "searchPanel.rootErrors.one": "Ein Root konnte nicht {operation} werden.",
   "searchPanel.rootErrors.operationPreviewed": "in der Vorschau geprüft",
@@ -760,4 +840,305 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "searchPanel.status.searchingRoots": "Workspace-Roots werden durchsucht…",
   "searchPanel.status.selectWorkspace": "Vor der Suche einen Workspace auswählen.",
   "searchPanel.symbol.enclosingSuffix": " in {enclosing}",
+  "gatewaySetup.upload.title": "Konfigurationsdatei laden",
+  "gatewaySetup.upload.hint":
+    "Du hast eine keiko.config.json? Lade sie und alle enthaltenen Felder werden ausgefüllt — die Datei bleibt auf diesem Rechner, und was sie nicht enthält (etwa den API-Token), ergänzt du unten.",
+  "gatewaySetup.upload.action": "keiko.config.json laden",
+  "gatewaySetup.upload.appliedOne": "Konfiguration geladen — 1 Feld unten ausgefüllt.",
+  "gatewaySetup.upload.appliedMany": "Konfiguration geladen — {count} Felder unten ausgefüllt.",
+  "gatewaySetup.upload.invalid": "Diese Datei ist keine lesbare Keiko-Konfiguration.",
+  "gatewaySetup.upload.fileTooLarge": "Diese Datei überschreitet die unterstützten 256 KB.",
+  "gatewaySetup.upload.unsupportedSetting":
+    "Diese Datei enthält Einstellungen, die dieser Upload nicht abbilden kann — Chat-/Embedding-Provider-Optionen (Endpoint-Stil, API-Version, Output-Token-Parameter, Realtime-Auth-Modus, Voice-Profile), einen angepassten Circuit-Breaker oder einen Policy-Block wie Grounding, Reranker oder Egress. Trage diese Konfiguration manuell ein.",
+  "gatewaySetup.upload.unsupportedKind":
+    "Diese Datei enthält OCR-Provider, die dieser Upload nicht ausfüllen kann — trage diesen Abschnitt manuell ein und entferne ihn aus der Datei.",
+  "gatewaySetup.upload.realtimeSkipped":
+    "Das Realtime-Sprachmodell nutzt einen eigenen Endpoint und wurde nicht übernommen — ergänze es nach dem Speichern über die Sprach-Einstellungen.",
+  "gatewaySetup.upload.voiceProfilesReduced":
+    "Die Datei konfiguriert mehrere Ausgabestimmen; übernommen wurde die neutrale Stimme — die übrigen lassen sich später neu wählen.",
+  "gatewaySetup.upload.voiceRetryTuningReset":
+    "Die Datei stimmt Sprach-Wiederholversuche ab, die dieses Formular nicht übernehmen kann — beim Speichern gilt das Standard-Wiederholverhalten.",
+  "gatewaySetup.badge.setup": "Modell-Gateway-Einrichtung",
+  "gatewaySetup.badge.update": "Zugangsdaten aktualisieren",
+  "gatewaySetup.voice.locality.azureFoundry": "Microsoft Foundry",
+  "gatewaySetup.voice.locality.customerHosted": "Vom Kunden betrieben",
+  "gatewaySetup.voice.locality.localOnly": "Nur lokal",
+  "gatewaySetup.voice.locality.gatewayManaged": "Vom Gateway verwaltet (Standort unbekannt)",
+  "gatewaySetup.voice.title": "Audio & Digital Twin",
+  "gatewaySetup.voice.description":
+    "Optionale Modelle für Diktat, Live-Unterhaltungen und vorgelesene Antworten.",
+  "gatewaySetup.voice.guidance":
+    "Keiko erkennt Audiomodelle am Gateway und verwendet dieselbe Verbindung. Fehlt ein Modell, trage unten seinen Deployment-Namen ein. Digital Twin funktioniert mit Spracherkennung, Chat und Sprachausgabe; natives Realtime ist optional. Für Sprachausgabe wird außerdem eine unterstützte Stimmen-ID benötigt. Eine separate Audio-Verbindung und natives Realtime findest du unter Erweitert.",
+  "gatewaySetup.voice.advancedSettings":
+    "Erweitert: natives Realtime oder separate Audio-Verbindung",
+  "gatewaySetup.voice.selectedCapabilities":
+    "Ausgewählte Funktionen: Diktieren {dictate} · Digital Twin {digitalVoice} · Vorlesen {readAloud}.",
+  "gatewaySetup.voice.dictateDeployment": "Diktieren · Speech-to-Text-Deployment",
+  "gatewaySetup.voice.realtimeDeployment": "Natives Realtime · Deployment",
+  "gatewaySetup.voice.realtimeTranscriptionDeployment":
+    "Natives Realtime · Live-Transkriptions-Deployment",
+  "gatewaySetup.voice.realtimeTranscriptionDeploymentPlaceholder":
+    "ihr-realtime-transkriptions-deployment",
+  "gatewaySetup.voice.realtimeTranscriptionRequiredLabel": "mit Realtime erforderlich",
+  "gatewaySetup.voice.realtimeTranscriptionRequired":
+    "Gib das kompatible Live-Transkriptions-Deployment für dieses Realtime-Deployment ein.",
+  "gatewaySetup.voice.realtimeRequired":
+    "Ein Live-Transkriptions-Deployment erfordert ein ausdrückliches Realtime-Deployment.",
+  "gatewaySetup.voice.deploymentRequired":
+    "Gib mindestens ein ausdrückliches Voice-Deployment an: Speech-to-Text, Realtime mit Live-Transkription oder Speech Output.",
+  "gatewaySetup.voice.realtimeAuthMode.label": "Realtime-Authentifizierung",
+  "gatewaySetup.voice.realtimeAuthMode.apiKey": "API-Schlüssel",
+  "gatewaySetup.voice.realtimeAuthMode.ephemeral": "Kurzlebiges Sitzungs-Token",
+  "gatewaySetup.voice.endpointProtocolRestatementRequired":
+    "Beim Ersetzen eines gespeicherten Audio-Endpunkts müssen Endpunkt-Stil und Realtime-Authentifizierung für den neuen Host erneut angegeben werden.",
+  "gatewaySetup.voice.azureEndpointRequiresApiVersion":
+    "Der Azure-Deployment-Pfad erfordert eine Audio-API-Version.",
+  "gatewaySetup.voice.endpointStyle.label": "Audio-Endpunkt-Stil",
+  "gatewaySetup.voice.apiVersion.label": "Audio-API-Version",
+  "gatewaySetup.voice.protocol.optional": "optional",
+  "gatewaySetup.voice.endpointStyle.unstated": "Nicht angegeben",
+  "gatewaySetup.voice.endpointStyle.openaiCompatible": "OpenAI-kompatibel",
+  "gatewaySetup.voice.endpointStyle.azureDeploymentPath": "Azure-Deployment-Pfad",
+  "gatewaySetup.voice.apiVersion.azureOnly": "nur beim Azure-Deployment-Pfad",
+  "gatewaySetup.voice.endpointMigrationRequired":
+    "Zum Ersetzen eines gespeicherten Audio-Endpunkts sind neue Zugangsdaten, eine ausdrücklich gewählte Anbieter-Lokalität und mindestens eine zu verschiebende Deployment-Rolle erforderlich.",
+  "gatewaySetup.voice.semanticTurnDetection": "Semantische Turn-Ende-Erkennung (Semantic VAD)",
+  "gatewaySetup.voice.semanticTurnDetectionHint":
+    "Nur aktivieren, wenn dieses Realtime-Deployment Semantic VAD ausdrücklich unterstützt. Beim Austausch des Deployments wird diese Funktion zurückgesetzt.",
+  "gatewaySetup.voice.speechOutputDeployment": "Vorlesen · Speech-Output-Deployment",
+  "gatewaySetup.voice.outputVoice": "Ausgabestimme",
+  "gatewaySetup.voice.outputVoiceHint":
+    "bei Bedarf eine vom Sprachanbieter unterstützte Stimmen-ID eingeben",
+  "gatewaySetup.voice.outputVoiceRequired":
+    "Beim Konfigurieren oder Austauschen eines Speech-Output-Deployments ist eine ausdrückliche Anbieter-Stimmen-ID erforderlich.",
+  "gatewaySetup.voice.endpointUrl": "Audio-Endpunkt-URL",
+  "gatewaySetup.voice.preserveExistingHint": "leer lassen, um den gespeicherten Wert beizubehalten",
+  "gatewaySetup.voice.endpointReplacePlaceholder":
+    "Mit Zugangsdaten, Lokalität und ausdrücklichen Zielrollen ersetzen",
+  "gatewaySetup.voice.credential": "Audio-Zugangsdaten",
+  "gatewaySetup.voice.credentialReplacePlaceholder":
+    "Nur ausfüllen, um die gespeicherten Audio-Zugangsdaten zu ersetzen",
+  "gatewaySetup.voice.credentialPlaceholder": "Audio-Zugangsdaten einfügen",
+  "gatewaySetup.voice.authHeader": "Audio-Authentifizierungs-Header",
+  "gatewaySetup.voice.authHeaderPreservePlaceholder":
+    "Leer lassen, um den gespeicherten Header beizubehalten",
+  "gatewaySetup.voice.timeout": "Audio-Zeitlimit (ms)",
+  "gatewaySetup.voice.timeoutPreservePlaceholder":
+    "Leer lassen, um das gespeicherte Zeitlimit beizubehalten",
+  "gatewaySetup.voice.storedAria": "Gespeicherte Audio-Zugangsdaten",
+  "gatewaySetup.voice.audioModels": "Audio-Modelle",
+  "gatewaySetup.voice.updateSettings": "Audio- und Digital-Twin-Einstellungen aktualisieren",
+  "gatewaySetup.voice.success.audioAndFigma":
+    "Audio- und Digital-Twin-Einstellungen aktualisiert und Figma-Zugriffstoken verifiziert. Keiko wird neu geladen…",
+  "gatewaySetup.voice.success.gatewayAudioAndFigma":
+    "Modell-Gateway-, Audio- und Digital-Twin-Einstellungen aktualisiert und Figma-Zugriffstoken verifiziert. Keiko wird neu geladen…",
+  "gatewaySetup.voice.success.audio":
+    "Audio- und Digital-Twin-Einstellungen aktualisiert. Keiko wird neu geladen…",
+  "gatewaySetup.voice.success.verifiedAudioAndFigma":
+    "{verified}, Audio- und Digital-Twin-Einstellungen aktualisiert und Figma-Zugriffstoken verifiziert. Keiko wird neu geladen…{skipped}",
+  "gatewaySetup.voice.success.verifiedAudio":
+    "{verified} und Audio- sowie Digital-Twin-Einstellungen aktualisiert. Keiko wird neu geladen…{skipped}",
+  "figmaSnapshotWindow.railLabel": "Figma-Snapshot",
+  "figmaSnapshotWindow.common.cancel": "Abbrechen",
+  "figmaSnapshotWindow.common.save": "Speichern",
+  "figmaSnapshotWindow.common.delete": "Löschen",
+  "figmaSnapshotWindow.build.cancelNote":
+    "Der Abbruch beendet nur das Warten dieses Fensters — der serverseitige Build läuft im Hintergrund weiter.",
+  "figmaSnapshotWindow.build.detachedNotice":
+    "Dieses Fenster wartet nicht mehr. Der Server erstellt den Snapshot möglicherweise weiterhin im Hintergrund. Sie können dieses Fenster gefahrlos schließen.",
+  "figmaSnapshotWindow.build.reconnect": "Build erneut verbinden",
+  "figmaSnapshotWindow.codegen.generateButton": "Code generieren",
+  "figmaSnapshotWindow.codegen.generating": "Code wird generiert…",
+  "figmaSnapshotWindow.codegen.proposalNote":
+    "— nur ein Vorschlag, wird nie automatisch angewendet.",
+  "figmaSnapshotWindow.codegen.reviewableFilePlural": "{count} überprüfbare Dateien",
+  "figmaSnapshotWindow.codegen.reviewableFileSingular": "{count} überprüfbare Datei",
+  "figmaSnapshotWindow.codegen.screenBreakdown":
+    "{rendered} gerendert, {structural} strukturell, {unparseable} als nicht lesbar ausgelassen",
+  "figmaSnapshotWindow.count.screenPlural": "{count} Bildschirme",
+  "figmaSnapshotWindow.count.screenSingular": "{count} Bildschirm",
+  "figmaSnapshotWindow.dashboard.currentBadge": "Aktuell",
+  "figmaSnapshotWindow.dashboard.deleteConfirmQuestion": "Diesen Snapshot löschen?",
+  "figmaSnapshotWindow.dashboard.deleteSnapshotAria": "Snapshot {title} löschen",
+  "figmaSnapshotWindow.dashboard.eyebrow": "Snapshot-Dashboard",
+  "figmaSnapshotWindow.dashboard.hideMetadataAria": "Metadaten für Snapshot {title} ausblenden",
+  "figmaSnapshotWindow.dashboard.load": "Laden",
+  "figmaSnapshotWindow.dashboard.loadSnapshotAria": "Snapshot {title} laden",
+  "figmaSnapshotWindow.dashboard.loadingSnapshots": "Snapshots werden geladen…",
+  "figmaSnapshotWindow.dashboard.metadataTitle": "Metadaten",
+  "figmaSnapshotWindow.dashboard.noBoardSelectedDetail":
+    "Fügen Sie einen gültigen Figma-Board-Link ein oder laden Sie einen gespeicherten Snapshot, um den Verlauf dieses Boards zu sehen.",
+  "figmaSnapshotWindow.dashboard.noBoardSelectedTitle": "Noch kein Board ausgewählt",
+  "figmaSnapshotWindow.dashboard.noBoardSnapshotsDetail":
+    "Erstellen Sie den ersten Snapshot für dieses Board, damit er hier verfügbar ist.",
+  "figmaSnapshotWindow.dashboard.noBoardSnapshotsTitle":
+    "Für dieses Board sind keine Snapshots gespeichert",
+  "figmaSnapshotWindow.dashboard.noRecentSnapshotsDetail":
+    "Gespeicherte Figma-Snapshots werden hier angezeigt, sobald die erste Board-Erfassung abgeschlossen ist.",
+  "figmaSnapshotWindow.dashboard.noRecentSnapshotsTitle": "Noch keine Snapshots gespeichert",
+  "figmaSnapshotWindow.dashboard.noSkipped": ", keine übersprungenen Renderings",
+  "figmaSnapshotWindow.dashboard.refresh": "Aktualisieren",
+  "figmaSnapshotWindow.dashboard.renameInputAria": "Snapshot-Name für {title}",
+  "figmaSnapshotWindow.dashboard.renameInputPlaceholder": "Snapshot-Name",
+  "figmaSnapshotWindow.dashboard.renameSnapshotAria": "Snapshot {title} umbenennen",
+  "figmaSnapshotWindow.dashboard.renameTitle": "Umbenennen",
+  "figmaSnapshotWindow.dashboard.showMetadataAria": "Metadaten für Snapshot {title} anzeigen",
+  "figmaSnapshotWindow.dashboard.skippedCount": ", {count} übersprungen",
+  "figmaSnapshotWindow.dashboard.tabBoard": "Dieses Board",
+  "figmaSnapshotWindow.dashboard.tabRecent": "Zuletzt verwendet",
+  "figmaSnapshotWindow.dashboard.tabsAriaLabel": "Snapshot-Ansichten",
+  "figmaSnapshotWindow.dashboard.title": "Gespeicherte Snapshots",
+  "figmaSnapshotWindow.empty.note":
+    "Der Snapshot speichert die erfassten Bildschirme und ihre Struktur als unveränderlichen Nachweis — verbinden Sie dieses Fenster mit Quality Intelligence, um generierte Tests im Design zu verankern. Erfordert einen auf dem Server konfigurierten Figma-Zugriffstoken.",
+  "figmaSnapshotWindow.empty.step1":
+    "Wählen Sie in Figma den Rahmen oder Abschnitt aus, den Sie erfassen möchten.",
+  "figmaSnapshotWindow.empty.step2":
+    "Kopieren Sie den Link dazu (Copy link to selection) — er enthält die node-id.",
+  "figmaSnapshotWindow.empty.step3":
+    "Fügen Sie ihn oben ein, bestätigen Sie den schreibgeschützten Umfang und erstellen Sie dann den Snapshot.",
+  "figmaSnapshotWindow.empty.title": "Bildschirme von einem Figma-Board erfassen",
+  "figmaSnapshotWindow.error.buildTimeoutDetail":
+    "Dieses Fenster wartet nicht mehr auf das Snapshot-Ergebnis. Der Server schließt den Build möglicherweise weiterhin im Hintergrund ab.",
+  "figmaSnapshotWindow.error.buildTimeoutRemediation":
+    "Verbinden Sie sich erneut mit demselben Board, um weiter zu warten, oder schließen Sie dieses Fenster und kehren Sie später zurück.",
+  "figmaSnapshotWindow.error.buildTimeoutTitle": "Figma-Snapshot läuft noch",
+  "figmaSnapshotWindow.error.consentCheckboxRequired":
+    "Aktivieren Sie unten das Kontrollkästchen zur Bestätigung des schreibgeschützten Zugriffs und erstellen Sie den Snapshot erneut.",
+  "figmaSnapshotWindow.error.consentRequiredSuffix":
+    "Aktivieren Sie unten das Bestätigungs-Kontrollkästchen und erstellen Sie den Snapshot erneut.",
+  "figmaSnapshotWindow.error.egressBlocked.caRemediation":
+    "Ein Fehler bei der TLS-Zertifikatsprüfung hat die Anfrage blockiert. Prüfen Sie die CA-Bundle-Konfiguration und versuchen Sie es erneut. Es wurde kein Snapshot gespeichert.",
+  "figmaSnapshotWindow.error.egressBlocked.networkRemediation":
+    "Die ausgehende Netzwerkanfrage an Figma ist fehlgeschlagen. Prüfen Sie die DNS-Auflösung und die Netzwerkverbindung und versuchen Sie es erneut. Es wurde kein Snapshot gespeichert.",
+  "figmaSnapshotWindow.error.egressBlocked.proxyRemediation":
+    "Prüfen Sie den konfigurierten Proxy, die NO_PROXY-Regeln und das CA-Bundle und versuchen Sie es erneut. Es wurde kein Snapshot gespeichert.",
+  "figmaSnapshotWindow.error.egressBlocked.title":
+    "Figma-Snapshot durch ausgehenden Netzwerkzugriff blockiert",
+  "figmaSnapshotWindow.error.generic.title": "Figma-Snapshot fehlgeschlagen",
+  "figmaSnapshotWindow.error.generic.unknownDetail": "Ein unerwarteter Fehler ist aufgetreten.",
+  "figmaSnapshotWindow.error.openTokenSettings": "Figma-Zugriffstoken-Einstellungen öffnen",
+  "figmaSnapshotWindow.error.runIdClearedSuffix": "Die gespeicherte Run-ID wurde gelöscht.",
+  "figmaSnapshotWindow.error.tokenAttention.remediation":
+    "Öffnen Sie die Figma-Zugriffstoken-Einstellungen, um den schreibgeschützten Token hinzuzufügen oder zu erneuern, und versuchen Sie es dann erneut. Es wurde kein Snapshot gespeichert.",
+  "figmaSnapshotWindow.error.tokenAttention.title": "Figma-Zugriffstoken erfordert Aufmerksamkeit",
+  "figmaSnapshotWindow.error.upstreamUnavailable.remediation":
+    "Versuchen Sie es später erneut — es wurde kein Snapshot gespeichert.",
+  "figmaSnapshotWindow.error.upstreamUnavailable.title": "Figma ist derzeit nicht verfügbar",
+  "figmaSnapshotWindow.fact.file": "Datei",
+  "figmaSnapshotWindow.fact.integrity": "Integrität",
+  "figmaSnapshotWindow.fact.nameUpdated": "Name aktualisiert",
+  "figmaSnapshotWindow.fact.node": "Node",
+  "figmaSnapshotWindow.fact.run": "Lauf",
+  "figmaSnapshotWindow.fact.structural": "Strukturell",
+  "figmaSnapshotWindow.fact.version": "Version",
+  "figmaSnapshotWindow.form.boardLinkLabel": "Board-Link",
+  "figmaSnapshotWindow.form.boardLinkPlaceholder": "https://www.figma.com/design/…?node-id=…",
+  "figmaSnapshotWindow.form.building": "Wird erstellt…",
+  "figmaSnapshotWindow.form.consentPrefix":
+    "Ich bestätige, dass der konfigurierte Figma-PAT schreibgeschützt und mit minimalen Rechten ausgestattet ist (",
+  "figmaSnapshotWindow.form.consentRequired": "Erforderlich vor dem ersten Snapshot eines Boards.",
+  "figmaSnapshotWindow.form.consentSuffix": ").",
+  "figmaSnapshotWindow.form.hint":
+    "Fügen Sie einen Figma-Board-Link mit einem node-id-Parameter ein (Abschnitts- oder Rahmenanker). Der Zugriffstoken wird serverseitig aufgelöst — er erreicht diese Seite nie.",
+  "figmaSnapshotWindow.form.snapshotButton": "Snapshot",
+  "figmaSnapshotWindow.gallery.capturedScreenPlural":
+    "{count} erfasste und strukturelle Bildschirme",
+  "figmaSnapshotWindow.gallery.capturedScreenSingular":
+    "{count} erfasster oder struktureller Bildschirm",
+  "figmaSnapshotWindow.gallery.noScreensCaptured":
+    "Aus diesem Board-Abschnitt wurden keine Bildschirme erfasst.",
+  "figmaSnapshotWindow.gallery.selectedScreenPlural": "{count} ausgewählte Bildschirme",
+  "figmaSnapshotWindow.gallery.selectedScreenSingular": "{count} ausgewählter Bildschirm",
+  "figmaSnapshotWindow.gallery.showMore": "Weitere Bildschirme anzeigen",
+  "figmaSnapshotWindow.jsonInspector.ariaLabel": "Bereichsbezogenes JSON für {name}",
+  "figmaSnapshotWindow.jsonInspector.clipboardUnavailable": "Zwischenablage nicht verfügbar",
+  "figmaSnapshotWindow.jsonInspector.copied": "Kopiert",
+  "figmaSnapshotWindow.jsonInspector.copyFailed": "Kopieren fehlgeschlagen",
+  "figmaSnapshotWindow.jsonInspector.copyJson": "JSON kopieren",
+  "figmaSnapshotWindow.jsonInspector.createJsonSourceAria":
+    "Eigenständige JSON-Quelle für {name} erstellen",
+  "figmaSnapshotWindow.jsonInspector.dragJsonTitle": "JSON für {name} in den Arbeitsbereich ziehen",
+  "figmaSnapshotWindow.jsonInspector.kicker": "Gespeichertes Screen-IR-JSON",
+  "figmaSnapshotWindow.jsonInspector.relatedLinkPlural": "{count} verknüpfte Links",
+  "figmaSnapshotWindow.jsonInspector.relatedLinkSingular": "{count} verknüpfter Link",
+  "figmaSnapshotWindow.jsonInspector.screenJsonAriaLabel": "Screen-IR-JSON für {screenId}",
+  "figmaSnapshotWindow.result.captured": "Erfasst am {date}",
+  "figmaSnapshotWindow.result.resnapshotAria": "Für dieses Board erneut einen Snapshot erstellen",
+  "figmaSnapshotWindow.result.resnapshotButton": "Erneut Snapshot erstellen",
+  "figmaSnapshotWindow.result.scopeNote": "QI-Quellumfang: {scope}",
+  "figmaSnapshotWindow.result.skippedPlural":
+    "{count} Bildschirme konnten nicht gerendert werden und wurden übersprungen.",
+  "figmaSnapshotWindow.result.skippedSingular":
+    "{count} Bildschirm konnte nicht gerendert werden und wurde übersprungen.",
+  "figmaSnapshotWindow.revoke.confirmQuestion": "Den gespeicherten Token wirklich widerrufen?",
+  "figmaSnapshotWindow.revoke.confirmYes": "Ja, widerrufen",
+  "figmaSnapshotWindow.revoke.trigger": "Gespeicherten Token widerrufen",
+  "figmaSnapshotWindow.scopes.readScopeDescription":
+    "— liest Designdateistruktur, Node-Metadaten und gerenderte Bilder",
+  "figmaSnapshotWindow.scopes.summary": "Erforderliche Figma-PAT-Berechtigungen",
+  "figmaSnapshotWindow.scopes.tokenSourcePrefix":
+    "Der Token wird serverseitig aus dem Vault, der Keiko-Konfiguration oder der Umgebungsvariable",
+  "figmaSnapshotWindow.scopes.tokenSourceSuffix":
+    "gelesen. Dieses Fenster speichert oder überträgt den Token niemals.",
+  "figmaSnapshotWindow.screenCard.addToWorkspace": "Zum Arbeitsbereich hinzufügen",
+  "figmaSnapshotWindow.screenCard.addToWorkspaceAria":
+    "Bildschirm {name} als Quality-Intelligence-Quelle zum Arbeitsbereich hinzufügen",
+  "figmaSnapshotWindow.screenCard.alreadyActiveSource":
+    "{name} ist bereits die aktive bereichsbezogene Quelle",
+  "figmaSnapshotWindow.screenCard.ariaLabel": "Bildschirm {index}: {name}",
+  "figmaSnapshotWindow.screenCard.capturedPreviewAlt": "Erfasste Vorschau für {name}",
+  "figmaSnapshotWindow.screenCard.irBadge": "IR",
+  "figmaSnapshotWindow.screenCard.previewAddHint":
+    "Bildschirm {name} in den Arbeitsbereich ziehen oder klicken, um ihn als Quality-Intelligence-Quelle hinzuzufügen",
+  "figmaSnapshotWindow.screenCard.previewAlreadyActive":
+    "Die Vorschau von {name} ist bereits die aktive bereichsbezogene Quelle",
+  "figmaSnapshotWindow.screenCard.sourceActive": "Quelle aktiv",
+  "figmaSnapshotWindow.screenCard.structuralDataOnlyAlt": "Nur strukturelle Daten für {name}",
+  "figmaSnapshotWindow.screenCard.structuralIrOnly": "Nur strukturelles IR",
+  "figmaSnapshotWindow.screenCard.structuralIrOnlyWithReason": "Nur strukturelles IR ({reason})",
+  "figmaSnapshotWindow.snapshot.defaultName": "Snapshot {date}",
+  "figmaSnapshotWindow.status.buildingProgress":
+    "Snapshot wird erstellt — Bildschirme werden von Figma abgerufen…",
+  "figmaSnapshotWindow.status.codeGeneratedPlural":
+    "Code generiert — {count} Dateien zur Überprüfung bereit.",
+  "figmaSnapshotWindow.status.codeGeneratedSingular":
+    "Code generiert — {count} Datei zur Überprüfung bereit.",
+  "figmaSnapshotWindow.status.elapsedSuffix": "{elapsed} vergangen.",
+  "figmaSnapshotWindow.status.largeBoardsNote":
+    "Bei großen Boards kann dies mehrere Minuten dauern.",
+  "figmaSnapshotWindow.status.loadingStoredSnapshot": "Gespeicherter Snapshot wird geladen…",
+  "figmaSnapshotWindow.status.snapshotCompleteAnnouncement":
+    "Snapshot abgeschlossen — {reductionHint}.",
+  "figmaSnapshotWindow.storedSnapshot.available": "Ein gespeicherter Snapshot ist verfügbar.",
+  "figmaSnapshotWindow.storedSnapshot.loadButton": "Snapshot laden",
+  "figmaSnapshotWindow.storedSnapshot.loading": "Wird geladen…",
+  "figmaSnapshotWindow.validation.invalidLink":
+    "Das sieht nicht wie ein Figma-Board-Link aus. Verwenden Sie einen figma.com-Design-/File-Link, der einen node-id-Parameter enthält.",
+  "figmaSnapshotWindow.validation.missingNodeId":
+    "Fügen Sie eine node-id hinzu, indem Sie in Figma einen Rahmen oder Abschnitt auswählen und dessen Link kopieren (Copy link to selection).",
+  "figmaSnapshotWindow.version.latest": "Neueste",
+  "figmaSnapshotWindow.viewSource.ariaLabel": "Figma-Ansichtsquelle: {name}",
+  "figmaSnapshotWindow.viewSource.createImageSourceAria":
+    "Eigenständige Bildquelle für {name} erstellen",
+  "figmaSnapshotWindow.viewSource.dragImageTitle": "Bild für {name} in den Arbeitsbereich ziehen",
+  "figmaSnapshotWindow.viewSource.factCaptured": "Erfasst",
+  "figmaSnapshotWindow.viewSource.factPreview": "Vorschau",
+  "figmaSnapshotWindow.viewSource.factScreen": "Bildschirm",
+  "figmaSnapshotWindow.viewSource.factSnapshot": "Snapshot",
+  "figmaSnapshotWindow.viewSource.kicker": "QI-Ansichtsquelle",
+  "figmaSnapshotWindow.viewSource.structuralIrLabel": "Strukturelles IR",
+  "figmaSnapshotWindow.viewSource.structuralIrWithReason": "Strukturelles IR ({reason})",
+  "figmaSnapshotWindow.viewSourceMode.ariaLabel": "Figma-Ansichtsquelle {name}",
+  "figmaSnapshotWindow.viewSourceMode.badge": "QI-Quelle",
+  "figmaSnapshotWindow.viewSourceMode.eyebrow": "Figma-Ansicht",
+  "figmaSnapshotWindow.viewSourceMode.inspectJson": "JSON prüfen",
+  "figmaSnapshotWindow.viewSourceMode.loadViewButton": "Ansicht laden",
+  "figmaSnapshotWindow.viewSourceMode.loadedAnnouncement": "Figma-Ansicht geladen — {name}.",
+  "figmaSnapshotWindow.viewSourceMode.loadingJson": "JSON wird geladen…",
+  "figmaSnapshotWindow.viewSourceMode.loadingPreview": "Ansichtsvorschau wird geladen…",
+  "figmaSnapshotWindow.viewSourceMode.loadingSelectedView": "Die ausgewählte Ansicht wird geladen…",
+  "figmaSnapshotWindow.viewSourceMode.notLoaded":
+    "Vorschau der ausgewählten Ansicht nicht geladen.",
+  "figmaSnapshotWindow.viewSourceMode.screenNotPresent":
+    "Der ausgewählte Bildschirm ist in diesem gespeicherten Snapshot nicht vorhanden.",
 } satisfies OptionalWidgetMessageCatalog;

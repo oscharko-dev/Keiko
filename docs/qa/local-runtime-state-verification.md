@@ -47,11 +47,35 @@ it is reproduced here as the closure snapshot.
 
 ## Automated audit
 
+### Updater repair evidence boundary (#3405)
+
+The historical confidentiality matrix above does not verify the repaired updater's durable
+session/recovery protocol. The [current runtime-state contract](../local-runtime-state-contract.md)
+and [#3405 repair ledger](built-in-updater-repair-3405.md) separately cover the schema-2 aggregate,
+revision-checked transitions, immutable candidate binding, and native handoff reconciliation.
+
+Current focused coverage lives in `packages/keiko-server/src/update-local-state.test.ts`,
+`update-session-durable.test.ts`, and the `update-portable-handoff-{plan,receipts,recovery,production}.test.ts`
+suites. The production-factory recovery suite exercises real local-state validation rather than
+replacing settlement with a stub. These development results must be re-run on the final integrated
+head; they are not target-native N−1→N qualification.
+
+The handoff capsule contains private control material, including installation paths and process
+identity, and must not be copied into committed proof or support output. Canonical `server.log`
+events carry bounded body-free correlation and outcome fields instead. Neither the generic at-rest
+auditor below nor a no-new-JSONL assertion proves the updater's complete crash matrix, historical
+journal retirement, same-port transfer, or final support reconstruction. Those remain separately
+named acceptance gates in the repair ledger.
+
+### Existing confidentiality auditor
+
 `scripts/check-local-state.mjs` is a deterministic, read-only auditor. It imports only `node:fs` and
 `node:sqlite`, requires no vault key (every encryption check reads the on-disk sealed markers the
 product itself writes), and never mutates the tree.
 
-- `npm run audit:local-state -- --state-dir <path>` — audit a real `.keiko` tree (maintainer).
+- `keiko audit local-state --state-dir <path>` — audit a real `.keiko` tree from a packaged install
+  (operator). Same module, same output, same exit codes; no checkout required (KEIKO-0230).
+- `npm run audit:local-state -- --state-dir <path>` — the same audit from a checkout (maintainer).
 - `npm run check:local-state` — maintainer self-test that generates a genuinely-encrypted healthy
   fixture and a deliberately drifted one, then asserts the auditor passes the former and detects the
   drift in the latter.

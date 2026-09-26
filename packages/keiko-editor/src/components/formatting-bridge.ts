@@ -34,6 +34,8 @@ import {
 } from "./completion-bridge.js";
 import {
   classifyResultKind,
+  composeDisposers,
+  controllerForToken,
   runLanguageBridgeCall,
   type EditorLanguageIntelligenceReporter,
 } from "./language-intelligence.js";
@@ -129,17 +131,6 @@ function buildRequest(
   };
 }
 
-function controllerForToken(token: MonacoCancellationToken): AbortController {
-  const controller = new AbortController();
-  if (token.isCancellationRequested) {
-    controller.abort();
-  }
-  token.onCancellationRequested(() => {
-    controller.abort();
-  });
-  return controller;
-}
-
 const EMPTY_EDITS: readonly MonacoTextEdit[] = [];
 
 /**
@@ -162,7 +153,7 @@ export function createKeikoFormattingProvider(
       sequence += 1;
       const versionBefore = model.getVersionId();
       const request = buildRequest(deps, documentUri, options, sequence, versionBefore);
-      const controller = controllerForToken(token);
+      const { controller, dispose } = controllerForToken(token);
       const query: EditorFormattingQuery = { request, documentText: model.getValue() };
       return runLanguageBridgeCall<EditorFormattingResponse, readonly MonacoTextEdit[]>({
         operation: "formatting",
@@ -184,6 +175,8 @@ export function createKeikoFormattingProvider(
           return decision.status === "apply" ? editsToMonaco(decision.edits) : EMPTY_EDITS;
         },
         report: deps.report,
+      }).finally(() => {
+        dispose();
       });
     },
   };
@@ -197,16 +190,6 @@ export interface RegisterKeikoFormattingProviderArgs {
   readonly streamId: string;
   readonly newRequestId: () => string;
   readonly report?: EditorLanguageIntelligenceReporter | undefined;
-}
-
-function composeDisposers(disposers: readonly MonacoDisposable[]): MonacoDisposable {
-  return {
-    dispose(): void {
-      for (const disposer of disposers) {
-        disposer.dispose();
-      }
-    },
-  };
 }
 
 /**

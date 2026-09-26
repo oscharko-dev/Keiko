@@ -5,13 +5,13 @@
 // screening partitions safe vs rejected candidates (AC3).
 
 import { describe, expect, it } from "vitest";
-import {
-  asEnhancedPromptId,
-  validatePromptSafetyAssessment,
-  type EnhancedPrompt,
-  type PromptSafetyAssessment,
-  type RawPromptInput,
+import type {
+  EnhancedPrompt,
+  PromptSafetyAssessment,
+  RawPromptInput,
 } from "@oscharko-dev/keiko-contracts";
+import { asEnhancedPromptId } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
+import { validatePromptSafetyAssessment } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-safety";
 import { generatePromptCandidates } from "../candidates.js";
 import { generateEnhancedPrompt } from "../generator.js";
 import { planPromptEnhancement } from "../planner.js";

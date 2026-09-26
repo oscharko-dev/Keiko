@@ -80,7 +80,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 
 import {
-  WORKSPACE_INDEX_SNAPSHOT_VERSION,
+  buildWorkspaceIndexSnapshot,
   createFileWorkspaceIndexStore,
   type WorkspaceIndexSnapshot,
 } from "./workspaceIndex.js";
@@ -98,12 +98,13 @@ function storageGenerationId(key: Buffer): string {
 }
 
 function snapshot(scopePath: string): WorkspaceIndexSnapshot {
-  return {
-    version: WORKSPACE_INDEX_SNAPSHOT_VERSION,
-    relativePaths: [],
-    policyMode: "workspace-root-default",
-    applyGitignore: true,
-    omitLowValueWorkspaceFiles: true,
+  return buildWorkspaceIndexSnapshot({
+    scope: { relativePaths: [] },
+    policy: {
+      policyMode: "workspace-root-default",
+      applyGitignore: true,
+      omitLowValueWorkspaceFiles: true,
+    },
     maxBytesPerFileScanned: 1024,
     maxFilesScanned: 100,
     discovery: {
@@ -116,7 +117,7 @@ function snapshot(scopePath: string): WorkspaceIndexSnapshot {
       truncated: false,
     },
     records: [{ scopePath, sizeBytes: 1, kind: "text" }],
-  };
+  });
 }
 
 function snapshotFiles(runtimeDir: string): readonly string[] {

@@ -156,20 +156,41 @@ export interface GitMergeStrategyEligibility {
   readonly requestedEligible: boolean;
 }
 
+/** Strategies that append a merge commit, so a base branch requiring linear history refuses them.
+ * `provider-default` is included deliberately: the provider chooses the method, so Keiko cannot
+ * promise a linear result — an observed GitHub merge with no explicit method produced a merge
+ * commit. Under linear history the operator must name a compatible strategy instead. */
+const NON_LINEAR_MERGE_STRATEGIES: ReadonlySet<GitDeliveryMergeStrategyHint> = new Set([
+  "merge-commit",
+  "provider-default",
+]);
+
+/** Base-branch rules that constrain which strategies can succeed at all. */
+export interface GitMergeStrategyBaseConstraints {
+  readonly linearHistoryRequired?: boolean | undefined;
+}
+
 // "provider-default" defers strategy choice to the provider; it is eligible iff policy permits it AND at
 // least one CONCRETE strategy is eligible (so the provider has something to default to). Concrete
-// strategies are eligible iff both policy and provider allow them.
+// strategies are eligible iff both policy and provider allow them, and iff the base branch's own
+// history rule can accept their result — a strategy the base will reject is not eligible, so the
+// existing `strategy-unavailable` blocker names it before a doomed merge is dispatched.
 export function deriveEligibleMergeStrategies(
   requested: GitDeliveryMergeStrategyHint,
   policy: GitMergeStrategyPolicy,
   providerCapable: readonly GitDeliveryMergeStrategyHint[],
+  base: GitMergeStrategyBaseConstraints = {},
 ): GitMergeStrategyEligibility {
   const policySet = new Set(policy.allowedStrategies);
   const providerSet = new Set(providerCapable);
+  const linearOnly = base.linearHistoryRequired === true;
+  const permitted = (s: GitDeliveryMergeStrategyHint): boolean =>
+    !linearOnly || !NON_LINEAR_MERGE_STRATEGIES.has(s);
   const concrete = GIT_DELIVERY_MERGE_STRATEGY_HINTS.filter(
-    (s) => s !== "provider-default" && policySet.has(s) && providerSet.has(s),
+    (s) => s !== "provider-default" && policySet.has(s) && providerSet.has(s) && permitted(s),
   );
-  const providerDefaultEligible = policySet.has("provider-default") && concrete.length > 0;
+  const providerDefaultEligible =
+    policySet.has("provider-default") && concrete.length > 0 && permitted("provider-default");
   const eligible: GitDeliveryMergeStrategyHint[] = [...concrete];
   if (providerDefaultEligible) {
     eligible.push("provider-default");
@@ -505,12 +526,57 @@ function isBlockerArray(value: unknown): value is readonly GitMergeReadinessBloc
   return Array.isArray(value) && value.every(isGitMergeReadinessBlocker);
 }
 
+function hasBlockingBlocker(blockers: readonly { readonly severity: string }[]): boolean {
+  return blockers.some((blocker) => blocker.severity === "blocking");
+}
+
+// The only code collectMergeAdvisory ever constructs via advisory(...) — kept immediately beside
+// that function so the two cannot silently drift. Every other blocker code is only ever
+// constructed via blocking(...); hasBlockingBlocker above trusts the SUPPLIED severity, so a
+// payload could relabel a code that is always blocking in practice (e.g. "conflicts") as
+// "advisory", clear hasBlockingBlocker's check, and pass mergeable:true for a genuinely conflicted
+// PR. "checks-failing" is intentionally NOT "advisory-only": collectMergeBlocking also emits it as
+// blocking when the PR is not yet ready, so this set names what advisory CAN be, not a fixed
+// per-code severity.
+const CODES_COLLECT_MERGE_ADVISORY_CAN_EMIT: ReadonlySet<GitMergeReadinessBlockerCode> = new Set([
+  "checks-failing",
+]);
+
+function hasIllegitimateAdvisoryBlocker(blockers: readonly GitMergeReadinessBlocker[]): boolean {
+  return blockers.some(
+    (blocker) =>
+      blocker.severity === "advisory" && !CODES_COLLECT_MERGE_ADVISORY_CAN_EMIT.has(blocker.code),
+  );
+}
+
+// "Severity-ranked" means every blocking entry precedes every advisory one: once an advisory has
+// been seen, no blocking entry may follow.
+function isSeverityRanked(blockers: readonly { readonly severity: string }[]): boolean {
+  let sawAdvisory = false;
+  for (const blocker of blockers) {
+    if (blocker.severity === "advisory") {
+      sawAdvisory = true;
+    } else if (sawAdvisory) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// The two documented invariants of GitMergeReadinessSummary — `mergeable` is true iff there are no
+// BLOCKING blockers, and every blocking entry precedes every advisory one — were documented but not
+// checked, so a summary crossing a package or process boundary could assert `mergeable: true` while
+// carrying a blocking conflict. In-package derivations recompute from `blockers` and were safe, but
+// reading the boolean named `mergeable` is the natural thing to do, and it was free to lie.
 export function isGitMergeReadinessSummary(value: unknown): value is GitMergeReadinessSummary {
   return (
     isRecord(value) &&
     value.schemaVersion === GIT_MERGE_SCHEMA_VERSION &&
     isBoolean(value.mergeable) &&
-    isBlockerArray(value.blockers)
+    isBlockerArray(value.blockers) &&
+    value.mergeable === !hasBlockingBlocker(value.blockers) &&
+    !hasIllegitimateAdvisoryBlocker(value.blockers) &&
+    isSeverityRanked(value.blockers)
   );
 }
 

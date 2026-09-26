@@ -13,7 +13,7 @@
  * whole rename — and applying 128 of 400 files leaves the workspace referring to a symbol that no
  * longer exists. {@link isRenameChangesetComplete} is the host's gate for Accept.
  */
-import type { LanguageRenameChangeset } from "@oscharko-dev/keiko-contracts";
+import type { LanguageRenameChangeset, LanguageTextEdit } from "@oscharko-dev/keiko-contracts";
 
 import {
   buildPatchPreview,
@@ -23,6 +23,7 @@ import {
   type PatchPreviewSource,
   type PatchPreviewSourceTruncation,
 } from "./patch-preview.js";
+import { fromLanguagePosition } from "./position-adapters.js";
 import type { EditorPatchFileChange, EditorPreviewedPatch, EditorTextEdit } from "./types.js";
 
 export interface BuildRenamePreviewInput {
@@ -32,17 +33,11 @@ export interface BuildRenamePreviewInput {
   readonly patchId?: string | undefined;
 }
 
-function toEditorTextEdit(edit: {
-  readonly range: {
-    readonly start: { readonly line: number; readonly character: number };
-    readonly end: { readonly line: number; readonly character: number };
-  };
-  readonly newText: string;
-}): EditorTextEdit {
+function toEditorTextEdit(edit: LanguageTextEdit): EditorTextEdit {
   return {
     range: {
-      start: { line: edit.range.start.line, column: edit.range.start.character },
-      end: { line: edit.range.end.line, column: edit.range.end.character },
+      start: fromLanguagePosition(edit.range.start),
+      end: fromLanguagePosition(edit.range.end),
     },
     newText: edit.newText,
   };

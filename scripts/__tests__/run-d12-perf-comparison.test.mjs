@@ -411,19 +411,47 @@ describe("D12 performance comparison runner", () => {
     ).rejects.toThrow(/baseline HEAD .* does not match pinned baseline/u);
   });
 
-  it("rejects non-ancestor generation before executing either harness", async () => {
+  it("allows the pinned baseline to be a squash-only foreign commit", async () => {
+    const paths = fixture();
+    const calls = [];
+
+    const result = await runD12Comparison(invocation(paths), {
+      ...preflightDependencies(paths),
+      buildComparison: (args) => ({ args }),
+      createProvisioning: () => "test provisioning",
+      isAncestor: () => false,
+      runHarness: ({ outputPath, recorded, revision, sequence }) => {
+        calls.push(revision);
+        if (recorded) {
+          writeFileSync(outputPath, `${JSON.stringify(rawArtifact(revision, sequence))}\n`);
+        }
+      },
+    });
+    const manifest = JSON.parse(readFileSync(result.manifestPath, "utf8"));
+
+    expect(result.comparison.args).toContain("--self-check");
+    expect(manifest.repetitions[0].baseline.checkoutHead).toBe(BASELINE_COMMIT);
+    expect(manifest.repetitions[0].candidate.checkoutHead).toBe(CANDIDATE_COMMIT);
+    expect(manifest.repetitions[0].baseline.sourceTreeSha256).toBe(SOURCE_DIGESTS.baseline);
+    expect(manifest.repetitions[0].candidate.sourceTreeSha256).toBe(SOURCE_DIGESTS.candidate);
+    expect(calls).toContain("baseline");
+    expect(calls).toContain("candidate");
+  });
+
+  it("still rejects a dirty foreign baseline before executing either harness", async () => {
     const paths = fixture();
     let executed = false;
     await expect(
       runD12Comparison(invocation(paths), {
-        getHead: (root) => (root === paths.baselineRoot ? BASELINE_COMMIT : CANDIDATE_COMMIT),
+        ...preflightDependencies(paths),
         isAncestor: () => false,
-        listDirtyPaths: () => [],
+        listDirtyPaths: (root) =>
+          root === paths.baselineRoot ? ["packages/keiko-ui/src/x.ts"] : [],
         runHarness: () => {
           executed = true;
         },
       }),
-    ).rejects.toThrow(/pinned baseline commit is not an ancestor/u);
+    ).rejects.toThrow(/baseline performance subject is dirty/u);
     expect(executed).toBe(false);
   });
 

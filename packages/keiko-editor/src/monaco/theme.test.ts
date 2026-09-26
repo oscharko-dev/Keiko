@@ -18,6 +18,7 @@ import {
   type EditorThemeVariant,
   type ResolvedEditorThemeTokens,
 } from "./theme.js";
+import { stripBlockComments } from "./test-support.js";
 
 const require = createRequire(import.meta.url);
 
@@ -112,15 +113,15 @@ describe("theme token contract", () => {
   });
 
   it("does not map the diff-gutter tokens to Monaco theme colours (handled by decorations in #1195)", () => {
-    // Their natural targets are VS Code SCM colours monaco-editor 0.55.1 standalone never registers,
+    // Their natural targets are VS Code SCM colours monaco-editor 0.56.0 standalone never registers,
     // so a theme mapping would be an inert no-op. They stay surfaced in globals.css for the diff editor.
     expect(CHROME_TOKEN_COLOR_IDS["--ed-diff-ins-gutter"]).toBeUndefined();
     expect(CHROME_TOKEN_COLOR_IDS["--ed-diff-rem-gutter"]).toBeUndefined();
     expect(CHROME_TOKEN_COLOR_IDS["--ed-diff-chg-gutter"]).toBeUndefined();
   });
 
-  it("maps only Monaco 0.55 registered colour ids", () => {
-    const monacoRoot = dirname(require.resolve("monaco-editor/package.json"));
+  it("maps only Monaco 0.56 registered colour ids", () => {
+    const monacoRoot = resolve(dirname(require.resolve("monaco-editor")), "..", "..");
     const registered = new Set<string>();
     const scan = (dir: string): void => {
       const stat = statSync(dir);
@@ -288,11 +289,6 @@ describe("registerKeikoEditorTheme", () => {
     ]);
   });
 });
-
-/** Remove block/JSDoc comments so the scan inspects code, not documentation prose. */
-function stripBlockComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, "");
-}
 
 describe("theme code carries no colour literals (Issue #1193 AC)", () => {
   it("theme.ts maps tokens only — no hex/oklch/rgb/color-mix literal", () => {

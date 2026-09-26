@@ -115,17 +115,24 @@ describe("dev-lane secure workspace text read port", () => {
     expect(["process-failed", "protocol-invalid", "timeout"]).toContain(result.reason);
   });
 
-  it("rejects an unsupported host platform before verification", async () => {
+  it.each([
+    [
+      "a Linux host carrying the macOS dev artifact",
+      { os: "linux", arch: "x64" },
+      "artifact-unverified",
+    ],
+    ["an unsupported host platform", { os: "plan9", arch: "amd64" }, "unsupported-platform"],
+  ] as const)("rejects %s before helper execution", async (_scenario, platform, reason) => {
     const fixture = stageFixture();
     const port = createDevLaneSecureWorkspaceTextReadPort({
       binding: fixture.binding,
       resolveWorkspaceRoot: () => fixture.workspaceRoot,
       safeCwd: fixture.safeCwd,
-      platform: { os: "linux", arch: "x64" },
+      platform,
     });
     await expect(port.readText({ relativePath: "src/example.ts" })).resolves.toEqual({
       ok: false,
-      reason: "unsupported-platform",
+      reason,
     });
   });
 });

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { ScriptedGovernedTools, type ScriptedToolPhase } from "./_governedTools.js";
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import {
   chmodSync,
@@ -23,10 +24,14 @@ import type {
   ProductionOpenCodeBackendInput,
 } from "../productionOpenCodeBackend.js";
 import { parseOpenCodeHistory } from "../opencodeProtocol.js";
-import { OPENCODE_MODEL_VISIBLE_TOOLS, OPENCODE_PINNED_VERSION } from "../opencodeToolSchemas.js";
 import {
-  OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
-  projectOpenCodeProtocolSurface,
+  OPENCODE_MODEL_VISIBLE_TOOLS,
+  OPENCODE_PINNED_VERSION,
+  projectedGatewaySchema,
+} from "../opencodeToolSchemas.js";
+import {
+  OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
+  projectOpenCodeV2ProtocolSurface,
 } from "../opencodeProtocolSurface.js";
 import {
   createRuntimeProcessSupervisor,
@@ -40,195 +45,47 @@ import {
 const BINARY = process.env.KEIKO_OPENCODE_REAL_BINARY;
 const RESOURCE_ROOT = process.env.KEIKO_OPENCODE_REAL_RESOURCE_ROOT;
 const RECEIPT = `sha256:${"0".repeat(64)}`;
-const PROTOCOL_SCHEMA_SHA256 = "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de";
+const PROTOCOL_SCHEMA_SHA256 = "1362671d8cfdcb925b3a9fd61eaa20152e4c587746445a0b03504674b25c88ec";
 const MAX_FAKE_BODY_BYTES = 1024 * 1024;
 const MAX_FAKE_AGENT_STEPS = 12;
 const FAKE_SESSION_ID = "ses_functional0000000001";
 
-/** OpenAPI projection served by the scripted child; it projects to the pinned handshake digest. */
-const FUNCTIONAL_OPENCODE_OPENAPI = {
-  openapi: "3.1.0",
-  paths: {
-    "/global/health": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: {
-          "200": { $ref: "#/components/responses/Health" },
-          "401": { $ref: "#/components/responses/Unauthorized" },
-        },
-      },
-    },
-    "/global/event": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/EventStream" } },
-      },
-    },
-    "/doc": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/sync/history": {
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/History" } },
-      },
-    },
-    "/session": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Sessions" } },
-      },
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Session" } },
-      },
-    },
-    "/session/status": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/SessionStatus" } },
-      },
-    },
-    "/session/{sessionID}/prompt_async": {
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/session/{sessionID}/abort": {
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/permission": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/permission/{requestID}/reply": {
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/question": {
-      get: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/question/{requestID}/reply": {
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-    "/question/{requestID}/reject": {
-      post: {
-        security: [{ basicAuth: [] }],
-        responses: { "200": { $ref: "#/components/responses/Health" } },
-      },
-    },
-  },
-  components: {
-    securitySchemes: { basicAuth: { type: "http", scheme: "basic" } },
-    responses: {
-      Health: {
-        content: { "application/json": { schema: { $ref: "#/components/schemas/Health" } } },
-      },
-      Unauthorized: { description: "unauthorized" },
-      EventStream: { content: { "text/event-stream": { schema: { type: "string" } } } },
-      History: {
-        content: { "application/json": { schema: { $ref: "#/components/schemas/History" } } },
-      },
-      Sessions: {
-        content: { "application/json": { schema: { $ref: "#/components/schemas/SessionList" } } },
-      },
-      Session: {
-        content: { "application/json": { schema: { $ref: "#/components/schemas/Session" } } },
-      },
-      SessionStatus: {
-        content: {
-          "application/json": { schema: { $ref: "#/components/schemas/SessionStatusMap" } },
-        },
-      },
-    },
-    schemas: {
-      Health: {
-        type: "object",
-        required: ["healthy", "version"],
-        properties: { healthy: { type: "boolean" }, version: { type: "string" } },
-      },
-      History: { type: "array", items: { $ref: "#/components/schemas/Event" } },
-      Event: {
-        type: "object",
-        required: ["id", "aggregate_id", "seq", "type", "data"],
-        properties: {
-          id: { type: "string" },
-          aggregate_id: { type: "string" },
-          seq: { type: "integer" },
-          type: { type: "string" },
-          data: { type: "object" },
-        },
-      },
-      Session: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
-      SessionList: {
-        type: "array",
-        items: { type: "object", required: ["id"], properties: { id: { type: "string" } } },
-      },
-      SessionStatusMap: {
-        type: "object",
-        additionalProperties: { $ref: "#/components/schemas/SessionStatus" },
-      },
-      SessionStatus: {
-        oneOf: [
-          { type: "object", required: ["type"], properties: { type: { const: "idle" } } },
-          { type: "object", required: ["type"], properties: { type: { const: "busy" } } },
-          {
-            type: "object",
-            required: ["type", "attempt", "message", "next"],
-            properties: {
-              type: { const: "retry" },
-              attempt: { type: "integer" },
-              message: { type: "string" },
-              next: { type: "number" },
-            },
-          },
-        ],
-      },
-    },
-  },
-} as const;
-
-const PROTOCOL_HANDSHAKE_DIGEST = projectOpenCodeProtocolSurface(
+/** Captured OpenCode 2.0.10 protocol projection served by the scripted V2 child. */
+const protocolFixtureUrl = new URL(
+  "../opencodeProtocolSurface.opencode-2.0.10.fixture.json",
+  import.meta.url,
+);
+// The e2e server compiles this harness under tests/e2e/servers/dist without copying JSON assets.
+// Its workspace root remains the repo root, where the checked-in fixture is authoritative.
+const protocolFixturePath = existsSync(protocolFixtureUrl)
+  ? protocolFixtureUrl
+  : resolve(
+      process.cwd(),
+      "packages/keiko-server/src/coding-runtime/opencodeProtocolSurface.opencode-2.0.10.fixture.json",
+    );
+const FUNCTIONAL_OPENCODE_OPENAPI: unknown = JSON.parse(readFileSync(protocolFixturePath, "utf8"));
+const PROTOCOL_HANDSHAKE_DIGEST = projectOpenCodeV2ProtocolSurface(
   FUNCTIONAL_OPENCODE_OPENAPI,
 ).digest;
 
-/** OpenCode v1.17.17 strips unsupported JSON Schema keywords before forwarding this tool. */
-const VERIFICATION_PROJECTED_SCHEMA = {
-  type: "object",
-  properties: {
-    verifierId: {
-      type: "string",
-      enum: ["test", "targeted-test", "typecheck", "lint", "build"],
-    },
-  },
-  required: ["verifierId"],
-} as const;
+/** One OpenAI-compatible function-tool entry a scripted child advertises to the gateway. */
+export interface FunctionalGatewayTool {
+  readonly type: "function";
+  readonly function: { readonly name: string; readonly parameters: unknown };
+}
 
-/** The exact model-visible tool projection an OpenCode child presents to the gateway. */
-function functionalGatewayTools(): readonly Record<string, unknown>[] {
+/**
+ * The exact model-visible tool projection an OpenCode child presents to the gateway. Exported so a
+ * test can derive a deliberately incomplete projection (e.g. `.filter(...)` out one tool) for a
+ * live fail-closed proof against the real sidecar gateway route, without restating this mapping.
+ * Derives every entry's parameters from `opencodeToolSchemas.ts`'s own `projectedGatewaySchema`
+ * (the single source for OpenCode's v2.0.10 wire projection) so this scripted advertisement can
+ * never drift from the incoming trust check it is meant to satisfy.
+ */
+export function functionalGatewayTools(): readonly FunctionalGatewayTool[] {
   return OPENCODE_MODEL_VISIBLE_TOOLS.map(({ name, parameters }) => ({
     type: "function",
-    function: {
-      name,
-      parameters: name === "keiko_verification" ? VERIFICATION_PROJECTED_SCHEMA : parameters,
-    },
+    function: { name, parameters: projectedGatewaySchema(name, parameters) },
   }));
 }
 
@@ -263,7 +120,7 @@ export function stagedFunctionalPortable(testRoot: string): FunctionalPortableOp
   // surface pin, not onto the scripted harness surface digest.
   const sidecar = {
     ...verification(installRoot, target),
-    protocolHandshakeDigest: OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
+    protocolHandshakeDigest: OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256,
   };
   return {
     evidenceClass: "functional-not-platform-qualified",
@@ -385,7 +242,7 @@ function verification(
     sbomEvidenceSha256: digest(join(installRoot, "payload/evidence/sbom.cdx.json")),
     protocolSchemaRawSha256: PROTOCOL_SCHEMA_SHA256,
     protocolHandshakeDigest: PROTOCOL_HANDSHAKE_DIGEST,
-    protocolHandshakeAlgorithm: "keiko-opencode-protocol-surface-v1",
+    protocolHandshakeAlgorithm: "keiko-opencode-protocol-surface-v2",
     availability: {
       redistributionApproved: true,
       payloadPresent: true,
@@ -411,7 +268,7 @@ function verificationSummary(
     upstreamName: "opencode",
     upstreamVersion: OPENCODE_PINNED_VERSION,
     adapterName: "keiko-coding-sidecar",
-    adapterVersion: "1",
+    adapterVersion: "2",
     protocolVersion: "http-sse",
     platformTarget: target,
     payloadSha256,
@@ -513,13 +370,13 @@ interface FakeHistoryRow {
   readonly data: Record<string, unknown>;
 }
 
-interface FakeToolCall {
+export interface FakeToolCall {
   readonly id: string;
   readonly name: string;
   readonly args: Record<string, unknown>;
 }
 
-interface FakeGatewayTurn {
+export interface FakeGatewayTurn {
   readonly content: string;
   readonly toolCalls: readonly FakeToolCall[];
 }
@@ -541,6 +398,7 @@ const FAKE_TOOL_ACTIONS: Readonly<
   keiko_changeset_edit: { action: "edit", arguments: ["changeset"] },
   keiko_verification: { action: "verification", arguments: ["verifierId"] },
   keiko_research_fetch: { action: "egress", arguments: ["target"] },
+  keiko_skill_discover: { action: "skill-discover", arguments: [] },
   keiko_skill: { action: "skill", arguments: ["skillId"] },
   keiko_child_agent: { action: "child-agent", arguments: ["objective", "maxToolCalls"] },
 };
@@ -550,7 +408,16 @@ const FAKE_TOOL_ACTIONS: Readonly<
  * per-run Basic-auth secret, bridges gateway tool calls to the governed tool facade, and surfaces
  * `question` tool calls through the /question endpoints — exactly the loop the real binary runs.
  */
+/** Test-only seam: plays the model's own tool-call selection for `FakeOpenCodeChild.callGateway`. */
+interface ScriptedModelTurnInput {
+  readonly modelTurn: (transcript: readonly Record<string, unknown>[]) => FakeGatewayTurn;
+  readonly toolFacadeFetch?: typeof globalThis.fetch;
+}
+
 class FakeOpenCodeChild {
+  private readonly governedTools: ScriptedGovernedTools | undefined;
+  private readonly scriptedModelTurn: ScriptedModelTurnInput["modelTurn"] | undefined;
+  private readonly gatewayToolsOverride: readonly FunctionalGatewayTool[] | undefined;
   private readonly password: string;
   private readonly gatewayUrl: string;
   private readonly gatewayCapability: string;
@@ -577,7 +444,30 @@ class FakeOpenCodeChild {
   private closed = false;
   private closing: Promise<void> | undefined;
 
-  public constructor(env: Readonly<Record<string, string>>) {
+  public constructor(
+    env: Readonly<Record<string, string>>,
+    generatedTools = false,
+    observePhase?: (event: ScriptedToolPhase) => void,
+    scriptedModel?: ScriptedModelTurnInput,
+    gatewayToolsOverride?: readonly FunctionalGatewayTool[],
+    pluginVersion: "v1" | "v2" = "v1",
+  ) {
+    this.gatewayToolsOverride = gatewayToolsOverride;
+    this.governedTools = generatedTools
+      ? new ScriptedGovernedTools({
+          env,
+          pluginVersion,
+          ...(observePhase === undefined ? {} : { observePhase }),
+          sessionId: FAKE_SESSION_ID,
+          broadcast: (type, properties): void => {
+            this.broadcast(type, properties);
+          },
+          ...(scriptedModel?.toolFacadeFetch === undefined
+            ? {}
+            : { fetch: scriptedModel.toolFacadeFetch }),
+        })
+      : undefined;
+    this.scriptedModelTurn = scriptedModel?.modelTurn;
     this.password = requiredEnv(env, "OPENCODE_SERVER_PASSWORD");
     this.gatewayUrl = requiredEnv(env, "KEIKO_MODEL_GATEWAY_URL");
     this.gatewayCapability = requiredEnv(env, "KEIKO_MODEL_GATEWAY_CAPABILITY");
@@ -625,6 +515,7 @@ class FakeOpenCodeChild {
   private async shutdown(): Promise<void> {
     this.closed = true;
     this.turnController?.abort();
+    this.governedTools?.close();
     for (const pending of this.questions.values()) pending.settle({ kind: "rejected" });
     this.questions.clear();
     for (const client of this.sseClients) client.destroy();
@@ -660,48 +551,66 @@ class FakeOpenCodeChild {
 
   // eslint-disable-next-line complexity -- the finite pinned endpoint table is intentionally explicit.
   private route(method: string, path: string, body: string, response: ServerResponse): void {
-    if (method === "GET" && path === "/global/health") {
-      json(response, { healthy: true, version: OPENCODE_PINNED_VERSION });
-    } else if (method === "GET" && path === "/doc") {
+    if (method === "GET" && path === "/api/info") {
+      json(response, { version: OPENCODE_PINNED_VERSION });
+    } else if (method === "GET" && path === "/openapi.json") {
       json(response, FUNCTIONAL_OPENCODE_OPENAPI);
-    } else if (method === "GET" && path === "/global/event") {
+    } else if (method === "GET" && path === "/api/event") {
       this.openEvents(response);
-    } else if (method === "POST" && path === "/session") {
+    } else if (method === "POST" && path === "/api/session") {
       this.createSession(response);
-    } else if (method === "GET" && path === "/session") {
-      json(response, [{ id: FAKE_SESSION_ID }]);
-    } else if (method === "GET" && path === "/session/status") {
-      json(response, this.busy ? { [FAKE_SESSION_ID]: { type: "busy" } } : {});
-    } else if (method === "GET" && path === "/question") {
-      json(
-        response,
-        [...this.questions.values()].map((pending) => pending.row),
-      );
-    } else if (method === "POST" && path === "/sync/history") {
-      json(response, this.historyRows);
+    } else if (method === "GET" && path === "/api/session") {
+      json(response, { data: [{ id: FAKE_SESSION_ID }] });
+    } else if (method === "GET" && path === "/api/session/active") {
+      json(response, { data: this.busy ? { [FAKE_SESSION_ID]: { type: "busy" } } : {} });
+    } else if (method === "GET" && path === "/api/permission/request") {
+      json(response, { data: this.governedTools?.rows() ?? [] });
+    } else if (method === "GET" && path === "/api/form") {
+      json(response, { data: [...this.questions.values()].map((pending) => pending.row) });
+    } else if (method === "GET" && path === `/api/session/${FAKE_SESSION_ID}/message`) {
+      json(response, { data: this.v2Messages().slice().reverse() });
+    } else if (this.routePermission(method, path, body, response)) {
+      return;
     } else {
       this.routeDynamic(method, path, body, response);
     }
   }
 
+  private routePermission(
+    method: string,
+    path: string,
+    body: string,
+    response: ServerResponse,
+  ): boolean {
+    const permission = /^\/api\/session\/[^/]+\/permission\/([^/]+)\/reply$/u.exec(path);
+    if (method === "POST" && permission !== null) {
+      json(response, { data: this.governedTools?.reply(permission[1] ?? "", body) ?? false });
+      return true;
+    }
+    return false;
+  }
+
   private routeDynamic(method: string, path: string, body: string, response: ServerResponse): void {
-    const prompt = /^\/session\/([^/]+)\/prompt_async$/u.exec(path);
+    const prompt = /^\/api\/session\/([^/]+)\/prompt$/u.exec(path);
     if (method === "POST" && prompt !== null) {
       this.acceptPrompt(prompt[1] ?? "", body, response);
       return;
     }
-    const abort = /^\/session\/([^/]+)\/abort$/u.exec(path);
+    const abort = /^\/api\/session\/([^/]+)\/interrupt$/u.exec(path);
     if (method === "POST" && abort !== null) {
       this.turnController?.abort();
-      json(response, true);
+      json(response, { data: {} });
       return;
     }
-    const question = /^\/question\/([^/]+)\/(reply|reject)$/u.exec(path);
-    if (method === "POST" && question !== null) {
-      this.settleQuestion(question[1] ?? "", question[2] === "reply", body, response);
-      return;
-    }
+    if (this.routeForm(method, path, body, response)) return;
     response.writeHead(404).end();
+  }
+
+  private routeForm(method: string, path: string, body: string, response: ServerResponse): boolean {
+    const form = /^\/api\/session\/[^/]+\/form\/([^/]+)(?:\/reply)?$/u.exec(path);
+    if (form === null || (method !== "POST" && method !== "DELETE")) return false;
+    this.settleQuestion(form[1] ?? "", method === "POST", body, response);
+    return true;
   }
 
   private acceptPrompt(sessionId: string, body: string, response: ServerResponse): void {
@@ -709,8 +618,8 @@ class FakeOpenCodeChild {
       response.writeHead(404).end();
       return;
     }
-    const text = promptText(body);
-    response.writeHead(204).end();
+    const text = functionalPromptText(body);
+    json(response, { data: {} });
     const controller = new AbortController();
     this.turnController = controller;
     this.turnTail = this.turnTail.then(() => this.runTurn(text, controller));
@@ -731,7 +640,7 @@ class FakeOpenCodeChild {
     pending.settle(
       answered ? { kind: "answered", answers: parseAnswers(body) } : { kind: "rejected" },
     );
-    json(response, true);
+    json(response, { data: {} });
   }
 
   private createSession(response: ServerResponse): void {
@@ -742,7 +651,7 @@ class FakeOpenCodeChild {
         info: { id: FAKE_SESSION_ID },
       });
     }
-    json(response, { id: FAKE_SESSION_ID });
+    json(response, { data: { id: FAKE_SESSION_ID } });
   }
 
   private openEvents(response: ServerResponse): void {
@@ -762,9 +671,23 @@ class FakeOpenCodeChild {
     properties: Record<string, unknown>,
   ): void {
     this.liveEventSequence += 1;
-    const payload = { id: `evt_live${String(this.liveEventSequence)}`, type, properties };
+    const payload = {
+      id: `evt_live${String(this.liveEventSequence)}`,
+      type:
+        type === "session.status"
+          ? "session.execution.started"
+          : type === "session.idle"
+            ? "session.execution.succeeded"
+            : type === "question.asked"
+              ? "form.created"
+              : type,
+      data:
+        type === "question.asked"
+          ? { form: { id: properties.id, sessionID: properties.sessionID } }
+          : properties,
+    };
     if (!client.writableEnded && !client.destroyed) {
-      client.write(`data: ${JSON.stringify({ payload })}\n\n`);
+      client.write(`data: ${JSON.stringify(payload)}\n\n`);
     }
   }
 
@@ -780,6 +703,10 @@ class FakeOpenCodeChild {
     if (!parsed.ok) this.historyFixtureFailures.push(`${type}:${parsed.reason}`);
     this.historyRows.push(row);
     this.broadcast("history.updated", {});
+  }
+
+  private v2Messages(): readonly Readonly<Record<string, unknown>>[] {
+    return mergeV2Messages(this.historyRows.flatMap(v2MessageFromHistoryRow));
   }
 
   private async runTurn(text: string, controller: AbortController): Promise<void> {
@@ -858,7 +785,7 @@ class FakeOpenCodeChild {
       sessionID: FAKE_SESSION_ID,
       info: assistantHistoryInfo(messageId, parentId, { created }),
     });
-    for (const [index, chunk] of splitFunctionalText(expandFunctionalDisplayText(text)).entries()) {
+    for (const [index, chunk] of splitFunctionalText(text).entries()) {
       this.appendHistory("message.part.updated.1", {
         sessionID: FAKE_SESSION_ID,
         part: {
@@ -914,7 +841,29 @@ class FakeOpenCodeChild {
     return this.fixtureTimeMs;
   }
 
+  /**
+   * Runs one user turn through the REAL agent loop (`callGateway` -> `executeToolCall` ->
+   * `callToolFacade` -> the governed generated-tool bundle) driven directly, in-process, rather
+   * than through the HTTP `prompt_async` endpoint -- the scripted model is a same-process test
+   * double, so there is no process boundary to cross. Resolves once the turn ends (the scripted
+   * model returns no further tool calls) and returns every completed tool part the turn appended
+   * to durable history, in call order -- the same tool-event evidence a real transcript produces.
+   */
+  public async runScriptedUserTurn(
+    text: string,
+  ): Promise<readonly ScriptedGovernedTranscriptToolResult[]> {
+    const before = this.historyRows.length;
+    const controller = new AbortController();
+    this.turnController = controller;
+    await this.runTurn(text, controller);
+    return this.historyRows.slice(before).flatMap((row) => completedToolResult(row));
+  }
+
   private async callGateway(signal: AbortSignal): Promise<FakeGatewayTurn> {
+    if (this.scriptedModelTurn !== undefined) {
+      if (signal.aborted) throw new Error("functional-gateway-denied");
+      return this.scriptedModelTurn([...this.transcript]);
+    }
     const response = await fetch(`${this.gatewayUrl}/chat/completions`, {
       method: "POST",
       signal,
@@ -925,7 +874,7 @@ class FakeOpenCodeChild {
       body: JSON.stringify({
         model: "coding",
         messages: this.transcript,
-        tools: functionalGatewayTools(),
+        tools: this.gatewayToolsOverride ?? functionalGatewayTools(),
       }),
     });
     if (!response.ok) throw new Error("functional-gateway-denied");
@@ -934,19 +883,18 @@ class FakeOpenCodeChild {
 
   private executeToolCall(call: FakeToolCall, signal: AbortSignal): Promise<string> {
     if (call.name === "question") return this.askQuestion(call, signal);
-    if (call.name === "todowrite") return Promise.resolve(executeBuiltInTodoWrite(call));
     return this.callToolFacade(call, signal);
   }
 
   /**
    * A rejected (or aborted) question fails the tool and ends the turn, like the real binary.
-   * The real v1.17.17 publishes its question lifecycle live-only over /global/event — question
+   * The real v2.0.10 publishes its question lifecycle live-only over /global/event — question
    * rows never reach the durable history — so the fake mirrors exactly that.
    */
   private askQuestion(call: FakeToolCall, signal: AbortSignal): Promise<string> {
     this.questionSequence += 1;
-    const id = `que_functional${String(this.questionSequence)}`;
-    const row = { id, sessionID: FAKE_SESSION_ID, questions: call.args.questions };
+    const id = `frm_functional${String(this.questionSequence)}`;
+    const row = v2QuestionForm(id, call.args.questions);
     return new Promise<string>((resolveQuestion, rejectQuestion) => {
       const settled = (outcome: FakeQuestionOutcome): void => {
         signal.removeEventListener("abort", onAbort);
@@ -968,9 +916,6 @@ class FakeOpenCodeChild {
   }
 
   private async callToolFacade(call: FakeToolCall, signal: AbortSignal): Promise<string> {
-    const definition = FAKE_TOOL_ACTIONS[call.name];
-    if (definition === undefined) return '{"status":"invalid"}';
-    const identity = `${FAKE_SESSION_ID}:${call.id}`;
     this.appendHistory("session.next.tool.called", {
       timestamp: new Date(this.nextFixtureTime()).toISOString(),
       sessionID: FAKE_SESSION_ID,
@@ -979,6 +924,15 @@ class FakeOpenCodeChild {
       tool: call.name,
       provider: "keiko",
     });
+    // The generated-tool bundle is self-describing (every tool it ships is dispatchable, and it
+    // fails closed on its own for one it does not) -- FAKE_TOOL_ACTIONS is only the legacy,
+    // hand-mapped action table for the non-generated fetch path below, so it must never gate a
+    // generated-tools call. Gating on it here silently swallowed every #3386/#3387/#3388 git/CI
+    // tool name as `{"status":"invalid"}` before this call ever reached `governedTools.execute`.
+    if (this.governedTools !== undefined) return this.governedTools.execute(call, signal);
+    const definition = FAKE_TOOL_ACTIONS[call.name];
+    if (definition === undefined) return '{"status":"invalid"}';
+    const identity = `${FAKE_SESSION_ID}:${call.id}`;
     const response = await fetch(this.toolFacadeUrl, {
       method: "POST",
       signal,
@@ -998,22 +952,12 @@ class FakeOpenCodeChild {
   }
 }
 
-/** Mirrors the v1.17.17 built-in: full-replace todo state, no facade round-trip, no tool event. */
-function executeBuiltInTodoWrite(call: FakeToolCall): string {
-  return JSON.stringify(call.args.todos ?? [], null, 2);
-}
-
 function splitFunctionalText(value: string): readonly string[] {
   const chunks: string[] = [];
   for (let start = 0; start < value.length; start += 4096) {
     chunks.push(value.slice(start, start + 4096));
   }
   return chunks;
-}
-
-function expandFunctionalDisplayText(value: string): string {
-  if (value.length === 0) return value;
-  return `${value.slice(0, 256)}${"x".repeat(4096 * 5)}${value.slice(-128)}`;
 }
 
 function assistantHistoryInfo(
@@ -1105,10 +1049,10 @@ function readBoundedBody(request: IncomingMessage): Promise<string> {
   });
 }
 
-function promptText(body: string): string {
+export function functionalPromptText(body: string): string {
   try {
-    const parsed = JSON.parse(body) as { parts?: readonly { text?: string }[] };
-    return parsed.parts?.[0]?.text ?? "";
+    const parsed: unknown = JSON.parse(body);
+    return isRecord(parsed) && typeof parsed.text === "string" ? parsed.text : "";
   } catch {
     return "";
   }
@@ -1116,11 +1060,42 @@ function promptText(body: string): string {
 
 function parseAnswers(body: string): readonly (readonly string[])[] {
   try {
-    const parsed = JSON.parse(body) as { answers?: readonly (readonly string[])[] };
-    return parsed.answers ?? [];
+    const parsed: unknown = JSON.parse(body);
+    const answer = isRecord(parsed) && isRecord(parsed.answer) ? parsed.answer : {};
+    return Object.values(answer).map((value) =>
+      Array.isArray(value)
+        ? value.filter((item): item is string => typeof item === "string")
+        : typeof value === "string"
+          ? [value]
+          : [],
+    );
   } catch {
     return [];
   }
+}
+
+function v2QuestionForm(id: string, questions: unknown): Record<string, unknown> {
+  const source = Array.isArray(questions) ? questions : [];
+  return {
+    id,
+    sessionID: FAKE_SESSION_ID,
+    title: "Question",
+    fields: source.map((value: unknown, index) => {
+      const question = isRecord(value) ? value : {};
+      const options = Array.isArray(question.options) ? question.options : [];
+      return {
+        key: `q${String(index)}`,
+        title: typeof question.header === "string" ? question.header : "Question",
+        description: typeof question.question === "string" ? question.question : "Question",
+        type: question.multiple === true ? "multiselect" : "string",
+        options: options.filter(isRecord).map((option) => ({
+          label: option.label,
+          value: option.label,
+          description: option.description,
+        })),
+      };
+    }),
+  };
 }
 
 function assistantMessage(turn: FakeGatewayTurn): Record<string, unknown> {
@@ -1166,6 +1141,104 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function v2ToolState(state: Record<string, unknown>): Readonly<Record<string, unknown>> {
+  const input = isRecord(state.input) ? state.input : {};
+  if (state.status === "pending") return { status: "streaming", input: JSON.stringify(input) };
+  if (state.status === "running") return { status: "running", input, metadata: {} };
+  return { status: "completed", input, content: [{ type: "text", text: state.output ?? "" }] };
+}
+
+function v2PartMessage(row: FakeHistoryRow): Readonly<Record<string, unknown>>[] {
+  const part = row.data.part;
+  if (!isRecord(part)) return [];
+  const id =
+    typeof part.messageID === "string" ? part.messageID : `msg_functional_${String(row.seq)}`;
+  const time = { created: typeof row.data.time === "number" ? row.data.time : row.seq };
+  if (part.type === "text" && typeof part.text === "string") {
+    if (id.startsWith("msg_user_")) {
+      return [{ id, time, type: "user", text: part.text }];
+    }
+    return [
+      {
+        id,
+        time,
+        type: "assistant",
+        agent: "build",
+        model: { providerID: "keiko-runtime", modelID: "coding" },
+        content: [{ id: part.id, type: "text", text: part.text }],
+      },
+    ];
+  }
+  if (part.type !== "tool" || !isRecord(part.state)) return [];
+  return [
+    {
+      id,
+      time,
+      type: "assistant",
+      agent: "build",
+      model: { providerID: "keiko-runtime", modelID: "coding" },
+      content: [
+        {
+          type: "tool",
+          id: part.callID,
+          name: part.tool,
+          time,
+          state: v2ToolState(part.state),
+        },
+      ],
+    },
+  ];
+}
+
+function v2MessageFromHistoryRow(row: FakeHistoryRow): Readonly<Record<string, unknown>>[] {
+  if (row.type === "message.part.updated.1") return v2PartMessage(row);
+  if (row.type !== "session.idle") return [];
+  return [
+    {
+      id: `msg_functional_${String(row.seq)}`,
+      time: { created: row.seq },
+      type: "idle",
+      outcome: "succeeded",
+    },
+  ];
+}
+
+function mergeV2Messages(
+  messages: readonly Readonly<Record<string, unknown>>[],
+): readonly Readonly<Record<string, unknown>>[] {
+  const grouped = new Map<string, Readonly<Record<string, unknown>>>();
+  for (const message of messages) {
+    const id = message.id;
+    if (typeof id !== "string") continue;
+    const previous = grouped.get(id);
+    if (message.type !== "assistant" || previous === undefined) {
+      grouped.set(id, message);
+      continue;
+    }
+    const existing: unknown = previous.content;
+    const incoming: unknown = message.content;
+    const parts = Array.isArray(existing) ? existing.filter(isRecord) : [];
+    for (const item of Array.isArray(incoming) ? incoming.filter(isRecord) : []) {
+      const index = parts.findIndex((value) => isRecord(value) && value.id === item.id);
+      if (index < 0) parts.push(item);
+      else parts[index] = item;
+    }
+    grouped.set(id, { ...previous, content: parts });
+  }
+  return [...grouped.values()];
+}
+
+/** Narrows one durable history row to its completed tool-call result, when it carries one. */
+function completedToolResult(row: FakeHistoryRow): readonly ScriptedGovernedTranscriptToolResult[] {
+  if (row.type !== "message.part.updated.1") return [];
+  const part = row.data.part;
+  if (!isRecord(part) || part.type !== "tool" || !isRecord(part.state)) return [];
+  if (part.state.status !== "completed") return [];
+  if (typeof part.callID !== "string" || typeof part.tool !== "string") return [];
+  if (typeof part.state.output !== "string") return [];
+  return [{ callId: part.callID, tool: part.tool, output: part.state.output }];
+}
+
 interface ScriptedTree extends RuntimeProcessTree {
   readonly child: FakeOpenCodeChild;
   readonly exits: Set<(code: number | null) => void>;
@@ -1178,12 +1251,22 @@ class ScriptedChildBackend implements RuntimeProcessBackend {
   public constructor(
     public readonly identity: RuntimeProcessBackend["identity"],
     private readonly children: FakeOpenCodeChild[],
+    private readonly generatedTools: boolean,
+    private readonly observePhase?: (event: ScriptedToolPhase) => void,
+    private readonly pluginVersion: "v1" | "v2" = "v1",
   ) {}
 
   public spawnOwnedTree(request: RuntimeSupervisorLaunchRequest): RuntimeProcessTree {
     const stdout = new PassThrough();
     const stderr = new PassThrough();
-    const child = new FakeOpenCodeChild(request.env);
+    const child = new FakeOpenCodeChild(
+      request.env,
+      this.generatedTools,
+      this.observePhase,
+      undefined,
+      undefined,
+      this.pluginVersion,
+    );
     this.children.push(child);
     const tree: ScriptedTree = {
       treeId: request.recoveryHandle,
@@ -1200,8 +1283,7 @@ class ScriptedChildBackend implements RuntimeProcessBackend {
     child
       .listen()
       .then((port) => {
-        if (!tree.exited)
-          stdout.write(`opencode server listening on http://127.0.0.1:${String(port)}\n`);
+        if (!tree.exited) stdout.write(`server listening on http://127.0.0.1:${String(port)}\n`);
       })
       .catch(() => {
         if (!stdout.writableEnded) stdout.end();
@@ -1255,7 +1337,13 @@ export interface ScriptedOpenCodeHarness {
 }
 
 /** Scripted supervisor seam for `createProductionOpenCodeBackend`; no real binary is required. */
-export function createScriptedOpenCodeHarness(): ScriptedOpenCodeHarness {
+export function createScriptedOpenCodeHarness(
+  options: {
+    readonly generatedTools?: boolean;
+    readonly observePhase?: (event: ScriptedToolPhase) => void;
+    readonly pluginVersion?: "v1" | "v2";
+  } = {},
+): ScriptedOpenCodeHarness {
   const children: FakeOpenCodeChild[] = [];
   return {
     children,
@@ -1268,6 +1356,9 @@ export function createScriptedOpenCodeHarness(): ScriptedOpenCodeHarness {
             backend: portable.qualification.backend,
           },
           children,
+          options.generatedTools === true,
+          options.observePhase,
+          options.pluginVersion,
         ),
         qualifications: [portable.qualification],
         planSandbox: (request) =>
@@ -1280,5 +1371,90 @@ export function createScriptedOpenCodeHarness(): ScriptedOpenCodeHarness {
     closeAll: async (): Promise<void> => {
       for (const child of children.splice(0)) await child.close();
     },
+  };
+}
+
+/** One completed tool part a scripted transcript's model-driven turn appended to durable history. */
+export interface ScriptedGovernedTranscriptToolResult {
+  readonly callId: string;
+  readonly tool: string;
+  readonly output: string;
+}
+
+export interface ScriptedGovernedTranscriptChild {
+  /**
+   * Runs one user turn through the real scripted-child agent loop (`callGateway` ->
+   * `executeToolCall` -> `callToolFacade` -> the governed generated-tool bundle): the caller's
+   * `modelTurn` plays the model's own tool-call selection -- exactly the seam a real transcript's
+   * `/chat/completions` response fills for `FakeOpenCodeChild.callGateway` -- so which tool runs
+   * next is decided outside the test body, from the accumulated transcript, the same way a real
+   * model decides from it. Resolves once the turn ends (no further tool calls) and returns every
+   * tool result the turn produced, in call order.
+   */
+  readonly runTurn: (userText: string) => Promise<readonly ScriptedGovernedTranscriptToolResult[]>;
+  readonly close: () => Promise<void>;
+}
+
+/**
+ * A scripted OpenCode child driven in-process for a MODEL-SELECTED tool-call proof. It reuses the
+ * exact same `FakeOpenCodeChild`/`ScriptedGovernedTools` machinery `createScriptedOpenCodeHarness`
+ * wires for a full pipeline run, minus the `RuntimeProcessSupervisor`/HTTP-gateway plumbing a full
+ * production composition needs only to route a real model call to this same child in a live run --
+ * the model's tool-call selection itself is supplied directly as `modelTurn`, so a caller assembles
+ * a real generated-tool-backed facade (as `createScriptedOpenCodeHarness` callers already do) and
+ * proves the SAME dispatch path a real transcript uses, without re-deriving it.
+ */
+export function createScriptedGovernedTranscriptChild(input: {
+  readonly runId: string;
+  readonly toolFacadeFetch: typeof globalThis.fetch;
+  readonly modelTurn: (transcript: readonly Record<string, unknown>[]) => FakeGatewayTurn;
+  readonly observePhase?: (event: ScriptedToolPhase) => void;
+}): ScriptedGovernedTranscriptChild {
+  const env = {
+    OPENCODE_SERVER_PASSWORD: "scripted-transcript-password",
+    KEIKO_MODEL_GATEWAY_URL: "http://scripted-transcript.invalid/model-gateway",
+    KEIKO_MODEL_GATEWAY_CAPABILITY: "scripted-transcript-model-capability",
+    KEIKO_TOOL_FACADE_URL: "http://scripted-transcript.invalid/tool-facade",
+    KEIKO_TOOL_FACADE_CAPABILITY: "scripted-transcript-tool-capability",
+    KEIKO_CODING_RUN_ID: input.runId,
+  };
+  const child = new FakeOpenCodeChild(env, true, input.observePhase, {
+    modelTurn: input.modelTurn,
+    toolFacadeFetch: input.toolFacadeFetch,
+  });
+  return {
+    runTurn: (userText): Promise<readonly ScriptedGovernedTranscriptToolResult[]> =>
+      child.runScriptedUserTurn(userText),
+    close: (): Promise<void> => child.close(),
+  };
+}
+
+/**
+ * A scripted OpenCode child whose `callGateway` performs a REAL HTTP round trip to the given
+ * gateway base URL, instead of `createScriptedGovernedTranscriptChild`'s directly-injected
+ * `modelTurn` seam (which never touches HTTP at all). Exists for exactly one purpose: proving a
+ * live child is denied by the REAL production sidecar-gateway route
+ * (`handleCodingSidecarGatewayChatCompletions`) when the tool set it advertises is incomplete --
+ * the modelTurn-based child cannot exercise that route because it never calls it.
+ */
+export function createLiveGatewayScriptedChild(input: {
+  readonly runId: string;
+  readonly gatewayUrl: string;
+  readonly gatewayCapability: string;
+  readonly gatewayToolsOverride?: readonly FunctionalGatewayTool[];
+}): ScriptedGovernedTranscriptChild {
+  const env = {
+    OPENCODE_SERVER_PASSWORD: "scripted-transcript-password",
+    KEIKO_MODEL_GATEWAY_URL: input.gatewayUrl,
+    KEIKO_MODEL_GATEWAY_CAPABILITY: input.gatewayCapability,
+    KEIKO_TOOL_FACADE_URL: "http://scripted-transcript.invalid/tool-facade",
+    KEIKO_TOOL_FACADE_CAPABILITY: "scripted-transcript-tool-capability",
+    KEIKO_CODING_RUN_ID: input.runId,
+  };
+  const child = new FakeOpenCodeChild(env, false, undefined, undefined, input.gatewayToolsOverride);
+  return {
+    runTurn: (userText): Promise<readonly ScriptedGovernedTranscriptToolResult[]> =>
+      child.runScriptedUserTurn(userText),
+    close: (): Promise<void> => child.close(),
   };
 }

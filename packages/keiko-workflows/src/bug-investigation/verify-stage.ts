@@ -12,13 +12,13 @@ import { type WorkspaceFs, type WorkspaceInfo } from "@oscharko-dev/keiko-worksp
 import {
   buildVerificationPlan,
   detectScripts,
+  planDirectTargetedTests,
   resolveTargetedTests,
   runVerification,
   summarizeForAudit,
   DEFAULT_VERIFICATION_LIMITS,
   type VerificationAuditSummary,
   type VerificationPlan,
-  type VerificationStep,
 } from "@oscharko-dev/keiko-verification";
 import { isSensitivePath } from "./guard.js";
 import type { BugRunState } from "./internal.js";
@@ -48,42 +48,14 @@ function buildPlanFallback(workspace: WorkspaceInfo, fs: WorkspaceFs): Verificat
   return buildVerificationPlan(workspace, catalog, { only: ["test"] }, fs);
 }
 
-function targetedChangedTests(
-  workspace: WorkspaceInfo,
-  testFiles: readonly string[],
-): VerificationStep | undefined {
-  if (testFiles.length === 0) {
-    return undefined;
-  }
-  if (workspace.testFramework === "vitest") {
-    return {
-      kind: "targeted-test",
-      scriptName: undefined,
-      command: "npx",
-      args: ["vitest", "run", ...testFiles],
-      limits: DEFAULT_VERIFICATION_LIMITS,
-    };
-  }
-  if (workspace.testFramework === "jest") {
-    return {
-      kind: "targeted-test",
-      scriptName: undefined,
-      command: "npx",
-      args: ["jest", ...testFiles],
-      limits: DEFAULT_VERIFICATION_LIMITS,
-    };
-  }
-  return undefined;
-}
-
 function resolveVerificationPlan(
   workspace: WorkspaceInfo,
   changedFiles: readonly PatchFileChange[],
   fs: WorkspaceFs,
 ): VerificationPlan | undefined {
-  const directTests = targetedChangedTests(workspace, changedTestFiles(changedFiles));
-  if (directTests !== undefined) {
-    return { workspaceRoot: workspace.root, steps: [directTests] };
+  const directTests = planDirectTargetedTests(workspace, changedTestFiles(changedFiles), fs);
+  if (directTests.length > 0) {
+    return { workspaceRoot: workspace.root, steps: directTests };
   }
   const targeted = resolveTargetedTests(
     workspace,
@@ -121,9 +93,12 @@ export async function runBugVerification(
     processEnv: state.deps.processEnv ?? process.env,
     now: state.now,
     fs,
-    networkEnforcement:
-      state.deps.verificationNetworkEnforcement ??
-      (state.deps.spawn !== undefined ? "enforce-or-degrade" : undefined),
+    // Explicit-only (ADR-0043 D8): leaving this undefined applies the orchestrator's fail-closed
+    // default. Deriving it from an injected dependency instead — `spawn !== undefined`, as shorthand
+    // for "a test harness is driving this" — also matched the production budget wrapper, which is
+    // exactly how a governed run injects its spawn, so the egress boundary was disabled on the one
+    // path that executes model-authored code.
+    networkEnforcement: state.deps.verificationNetworkEnforcement,
     ...(state.deps.verificationEnforcedNetworkAvailable === undefined
       ? {}
       : { enforcedNetworkAvailable: state.deps.verificationEnforcedNetworkAvailable }),

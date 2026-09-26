@@ -9,12 +9,11 @@
 // the untrusted input (user-typed or model-generated): it is redacted and byte-bounded, and the
 // injection summary is computed over the redacted query, content-free.
 
+import type { ShapedSearchObservation, ShapedSearchRange } from "@oscharko-dev/keiko-contracts";
 import {
   MAX_OBSERVATION_QUERY_BYTES,
   MAX_TOP_RANGES,
-  type ShapedSearchObservation,
-  type ShapedSearchRange,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/context-observations";
 import type { EvidenceAtom } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { SearchResult } from "@oscharko-dev/keiko-workspace";
 

@@ -7,7 +7,10 @@ import {
   endpointContractAdapter,
   normalizeEndpointPath,
 } from "./endpointContracts.js";
+import { buildEndpointContractGraphFromCandidates } from "./endpointContractGraph.js";
 import { DEFAULT_SEARCH_LIMITS, type SearchScope } from "./repoSearch.js";
+import { gatherCandidates } from "./repoSearchScan.js";
+import type { WorkspaceFs } from "./fs.js";
 import type { WorkspaceInfo } from "./types.js";
 
 const MEM_ROOT = "/ws";
@@ -19,6 +22,7 @@ function makeScope(files: Readonly<Record<string, string>>): {
 } {
   const workspace: WorkspaceInfo = {
     root: MEM_ROOT,
+    selectedRoot: MEM_ROOT,
     name: "endpoint-demo",
     version: "1.0.0",
     testFramework: "vitest",
@@ -69,6 +73,96 @@ describe("lineNumberOf", () => {
 });
 
 describe("buildEndpointContractGraph", () => {
+  it("does not start candidate discovery when its execution control is already expired", async () => {
+    const { scope, fs: base } = makeScope({
+      "src/client/expired.ts": 'fetch("/api/expired");',
+    });
+    let directoryReads = 0;
+    const fs: WorkspaceFs = {
+      ...base,
+      readDir: (absolutePath) => {
+        directoryReads += 1;
+        return base.readDir(absolutePath);
+      },
+    };
+
+    const graph = await buildEndpointContractGraph(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      nowMs: () => 10,
+      deadlineAtMs: 10,
+    });
+
+    expect(directoryReads).toBe(0);
+    expect(graph.routes).toEqual([]);
+    expect(graph.clientCalls).toEqual([]);
+    expect(graph.diagnostics.candidateLimitReached).toBe(true);
+  });
+
+  it("marks completed link output truncated when the deadline expires after linking", async () => {
+    const { scope, fs } = makeScope({
+      "src/client.ts": 'fetch("/api/orders", { method: "POST" });',
+      "src/OrderController.java": `
+        @RestController
+        @RequestMapping("/api")
+        class OrderController {
+          @PostMapping("/orders")
+          public void createOrder() {}
+        }
+      `,
+    });
+    const candidates = gatherCandidates(scope, DEFAULT_SEARCH_LIMITS, fs);
+    let deadlineChecks = 0;
+    const executionControl = {
+      deadlineAtMs: 1,
+      nowMs: (): number => {
+        deadlineChecks += 1;
+        // Source collection, extraction, and all link-loop checkpoints complete while the first
+        // 17 checks are live; the post-link checkpoint is the first one to observe expiration.
+        return deadlineChecks >= 18 ? 1 : 0;
+      },
+    };
+
+    const graph = await buildEndpointContractGraphFromCandidates(
+      scope,
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      candidates,
+      executionControl,
+    );
+
+    expect(graph.links).toHaveLength(1);
+    expect(graph.diagnostics.linksFound).toBe(1);
+    expect(graph.diagnostics.candidateLimitReached).toBe(true);
+    expect(deadlineChecks).toBeGreaterThanOrEqual(18);
+  });
+
+  it("rejects hard-linked sources before reading their raw byte prefix", async () => {
+    const { scope, fs: baseFs } = makeScope({
+      "src/client/hard-linked.ts": 'fetch("/api/private");',
+    });
+    let byteReadCount = 0;
+    const fs: WorkspaceFs = {
+      ...baseFs,
+      stat: (absolutePath) => {
+        const stat = baseFs.stat(absolutePath);
+        return absolutePath.endsWith("/src/client/hard-linked.ts")
+          ? { ...stat, hardLinkCount: 2 }
+          : stat;
+      },
+      readFileBytes: () => {
+        byteReadCount += 1;
+        return Promise.reject(new Error("hard-linked source must not be probed"));
+      },
+    };
+
+    const graph = await buildEndpointContractGraph(scope, DEFAULT_SEARCH_LIMITS, fs);
+    const coverage = await endpointContractAdapter.coverage?.(scope, DEFAULT_SEARCH_LIMITS, fs);
+
+    expect(graph.clientCalls).toEqual([]);
+    expect(graph.diagnostics.filesSkipped).toBe(1);
+    expect(coverage?.filesSkipped).toBe(1);
+    expect(byteReadCount).toBe(0);
+  });
+
   it("links Java Spring GET/POST routes to TypeScript axios and fetch call sites", async () => {
     const { scope, fs } = makeScope({
       "src/main/java/com/acme/OrderController.java": `
@@ -169,6 +263,40 @@ describe("buildEndpointContractGraph", () => {
       ["GET", "/template"],
     ]);
   });
+
+  it("reports when endpoint source discovery exceeds the structural file ceiling", async () => {
+    const { scope, fs } = makeScope({
+      "src/a.ts": 'fetch("/api/a");',
+      "src/b.ts": 'fetch("/api/b");',
+    });
+
+    const graph = await buildEndpointContractGraph(
+      scope,
+      { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 },
+      fs,
+    );
+
+    expect(graph.diagnostics.filesScanned).toBe(1);
+    expect(graph.diagnostics.candidateLimitReached).toBe(true);
+  });
+
+  it("processes every bounded endpoint candidate before reporting excess coverage", async () => {
+    const { scope, fs } = makeScope({
+      "src/a.ts": "export const first = true;",
+      "src/b.ts": 'fetch("/api/second");',
+      "src/c.ts": 'fetch("/api/excess");',
+    });
+
+    const graph = await buildEndpointContractGraph(
+      scope,
+      { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 2 },
+      fs,
+    );
+
+    expect(graph.diagnostics.filesScanned).toBe(2);
+    expect(graph.clientCalls.map((call) => call.path)).toEqual(["/api/second"]);
+    expect(graph.diagnostics.candidateLimitReached).toBe(true);
+  });
 });
 
 describe("buildEndpointContractGraph regex complexity safety (S8786 regression)", () => {
@@ -254,5 +382,23 @@ describe("endpointContractAdapter", () => {
       ["src/main/java/com/acme/OrderController.java", "endpoint-contract-linker"],
       ["src/client/orders.ts", "endpoint-contract-linker"],
     ]);
+  });
+
+  it("surfaces endpoint candidate truncation through structural coverage", async () => {
+    const { scope, fs } = makeScope({
+      "src/a.ts": 'fetch("/api/a");',
+      "src/b.ts": 'fetch("/api/b");',
+    });
+    const cappedLimits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 };
+
+    const coverage = await endpointContractAdapter.coverage?.(scope, cappedLimits, fs, {
+      nowMs: NOW,
+    });
+
+    expect(coverage).toMatchObject({
+      name: "endpoint-contract-linker",
+      filesIndexed: 1,
+      candidateLimitReached: true,
+    });
   });
 });

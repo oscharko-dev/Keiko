@@ -1,6 +1,8 @@
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -12,6 +14,13 @@ import {
 } from "./index.js";
 import { mockRequest, mockResponse } from "./_support.js";
 import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+  type BufferedServerLogSink,
+} from "./observability/index.js";
+import {
   createFakeSessionPairingPort,
   fakePairingRequestBody,
 } from "./coding-app-session/_support.js";
@@ -21,6 +30,8 @@ import { createCodingAppSessionChannel } from "./coding-app-session/sessionChann
 import { handleFilesContent, handleFilesTree, type FilesTreeResponse } from "./files.js";
 import type { RouteContext } from "./routes.js";
 import { deriveManagedWorktreePath } from "./task-workspace/naming.js";
+import { assertManagedRootOwned } from "./task-workspace/managed-root.js";
+import { inspectManagedGitdirIdentity } from "./task-workspace/gitdir-identity.js";
 import type { WorkspaceProvisioningService } from "./task-workspace/types.js";
 
 const REPOSITORY_ID = "repo_0123456789abcdef";
@@ -34,6 +45,7 @@ let dependencies: UiHandlerDeps;
 
 function route(path: string, cookie?: string): RouteContext {
   return {
+    correlationId: undefined,
     req: mockRequest({ headers: cookie === undefined ? {} : { cookie } }),
     res: mockResponse().res,
     params: {},
@@ -91,17 +103,47 @@ function contentPath(path: string): string {
   return `/api/files/content?root=${encodeURIComponent(managedWorktree)}&path=${encodeURIComponent(path)}`;
 }
 
+function git(cwd: string, args: readonly string[]): void {
+  execFileSync("git", [...args], { cwd });
+}
+
 beforeEach(async (): Promise<void> => {
-  fixtureRoot = await mkdtemp(join(tmpdir(), "keiko-files-managed-auth-"));
+  fixtureRoot = realpathSync(await mkdtemp(join(tmpdir(), "keiko-files-managed-auth-")));
   managedRoot = join(fixtureRoot, "managed", "task-workspaces");
+  assertManagedRootOwned(managedRoot);
   managedWorktree = deriveManagedWorktreePath({
     managedRoot,
     repositoryId: REPOSITORY_ID,
     workspaceId: WORKSPACE_ID,
   });
+  // #3347 managed-worktree identity: resolveManagedWorkspaceRootAccess now re-proves a real Git
+  // linked-worktree pointer (gitdir-identity.ts) instead of trusting a path shape, so the fixture
+  // must be an actual `git worktree add` linkage -- not a plain mkdir -- for the paired-session
+  // test below to reach a genuine 200 rather than the fail-closed 403 an unrecognized identity
+  // produces.
+  git(fixtureRoot, ["init", "-q"]);
+  git(fixtureRoot, ["config", "user.email", "test@example.invalid"]);
+  git(fixtureRoot, ["config", "user.name", "Keiko Test"]);
+  await writeFile(join(fixtureRoot, "README.md"), "managed workspace fixture\n");
+  git(fixtureRoot, ["add", "README.md"]);
+  git(fixtureRoot, ["commit", "-qm", "fixture"]);
+  await mkdir(dirname(managedWorktree), { recursive: true });
+  git(fixtureRoot, [
+    "worktree",
+    "add",
+    "-q",
+    "-b",
+    "keiko/task/files-managed-auth-01234567",
+    managedWorktree,
+    "HEAD",
+  ]);
   await mkdir(join(managedWorktree, "src"), { recursive: true });
   await writeFile(join(managedWorktree, "src", "app.ts"), 'export const status = "ready";\n');
   await writeFile(join(managedWorktree, ".env"), "TEST_SECRET=must-not-leak\n");
+  const gitdirInspection = inspectManagedGitdirIdentity(managedWorktree, fixtureRoot);
+  if (gitdirInspection === undefined) {
+    throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
+  }
   const now = new Date(0).toISOString();
   instance = {
     schemaVersion: "1",
@@ -112,7 +154,7 @@ beforeEach(async (): Promise<void> => {
     baseBranch: "dev",
     taskBranch: "keiko/task/files-managed-auth-01234567",
     managedWorktreePath: managedWorktree,
-    gitdirIdentity: "gitdir-identity",
+    gitdirIdentity: gitdirInspection.identity,
     lifecycleState: "active",
     health: "healthy",
     lock: null,
@@ -126,9 +168,18 @@ beforeEach(async (): Promise<void> => {
 });
 
 afterEach(async (): Promise<void> => {
+  resetServerLogger();
   dependencies.store.close();
   await rm(fixtureRoot, { recursive: true, force: true });
 });
+
+// The managed-root gate logs through the process sink (route deps carry no per-request sink), so
+// the pin captures the server logger itself.
+function captureServerLog(): BufferedServerLogSink {
+  const sink = createBufferedServerLogSink();
+  setServerLogger(createServerLogger({ sink, level: "debug" }));
+  return sink;
+}
 
 describe("managed task-workspace Files authorization", (): void => {
   it("denies existing and absent managed roots identically before consulting persistence", async (): Promise<void> => {
@@ -141,12 +192,29 @@ describe("managed task-workspace Files authorization", (): void => {
       workspaceId: "ws_ffffffffffffffffffffffff",
     });
 
+    const sink = captureServerLog();
+
     const existing = await handleFilesTree(route(treePath(managedWorktree)), dependencies);
     const absent = await handleFilesTree(route(treePath(missing)), dependencies);
 
     expect(existing).toMatchObject({ status: 403, body: { error: { code: "DENIED" } } });
     expect(absent).toEqual(existing);
     expect(getInstance).not.toHaveBeenCalled();
+    // Every unpaired refusal leaves one body-free security line naming why (an unpaired browser
+    // tab reading an active managed worktree's settings used to produce a 403 with no trace at
+    // all, observed live 2026-09-03); the managed path itself never travels into the log.
+    const denials = sink.events.filter((event) => event.op === "workspace.root.denied");
+    expect(denials).toHaveLength(2);
+    expect(denials[0]).toMatchObject({
+      category: "security",
+      errorKind: "authority-denied",
+      extra: {
+        decision: "denied",
+        reason: "managed-root-session-authority-missing",
+        failureKind: "DENIED",
+      },
+    });
+    expect(JSON.stringify(denials)).not.toContain(managedWorktree);
   });
 
   it("denies an unpaired symlink alias that resolves into a managed workspace", async (): Promise<void> => {

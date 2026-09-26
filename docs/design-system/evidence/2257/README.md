@@ -1,5 +1,10 @@
 # Issue #2257 — Live Coding Workbench evidence
 
+> Housekeeping 2026-08-10: the per-issue suite `coding-workbench-2257` and its config were
+> retired after months without a running lane; `coding-workbench-2253` in the extended e2e matrix
+> and the code-task authority journey carry the live-workbench coverage today. The command below
+> is preserved as the historical record of how this evidence was produced.
+
 This directory records Design System and accessibility acceptance evidence for the live Coding
 Workbench. Production rendering consumes the server-owned runtime hook; fixture projections are not
 reachable from the registered window.

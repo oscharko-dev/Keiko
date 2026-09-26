@@ -45,6 +45,7 @@ export interface SafeMarkdownNode {
   readonly text?: string;
   readonly level?: 1 | 2 | 3 | 4 | 5 | 6;
   readonly language?: string;
+  readonly start?: number;
   readonly href?: string;
   readonly align?: SafeMarkdownAlignment;
 }
@@ -460,11 +461,10 @@ function parseTable(
 interface ListItemRaw {
   text: string;
   indent: number;
+  start?: number;
 }
 
-function isUnorderedBullet(
-  line: string,
-): { match: true; indent: number; text: string } | { match: false } {
+function isUnorderedBullet(line: string): ({ match: true } & ListItemRaw) | { match: false } {
   const m = /^( *)([*+\-]) (.*)$/.exec(line); // eslint-disable-line no-useless-escape
   if (!m) return { match: false };
   return { match: true, indent: m[1]?.length ?? 0, text: m[3] ?? "" };
@@ -472,10 +472,17 @@ function isUnorderedBullet(
 
 function isOrderedBullet(
   line: string,
-): { match: true; indent: number; text: string } | { match: false } {
-  const m = /^( *)\d+\. (.*)$/.exec(line);
+): { match: true; indent: number; text: string; start: number } | { match: false } {
+  const m = /^( *)(\d{1,9})\. (.*)$/.exec(line);
   if (!m) return { match: false };
-  return { match: true, indent: m[1]?.length ?? 0, text: m[2] ?? "" };
+  return { match: true, indent: m[1]?.length ?? 0, text: m[3] ?? "", start: Number(m[2]) };
+}
+
+function listStartAttributes(
+  items: readonly ListItemRaw[],
+  ordered: boolean,
+): { readonly start?: number } {
+  return ordered ? { start: items[0]?.start ?? 1 } : {};
 }
 
 function buildListNodes(items: ListItemRaw[], ordered: boolean, depth: number): SafeMarkdownNode {
@@ -511,7 +518,7 @@ function buildListNodes(items: ListItemRaw[], ordered: boolean, depth: number): 
     children.push({ kind: "li", children: liChildren });
   }
 
-  return { kind: listKind, children };
+  return { kind: listKind, children, ...listStartAttributes(items, ordered) };
 }
 
 // ---------------------------------------------------------------------------
@@ -606,7 +613,11 @@ function consumeList(ctx: ParseContext, ordered: boolean): SafeMarkdownNode {
     const ll = ctx.lines[ctx.i] ?? "";
     const c = checker(ll);
     if (c.match) {
-      items.push({ text: c.text, indent: c.indent });
+      items.push({
+        text: c.text,
+        indent: c.indent,
+        ...(c.start !== undefined ? { start: c.start } : {}),
+      });
       ctx.i++;
     } else if (ll.trim() === "") {
       break;

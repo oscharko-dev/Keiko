@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { useEffect, type ReactElement } from "react";
+import { useEffect, useLayoutEffect, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EditorDiagnostic } from "@oscharko-dev/keiko-editor";
 import type {
@@ -45,22 +45,30 @@ import {
   saveFilesContent,
   mutateWorkspaceSnippets,
 } from "../../../../../lib/api";
+import type {
+  EditorM7CommandDefinition,
+  EditorM7SettingId,
+  EditorM7SettingValue,
+  EditorM11SettingsSnapshot,
+  EditorM7WorkspaceSnippetSnapshot,
+  EditorHotExitSnapshotV1,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_M7_SCHEMA_VERSION,
-  EDITOR_M7_SNIPPET_COLLECTION_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
-  EDITOR_HOT_EXIT_SCHEMA_VERSION,
-  resolveEditorM11Settings,
-  type EditorM7SettingId,
-  type EditorM7SettingValue,
-  type EditorM11SettingsSnapshot,
-  type EditorM7WorkspaceSnippetSnapshot,
-  type EditorHotExitSnapshotV1,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
+import { EDITOR_M7_SNIPPET_COLLECTION_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-snippets";
+import { EDITOR_HOT_EXIT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-hot-exit";
+import { resolveEditorM11Settings } from "@oscharko-dev/keiko-contracts/runtime/editor-m11-settings";
 import { I18N_STORAGE_KEY, I18nProvider, loadLocaleMessages } from "@/lib/i18n";
 import type { EditorSurfaceProps } from "./EditorSurface";
 import type { EditorDiffSurfaceProps } from "./EditorDiffSurface";
 import EditorRuntimeWidget from "./EditorRuntimeWidget";
+import { editorShortcutCommandId } from "./EditorWidget";
+import {
+  dispatchableWorkspaceShortcutsForContext,
+  type EffectiveKeyboardShortcutRegistry,
+} from "../../keyboardShortcutsRegistry";
 import { requestEditorBufferReconciliation } from "./editor-buffer-reconciliation-events";
 import { _resetEditorAgentBridgeStateForTests } from "./editorAgentBridge";
 import { getEditorProblems, resetEditorProblemsStoreForTests } from "./editorProblemsStore";
@@ -147,7 +155,10 @@ const diffSurface: { props: EditorDiffSurfaceProps | null; mounts: number; unmou
 vi.mock("next/dynamic", () => ({
   default: () => {
     function EditorSurfaceProbe(props: EditorSurfaceProps): ReactElement {
-      useEffect(() => {
+      // Counted in a layout effect, which runs in the commit that inserts the element. A passive
+      // effect ran after it, so `findByTestId` could resolve on a tree whose mount was not counted
+      // yet: "probe counter isolation" failed that way under CI load (run 34578159771).
+      useLayoutEffect(() => {
         surface.mounts += 1;
         return (): void => {
           surface.unmounts += 1;
@@ -164,7 +175,8 @@ vi.mock("next/dynamic", () => ({
 // the module itself instead of riding the next/dynamic loader.
 vi.mock("./EditorDiffSurface", () => ({
   default: function EditorDiffSurfaceProbe(props: EditorDiffSurfaceProps): ReactElement {
-    useEffect(() => {
+    // A layout effect for the same reason as EditorSurfaceProbe's: counted in the mounting commit.
+    useLayoutEffect(() => {
       diffSurface.mounts += 1;
       return (): void => {
         diffSurface.unmounts += 1;
@@ -439,12 +451,6 @@ function workspaceSnippetSnapshot(
 }
 
 afterEach(() => {
-  surface.props = null;
-  surface.mounts = 0;
-  surface.unmounts = 0;
-  diffSurface.props = null;
-  diffSurface.mounts = 0;
-  diffSurface.unmounts = 0;
   delete document.documentElement.dataset.theme;
   restoreEventSource();
   _resetEditorAgentBridgeStateForTests();
@@ -456,6 +462,16 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  // Zeroed HERE, not in `afterEach`: Testing Library's automatic cleanup unmounts the previous
+  // test's tree from its own `afterEach`, which runs after this file's, so resetting there left
+  // the tear-down to land in the next test's baseline. `beforeEach` is the only point nothing
+  // else can run before the test body.
+  surface.props = null;
+  surface.mounts = 0;
+  surface.unmounts = 0;
+  diffSurface.props = null;
+  diffSurface.mounts = 0;
+  diffSurface.unmounts = 0;
   vi.mocked(fetchEditorLanguageCapabilities).mockResolvedValue(LANGUAGE_CAPABILITIES);
   vi.mocked(fetchEditorSettings).mockResolvedValue(editorSettingsSnapshot());
   vi.mocked(fetchWorkspaceSnippets).mockResolvedValue(workspaceSnippetSnapshot());
@@ -602,6 +618,25 @@ describe("EditorWidget — empty state", () => {
     expect(await screen.findByRole("note")).toHaveTextContent(
       "Wähle im Projektbaum eine Datei aus, um mit der Bearbeitung zu beginnen.",
     );
+  });
+});
+
+// Testing Library's automatic cleanup unmounts the previous test's tree from its OWN `afterEach`,
+// which runs AFTER the reset below, so every counter the probes keep leaks one tear-down into the
+// next test. Observed directly: a test whose `mounts` had correctly reset to 0 still saw the
+// previous tree's unmount. The counters therefore have to be zeroed where nothing can run before
+// the test body — `beforeEach` — not after it.
+describe("probe counter isolation", () => {
+  it("leaves a tree mounted for the next test to observe", async () => {
+    await renderLoaded();
+    expect(surface.mounts).toBe(1);
+  });
+
+  it("starts with counters nobody else has touched", () => {
+    expect({ mounts: surface.mounts, unmounts: surface.unmounts }).toEqual({
+      mounts: 0,
+      unmounts: 0,
+    });
   });
 });
 
@@ -1160,6 +1195,34 @@ describe("EditorWidget — edit and save", () => {
     expect(warning).toHaveTextContent("filesystem-identity-correlation");
   });
 
+  it("explains when a save is suppressed because the content looks like a secret (#2898)", async () => {
+    await renderLoaded();
+    vi.mocked(saveFilesContent).mockResolvedValueOnce(
+      fileResponse({
+        modifiedAt: 2,
+        content: "const value = 2;\n",
+        localHistoryProtection: {
+          status: "suppressed",
+          reason: "secret-detected",
+          correlationId: "secret-suppressed-correlation",
+        },
+      }),
+    );
+    act(() => {
+      surface.props?.onContentChange({ text: "const value = 2;\n", sizeBytes: 17 }, "human");
+    });
+    await userEvent.click(await screen.findByRole("button", { name: "Save" }));
+
+    const warning = await screen.findByTestId("editor-local-history-protection");
+    expect(warning).toHaveTextContent(
+      "This save was not checkpointed: the content looks like it contains a secret.",
+    );
+    expect(warning).toHaveTextContent("Local History recovery is unavailable for this save.");
+    expect(warning).toHaveTextContent("secret-suppressed-correlation");
+    expect(surface.props?.saveStatus).toBe("saved");
+    expect(surface.props?.fileModel.dirty).toBe(false);
+  });
+
   it("surfaces a clean external disk edit and reloads only after the user chooses Reload", async () => {
     const FakeSource = installFakeEventSource();
     await renderLoaded();
@@ -1254,7 +1317,7 @@ describe("EditorWidget — edit and save", () => {
     view.rerender(<EditorRuntimeWidget windowId="editor-test" root="/next" file="src/app.ts" />);
 
     await waitFor(() => {
-      expect(disposeEditorModelRegistryRoot).toHaveBeenCalledWith("/repo", "root-disposed");
+      expect(disposeEditorModelRegistryRoot).toHaveBeenCalledWith("/repo");
     });
     expect(disposeAllUnattachedEditorModels).not.toHaveBeenCalled();
     expect(surface.props?.modelRootKey).toBe("/next");
@@ -1267,7 +1330,7 @@ describe("EditorWidget — edit and save", () => {
     view.unmount();
 
     await waitFor(() => {
-      expect(disposeAllUnattachedEditorModels).toHaveBeenCalledWith("shutdown");
+      expect(disposeAllUnattachedEditorModels).toHaveBeenCalledWith();
     });
   });
 
@@ -1287,7 +1350,7 @@ describe("EditorWidget — edit and save", () => {
       expect(screen.getAllByTestId("editor-surface")).toHaveLength(2);
     });
 
-    expect(disposeEditorModelRegistryRoot).toHaveBeenCalledWith("/repo", "root-disposed");
+    expect(disposeEditorModelRegistryRoot).toHaveBeenCalledWith("/repo");
     expect(disposeAllUnattachedEditorModels).not.toHaveBeenCalled();
 
     sibling.unmount();
@@ -1308,9 +1371,9 @@ describe("EditorWidget — edit and save", () => {
     view.rerender(<EditorRuntimeWidget windowId="editor-test" root="/next" file="src/app.ts" />);
 
     await waitFor(() => {
-      expect(disposeEditorModelRegistryRoot).toHaveBeenCalledWith("/repo", "root-disposed");
+      expect(disposeEditorModelRegistryRoot).toHaveBeenCalledWith("/repo");
     });
-    expect(disposeEditorModelRegistryRoot).not.toHaveBeenCalledWith("/sibling", "root-disposed");
+    expect(disposeEditorModelRegistryRoot).not.toHaveBeenCalledWith("/sibling");
     expect(disposeAllUnattachedEditorModels).not.toHaveBeenCalled();
 
     sibling.unmount();
@@ -1331,7 +1394,7 @@ describe("EditorWidget — edit and save", () => {
 
     second.unmount();
     await waitFor(() => {
-      expect(disposeAllUnattachedEditorModels).toHaveBeenCalledWith("shutdown");
+      expect(disposeAllUnattachedEditorModels).toHaveBeenCalledWith();
     });
   });
 
@@ -2387,9 +2450,14 @@ describe("EditorWidget — inline completion wiring (Issue #1200)", () => {
     await screen.findByTestId("editor-surface");
     expect(surface.props?.fileModel.identity.language).toBe("markdown");
     expect(surface.props?.provideInlineCompletions).toBeUndefined();
+    // `waitFor` retries until its callback stops throwing, so an EXACT count inside it is one-way:
+    // once the counter overshoots it can never become true again, and the test burns the whole
+    // window before reporting a stale number. Wait for the settling condition, then pin the exact
+    // count immediately — the pin itself is unchanged, it just fails on the first observation.
     await waitFor(() => {
-      expect(surface.mounts).toBe(1);
+      expect(surface.mounts).toBeGreaterThanOrEqual(1);
     });
+    expect(surface.mounts).toBe(1);
 
     rerender(<EditorRuntimeWidget root="/repo" file="src/app.ts" />);
     await waitFor(() => {
@@ -2397,9 +2465,10 @@ describe("EditorWidget — inline completion wiring (Issue #1200)", () => {
     });
     await waitFor(() => {
       expect(surface.props?.provideInlineCompletions).toBeDefined();
-      expect(surface.mounts).toBe(2);
-      expect(surface.unmounts).toBeGreaterThanOrEqual(1);
+      expect(surface.mounts).toBeGreaterThanOrEqual(2);
     });
+    expect(surface.mounts).toBe(2);
+    expect(surface.unmounts).toBeGreaterThanOrEqual(1);
   });
 });
 
@@ -5610,5 +5679,81 @@ describe("EditorWidget — stale-load discard on rapid file switch (GEN-TEST-MIS
     // The always-present status-bar live region carries no error text; the stale landing was a
     // silent no-op rather than a surfaced load failure.
     expect(screen.getByTestId("editor-status-bar-alert")).toHaveTextContent("");
+  });
+});
+
+describe("EditorWidget — editor-context shortcut dispatch collision safety (KEIKO-0199)", () => {
+  function fakeEditorCommand(id: string, defaultBinding: string): EditorM7CommandDefinition {
+    return {
+      id,
+      labelKey: `test.${id}`,
+      descriptionKey: `test.${id}.description`,
+      scope: "editor",
+      contexts: ["editor"],
+      defaultBindings: [defaultBinding],
+      rebindable: true,
+      dispatchOwner: "keiko",
+    };
+  }
+
+  // OWNER's binding is its own, untouched default. HIJACKER's binding is a persisted override that
+  // targets OWNER's chord instead of its own — reachable only by bypassing
+  // `updateKeyboardShortcutOverride`'s write-time collision check (a hand-edited or imported
+  // `keybindingOverrides` entry never runs it), exactly as a settings-import path could produce.
+  // HIJACKER is listed FIRST so a raw `Array.find` over `registry.commands` reaches it before OWNER.
+  const OWNER = fakeEditorCommand("test.editorShortcutOwner", "CtrlOrMeta+Alt+A");
+  const HIJACKER = fakeEditorCommand("test.editorShortcutHijacker", "CtrlOrMeta+Alt+B");
+
+  function collidingRegistry(): EffectiveKeyboardShortcutRegistry {
+    return {
+      commands: [
+        {
+          command: HIJACKER,
+          binding: "CtrlOrMeta+Alt+A",
+          defaultBinding: "CtrlOrMeta+Alt+B",
+          source: "user",
+          modified: true,
+          conflictCommandIds: [],
+        },
+        {
+          command: OWNER,
+          binding: "CtrlOrMeta+Alt+A",
+          defaultBinding: "CtrlOrMeta+Alt+A",
+          source: "default",
+          modified: false,
+          conflictCommandIds: [],
+        },
+      ],
+      activeBindings: [
+        { commandId: HIJACKER.id, binding: "CtrlOrMeta+Alt+A" },
+        { commandId: OWNER.id, binding: "CtrlOrMeta+Alt+A" },
+      ],
+      status: { kind: "ready" },
+    };
+  }
+
+  function chordEvent(key: string): KeyboardEvent {
+    return new KeyboardEvent("keydown", { key, ctrlKey: true, altKey: true });
+  }
+
+  it("dispatches the contested chord to the collision-resolved owner, not the first raw binding match (#2894)", () => {
+    const registry = collidingRegistry();
+
+    // The reference projection: the two-phase claim algorithm reserves every command's own default
+    // chord before any override is considered, so OWNER keeps "CtrlOrMeta+Alt+A" and HIJACKER's
+    // override onto it is refused. Derived from the production projection rather than restated, so
+    // this assertion cannot silently drift from the algorithm it is pinned to.
+    const expectedCommandId =
+      dispatchableWorkspaceShortcutsForContext(registry, "editor").find(
+        (entry) => entry.binding === "CtrlOrMeta+Alt+A",
+      )?.commandId ?? null;
+    expect(expectedCommandId).toBe(OWNER.id);
+
+    expect(editorShortcutCommandId(registry, chordEvent("a"))).toBe(expectedCommandId);
+  });
+
+  it("falls the refused override back to the hijacker's own untouched default (#2894)", () => {
+    const registry = collidingRegistry();
+    expect(editorShortcutCommandId(registry, chordEvent("b"))).toBe(HIJACKER.id);
   });
 });

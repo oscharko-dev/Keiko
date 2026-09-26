@@ -114,15 +114,33 @@ describe("mutationResultMatchesCurrentTruth", () => {
 });
 
 describe("createStartMutation", () => {
-  it("refuses to start while the runtime readiness gate is closed", () => {
-    expect(() => createStartMutation("task", stateWithRun(null))).toThrowError(
-      expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }),
+  it("preserves the accepted issue intent and digest through the production start client", async () => {
+    const issue = {
+      issueRef: "https://github.com/owner/repo/issues/42",
+      expectedIssueBindingDigest: "a".repeat(64),
+    };
+    const mutation = createStartMutation(
+      "implement the issue",
+      stateWithRun(null, { canStart: true }),
+      { issue, projectMemoryEnabled: true },
     );
+    await mutation.run();
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ ...issue, issuePurpose: "context" }),
+    );
+  });
+
+  it("refuses to start while the runtime readiness gate is closed", () => {
+    expect(() =>
+      createStartMutation("task", stateWithRun(null), { projectMemoryEnabled: true }),
+    ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
   });
 
   it("starts a new run with the requested mode and preference", async () => {
     const state = stateWithRun(null, { canStart: true });
-    const mutation = createStartMutation("add a regression test", state);
+    const mutation = createStartMutation("add a regression test", state, {
+      projectMemoryEnabled: true,
+    });
     expect(mutation.mayInstallNewRun).toBe(true);
     expect(mutation.expected).toBeUndefined();
     await mutation.run();
@@ -131,7 +149,64 @@ describe("createStartMutation", () => {
       taskIntent: "add a regression test",
       requestedMode: "supervised-coding",
       runtimePreference: "managed-gateway",
+      projectMemory: { enabled: true },
     });
+  });
+
+  it("can disable project memory for the next run without sending browser-authored scopes", async () => {
+    const state = stateWithRun(null, { canStart: true });
+    const mutation = createStartMutation("inspect the repository", state, {
+      projectMemoryEnabled: false,
+    });
+
+    await mutation.run();
+
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledWith({
+      requestId: mutation.requestId,
+      taskIntent: "inspect the repository",
+      requestedMode: "supervised-coding",
+      runtimePreference: "managed-gateway",
+      projectMemory: { enabled: false },
+    });
+  });
+
+  it("does not leak stale gateway model settings into a Codex subscription start", async () => {
+    const state = stateWithRun(null, {
+      canStart: true,
+      runtimePreference: "codex-subscription",
+      selectedModelId: "stale-model",
+      reasoningEffort: "high",
+    });
+    const mutation = createStartMutation("inspect the repository", state, {
+      projectMemoryEnabled: true,
+    });
+
+    await mutation.run();
+
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledWith({
+      requestId: mutation.requestId,
+      taskIntent: "inspect the repository",
+      requestedMode: "supervised-coding",
+      runtimePreference: "codex-subscription",
+      projectMemory: { enabled: true },
+    });
+  });
+
+  it("sends the selected model settings for the managed gateway", async () => {
+    const state = stateWithRun(null, {
+      canStart: true,
+      selectedModelId: "coding-model",
+      reasoningEffort: "high",
+    });
+    const mutation = createStartMutation("inspect the repository", state, {
+      projectMemoryEnabled: true,
+    });
+
+    await mutation.run();
+
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({ modelId: "coding-model", reasoningEffort: "high" }),
+    );
   });
 });
 
@@ -204,6 +279,25 @@ describe("createRetryMutation", () => {
       taskIntent: "retry it",
       requestedMode: "supervised-coding",
       runtimePreference: "managed-gateway",
+    });
+  });
+
+  it("drops stale gateway model settings when retrying through a Codex subscription", async () => {
+    const state = stateWithRun(snapshot(), {
+      canRetry: true,
+      runtimePreference: "codex-subscription",
+      selectedModelId: "stale-model",
+      reasoningEffort: "high",
+    });
+    const mutation = createRetryMutation("retry it", state);
+
+    await mutation.run();
+
+    expect(apiMocks.retryCodingWorkbenchRuntime).toHaveBeenCalledWith("run-1", {
+      requestId: mutation.requestId,
+      taskIntent: "retry it",
+      requestedMode: "supervised-coding",
+      runtimePreference: "codex-subscription",
     });
   });
 });

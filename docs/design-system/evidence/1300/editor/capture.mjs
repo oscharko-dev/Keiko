@@ -47,9 +47,11 @@ const REFERENCE_FILES = [
 ];
 const REFERENCE = REFERENCE_FILES.map((f) => readFileSync(resolve(DS_DIR, f), "utf8")).join("\n");
 
+// javascript:S4036 — this script is a developer-run evidence-generation harness; the caller's PATH
+// is intentional and the git binary is not a production trust boundary.
 function git(args) {
   try {
-    return execFileSync("git", ["-C", REPO, ...args], { encoding: "utf8" }).trim();
+    return execFileSync("git", ["-C", REPO, ...args], { encoding: "utf8" }).trim(); // NOSONAR javascript:S4036
   } catch {
     return "unknown";
   }
@@ -135,10 +137,10 @@ async function applyMode(page, cssText, mode) {
   await page.evaluate(
     ({ theme, hc }) => {
       const r = document.documentElement;
-      r.removeAttribute("data-theme");
-      r.removeAttribute("data-hc");
-      if (theme) r.setAttribute("data-theme", theme);
-      if (hc) r.setAttribute("data-hc", hc);
+      delete r.dataset.theme;
+      delete r.dataset.hc;
+      if (theme) r.dataset.theme = theme;
+      if (hc) r.dataset.hc = hc;
     },
     { theme: mode.theme, hc: mode.hc },
   );
@@ -218,7 +220,7 @@ for (const mode of MODES) {
   let accent = 0;
   let refOnly = 0;
   for (const t of EDITOR_TOKENS) {
-    if (reference[t].rgba === "__MISSING__") {
+    if (!reference[t].defined) {
       missing.add(`${mode.id}:${t}`);
       continue;
     }
@@ -277,9 +279,9 @@ for (const file of REF_PAGES) {
       await page.goto(url, { waitUntil: "load", timeout: 30000 });
       await page.evaluate((m) => {
         const r = document.documentElement;
-        r.setAttribute("data-theme", m.theme);
-        r.removeAttribute("data-hc");
-        if (m.hc) r.setAttribute("data-hc", m.hc);
+        r.dataset.theme = m.theme;
+        delete r.dataset.hc;
+        if (m.hc) r.dataset.hc = m.hc;
       }, mode);
       await page.waitForTimeout(350);
       const name = `ref-${file.replace(".html", "")}-${mode.id}.png`;

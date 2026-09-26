@@ -2,13 +2,14 @@
 // openai-embedding-adapter.ts: callers pass the already-resolved credential-tier endpoint and get
 // structural outcomes only. Raw provider payloads never escape this module.
 
-import { apiKeyHeaderValue } from "./config.js";
+import { apiKeyHeaderValue, trimTrailingSlash } from "./config.js";
 import {
   gatewayFetch,
   OutboundHttpEgressError,
   readJsonCapped,
   type OutboundHttpEgressErrorCode,
 } from "./http.js";
+import { GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS } from "./resilience.js";
 import type { OutboundHttpEgressConfig } from "./types.js";
 
 export interface RerankRequest {
@@ -87,7 +88,7 @@ function headerName(name: string | undefined): string {
 }
 
 function joinUrl(endpoint: string): string {
-  const trimmed = endpoint.endsWith("/") ? endpoint.slice(0, -1) : endpoint;
+  const trimmed = trimTrailingSlash(endpoint);
   return `${trimmed}/rerank`;
 }
 
@@ -103,7 +104,11 @@ function buildRequest(request: LiteLLMRerankRequest): BuiltRequest {
     documents: request.documents,
     top_n: request.topN,
   });
-  const timeoutSignal = AbortSignal.timeout(request.timeoutMs ?? 30_000);
+  // #3591: per-call floor — a slow gateway's rerank call is not a broken one, so the actual
+  // outbound deadline never goes below this regardless of a smaller configured value.
+  const timeoutSignal = AbortSignal.timeout(
+    Math.max(request.timeoutMs ?? 30_000, GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS),
+  );
   const signal =
     request.signal !== undefined ? AbortSignal.any([timeoutSignal, request.signal]) : timeoutSignal;
   return {

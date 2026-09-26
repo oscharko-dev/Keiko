@@ -21,7 +21,7 @@ import type {
   EvidenceStore,
   QualityIntelligenceEvidenceManifest,
 } from "@oscharko-dev/keiko-evidence";
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
 import type { RouteContext, RouteResult } from "../../routes.js";
 import { STREAMING } from "../../routes.js";
@@ -69,6 +69,7 @@ function makeRawReq(raw: string): IncomingMessage {
 
 function ctx(runId: string, req: IncomingMessage): RouteContext {
   return {
+    correlationId: undefined,
     req,
     res: {} as RouteContext["res"],
     params: { id: runId },
@@ -181,6 +182,7 @@ afterEach(() => {
 describe("handleQiExport — missing id param", () => {
   it("returns 400 QI_BAD_REQUEST when id param is absent", async () => {
     const c: RouteContext = {
+      correlationId: undefined,
       req: makeReq({ adapter: "csv" }),
       res: {} as RouteContext["res"],
       params: {},
@@ -193,6 +195,7 @@ describe("handleQiExport — missing id param", () => {
 
   it("returns 400 QI_BAD_REQUEST when id param is an empty string", async () => {
     const c: RouteContext = {
+      correlationId: undefined,
       req: makeReq({ adapter: "csv" }),
       res: {} as RouteContext["res"],
       params: { id: "" },
@@ -997,6 +1000,66 @@ describe("handleQiExport — deliverable quality gate", () => {
   );
 });
 
+// ─── KEIKO-0365 — partial-drop diagnostic ─────────────────────────────────────
+//
+// The quality-gate filter is applied at the single serialiseExport chokepoint shared by every
+// export mode, including the "diagnostic all-candidate" path the UI copy describes as unfiltered.
+// A caller who unchecks "Approved only" and gets a partial 200 (some candidates dropped by the
+// deliverable quality gate) currently sees no diagnostic anywhere. Approach (b) per the finding:
+// keep the filter but add an omittedByQualityGate count so the drop is surfaced.
+describe("handleQiExport — surfaces omitted-by-quality-gate count on partial materialised drops (KEIKO-0365)", () => {
+  it("reports the omittedByQualityGate count when approvedOnly=false drops a needs-review candidate", async () => {
+    const runId = "run-export-partial-drop";
+    recordQualityIntelligenceRun(runRecordInput(runId), { evidenceDir });
+    recordQualityIntelligenceCandidates({
+      runId,
+      generatedAt: "2026-06-01T10:01:00.000Z",
+      candidates: [
+        makeCandidate("Clean candidate", "cand-clean"),
+        {
+          ...makeCandidate("Needs-review candidate", "cand-needs-review"),
+          status: "needs-review",
+        },
+      ],
+      evidenceDir,
+      redact: (v: unknown): unknown => v,
+    });
+
+    const result = asResult(
+      await handleQiExport(
+        ctx(runId, makeReq({ adapter: "json", dryRun: false, approvedOnly: false })),
+        deps(evidenceDir),
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as {
+      readonly dryRun: boolean;
+      readonly omittedByQualityGate?: number;
+      readonly candidateCount?: number;
+    };
+    // Either the response body carries an explicit omitted-by-quality-gate count OR the omitted
+    // candidate appears in the exported artifact. Approach (b) records the count.
+    expect(body.omittedByQualityGate).toBe(1);
+  });
+
+  it("reports omittedByQualityGate=0 when nothing was dropped (approvedOnly=false, all deliverable)", async () => {
+    const runId = "run-export-no-drop";
+    recordSingleCandidateRun(runId, makeCandidate("Clean candidate", "cand-clean"));
+
+    const result = asResult(
+      await handleQiExport(
+        ctx(runId, makeReq({ adapter: "json", dryRun: false, approvedOnly: false })),
+        deps(evidenceDir),
+      ),
+    );
+
+    expect(result.status).toBe(200);
+    const body = result.body as { readonly omittedByQualityGate?: number };
+    expect(body.omittedByQualityGate).toBe(0);
+  });
+});
+
 // ─── FIX E (Issue #282) — export honors RUN-scope approval ───────────────────
 //
 // A reviewer can approve the whole RUN (runState = approved) instead of each candidate. The
@@ -1372,6 +1435,7 @@ const MANIFEST_FILE = (dir: string): string => join(dir, "qi", `${RUN_ID}.qi.jso
 
 function editCtx(runId: string, body: Record<string, unknown>): RouteContext {
   return {
+    correlationId: undefined,
     req: makeReq(body),
     res: {} as RouteContext["res"],
     params: { id: runId },
@@ -1381,6 +1445,7 @@ function editCtx(runId: string, body: Record<string, unknown>): RouteContext {
 
 function detailCtx(runId: string): RouteContext {
   return {
+    correlationId: undefined,
     req: makeRawReq(""),
     res: {} as RouteContext["res"],
     params: { id: runId },

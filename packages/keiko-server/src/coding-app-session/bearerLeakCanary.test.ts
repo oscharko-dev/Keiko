@@ -17,6 +17,11 @@ import {
 // crash reporters) run in page script; HttpOnly makes the bearer unreadable to all of them, so the
 // server-boundary assertions below are the authoritative negative canaries.
 
+// The local-session route path lives here rather than in `_support.ts` because that file is a
+// pinned coding-runtime measurement input; adding a member there would change the harness ruler
+// digest and force a recalibration for every new session-route entry (issue #3494).
+const APP_SESSION_LOCAL_SESSION_PATH = "/api/coding-workbench/app-session/local-session";
+
 interface CanaryCapture {
   readonly token: string;
   readonly secret: string;
@@ -82,9 +87,11 @@ beforeAll(async () => {
   for (const path of [
     APP_SESSION_PATHS.channel,
     APP_SESSION_PATHS.stream,
+    APP_SESSION_LOCAL_SESSION_PATH,
     APP_SESSION_PATHS.rotate,
   ]) {
-    const method = path === APP_SESSION_PATHS.rotate ? "POST" : "GET";
+    const method =
+      path === APP_SESSION_PATHS.rotate || path === APP_SESSION_LOCAL_SESSION_PATH ? "POST" : "GET";
     const response = await fetch(`${server.baseUrl}${path}`, {
       method,
       headers: method === "POST" ? postHeaders(cookie) : { cookie },

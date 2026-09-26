@@ -28,6 +28,7 @@ import type {
   WorkspaceHealthEntry,
   WorkspaceHealthSignals,
   WorkspaceReconciliationFacts,
+  WorkspaceHealthEvaluation,
 } from "./task-workspace.js";
 
 function healthyReconFacts(
@@ -317,6 +318,42 @@ describe("classifyWorkspaceHealth — operational classification", () => {
     );
     expect(evaluation.cleanupEligible).toBe(false);
     expect(evaluation.classification).toBe("archived");
+  });
+
+  // Ownership is a signal of its own, not a containment fact: an unproven managed root withdraws the
+  // verdicts that vouch for the tree and leaves the structural ones — and the settled dispositions —
+  // exactly as the reconciliation facts state them (#3376 review).
+  it("withdraws healthy and dirty, and only those, when ownership is unproven", () => {
+    const unproven = (
+      facts: Partial<WorkspaceReconciliationFacts>,
+      worktreeDirty = false,
+    ): WorkspaceHealthEvaluation =>
+      classifyWorkspaceHealth(
+        signals({
+          reconciliation: healthyReconFacts(facts),
+          ownershipProven: false,
+          worktreeDirty,
+        }),
+      );
+
+    expect(unproven({ lifecycleState: "active" }).classification).toBe("recovery-required");
+    expect(unproven({ lifecycleState: "active" }, true).classification).toBe("recovery-required");
+    expect(unproven({ lifecycleState: "cleanup-pending" }).classification).toBe(
+      "recovery-required",
+    );
+    expect(unproven({ lifecycleState: "active", worktreeDirExists: false }).classification).toBe(
+      "missing",
+    );
+    expect(
+      unproven({ lifecycleState: "active", gitdirIdentityMatches: false }).driftMarkers,
+    ).toEqual(["gitdir-mismatch"]);
+    expect(
+      unproven({ lifecycleState: "active", gitdirIdentityMatches: false }).driftMarkers,
+    ).not.toContain("path-escape");
+    expect(unproven({ lifecycleState: "merged" }).classification).toBe("archived");
+    for (const state of ["active", "cleanup-pending", "merged"] as const) {
+      expect(unproven({ lifecycleState: state }).cleanupEligible).toBe(false);
+    }
   });
 });
 

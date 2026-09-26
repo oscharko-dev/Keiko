@@ -5,11 +5,13 @@ import { strictestCodingWorkbenchPolicyEffect } from "./coding-workbench.js";
 import type { CodingWorkbenchPolicyEffect } from "./coding-workbench.js";
 import {
   WORKSPACE_CONTRACT_SCHEMA_VERSION,
+  WORKSPACE_POLICY_VERSION_PATTERN,
   hasOnlyWorkspaceKeys,
   isWorkspaceFact,
   isWorkspaceManifestDigest,
   isWorkspaceManifestRef,
   isWorkspaceRecord,
+  isWorkspaceRevision,
   isWorkspaceRootIdentityDigest,
   isWorkspaceRootRef,
   isWorkspaceTrustBasisDigest,
@@ -119,19 +121,14 @@ const STATUS_KEYS = [
   "reason",
   "revision",
 ] as const;
-const POLICY_VERSION_PATTERN = /^[a-z0-9][a-z0-9._-]{2,95}$/u;
 const PROJECT_ID_MAX_CHARS = 4_096;
-
-function isRevision(value: unknown): value is number {
-  return Number.isSafeInteger(value) && (value as number) >= 0;
-}
 
 function isWorkspaceTrustBinding(value: unknown): value is WorkspaceTrustBinding {
   return (
     isWorkspaceRecord(value) &&
     hasOnlyWorkspaceKeys(value, BINDING_KEYS) &&
     isWorkspaceManifestRef(value.manifestRef) &&
-    isRevision(value.manifestRevision) &&
+    isWorkspaceRevision(value.manifestRevision) &&
     isWorkspaceManifestDigest(value.manifestDigest) &&
     isWorkspaceRootRef(value.rootRef) &&
     isWorkspaceRootIdentityDigest(value.rootIdentityDigest) &&
@@ -194,8 +191,9 @@ function isWorkspaceTrustRecord(value: unknown): value is WorkspaceTrustRecord {
     value.kind === "workspace-trust",
     value.schemaVersion === WORKSPACE_TRUST_SCHEMA_VERSION,
     value.decidedBy === "server",
-    isRevision(value.revision),
-    typeof value.policyVersion === "string" && POLICY_VERSION_PATTERN.test(value.policyVersion),
+    isWorkspaceRevision(value.revision),
+    typeof value.policyVersion === "string" &&
+      WORKSPACE_POLICY_VERSION_PATTERN.test(value.policyVersion),
   ].every(Boolean);
   return (
     fieldsValid &&
@@ -228,7 +226,7 @@ function isWorkspaceTrustStatusValue(value: unknown): value is WorkspaceTrustSta
     isWorkspaceTrustLevel(value.trust),
     value.decidedBy === "server",
     isWorkspaceTrustReason(value.reason),
-    value.revision === null || isRevision(value.revision),
+    value.revision === null || isWorkspaceRevision(value.revision),
   ].every(Boolean);
   return (
     fieldsValid &&
@@ -254,6 +252,30 @@ function factsMatch(
   return left.outcome !== "known" || (right.outcome === "known" && left.value === right.value);
 }
 
+export interface WorkspaceTrustRootBinding {
+  readonly rootRef: string;
+  readonly rootIdentityDigest: string;
+  // Server-owned identity provenance, such as the durable filesystem-object digest. The public
+  // V1 binding intentionally omits it, but a store that has it must compare it here rather than
+  // maintain a second invalidation formula.
+  readonly rootIdentityProvenanceDigest?: string | null | undefined;
+}
+
+// KEIKO-0198: every layer that decides whether a root identity still authorizes trust uses this
+// predicate. Missing membership fails closed; an absent private provenance is comparable only to
+// the same absent provenance, preserving the persisted V1 compatibility state.
+export function workspaceTrustRootBindingsMatch(
+  left: WorkspaceTrustRootBinding | undefined,
+  right: WorkspaceTrustRootBinding | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return false;
+  return (
+    left.rootRef === right.rootRef &&
+    left.rootIdentityDigest === right.rootIdentityDigest &&
+    left.rootIdentityProvenanceDigest === right.rootIdentityProvenanceDigest
+  );
+}
+
 /**
  * ADR-0155 narrows this comparison to the dimensions that describe the trusted root itself. The
  * manifest revision and digest are workspace-level and change on focus and reorder, which carry no
@@ -268,8 +290,7 @@ function factsMatch(
 function trustBindingsMatch(left: WorkspaceTrustBinding, right: WorkspaceTrustBinding): boolean {
   return (
     left.manifestRef === right.manifestRef &&
-    left.rootRef === right.rootRef &&
-    left.rootIdentityDigest === right.rootIdentityDigest &&
+    workspaceTrustRootBindingsMatch(left, right) &&
     factsMatch(left.trustBasisDigest, right.trustBasisDigest)
   );
 }

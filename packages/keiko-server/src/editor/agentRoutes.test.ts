@@ -1,7 +1,13 @@
 import {
+  editorAgentPathBoundaryReason,
+  type EditorAgentResolvedRoot,
+  serverResolvedDocumentText,
+} from "./agentRootBoundary.js";
+import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
@@ -17,10 +23,30 @@ import { EventEmitter } from "node:events";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
+import type {
+  CodingWorkbenchAuthorityEnvelope,
+  CodingWorkbenchMode,
+  EditorAgentAction,
+  EditorAgentGovernedAuthorityReference,
+  EditorAgentActionResult,
+  EditorAgentActionStatus,
+  EditorAgentEvent,
+  EditorAgentSessionSnapshot,
+  WorkspaceInstance,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  isWorkspaceManifestDigest,
+  isWorkspaceManifestRef,
+  isWorkspaceRootIdentityDigest,
+  isWorkspaceRootRef,
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_SCHEMA_VERSION,
-  DEFAULT_LANGUAGE_SERVICE_LIMITS,
+  resolveEffectiveCodingWorkbenchMode,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { DEFAULT_LANGUAGE_SERVICE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/language-service";
+import {
   EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS,
   EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,
   EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_ENCODED_CHARS,
@@ -28,27 +54,20 @@ import {
   isEditorAgentAction,
   parseEditorAgentQueryGitData,
   isEditorAgentSessionSnapshot,
-  resolveEffectiveCodingWorkbenchMode,
-  type CodingWorkbenchAuthorityEnvelope,
-  type CodingWorkbenchMode,
-  type EditorAgentAction,
-  type EditorAgentGovernedAuthorityReference,
-  type EditorAgentActionResult,
-  type EditorAgentActionStatus,
-  type EditorAgentEvent,
-  type EditorAgentSessionSnapshot,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import {
   PatchApplyError,
+  parseUnifiedDiff,
   PatchValidationError,
   type WorkspaceWriter,
 } from "@oscharko-dev/keiko-tools";
 import type { GitProcessOptions, GitProcessResult } from "@oscharko-dev/keiko-git";
-import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { forwardWorkspaceFs, nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { PathDeniedError } from "@oscharko-dev/keiko-workspace";
+import { EDITOR_AGENT_NAVIGATION_DOCUMENT_MAX_BYTES as NAVIGATION_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { STREAMING, type RouteContext } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
-import { createAutonomousDeliveryApprovalStore } from "../coding-runtime/autonomousDeliveryApprovalStore.js";
 import * as workspaceSearchRoutes from "./workspaceSearchRoutes.js";
 import * as languageRoutes from "./languageRoutes.js";
 import { EDITOR_AGENT_ACTION_TIMEOUT_MS, editorAgentRegistry } from "./agentSessionRegistry.js";
@@ -56,8 +75,8 @@ import {
   _resetEditorAgentStateForTests,
   _setEditorAgentPatchWriterForTests,
   applyChangesetErrorMessage,
+  authorityDenyReason,
   handleEditorAgentActions as handleEditorAgentActionsRoute,
-  handleEditorAgentAuthority,
   handleEditorAgentAudit,
   handleEditorAgentEvents,
   handleEditorAgentSessions,
@@ -68,6 +87,23 @@ import {
   editorAgentAuthorityRegistry,
   editorAgentWorkspaceRootDigest,
 } from "./agentAuthorityRegistry.js";
+import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+  type BufferedServerLogSink,
+  type ServerLogEvent,
+} from "../observability/index.js";
+import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
+import { deriveManagedWorktreePath } from "../task-workspace/naming.js";
+import {
+  grantedWorkspaceRootAccess,
+  resolveLifecycleManagedWorkspaceRootAccess,
+  type WorkspaceRootAccessOutcome,
+} from "../task-workspace/workspace-root-access.js";
 
 // Epic #2384: governed-assist now gates workspace-contained mutations, so the action-mechanics
 // harness runs at the Full-access deployment ceiling. Explicit mode-policy tests keep exercising
@@ -88,6 +124,12 @@ function handleEditorAgentActions(
 }
 
 const HASH = "a".repeat(64);
+
+// Narrows a fixture literal through the contract's own guard instead of casting to the brand.
+function branded<T>(value: string, guard: (candidate: unknown) => candidate is T): T {
+  if (!guard(value)) throw new Error(`fixture value does not satisfy the contract guard: ${value}`);
+  return value;
+}
 const PREPARED_CHANGESET_WIRE_LIMIT_BYTES = 65_536;
 const PATCH_SOURCE_LIMIT_BYTES = 1_000_000;
 let bridgeDecisionCapability: string | undefined;
@@ -130,14 +172,6 @@ function responseBridgeCapability(body: unknown): string | undefined {
   if (!isRecord(body)) return undefined;
   return typeof body.bridgeDecisionCapability === "string"
     ? body.bridgeDecisionCapability
-    : undefined;
-}
-
-function responseAuthorityRef(body: unknown): EditorAgentGovernedAuthorityReference | undefined {
-  if (!isRecord(body) || !isRecord(body.authorityRef)) return undefined;
-  const { runId, envelopeDigest } = body.authorityRef;
-  return typeof runId === "string" && typeof envelopeDigest === "string"
-    ? { runId, envelopeDigest }
     : undefined;
 }
 
@@ -200,27 +234,6 @@ function authorityEnvelope(
   };
 }
 
-function authorityRouteRequest(
-  envelope: CodingWorkbenchAuthorityEnvelope,
-  deploymentCeiling: CodingWorkbenchMode = "autonomous-delivery",
-): {
-  readonly body: Record<string, unknown>;
-  readonly deps: Parameters<typeof handleEditorAgentAuthority>[1];
-} {
-  const approvalStore = createAutonomousDeliveryApprovalStore();
-  return {
-    body: {
-      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
-      authorityEnvelope: envelope,
-      confirmation: approvalStore.issue(envelope, "2026-07-10T00:00:00.000Z"),
-    },
-    deps: {
-      autonomousDeliveryApprovalStore: approvalStore,
-      autonomousDeliveryDeploymentCeiling: deploymentCeiling,
-    },
-  };
-}
-
 function registerTestAuthority(
   workspaceRoot: string,
   requestedMode: CodingWorkbenchMode = "autonomous-delivery",
@@ -246,6 +259,7 @@ function context(body: unknown = {}, path = "/api/editor/agent/actions"): RouteC
   ]) as unknown as IncomingMessage;
   (req as { method?: string }).method = "POST";
   return {
+    correlationId: undefined,
     req,
     res: Object.assign(new EventEmitter(), { writableEnded: false }) as unknown as ServerResponse,
     params: {},
@@ -317,8 +331,11 @@ function connectBridge(
   sessionId: string | readonly string[] | undefined,
   capabilityOverride?: string | readonly string[] | null,
   bridgeStreamIdOverride?: string,
+  correlationId?: string,
+  acceptWrite: (index: number) => boolean = (): boolean => true,
 ): {
   readonly frames: () => string;
+  readonly destroyed: () => boolean;
   readonly close: () => void;
   readonly outcome: ReturnType<typeof handleEditorAgentEvents>;
   readonly requestUrl: () => string | undefined;
@@ -326,17 +343,18 @@ function connectBridge(
 } {
   const writes: string[] = [];
   const closeHandlers: (() => void)[] = [];
+  const destroy = vi.fn();
   const res = {
     writeHead: vi.fn(),
     write: vi.fn((chunk: string) => {
       writes.push(chunk);
-      return true;
+      return acceptWrite(writes.length - 1);
     }),
     on: vi.fn((event: string, cb: () => void) => {
       if (event === "close") closeHandlers.push(cb);
     }),
     end: vi.fn(),
-    destroy: vi.fn(),
+    destroy,
   } as unknown as ServerResponse;
   const req = { on: vi.fn() } as unknown as IncomingMessage;
   const sessionIds: readonly string[] =
@@ -362,14 +380,10 @@ function connectBridge(
   const query = queryParts.length === 0 ? "" : `?${queryParts.join("&")}`;
   (req as { url?: string }).url = `/api/editor/agent/events${query}`;
   const url = new URL(`http://localhost/api/editor/agent/events${query}`);
-  const outcome = handleEditorAgentEvents({
-    req,
-    res,
-    params: {},
-    url,
-  });
+  const outcome = handleEditorAgentEvents({ correlationId, req, res, params: {}, url });
   return {
     frames: (): string => writes.join(""),
+    destroyed: (): boolean => destroy.mock.calls.length > 0,
     outcome,
     requestUrl: (): string | undefined => req.url,
     contextUrl: (): string => url.toString(),
@@ -527,8 +541,81 @@ async function postActionResult(
 
 function runtimeMutationDeps(
   runtimeMutationLease: NonNullable<UiHandlerDeps["runtimeMutationLease"]>,
+  workspaceRootAccessResolver: NonNullable<UiHandlerDeps["workspaceRootAccessResolver"]> = (
+    requestedRoot,
+  ) =>
+    grantedWorkspaceRootAccess({
+      kind: "managed-task",
+      canonicalRoot: requestedRoot,
+      fs: nodeWorkspaceFs,
+      repositoryRoot: requestedRoot,
+    }),
 ): Parameters<typeof handleEditorAgentActions>[1] {
-  return { runtimeMutationLease };
+  return { runtimeMutationLease, workspaceRootAccessResolver };
+}
+
+interface ManagedAgentWorkspaceFixture {
+  readonly dispose: () => void;
+  readonly resolveAccess: NonNullable<UiHandlerDeps["workspaceRootAccessResolver"]>;
+  readonly root: string;
+}
+
+function runManagedFixtureGit(repositoryRoot: string, args: readonly string[]): void {
+  execFileSync("git", [...args], { cwd: repositoryRoot, stdio: "ignore" });
+}
+
+function createManagedAgentWorkspaceFixture(): ManagedAgentWorkspaceFixture {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-agent-managed-")));
+  const repositoryRoot = join(base, "repository");
+  mkdirSync(repositoryRoot);
+  runManagedFixtureGit(repositoryRoot, ["init", "-q"]);
+  runManagedFixtureGit(repositoryRoot, ["config", "user.email", "test@example.invalid"]);
+  runManagedFixtureGit(repositoryRoot, ["config", "user.name", "Keiko Test"]);
+  writeFileSync(join(repositoryRoot, "README.md"), "managed agent fixture\n");
+  runManagedFixtureGit(repositoryRoot, ["add", "README.md"]);
+  runManagedFixtureGit(repositoryRoot, ["commit", "-qm", "fixture"]);
+  const managedRoot = join(base, ".keiko", "task-workspaces");
+  assertManagedRootOwned(managedRoot);
+  const repositoryId = "repo_0123456789abcdef";
+  const workspaceId = "ws_0123456789abcdef01234567";
+  const root = deriveManagedWorktreePath({ managedRoot, repositoryId, workspaceId });
+  mkdirSync(join(managedRoot, repositoryId), { recursive: true });
+  const taskBranch = "keiko/task/agent-managed-access-01234567";
+  runManagedFixtureGit(repositoryRoot, ["worktree", "add", "-q", "-b", taskBranch, root, "HEAD"]);
+  const gitdirIdentity = inspectManagedGitdirIdentity(root, repositoryRoot)?.identity;
+  if (gitdirIdentity === undefined) throw new Error("expected managed linked-worktree identity");
+  const instance: WorkspaceInstance = {
+    schemaVersion: "1",
+    workspaceId,
+    taskId: "agent-managed-access",
+    repositoryId,
+    repositoryRoot,
+    baseBranch: "dev",
+    taskBranch,
+    managedWorktreePath: root,
+    gitdirIdentity,
+    lifecycleState: "active",
+    health: "healthy",
+    lock: null,
+    createdAt: new Date(0).toISOString(),
+    updatedAt: new Date(0).toISOString(),
+    driftMarkers: [],
+    recoveryHints: [],
+    auditCorrelationId: "corr_agent_managed_access",
+  };
+  return {
+    root,
+    resolveAccess: (requestedRoot): WorkspaceRootAccessOutcome => {
+      const access = resolveLifecycleManagedWorkspaceRootAccess(
+        { managedRoot, store: { getById: (): WorkspaceInstance => instance } },
+        requestedRoot,
+      );
+      return access === undefined ? { decision: "denied" } : grantedWorkspaceRootAccess(access);
+    },
+    dispose: (): void => {
+      rmSync(base, { recursive: true, force: true });
+    },
+  };
 }
 
 function lastEmittedAction(frames: string): EditorAgentAction {
@@ -1748,49 +1835,6 @@ describe("server-resolved git query action (#2298)", () => {
 // ─── Original tests (unchanged) ────────────────────────────────────────────────────────────────
 
 describe("editor agent routes", () => {
-  it("registers a validated Authority Envelope and returns only its bounded reference", async () => {
-    const request = authorityRouteRequest(authorityEnvelope("/repo"));
-    const result = await handleEditorAgentAuthority(
-      context(request.body, "/api/editor/agent/authority"),
-      request.deps,
-    );
-    expect(result.status).toBe(200);
-    expect(responseAuthorityRef(result.body)).toEqual(
-      expect.objectContaining({ runId: "run-2121" }),
-    );
-    expect(JSON.stringify(result.body)).not.toContain("local-operator");
-    expect(JSON.stringify(result.body)).not.toContain("autonomous-delivery");
-    const replay = await handleEditorAgentAuthority(
-      context(request.body, "/api/editor/agent/authority"),
-      request.deps,
-    );
-    expect(replay.status).toBe(403);
-  });
-
-  it("rejects an Authority Envelope that is expired or exceeds the server ceiling", async () => {
-    const expiredEnvelope = {
-      ...authorityEnvelope("/repo"),
-      expiresAt: "2026-01-01T00:00:00.000Z",
-    };
-    const expiredRequest = authorityRouteRequest(expiredEnvelope);
-    const expired = await handleEditorAgentAuthority(
-      context(expiredRequest.body, "/api/editor/agent/authority"),
-      expiredRequest.deps,
-    );
-    const wrongCeilingEnvelope = authorityEnvelope(
-      "/repo",
-      "supervised-coding",
-      "supervised-coding",
-    );
-    const wrongCeilingRequest = authorityRouteRequest(wrongCeilingEnvelope);
-    const wrongCeiling = await handleEditorAgentAuthority(
-      context(wrongCeilingRequest.body, "/api/editor/agent/authority"),
-      wrongCeilingRequest.deps,
-    );
-    expect(expired.status).toBe(403);
-    expect(wrongCeiling.status).toBe(403);
-  });
-
   it("lists only browser sessions with a live authenticated bridge", async () => {
     const registered = await handleEditorAgentSnapshot(
       context(
@@ -1987,6 +2031,7 @@ describe("editor agent routes", () => {
       on: vi.fn(),
     } as unknown as IncomingMessage;
     const result = handleEditorAgentEvents({
+      correlationId: undefined,
       req,
       res,
       params: {},
@@ -2608,6 +2653,60 @@ describe("editor agent routes — Issue #1394 preflight checks", () => {
       expect(actionResultStatus(result.body)).toBe("queued");
     });
 
+    // Cursor review, PR #3381: the boundary check was repaired to run through the port a managed
+    // task worktree's access minted, but `inspectAdmissionAction` still hardcoded the plain node
+    // port for `applyPatch`, so a single-file patch inside such a worktree failed preflight as
+    // OUT_OF_SCOPE / INVALID_EDITS. The managed port is the ONLY source of the pre-image here — the
+    // bytes on disk do not match the patch — so reverting that hunk turns this 202 into a conflict.
+    it("inspects an applyPatch pre-image through the port the managed access resolved", async () => {
+      const srcDir = join(tmpDir, "src");
+      mkdirSync(srcDir);
+      const preImage = "export const VALUE = 1;\n";
+      // Same byte length as the pre-image (so nothing downstream reports the file as changed
+      // mid-validation) but a different value, which the patch context cannot match.
+      writeFileSync(join(srcDir, "widget.ts"), "export const VALUE = 9;\n", "utf8");
+      await registerSnapshot(tmpDir, "src/widget.ts");
+      const accessFs = forwardWorkspaceFs(nodeWorkspaceFs);
+      const accessRead = vi
+        .spyOn(accessFs, "readFileUtf8")
+        .mockImplementation((path: string): string =>
+          path === join(srcDir, "widget.ts") ? preImage : nodeWorkspaceFs.readFileUtf8(path),
+        );
+      const deps = {
+        workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccessOutcome =>
+          grantedWorkspaceRootAccess({
+            kind: "managed-task",
+            canonicalRoot: requestedRoot,
+            fs: accessFs,
+            repositoryRoot: requestedRoot,
+          }),
+      } satisfies Parameters<typeof handleEditorAgentActions>[1];
+
+      const result = await handleEditorAgentActions(
+        context(
+          action({
+            type: "applyPatch",
+            idempotencyKey: "ik-managed-patch",
+            actionId: "a-managed-patch",
+            expectedContentHash: HASH,
+            patch: [
+              "--- a/src/widget.ts",
+              "+++ b/src/widget.ts",
+              "@@ -1,1 +1,1 @@",
+              "-export const VALUE = 1;",
+              "+export const VALUE = 42;",
+            ].join("\n"),
+          }),
+        ),
+        deps,
+      );
+
+      expect(result.status).toBe(202);
+      expect(actionResultStatus(result.body)).toBe("queued");
+      expect(accessRead).toHaveBeenCalledWith(join(srcDir, "widget.ts"));
+      expect(JSON.stringify(result.body)).not.toContain("VALUE = 9");
+    });
+
     it("preserves chat origin on queued applyPatch and emits content-free audit (#2119)", async () => {
       const relativePath = "src/chat-origin.ts";
       const srcDir = join(tmpDir, "src");
@@ -2687,6 +2786,7 @@ describe("editor agent routes — Issue #1394 preflight checks", () => {
       const capability = bridgeDecisionCapabilities.get("session-1");
       if (capability === undefined) throw new Error("expected bridge capability");
       handleEditorAgentEvents({
+        correlationId: undefined,
         req: fakeReq,
         res: fakeRes,
         params: {},
@@ -2884,6 +2984,7 @@ describe("editor agent routes — Issue #1394 preflight checks", () => {
       } as unknown as ServerResponse;
       const fakeReq = { on: vi.fn() } as unknown as IncomingMessage;
       handleEditorAgentEvents({
+        correlationId: undefined,
         req: fakeReq,
         res: fakeRes,
         params: {},
@@ -3497,7 +3598,12 @@ describe("editor agent routes — Issue #1392 liveness and queue lifecycle", () 
     );
     expect(second.status).toBe(409);
     expect(actionResultStatus(second.body)).toBe("failed");
-    expect(actionFailureCode(second.body)).toBeUndefined();
+    // Still 409 and still not backpressure -- the invariant this case was written for. The cause
+    // is now NAMED as well: a code-free lifecycle failure reached the coding runtime as
+    // `undefined`, which the activity log recorded as `unclassified`, so the model read a
+    // duplicate as a policy denial and retried the same edit blind.
+    expect(actionFailureCode(second.body)).not.toBe("QUEUE_FULL");
+    expect(actionFailureCode(second.body)).toBe("DUPLICATE_ACTION");
   });
 
   it("rejects a second mutation while allowing a nonmutating action to queue", async () => {
@@ -3530,6 +3636,96 @@ describe("editor agent routes — Issue #1392 liveness and queue lifecycle", () 
     expect(bridge1.frames()).toContain("event: editor-agent:action");
     expect(observer.frames()).not.toContain("event: editor-agent:action");
     expect(bridge2.frames()).not.toContain("event: editor-agent:action");
+  });
+
+  // The editor-agent SSE bridge wrote its ready frame and every event frame with a bare
+  // `res.write`, bypassing `recordSseStreamFrame` (sse-write.ts): the stream never counted a frame,
+  // never attached a correlation id, and never produced its terminal `sse.stream.closed` line, so a
+  // customer log could not show a bridge had been open at all (AGENTS.md §8). Every frame now goes
+  // through the shared recording path under the request's correlation id.
+  describe("editor-agent bridge stream evidence", () => {
+    function closedLines(sink: BufferedServerLogSink): readonly ServerLogEvent[] {
+      return sink.events.filter((event) => event.op === "sse.stream.closed");
+    }
+
+    afterEach(() => {
+      resetServerLogger();
+    });
+
+    it("closes with one sse.stream.closed line counting the ready and event frames under the request's correlation id", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      await registerSnapshotOnly();
+      const bridge = connectBridge("session-1", undefined, undefined, "corr-agent-bridge-1");
+
+      await handleEditorAgentActions(
+        context(navAction({ actionId: "a-evidence", idempotencyKey: "k-evidence" })),
+      );
+      bridge.close();
+
+      expect(bridge.frames()).toContain("event: editor-agent:action");
+      expect(closedLines(sink)).toEqual([
+        expect.objectContaining({
+          category: "http",
+          op: "sse.stream.closed",
+          correlationId: "corr-agent-bridge-1",
+          extra: {
+            completeness: "complete",
+            loss: "none",
+            frameCount: 2,
+            bytesStreamed: Buffer.byteLength(bridge.frames(), "utf8"),
+            reason: "client-disconnected",
+          },
+        }),
+      ]);
+    });
+
+    it("closes under UNKNOWN_CORRELATION_ID, never without an id, when the request carries none", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      await registerSnapshotOnly();
+      const bridge = connectBridge("session-1");
+
+      bridge.close();
+
+      expect(closedLines(sink)).toEqual([
+        expect.objectContaining({
+          op: "sse.stream.closed",
+          correlationId: UNKNOWN_CORRELATION_ID,
+          extra: expect.objectContaining({ frameCount: 1 }) as unknown,
+        }),
+      ]);
+    });
+
+    // CodeRabbit review, PR #3452: a refused ready frame used to be ignored, leaving the controller
+    // and the session subscription alive until some other close path ran. It now takes the same
+    // abort-and-destroy path as every event frame.
+    it("destroys a bridge stream whose ready frame is refused and closes it as backpressure-killed", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      await registerSnapshotOnly();
+      const bridge = connectBridge(
+        "session-1",
+        undefined,
+        undefined,
+        "corr-agent-bridge-2",
+        () => false,
+      );
+
+      expect(bridge.destroyed()).toBe(true);
+      bridge.close();
+
+      expect(closedLines(sink)).toEqual([
+        expect.objectContaining({
+          op: "sse.stream.closed",
+          correlationId: "corr-agent-bridge-2",
+          extra: expect.objectContaining({
+            frameCount: 1,
+            reason: "backpressure-killed",
+          }) as unknown,
+        }),
+      ]);
+    });
   });
 
   it("never writes raw source content to logs", async () => {
@@ -3572,6 +3768,7 @@ describe("editor agent routes — Issue #1392 liveness and queue lifecycle", () 
 
 function auditRecords(sessionId = "session-1"): readonly EditorAgentActionAuditRecord[] {
   const result = handleEditorAgentAudit({
+    correlationId: undefined,
     req: {} as unknown as IncomingMessage,
     res: {} as unknown as ServerResponse,
     params: {},
@@ -3799,6 +3996,28 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     expect(JSON.stringify(emitted.changeset?.prepared)).not.toContain("FORGED_PREVIEW");
     expect(reads).toEqual([join(workspaceRoot, "src/a.txt"), join(workspaceRoot, "src/b.txt")]);
     vi.restoreAllMocks();
+  });
+
+  it("reviews the validated three-file patch when model hunk counts need normalization", async () => {
+    const files = ["src/a.txt", "src/b.txt", "README.md"];
+    for (const file of files) writeWorkspaceFile(workspaceRoot, file, "before\n");
+    const patch = oneLineModifyPatch(
+      files.map((file) => ({ file, before: "before", after: "after" })),
+    ).replaceAll("@@ -1 +1 @@", "@@ -1,99 +1,99 @@");
+    const proposed = changesetActionFor(workspaceRoot, patch, files);
+    const bridge = await registerChangesetSnapshot(workspaceRoot, "src/a.txt", files);
+
+    expect((await handleEditorAgentActions(context(proposed))).status).toBe(202);
+    const emitted = lastEmittedAction(bridge.frames());
+    const reviewPatch = emitted.changeset?.patch ?? "";
+    // The bridge must never render the unvalidated model spelling: stale counts swallow the
+    // next file header in the UI parser, hiding a member of the approved changeset (#3560).
+    expect(parseUnifiedDiff(reviewPatch).files.map((file) => file.path)).toEqual(files);
+    expect(emitted.changeset?.prepared?.files.map((file) => file.file)).toEqual(files);
+    for (const file of files) expect(readWorkspaceFile(workspaceRoot, file)).toBe("before\n");
+    expect((await postActionResult(proposed, "succeeded")).status).toBe(200);
+    for (const file of files) expect(readWorkspaceFile(workspaceRoot, file)).toBe("after\n");
+    expect(auditRecords().map((record) => record.outcome)).toEqual(["queued", "succeeded"]);
   });
 
   it("preserves chat origin through a queued applyChangeset and its audit record (#2119)", async () => {
@@ -4078,6 +4297,147 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     },
   );
 
+  // A Keiko-managed task worktree lives below the state directory's always-denied segment. The
+  // boundary check answers "does the path leave the resolved root" through the port the managed
+  // access minted; through the plain node port it re-admitted the root under the user-workspace
+  // rules and refused every path inside the worktree as an escape, which denied every governed
+  // coding edit (workbench end-to-end run, 2026-09-03).
+  it("keeps a path inside a managed task worktree on its root through the access port", () => {
+    const fixture = createManagedAgentWorkspaceFixture();
+    try {
+      writeWorkspaceFile(fixture.root, "src/a.txt", "A0\n");
+      const access = fixture.resolveAccess(fixture.root);
+      if (access.decision !== "granted") throw new Error("expected managed-root access");
+      const root: EditorAgentResolvedRoot = {
+        workspaceRoot: fixture.root,
+        binding: {
+          workspaceId: "ws-managed",
+          manifestRef: branded("manifest-managed", isWorkspaceManifestRef),
+          manifestRevision: 1,
+          manifestDigest: branded(HASH, isWorkspaceManifestDigest),
+          rootRef: branded("root-managed", isWorkspaceRootRef),
+          rootIdentityDigest: branded(HASH, isWorkspaceRootIdentityDigest),
+        },
+        explicitBindingRequired: true,
+      };
+
+      expect(editorAgentPathBoundaryReason(root, ["src/a.txt"], access.access.fs)).toBeNull();
+      expect(editorAgentPathBoundaryReason(root, ["src/new.txt"], access.access.fs)).toBeNull();
+      expect(editorAgentPathBoundaryReason(root, ["../escape.txt"], access.access.fs)).toBe(
+        "workspace-boundary-escape",
+      );
+      // The plain node port still applies the user-workspace admission to the same root.
+      expect(editorAgentPathBoundaryReason(root, ["src/a.txt"])).toBe("workspace-boundary-escape");
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  // navigateSymbol without client-supplied text reads the document server-side. That read detected
+  // the workspace through the plain node port, so for a managed task worktree it threw before
+  // reading anything and every such navigation failed with the generic server-resolved error
+  // (review of PR #3452) — the same defect class as the boundary check above.
+  it("reads a navigateSymbol document inside a managed task worktree through the access port", () => {
+    const fixture = createManagedAgentWorkspaceFixture();
+    try {
+      writeWorkspaceFile(fixture.root, "src/a.ts", "export const a = 1;\n");
+      const deps = {
+        workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccessOutcome =>
+          fixture.resolveAccess(requestedRoot),
+      };
+      expect(serverResolvedDocumentText(deps, fixture.root, "src/a.ts", undefined)).toBe(
+        "export const a = 1;\n",
+      );
+      expect(serverResolvedDocumentText(deps, fixture.root, "src/a.ts", "buffer")).toBe("buffer");
+      // Without the resolver the plain node port still applies the user-workspace admission.
+      expect(() =>
+        serverResolvedDocumentText(undefined, fixture.root, "src/a.ts", undefined),
+      ).toThrow(PathDeniedError);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  // Empty, hostile and boundary inputs on the same managed port (AGENTS.md §10; CodeRabbit,
+  // PR #3452). Supplied text is returned verbatim and reads nothing — including the empty string,
+  // which must not fall through to a server-side read; a path that escapes the worktree is refused
+  // by the port rather than read; and the navigation byte ceiling is enforced AT the limit and above
+  // it, so one oversized document cannot be pulled into a navigation response.
+  it("holds empty, escaping and oversized navigateSymbol documents to the managed port's rules", () => {
+    const fixture = createManagedAgentWorkspaceFixture();
+    try {
+      const deps = {
+        workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccessOutcome =>
+          fixture.resolveAccess(requestedRoot),
+      };
+      writeWorkspaceFile(fixture.root, "src/a.ts", "export const a = 1;\n");
+      writeWorkspaceFile(fixture.root, "src/at-limit.ts", "x".repeat(NAVIGATION_MAX_BYTES));
+      writeWorkspaceFile(fixture.root, "src/over-limit.ts", "x".repeat(NAVIGATION_MAX_BYTES + 1));
+
+      // Empty supplied text is still supplied text: returned as-is, no read, no throw.
+      expect(serverResolvedDocumentText(deps, fixture.root, "src/a.ts", "")).toBe("");
+      expect(serverResolvedDocumentText(deps, fixture.root, "does-not-exist.ts", "")).toBe("");
+
+      // Hostile paths: a traversal escape, an absolute path, and a deeper traversal that still lands
+      // outside. `src/../../escape.ts` is NOT a third case — it resolves byte-for-byte to
+      // `../escape.ts` (owner review, PR #3452) — so the third one leaves from a nested directory.
+      for (const hostile of ["../escape.ts", "/etc/passwd", "src/nested/../../../escape.ts"]) {
+        expect(() => serverResolvedDocumentText(deps, fixture.root, hostile, undefined)).toThrow();
+      }
+      // The accept half of the same rule: a traversal that NORMALIZES BACK INSIDE the worktree is
+      // read through the managed port like any contained path, never refused as an escape.
+      expect(serverResolvedDocumentText(deps, fixture.root, "src/../src/a.ts", undefined)).toBe(
+        "export const a = 1;\n",
+      );
+
+      // Boundary: exactly at the ceiling reads; one byte over is refused.
+      expect(
+        serverResolvedDocumentText(deps, fixture.root, "src/at-limit.ts", undefined),
+      ).toHaveLength(NAVIGATION_MAX_BYTES);
+      expect(() =>
+        serverResolvedDocumentText(deps, fixture.root, "src/over-limit.ts", undefined),
+      ).toThrow();
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  it("applies a runtime changeset through freshly resolved managed-root authority", async () => {
+    const fixture = createManagedAgentWorkspaceFixture();
+    try {
+      writeWorkspaceFile(fixture.root, "src/a.txt", "A0\n");
+      writeWorkspaceFile(fixture.root, "src/b.txt", "B0\n");
+      const patch = oneLineModifyPatch([
+        { file: "src/a.txt", before: "A0", after: "A1" },
+        { file: "src/b.txt", before: "B0", after: "B1" },
+      ]);
+      const proposed = changesetActionFor(fixture.root, patch, ["src/a.txt", "src/b.txt"]);
+      await registerChangesetSnapshot(fixture.root, "src/a.txt", ["src/a.txt", "src/b.txt"]);
+      const runtimeMutationLease = {
+        matches: vi.fn((): boolean => true),
+        requiresReview: vi.fn((): boolean => true),
+        claim: vi.fn((): boolean => true),
+        complete: vi.fn((): boolean => true),
+        discard: vi.fn((): boolean => true),
+      } satisfies NonNullable<UiHandlerDeps["runtimeMutationLease"]>;
+      const resolveAccess = vi.fn(fixture.resolveAccess);
+      const deps = runtimeMutationDeps(runtimeMutationLease, resolveAccess);
+
+      expect((await handleEditorAgentActions(context(proposed), deps)).status).toBe(202);
+      const committed = await postActionResult(proposed, "succeeded", "session-1", undefined, deps);
+
+      expect(actionResultStatus(committed.body)).toBe("succeeded");
+      // Five live proofs: the root boundary checks at submission and at the posted result run
+      // through the managed access port too (2026-09-03), ahead of the inspection and apply proofs.
+      expect(resolveAccess).toHaveBeenCalledTimes(5);
+      expect(runtimeMutationLease.claim).toHaveBeenCalledOnce();
+      expect(readWorkspaceFile(fixture.root, "src/a.txt")).toBe("A1\n");
+      expect(readWorkspaceFile(fixture.root, "src/b.txt")).toBe("B1\n");
+    } finally {
+      fixture.dispose();
+    }
+  });
+
   it("keeps a local changeset with an authority reference on the established audit path", async () => {
     const arranged = arrangeTwoFiles();
     await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt", "src/b.txt"]);
@@ -4205,6 +4565,17 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
     await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt", "src/b.txt"]);
     registerTestAuthority(workspaceRoot);
     const order: string[] = [];
+    const accessFs = forwardWorkspaceFs(nodeWorkspaceFs);
+    const accessRead = vi.spyOn(accessFs, "readFileUtf8");
+    const resolveWorkspaceRootAccess = vi.fn((requestedRoot: string) => {
+      order.push("access");
+      return grantedWorkspaceRootAccess({
+        kind: "managed-task",
+        canonicalRoot: requestedRoot,
+        fs: accessFs,
+        repositoryRoot: requestedRoot,
+      });
+    });
     const writeFileUtf8 = vi.fn((_path: string, _content: string): void => {
       order.push("write");
     });
@@ -4227,32 +4598,99 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
       }),
       discard: vi.fn((): boolean => true),
     } satisfies NonNullable<UiHandlerDeps["runtimeMutationLease"]>;
+    const deps = runtimeMutationDeps(runtimeMutationLease, resolveWorkspaceRootAccess);
 
-    expect(
-      (
-        await handleEditorAgentActions(
-          context(arranged.action),
-          runtimeMutationDeps(runtimeMutationLease),
-        )
-      ).status,
-    ).toBe(202);
+    expect((await handleEditorAgentActions(context(arranged.action), deps)).status).toBe(202);
     const committed = await postActionResult(
       arranged.action,
       "succeeded",
       arranged.action.sessionId,
       undefined,
-      runtimeMutationDeps(runtimeMutationLease),
+      deps,
     );
 
     expect(actionResultStatus(committed.body)).toBe("succeeded");
     expect(runtimeMutationLease.matches).toHaveBeenCalledTimes(1);
     expect(runtimeMutationLease.claim).toHaveBeenCalledTimes(1);
     expect(runtimeMutationLease.complete).toHaveBeenCalledExactlyOnceWith(expect.any(Object), true);
-    expect(order).toEqual(expect.arrayContaining(["claim", "write"]));
+    // Boundary checks at submission and at the posted result add two proofs (2026-09-03).
+    expect(resolveWorkspaceRootAccess).toHaveBeenCalledTimes(5);
+    expect(accessRead).toHaveBeenCalled();
+    expect(order).toEqual(expect.arrayContaining(["claim", "access", "write"]));
     expect(order.indexOf("claim")).toBeLessThan(order.indexOf("write"));
+    expect(order.lastIndexOf("access")).toBeGreaterThan(order.indexOf("claim"));
+    expect(order.lastIndexOf("access")).toBeLessThan(order.indexOf("write"));
     expect(auditRecords().at(-2)).not.toHaveProperty("targetPath");
     expect(auditRecords().at(-1)).not.toHaveProperty("targetPath");
   });
+
+  it.each(["revoked", "replaced"] as const)(
+    "re-proves managed workspace authority and fails closed when it is %s before apply",
+    async (outcome) => {
+      const arranged = arrangeTwoFiles();
+      await registerChangesetSnapshot(workspaceRoot, "src/a.txt", ["src/a.txt", "src/b.txt"]);
+      registerTestAuthority(workspaceRoot);
+      const writer = {
+        writeFileUtf8: vi.fn((_path: string, _content: string): void => undefined),
+        mkdirp: vi.fn((_path: string): void => undefined),
+        remove: vi.fn((_path: string): void => undefined),
+        rename: vi.fn((_from: string, _to: string): void => undefined),
+      };
+      _setEditorAgentPatchWriterForTests(writer);
+      let proofCount = 0;
+      const resolveWorkspaceRootAccess = vi.fn(
+        (requestedRoot: string): WorkspaceRootAccessOutcome => {
+          proofCount += 1;
+          // Proofs 1-2 admit the submission, 3-4 the posted result's boundary check and
+          // projection; the apply's own re-proof is the fifth and must fail closed (2026-09-03).
+          if (proofCount < 5) {
+            return grantedWorkspaceRootAccess({
+              kind: "managed-task",
+              canonicalRoot: requestedRoot,
+              fs: nodeWorkspaceFs,
+              repositoryRoot: requestedRoot,
+            });
+          }
+          return outcome === "revoked"
+            ? { decision: "denied" }
+            : grantedWorkspaceRootAccess({
+                kind: "managed-task",
+                canonicalRoot: join(requestedRoot, "replacement"),
+                fs: nodeWorkspaceFs,
+                repositoryRoot: requestedRoot,
+              });
+        },
+      );
+      const runtimeMutationLease = {
+        matches: vi.fn((): boolean => true),
+        requiresReview: vi.fn((): boolean => true),
+        claim: vi.fn((): boolean => true),
+        complete: vi.fn((): boolean => true),
+        discard: vi.fn((): boolean => true),
+      } satisfies NonNullable<UiHandlerDeps["runtimeMutationLease"]>;
+      const deps = runtimeMutationDeps(runtimeMutationLease, resolveWorkspaceRootAccess);
+
+      expect((await handleEditorAgentActions(context(arranged.action), deps)).status).toBe(202);
+      const denied = await postActionResult(
+        arranged.action,
+        "succeeded",
+        "session-1",
+        undefined,
+        deps,
+      );
+
+      expect(actionResultStatus(denied.body)).toBe("failed");
+      expect(resolveWorkspaceRootAccess).toHaveBeenCalledTimes(5);
+      expect(runtimeMutationLease.claim).toHaveBeenCalledOnce();
+      expect(runtimeMutationLease.complete).toHaveBeenCalledExactlyOnceWith(
+        expect.any(Object),
+        false,
+      );
+      expect(Object.values(writer).every((effect) => effect.mock.calls.length === 0)).toBe(true);
+      expect(readWorkspaceFile(workspaceRoot, "src/a.txt")).toBe("A0\n");
+      expect(readWorkspaceFile(workspaceRoot, "src/b.txt")).toBe("B0\n");
+    },
+  );
 
   it("revalidates every changeset member after a target becomes an outward symlink", async () => {
     const arranged = arrangeTwoFiles();
@@ -4610,6 +5048,30 @@ describe("applyChangesetErrorMessage (Issue #2117)", () => {
     expect(applyChangesetErrorMessage("not an Error instance")).toBe(
       "The changeset could not be applied atomically.",
     );
+  });
+});
+
+// #2906 round-3 review: authorityDenyReason previously collapsed a revoked authority into the same
+// generic authority-invalid bucket as a genuinely malformed one, even though
+// EditorAgentActionDenyReason has carried a dedicated "authority-revoked" literal since this PR's
+// registry-revocation contract expansion -- mirrors verificationAuthorityDenyReason's own coverage.
+describe("authorityDenyReason", () => {
+  it("maps an expired authority to authority-expired", () => {
+    expect(authorityDenyReason({ ok: false, reason: "expired" })).toBe("authority-expired");
+  });
+
+  it("maps an exhausted budget to authority-budget-exceeded", () => {
+    expect(authorityDenyReason({ ok: false, reason: "budget-exceeded" })).toBe(
+      "authority-budget-exceeded",
+    );
+  });
+
+  it("maps a revoked authority to authority-revoked", () => {
+    expect(authorityDenyReason({ ok: false, reason: "revoked" })).toBe("authority-revoked");
+  });
+
+  it("falls back to authority-invalid for a malformed envelope", () => {
+    expect(authorityDenyReason({ ok: false, reason: "invalid" })).toBe("authority-invalid");
   });
 });
 

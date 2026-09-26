@@ -1,7 +1,7 @@
 import {
   EDITOR_AGENT_TARGET_PATH_MAX_BYTES,
   EDITOR_AGENT_WORKSPACE_ROOT_MAX_BYTES,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {

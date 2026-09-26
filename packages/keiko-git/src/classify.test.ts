@@ -190,5 +190,33 @@ describe("classifyGitRemoteFailure", () => {
     expect(new Set(GIT_REMOTE_FAILURE_REASONS).size).toBe(GIT_REMOTE_FAILURE_REASONS.length);
     expect(GIT_REMOTE_FAILURE_REASONS).toContain("remote-unavailable");
     expect(GIT_REMOTE_FAILURE_REASONS).toContain("output-truncated");
+    expect(GIT_REMOTE_FAILURE_REASONS).toContain("cancelled");
+  });
+
+  // KEIKO-0184: the runner sets `truncated` on abort too, so a classifier that only reads the
+  // byte-cap flag reports every caller-aborted run as `output-truncated`. The runner now also
+  // sets a distinct `aborted` bit, and the classifier must return `cancelled` for that case —
+  // ahead of the byte-cap fallback and ahead of the exit-code fallback.
+  it("distinguishes a caller-aborted run from a byte-cap truncation", () => {
+    expect(classifyGitRemoteFailure(result({ aborted: true, truncated: true }))).toBe("cancelled");
+    // Even when the process happened to close with exit 0 before the abort actually killed it,
+    // the abort remains the authoritative signal.
+    expect(classifyGitRemoteFailure(result({ aborted: true, exitCode: 0 }))).toBe("cancelled");
+  });
+
+  // KEIKO-0184 (round 2). An earlier revision of THIS pin asserted the opposite ordering
+  // (`aborted + timedOut` => "timeout"). Review showed that ordering made `cancelled` unreachable
+  // in the one situation it was introduced for, so the assertion is corrected here rather than
+  // relaxed — the guard is strictly stronger now, because a caller cancellation stays
+  // distinguishable in the race instead of being absorbed into "timeout".
+  //
+  // The race is real and lives in runner.ts: `onAbort` sets `aborted` and starts the
+  // KILL_GRACE_MS escalation but does NOT clear the deadline timer — only `settle` does, and that
+  // runs when the child finally closes. A caller aborting shortly before the deadline therefore
+  // arrives here with BOTH bits set.
+  it("reports a caller abort that raced the deadline as cancelled, not timeout", () => {
+    expect(classifyGitRemoteFailure(result({ aborted: true, timedOut: true }))).toBe("cancelled");
+    // A genuine deadline with no caller abort is still a timeout.
+    expect(classifyGitRemoteFailure(result({ timedOut: true }))).toBe("timeout");
   });
 });

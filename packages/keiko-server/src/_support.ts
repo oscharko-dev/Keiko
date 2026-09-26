@@ -23,7 +23,8 @@
 
 import { Readable, PassThrough } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { UNVERIFIED_GATEWAY, type GatewayVerificationState } from "@oscharko-dev/keiko-contracts";
+import type { GatewayVerificationState } from "@oscharko-dev/keiko-contracts";
+import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { RuntimeGatewayConfig, VerifiedModelCapabilityObservation } from "./deps.js";
 

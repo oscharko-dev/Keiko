@@ -786,6 +786,126 @@ describe("runGitMerge — remaining gate + execution branches", () => {
     expect(result.rejection?.reason).toBe("provider-unavailable");
   });
 
+  // KEIKO-0147: an unexpired approval by an operator not in the decision's requiredApprovers set
+  // used to sail through the gate — the resolver checked expiry and required-ness but not
+  // membership. A deployment that names specific approvers would silently accept ANY authenticated
+  // approval; only the default pack's empty requiredApprovers array (== any approval) hid the bug.
+  it("blocks when the granting user is not in the decision's requiredApprovers set", async () => {
+    const adapter = fakeAdapter(readyProvider(), SUCCEEDED);
+    const packWithNamedApprovers: GitDeliveryRepoPolicyPack = {
+      schemaVersion: "1",
+      repoId: "test-merge-named",
+      rules: [{ actionKind: "merge", decision: "approval-gated", requiredApprovers: ["alice"] }],
+      defaultRule: { decision: "blocked" },
+    };
+    const wrongApprover: GitDeliveryApprovalRequirement = {
+      required: true,
+      approvalTokenHash: "a".repeat(64),
+      approvedByUserId: "bob",
+      approvedAtMs: 1,
+    };
+    const result = await runGitMerge(
+      { command: COMMAND, approval: wrongApprover },
+      deps(adapter, packWithNamedApprovers),
+    );
+    expect(result.lifecycle.outcome).toMatchObject({
+      status: "blocked",
+      blockReason: "approver-not-authorized",
+    });
+    expect(adapter.mergeCalls()).toHaveLength(0);
+  });
+
+  it("proceeds when the granting user IS in the decision's requiredApprovers set", async () => {
+    const adapter = fakeAdapter(readyProvider(), SUCCEEDED);
+    const packWithNamedApprovers: GitDeliveryRepoPolicyPack = {
+      schemaVersion: "1",
+      repoId: "test-merge-named-ok",
+      rules: [{ actionKind: "merge", decision: "approval-gated", requiredApprovers: ["alice"] }],
+      defaultRule: { decision: "blocked" },
+    };
+    const rightApprover: GitDeliveryApprovalRequirement = {
+      required: true,
+      approvalTokenHash: "a".repeat(64),
+      approvedByUserId: "alice",
+      approvedAtMs: 1,
+    };
+    const result = await runGitMerge(
+      { command: COMMAND, approval: rightApprover },
+      deps(adapter, packWithNamedApprovers),
+    );
+    expect(result.lifecycle.outcome.status).toBe("succeeded");
+    expect(adapter.mergeCalls()).toHaveLength(1);
+  });
+
+  it("keeps the empty-requiredApprovers === any-authenticated-approval convention (ADR-0080 D5)", async () => {
+    const adapter = fakeAdapter(readyProvider(), SUCCEEDED);
+    const approvalFromUnnamedUser: GitDeliveryApprovalRequirement = {
+      required: true,
+      approvalTokenHash: "a".repeat(64),
+      approvedByUserId: "local-operator",
+      approvedAtMs: 1,
+    };
+    const result = await runGitMerge(
+      { command: COMMAND, approval: approvalFromUnnamedUser },
+      deps(adapter, APPROVAL_GATED_PACK),
+    );
+    expect(result.lifecycle.outcome.status).toBe("succeeded");
+    expect(adapter.mergeCalls()).toHaveLength(1);
+  });
+
+  // KEIKO-0154: the readiness read fetched provider.headRefHash but never compared it to the
+  // command's expectedHeadRefHash before calling mergePullRequest. A merge command that omitted
+  // the guard silently succeeded against whatever head the branch had acquired since the approval
+  // was granted; a merge command with a mismatched hash only failed IF the adapter's opportunistic
+  // -f sha= guard fired later, which it doesn't for the omitted case.
+  it("blocks fail-closed when expectedHeadRefHash is set but does not match the provider read", async () => {
+    const provider = readyProvider({ headRefHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" });
+    const adapter = fakeAdapter(provider, SUCCEEDED);
+    const result = await runGitMerge(
+      {
+        command: { ...COMMAND, expectedHeadRefHash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" },
+        approval: NO_APPROVAL,
+      },
+      deps(adapter, ALLOW_PACK),
+    );
+    expect(result.lifecycle.outcome).toMatchObject({
+      status: "blocked",
+      blockReason: "head-hash-mismatch",
+    });
+    expect(adapter.mergeCalls()).toHaveLength(0);
+  });
+
+  it("blocks fail-closed when the provider reports a head hash and the command omits expectedHeadRefHash", async () => {
+    const provider = readyProvider({ headRefHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" });
+    const adapter = fakeAdapter(provider, SUCCEEDED);
+    const result = await runGitMerge(
+      { command: COMMAND, approval: NO_APPROVAL }, // No expectedHeadRefHash on the command.
+      deps(adapter, ALLOW_PACK),
+    );
+    expect(result.lifecycle.outcome).toMatchObject({
+      status: "blocked",
+      blockReason: "head-hash-mismatch",
+    });
+    expect(adapter.mergeCalls()).toHaveLength(0);
+  });
+
+  it("proceeds when the command's expectedHeadRefHash matches the provider readiness read", async () => {
+    const provider = readyProvider({ headRefHash: "abcdef1234567890abcdef1234567890abcdef12" });
+    const adapter = fakeAdapter(provider, SUCCEEDED);
+    const result = await runGitMerge(
+      {
+        command: { ...COMMAND, expectedHeadRefHash: "abcdef1234567890abcdef1234567890abcdef12" },
+        approval: NO_APPROVAL,
+      },
+      deps(adapter, ALLOW_PACK),
+    );
+    expect(result.lifecycle.outcome.status).toBe("succeeded");
+    expect(adapter.mergeCalls()).toHaveLength(1);
+    expect(adapter.mergeCalls()[0]?.expectedHeadRefHash).toBe(
+      "abcdef1234567890abcdef1234567890abcdef12",
+    );
+  });
+
   it("carries merged + branchDeleted through a successful delete-after-merge", async () => {
     const merged: GitMergeExecResult = {
       schemaVersion: "1",

@@ -6,22 +6,29 @@
 
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts";
-import { MemoryList } from "./components/MemoryList";
+import { MemoryListContent } from "./components/MemoryList";
+import type { MemoryFilterState } from "./components/MemoryFilters";
 import { ReviewQueue } from "./components/ReviewQueue";
 import { EditMemoryDialog } from "./components/EditMemoryDialog";
 import { MemoryActions } from "./components/MemoryActions";
 import type { MemoryListResponse, MemoryReviewQueueResponse } from "@/lib/memory-api";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 
-const pushMock = vi.fn();
-let currentSearchParams: { get: (key: string) => string | null } = { get: () => null };
+// KEIKO-0650: the earlier MemoryList URL-state-sync wrapper (router.push on filter change) was
+// removed as dead code once every production caller moved to MemoryListContent with explicit
+// filters/onFilterChange props — none of ReviewQueue/EditMemoryDialog/MemoryActions use
+// next/navigation, so the router/searchParams mock this file used only for MemoryList is gone too.
 
-vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push: pushMock }),
-  useSearchParams: () => currentSearchParams,
-}));
+const emptyFilters: MemoryFilterState = {
+  query: "",
+  scope: [],
+  type: [],
+  status: [],
+  sensitivity: [],
+};
 
 vi.mock("next/link", () => ({
   default: ({
@@ -70,28 +77,37 @@ function queueResponse(records: readonly MemoryRecord[]): MemoryReviewQueueRespo
   return { memories: records, total: records.length };
 }
 
-beforeEach(() => {
-  pushMock.mockReset();
-  currentSearchParams = { get: () => null };
-});
-
 describe("MemoriaViva browser-tier flows", () => {
+  afterEach(() => {
+    resetClientDiagnosticWriter();
+  });
+
   it("covers filtering and empty-state behavior on the MemoriaViva route", async () => {
     const user = userEvent.setup();
     const fetchMemoriesImpl = vi.fn().mockResolvedValue(listResponse([]));
+    const onFilterChange = vi.fn();
 
-    render(<MemoryList fetchMemoriesImpl={fetchMemoriesImpl} />);
+    render(
+      <MemoryListContent
+        filters={emptyFilters}
+        onFilterChange={onFilterChange}
+        fetchMemoriesImpl={fetchMemoriesImpl}
+        showWorkspaceBackLink
+      />,
+    );
 
     await waitFor(() => {
       expect(screen.getByTestId("memory-empty-state")).toBeInTheDocument();
     });
     expect(screen.getByText("No memories found")).toBeInTheDocument();
 
+    // The filter chips still dispatch through onFilterChange — MemoryListContent's caller (a
+    // desktop window today) owns what happens next, no longer a router.push URL sync.
     await user.click(screen.getByRole("button", { name: "Global" }));
-    expect(pushMock).toHaveBeenLastCalledWith("/memoriaviva?scope=global");
+    expect(onFilterChange).toHaveBeenLastCalledWith({ ...emptyFilters, scope: ["global"] });
 
     await user.click(screen.getByRole("button", { name: "Proposed" }));
-    expect(pushMock).toHaveBeenLastCalledWith("/memoriaviva?status=proposed");
+    expect(onFilterChange).toHaveBeenLastCalledWith({ ...emptyFilters, status: ["proposed"] });
   });
 
   it("covers review actions, conflict display, stale display, and stale archival", async () => {
@@ -155,6 +171,141 @@ describe("MemoriaViva browser-tier flows", () => {
         "archived stale memory from review queue",
       );
     });
+  });
+
+  it("requires the reviewer to select an ambiguous correction predecessor", async () => {
+    const user = userEvent.setup();
+    const correction = makeMemory({
+      id: "mem-browser-correction" as MemoryId,
+      type: "correction",
+      body: "Release hardening uses vitest.",
+      status: "proposed",
+    });
+    const first = makeMemory({
+      id: "mem-browser-predecessor-1" as MemoryId,
+      body: "<img src=x onerror=alert(1)> Release hardening uses jest.",
+    });
+    const second = makeMemory({
+      id: "mem-browser-predecessor-2" as MemoryId,
+      body: "Release hardening uses tap.",
+    });
+    const acceptImpl = vi.fn().mockResolvedValue({ memory: { ...correction, status: "accepted" } });
+
+    const fetchPredecessors = vi.fn().mockResolvedValue({ candidates: [first, second] });
+    const { container } = render(
+      <ReviewQueue
+        fetchQueueImpl={vi.fn().mockResolvedValue(queueResponse([correction]))}
+        fetchCorrectionPredecessorsImpl={fetchPredecessors}
+        acceptImpl={acceptImpl}
+      />,
+    );
+
+    const approve = await screen.findByRole("button", { name: "Approve" });
+    expect(fetchPredecessors).not.toHaveBeenCalled();
+    await user.click(approve);
+    expect(acceptImpl).not.toHaveBeenCalled();
+    const selector = await screen.findByLabelText("Memory being corrected");
+    expect(selector).toHaveTextContent("<img src=x onerror=alert(1)>");
+    expect(container.querySelector("img")).toBeNull();
+    await user.selectOptions(selector, "mem-browser-predecessor-1");
+    await user.click(approve);
+
+    await waitFor(() => {
+      expect(acceptImpl).toHaveBeenCalledWith("mem-browser-correction", {
+        predecessorId: "mem-browser-predecessor-1",
+      });
+    });
+  });
+
+  it("binds a unique correction predecessor before acceptance", async () => {
+    const user = userEvent.setup();
+    const correction = makeMemory({
+      id: "mem-browser-unique-correction" as MemoryId,
+      type: "correction",
+      status: "proposed",
+    });
+    const predecessor = makeMemory({ id: "mem-browser-unique-predecessor" as MemoryId });
+    const acceptImpl = vi.fn().mockResolvedValue({ memory: { ...correction, status: "accepted" } });
+    render(
+      <ReviewQueue
+        fetchQueueImpl={vi.fn().mockResolvedValue(queueResponse([correction]))}
+        fetchCorrectionPredecessorsImpl={vi.fn().mockResolvedValue({ candidates: [predecessor] })}
+        acceptImpl={acceptImpl}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Approve" }));
+    expect(acceptImpl).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Approve" })).toHaveAttribute(
+        "aria-disabled",
+        "false",
+      );
+    });
+    await user.click(screen.getByRole("button", { name: "Approve" }));
+
+    await waitFor(() => {
+      expect(acceptImpl).toHaveBeenCalledWith("mem-browser-unique-correction", {
+        predecessorId: "mem-browser-unique-predecessor",
+      });
+    });
+  });
+
+  it("keeps a correction blocked when no eligible predecessor exists", async () => {
+    const user = userEvent.setup();
+    const correction = makeMemory({
+      id: "mem-browser-missing-predecessor" as MemoryId,
+      type: "correction",
+      status: "proposed",
+    });
+    const acceptImpl = vi.fn();
+    render(
+      <ReviewQueue
+        fetchQueueImpl={vi.fn().mockResolvedValue(queueResponse([correction]))}
+        fetchCorrectionPredecessorsImpl={vi.fn().mockResolvedValue({ candidates: [] })}
+        acceptImpl={acceptImpl}
+      />,
+    );
+
+    const approve = await screen.findByRole("button", { name: "Approve" });
+    await user.click(approve);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("No eligible predecessor remains.");
+    expect(approve).toHaveAttribute("aria-disabled", "true");
+    await user.click(approve);
+    expect(acceptImpl).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed correction predecessor data without replacing the review row", async () => {
+    const user = userEvent.setup();
+    const diagnostics: string[] = [];
+    setClientDiagnosticWriter((message) => diagnostics.push(message));
+    const correction = makeMemory({
+      id: "mem-browser-malformed-predecessor" as MemoryId,
+      type: "correction",
+      status: "proposed",
+    });
+    const acceptImpl = vi.fn();
+    render(
+      <ReviewQueue
+        fetchQueueImpl={vi.fn().mockResolvedValue(queueResponse([correction]))}
+        fetchCorrectionPredecessorsImpl={vi.fn().mockResolvedValue({
+          candidates: [{ id: "malformed", body: 42 }],
+        } as never)}
+        acceptImpl={acceptImpl}
+      />,
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Approve" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Correction predecessors could not be verified.",
+    );
+    expect(screen.getByText(correction.body)).toBeInTheDocument();
+    expect(acceptImpl).not.toHaveBeenCalled();
+    expect(diagnostics).toContain(
+      "[keiko] memory correction predecessor response rejected (kind=invalid-response)",
+    );
   });
 
   it("covers edit, correction, and deletion controls without local file edits", async () => {
@@ -237,10 +388,9 @@ describe("MemoriaViva browser-tier flows", () => {
     await user.click(screen.getByRole("button", { name: "Delete record" }));
 
     await waitFor(() => {
-      expect(deleteImpl).toHaveBeenCalledWith(
-        "mem-browser-1",
-        "user-initiated delete from MemoriaViva",
-      );
+      // KEIKO-0563: ForgetConfirmDialog (rendered inside MemoryActions) now calls deleteImpl with
+      // only the id — the dead reason-string argument was removed.
+      expect(deleteImpl).toHaveBeenCalledExactlyOnceWith("mem-browser-1");
       expect(onRecordChange).toHaveBeenCalledWith(null);
     });
   });

@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { buildCodeTaskAcceptanceContribution } from "../lib/code-task-acceptance.mjs";
 
 const { validateCodeTaskAcceptanceContribution } =
-  await import("../../packages/keiko-contracts/dist/index.js");
+  await import("../../packages/keiko-contracts/dist/code-task-acceptance.js");
 
 const COMMIT_SHA = "a".repeat(40);
 const TREE_SHA = "b".repeat(40);

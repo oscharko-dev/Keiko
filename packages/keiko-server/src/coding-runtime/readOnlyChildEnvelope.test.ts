@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CODE_TASK_AUXILIARY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import { CODE_TASK_AUXILIARY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
 import type {
   AuxiliaryCapabilityRequestV1,
   AuxiliaryResearchScopeV1,

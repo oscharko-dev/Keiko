@@ -1,12 +1,17 @@
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { openProviderCredentialVault } from "@oscharko-dev/keiko-server/credential-vault";
 import type { GatewayRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { runAgentCli } from "./run.js";
 import type { CliIo } from "./runner.js";
+import {
+  FIXTURE_API_KEY,
+  PROVIDER_CREDENTIALS_KEY,
+  REAL_TMPDIR,
+  writeGatewayConfig as writeGatewayConfigFixture,
+  writeReferenceOnlyGatewayConfig as writeReferenceOnlyGatewayConfigFixture,
+} from "./test-support/gateway-config-fixture.js";
 
 function capture(): { io: CliIo; out: () => string; err: () => string } {
   let out = "";
@@ -26,57 +31,26 @@ function capture(): { io: CliIo; out: () => string; err: () => string } {
 }
 
 const tempRoots: string[] = [];
-const REAL_TMPDIR = realpathSync(tmpdir());
-const PROVIDER_CREDENTIALS_KEY = Buffer.alloc(32, 0x33).toString("base64");
 
-function writeGatewayConfig(modelIds: readonly string[]): string {
+function tempRoot(): string {
   const root = mkdtempSync(join(REAL_TMPDIR, "keiko-run-config-"));
   tempRoots.push(root);
-  const path = join(root, "keiko.config.json");
-  writeFileSync(
-    path,
-    JSON.stringify({
-      providers: modelIds.map((modelId) => ({
-        modelId,
-        baseUrl: "https://host.example/v1",
-        apiKey: "example-test-token-1234567890",
-        timeoutMs: 30_000,
-        maxRetries: 3,
-        retryBaseDelayMs: 500,
-      })),
-      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-    }),
-    "utf8",
-  );
-  return path;
+  return root;
 }
 
-function writeReferenceOnlyGatewayConfig(modelId: string): string {
-  const root = mkdtempSync(join(REAL_TMPDIR, "keiko-run-config-"));
-  tempRoots.push(root);
-  const path = join(root, "keiko.config.json");
-  writeFileSync(
-    path,
-    JSON.stringify({
-      providers: [
-        {
-          modelId,
-          baseUrl: "https://host.example/v1",
-          apiKeySecretRef: `cred:${modelId}`,
-          timeoutMs: 30_000,
-          maxRetries: 3,
-          retryBaseDelayMs: 500,
-        },
-      ],
-      circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
-    }),
-    "utf8",
-  );
-  openProviderCredentialVault({
-    configPath: path,
-    env: { KEIKO_PROVIDER_CREDENTIALS_KEY: PROVIDER_CREDENTIALS_KEY },
-  }).set(`cred:${modelId}`, "example-test-token-1234567890");
-  return path;
+// Shared config-build args. The pre-refactor run-config fixture emitted providers with no
+// capability block, so the CLI falls back to the built-in registry — this is what lets the
+// "rejects embedding-only config" test detect that text-embedding-3-large is not a chat model.
+const RUN_CONFIG_FIXTURE_DEFAULTS = {
+  baseUrl: "https://host.example/v1",
+  apiKey: FIXTURE_API_KEY,
+  filename: "keiko.config.json",
+  capabilityMode: "omit" as const,
+  maxRetries: 3,
+};
+
+function writeGatewayConfig(modelIds: readonly string[]): string {
+  return writeGatewayConfigFixture(tempRoot(), { modelIds, ...RUN_CONFIG_FIXTURE_DEFAULTS });
 }
 
 function response(modelId: string): NormalizedResponse {
@@ -131,7 +105,10 @@ describe("runAgentCli gateway config resolution", () => {
   });
 
   it("selects a model from a migrated reference-only config for injected model runs", async () => {
-    const configPath = writeReferenceOnlyGatewayConfig("example-chat-model");
+    const configPath = writeReferenceOnlyGatewayConfigFixture(tempRoot(), {
+      modelIds: ["example-chat-model"],
+      ...RUN_CONFIG_FIXTURE_DEFAULTS,
+    });
     const seen: string[] = [];
     const c = capture();
 
@@ -144,7 +121,7 @@ describe("runAgentCli gateway config resolution", () => {
 
     expect(code).toBe(0);
     expect(seen).toEqual(["example-chat-model"]);
-    expect(c.out() + c.err()).not.toContain("example-test-token-1234567890");
+    expect(c.out() + c.err()).not.toContain(FIXTURE_API_KEY);
   });
 
   it("honors an explicit configured model from --config before calling the model port", async () => {
@@ -184,6 +161,6 @@ describe("runAgentCli gateway config resolution", () => {
 
     expect(code).toBe(1);
     expect(c.err()).toContain("no configured chat model");
-    expect(c.err()).not.toContain("example-test-token");
+    expect(c.err()).not.toContain(FIXTURE_API_KEY);
   });
 });

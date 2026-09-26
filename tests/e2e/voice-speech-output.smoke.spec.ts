@@ -18,6 +18,8 @@
 // rather than driving a real synthesized-audio round trip.
 
 import { expect, test, type Page } from "@playwright/test";
+import { openChatComposer } from "./support/chat-composer.js";
+import { fakeDictationMediaInit } from "./support/dictation-media.js";
 import { evidenceScreenshotPath } from "./support/evidence.js";
 
 const SPEECH_OUTPUT_CAPABILITY = {
@@ -50,23 +52,6 @@ const NO_VOICE_CAPABILITY = {
   },
 };
 
-// A capture-capable browser so the STT-only flow renders the dictation affordance (the playback control
-// must be absent independently of capture support).
-const CAPTURE_FAKES_SCRIPT = `
-  Object.defineProperty(navigator, "mediaDevices", {
-    configurable: true,
-    value: { getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }) },
-  });
-  window.MediaRecorder = class { static isTypeSupported() { return true; } start() {} stop() {} addEventListener() {} };
-`;
-
-async function openComposer(page: Page): Promise<void> {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Chat History", exact: true }).click();
-  await page.getByRole("button", { name: "New", exact: true }).click();
-  await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toBeVisible();
-}
-
 async function stubCapability(page: Page, body: unknown): Promise<void> {
   await page.route("**/api/voice/capability", (route) =>
     route.fulfill({ contentType: "application/json", body: JSON.stringify(body) }),
@@ -75,7 +60,7 @@ async function stubCapability(page: Page, body: unknown): Promise<void> {
 
 async function noVoiceFlow(page: Page): Promise<void> {
   await stubCapability(page, NO_VOICE_CAPABILITY);
-  await openComposer(page);
+  await openChatComposer(page);
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
   await composer.fill("plain typed message");
   await expect(composer).toHaveValue("plain typed message");
@@ -83,9 +68,9 @@ async function noVoiceFlow(page: Page): Promise<void> {
 }
 
 async function sttOnlyFlow(page: Page): Promise<void> {
-  await page.addInitScript(CAPTURE_FAKES_SCRIPT);
+  await page.addInitScript(fakeDictationMediaInit("grant"));
   await stubCapability(page, STT_CAPABILITY);
-  await openComposer(page);
+  await openChatComposer(page);
   // Dictation is offered for an STT-only deployment, but NEVER the assistant-voice playback control:
   // dictation does not imply the assistant can speak (AC1).
   await expect(page.getByRole("button", { name: "Dictate a message" })).toBeVisible();
@@ -94,7 +79,7 @@ async function sttOnlyFlow(page: Page): Promise<void> {
 
 async function speechOutputFlow(page: Page): Promise<void> {
   await stubCapability(page, SPEECH_OUTPUT_CAPABILITY);
-  await openComposer(page);
+  await openChatComposer(page);
 
   const mute = page.getByRole("button", { name: "Mute assistant voice" });
   await expect(mute).toBeVisible();

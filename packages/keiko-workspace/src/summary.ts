@@ -45,7 +45,10 @@ export function buildWorkspaceSummary(
   stats?: DiscoveryStats,
 ): WorkspaceSummary {
   return {
-    root: workspace.root,
+    // A summary is a display projection that performs no IO (see the module header), so it reports
+    // the identity the caller selected — the path a user recognises and the one a client may hand
+    // back as a registered project — never the canonical root that only filesystem effects bind to.
+    root: workspace.selectedRoot,
     name: workspace.name,
     version: workspace.version,
     testFramework: workspace.testFramework,

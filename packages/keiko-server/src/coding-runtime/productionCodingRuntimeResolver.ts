@@ -1,17 +1,57 @@
+import {
+  createProductionDraftDeliveryService,
+  requestDraftDeliveryApproval,
+} from "./productionDraftDeliveryRuntime.js";
+import type {
+  DraftDeliveryDependencies,
+  DraftDeliveryService,
+} from "../gitDelivery/draftDeliveryTypes.js";
+import type { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
+import type { GitDeliveryDescriptionAuthorityMintRequest } from "../gitDelivery/runBoundAuthority.js";
+import { createProductionCiObservationService } from "./productionCiObservationRuntime.js";
+import { createProductionCiRepairBudget } from "./productionCiRepairRuntime.js";
+import { reservePromptWithCiRepair } from "./ciRepairPromptReservation.js";
+import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
+import type { CiObservationService } from "../gitDelivery/ciObservationService.js";
+import {
+  createProductionRuntimeGitService,
+  requestRuntimeStageApproval,
+} from "./productionVerifiedCommitRuntime.js";
+import {
+  createProductionVerifiedCommitService,
+  requestVerifiedCommitApproval,
+  type VerifiedCommitRuntimeBinding,
+  type VerifiedCommitRuntimeDependencies,
+} from "./productionVerifiedCommitRuntime.js";
+import type { VerifiedCommitService } from "../gitDelivery/verifiedCommitTypes.js";
+import { createRuntimeGitPreparation } from "./productionRuntimeGitPreparation.js";
 import { isAbsolute } from "node:path";
 
-import {
-  CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-  type CodingWorkbenchRuntimeEvent,
-  type CodingWorkbenchRuntimeIntent,
+import type {
+  CodingWorkbenchAuxiliaryStatus,
+  CodingWorkbenchOperatorDecision,
+  CodingWorkbenchRuntimeEvent,
+  CodingWorkbenchRuntimeIntent,
+  SkillDiscoveryResultV1,
 } from "@oscharko-dev/keiko-contracts";
+import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
+import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import {
+  codingWorkbenchCodeTaskDeliveryEffectFor,
+  isCodingWorkbenchMode,
+  type CodingWorkbenchCodeTaskDeliveryAction,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 
 import {
   EditorAgentAuthorityRegistry,
   editorAgentAuthorityRegistry,
 } from "../editor/agentAuthorityRegistry.js";
 import { editorAgentRegistry } from "../editor/agentSessionRegistry.js";
-import type { ServerDiagnosticSink } from "../diagnostics-log.js";
+import {
+  contentFreeErrorClass,
+  emitServerDiagnostic,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import type { CodingRuntimePermissionPort } from "./codingRuntimePermissionPort.js";
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
 import type { CodingSafeActivityProjection } from "./codingSafeActivityProjection.js";
@@ -31,6 +71,7 @@ import type {
 } from "./codingRuntimeManager.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import type { CodingToolFacade } from "./codingToolFacadePorts.js";
+import type { OpenCodeToolBridge } from "./opencodeRuntimeComposition.js";
 import {
   createExplicitSkillInvocationTracker,
   type ExplicitSkillInvocationTracker,
@@ -62,8 +103,12 @@ import {
 } from "./productionCodingRuntimePorts.js";
 import {
   createProductionManagedWorktreeToolFacade,
+  deriveOptionalToolAvailability,
+  resolveChildModelForRun,
   type ProductionManagedWorktreeToolInput,
+  type ResolvedChildModelInput,
 } from "./productionManagedWorktreeTools.js";
+import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
 import {
   productionRuntimeAuthorityFacts,
   resolveProductionRuntimeContext,
@@ -80,6 +125,16 @@ import {
   type CodingToolApprovalBridge,
 } from "./codingToolApprovalBridge.js";
 import { createServerApprovedSkillCatalog, type SkillCatalog } from "./skillCatalog.js";
+import type { RepositorySemanticSearchResolver } from "./codingRuntimeControlPlane.js";
+import { operatorSkillProjection } from "./skillDiscovery.js";
+import { PRODUCTION_SKILL_STATIC_FACTS } from "./productionAuxiliaryPorts.js";
+import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
+import type { WorkspaceScriptTrustService } from "../workspace-script-trust.js";
+import { isIdentityProofFailure } from "../task-workspace/errors.js";
+import {
+  createCodingRuntimeContextUsageRegistry,
+  type CodingRuntimeContextUsageRegistry,
+} from "./codingRuntimeContextUsage.js";
 
 type MintedRuntime = Extract<CodingRuntimeMintResult, { readonly ok: true }>;
 type LaunchMaterial = Omit<
@@ -108,6 +163,8 @@ export interface ProductionRuntimeBackendInput {
   >;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
   readonly workspaceIsCurrent: () => boolean;
+  readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
+  readonly contextUsage?: CodingRuntimeContextUsageRegistry | undefined;
 }
 
 export interface QualifiedProductionRuntimeRun {
@@ -116,6 +173,12 @@ export interface QualifiedProductionRuntimeRun {
   readonly turnPort: ProductionRuntimeTurnPort;
   readonly questionPort?: CodingRuntimeQuestionPort | undefined;
   readonly permissionPort?: CodingRuntimePermissionPort | undefined;
+  /**
+   * ADR-0043 D11-D14 (#3390): the governed tool bridge for this run, dispatched directly by the
+   * BFF's `/api/coding-sidecar/tool` route -- optional so a backend that never composes an
+   * OpenCode-style bridge (e.g. a test double) is not forced to fabricate one.
+   */
+  readonly toolBridge?: OpenCodeToolBridge | undefined;
   readonly dispose?: (() => void | Promise<void>) | undefined;
 }
 
@@ -125,11 +188,14 @@ export interface ProductionRuntimeBackendResolver {
 }
 
 export interface ProductionCodingRuntimeResolverInput {
+  readonly verifiedCommit?: VerifiedCommitRuntimeDependencies;
+  readonly draftDelivery?: DraftDeliveryDependencies;
   readonly workspaceAuthority: ProductionWorkspaceAuthorityInput;
   readonly backend: ProductionRuntimeBackendResolver;
   readonly secureWorkspaceTextRead: ProductionManagedWorktreeToolInput["secureWorkspaceTextRead"];
   readonly editorAgentClient: ProductionManagedWorktreeToolInput["editorAgentClient"];
   readonly verificationRunner: ProductionManagedWorktreeToolInput["verificationRunner"];
+  readonly commandRunner?: ProductionManagedWorktreeToolInput["commandRunner"] | undefined;
   readonly confirmationConsumer?: CodingRuntimeStartConfirmationConsumer | undefined;
   readonly authorityRegistry?: EditorAgentAuthorityRegistry | undefined;
   readonly runtimeMutationLeaseBroker?:
@@ -149,18 +215,40 @@ export interface ProductionCodingRuntimeResolverInput {
   /** Explicit hermetic-test seam for the research transport. Production never supplies this. */
   readonly researchFetchImpl?: ProductionManagedWorktreeToolInput["researchFetchImpl"] | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly resolveWorkspaceRootAccess: (requestedRoot: string) => WorkspaceRootAccess | undefined;
+  /**
+   * ADR-0147 D3, autonomous-delivery amendment: the server-owned script-trust service, so an
+   * autonomous run's own manifest edits are admitted for its worktree and dropped with the run.
+   * Optional so a composition without it keeps every mode asking, exactly as before.
+   */
+  readonly workspaceScriptTrust?:
+    Pick<WorkspaceScriptTrustService, "admitRunManifest" | "revokeRunAdmissions"> | undefined;
 }
 
 interface ResolverRunRecord extends ProductionRuntimeRunRecord {
+  readonly ciRepairBudget?: CiRepairExecutionBudget | undefined;
   readonly launch: LaunchMaterial;
   readonly questionPort?: CodingRuntimeQuestionPort | undefined;
   readonly permissionPort?: CodingRuntimePermissionPort | undefined;
+  readonly toolBridge?: OpenCodeToolBridge | undefined;
+  readonly unavailableOptionalTools: () => ReadonlySet<OpenCodeOptionalToolName>;
 }
 
 /** The two server-level #2387 research stores threaded together through the run composition. */
 interface ResearchComposition {
   readonly grants: ResearchGrantRegistry;
   readonly pending: PendingResearchApprovals;
+}
+
+// What every run of this server shares: the run-bound research grants and the one server-approved
+// skill catalog (#3417). One value, so a run's composition keeps its parameter count in hand.
+interface RunComposition {
+  // Filled once by `deps.ts` after the deps graph exists; `undefined` until then, and on a server
+  // that composes no semantic index -- which is what makes a lexical-only search the default.
+  readonly semanticSearch: { current: RepositorySemanticSearchResolver | undefined };
+  readonly research: ResearchComposition;
+  readonly skillCatalog: SkillCatalog;
+  readonly contextUsage: CodingRuntimeContextUsageRegistry;
 }
 
 /** Wraps the manager's approval issuance with the #2387 research grant minting hook. */
@@ -208,6 +296,70 @@ export function resolveProductionRuntimeStartConfirmationClaim(
   return codingRuntimeStartConfirmationClaim(confirmationFacts(request, context), now.getTime());
 }
 
+// The server-scoped state every run composes from, a helper so `composeRuntime` stays under
+// AGENTS.md section 6's 50-line ceiling. The run-bound registry of read-only research grants
+// (#2387) is shared across the tool facade (which the egress port reads), the revoke route and
+// revoke-before-terminate, so a grant never outlives its run and revocation reaches the parent and
+// every child at once; beside it is the transient URL retention between "the model asked for this
+// URL" and "the operator approved it" (in memory only, invalidated with the run). The one
+// server-approved skill catalog (#3417) is what every run composes its tools from, and what the
+// operator's channel reads back.
+function sharedRunComposition(): RunComposition {
+  const research: ResearchComposition = {
+    grants: createResearchGrantRegistry(),
+    pending: createPendingResearchApprovals(),
+  };
+  return {
+    research,
+    skillCatalog: createServerApprovedSkillCatalog(),
+    semanticSearch: { current: undefined },
+    contextUsage: createCodingRuntimeContextUsageRegistry(),
+  };
+}
+
+// The operator's view of the approved skills (#3417), bound the way `mintDescriptionAuthorityFor`
+// binds its port below: the catalog's own readiness, never the live authority or the remaining
+// budget, which belong to the invocation that asks them and would be spent by the asking.
+function operatorSkillsFor(catalog: SkillCatalog): () => SkillDiscoveryResultV1 {
+  return () => operatorSkillProjection(catalog, PRODUCTION_SKILL_STATIC_FACTS);
+}
+
+// The git-delivery authority ports, a helper so `composeRuntime` stays under AGENTS.md section 6's
+// 50-line ceiling.
+// - `gitDeliveryDescriptionAuthority` is threaded through the exact same chain as
+//   `gitDeliveryAuthority` (#3399, epic #3384 correction 4): -> productionCodingRuntimeHost.ts ->
+//   codingRuntimeControlPlane.ts -> deps.ts, so the server-minted description authority is reachable
+//   from a live server for the Chat and post-terminal generation paths, not only from a running
+//   Code task.
+// - `mintDescriptionAuthority` is the MINT capability that chain was missing (#3401, epic #3384
+//   closeout). The port above only READS an existing record; nothing minted one, so the automatic
+//   description dispatcher (`productionCodingRuntimePorts.ts`) admitted every scope closed in
+//   production. The caller's action-specific accepted mode reaches the owner here and is clamped by
+//   the deployment ceiling; an absent or invalid mode mints nothing.
+function deliveryAuthorityPorts(
+  authority: CodingRuntimeAuthorityService,
+  input: ProductionCodingRuntimeResolverInput,
+): Pick<
+  QualifiedProductionCodingRuntime,
+  "gitDeliveryAuthority" | "gitDeliveryDescriptionAuthority" | "mintDescriptionAuthority"
+> {
+  return {
+    gitDeliveryAuthority: authority.gitDeliveryAuthorityPort(),
+    gitDeliveryDescriptionAuthority: authority.gitDeliveryDescriptionAuthorityPort(),
+    mintDescriptionAuthority: mintDescriptionAuthorityFor(authority, input),
+  };
+}
+
+// The two late-bound capabilities below fill one mutable slot exactly once -- the same
+// `receiver`/`verifiedHeadNotifier` indirection this file already uses. Named so `composeRuntime`
+// states the binding rather than spelling out the assignment, and stays under AGENTS.md section 6's
+// 50-line ceiling.
+function fillsSlot<T>(slot: { current: T }): (value: T) => void {
+  return (value: T): void => {
+    slot.current = value;
+  };
+}
+
 function composeRuntime(
   input: ProductionCodingRuntimeResolverInput,
 ): QualifiedProductionCodingRuntime {
@@ -215,85 +367,215 @@ function composeRuntime(
     input.authorityRegistry ?? editorAgentAuthorityRegistry,
   );
   const runs = new Map<string, ResolverRunRecord>();
-  // Server-level, run-bound registry of read-only research grants (#2387). Shared across the tool
-  // facade (which the egress port reads), the revoke route, and revoke-before-terminate, so a grant
-  // never outlives its run and revocation reaches the parent and every child at once.
-  const researchGrants = createResearchGrantRegistry();
-  // Transient URL retention between "the model asked for this URL" and "the operator approved it".
-  // In memory only; invalidated with the run.
-  const pendingResearch = createPendingResearchApprovals();
-  let receiver: (event: CodingWorkbenchRuntimeEvent) => void = () => undefined;
+  // Arity matches the declared slot deliberately (not just `() => undefined`): the placeholder
+  // is itself a value of type `(event: CodingWorkbenchRuntimeEvent) => void`, so every call site
+  // below passes exactly the one argument that type accepts -- confirmed a real callee-arity
+  // mismatch is not being papered over here.
+  let receiver: (event: CodingWorkbenchRuntimeEvent) => void = (_event) => undefined;
+  // #3401 (epic #3384 closeout, description-composition-closeout): the orchestrator that owns
+  // `notifyVerifiedHeadAdvanced` is built by `codingRuntimeControlPlane.ts` AFTER this resolver
+  // (and every per-run CI-repair budget it mints) already exists, so a per-run controller cannot
+  // receive it at construction time. Mirrors the `receiver` indirection immediately above: a
+  // mutable slot a run-bound closure reads through, filled in once by
+  // `attachVerifiedHeadNotifier` right after the control plane builds its orchestrator.
+  const verifiedHeadNotifier: { current: (runId: string) => void } = { current: () => undefined };
+  // ADR-0043 D11-D14 (#3390): at most one run's tool bridge is ever active (the singleton-run
+  // governance gate in codingRuntimeOrchestrator.ts), so "the current bridge" is one mutable slot
+  // -- the SAME idiom as `receiver`/`verifiedHeadNotifier` above -- set when a run's backend
+  // composes its bridge and cleared on that run's own disposal (guarded by identity so a
+  // late-settling dispose can never clear a NEWER run's bridge).
+  const toolFacadeBridge: { current: OpenCodeToolBridge | undefined } = { current: undefined };
   const manager = createProductionRuntimeManager(runs, authority, () => runtimeNow(input));
-  const research: ResearchComposition = { grants: researchGrants, pending: pendingResearch };
+  const shared = sharedRunComposition();
+  const { research, skillCatalog } = shared;
   return {
     createManager: (onRuntimeEvent): CodingRuntimeManager => {
       receiver = onRuntimeEvent;
       return manager;
     },
-    mintLaunch: launchResolver(input, authority, runs, research, (event): void => {
-      receiver(event);
-    }),
+    mintLaunch: composedMintLaunch(
+      input,
+      authority,
+      runs,
+      shared,
+      (event): void => {
+        receiver(event);
+      },
+      verifiedHeadNotifier,
+      toolFacadeBridge,
+    ),
+    toolFacadeBridge: { resolve: (): OpenCodeToolBridge | undefined => toolFacadeBridge.current },
     // The approved `research` action mints its grant here — the one seam that sees both the
     // manager's approval issuance (approval digest + expiry) and the retained approved URL.
     approvalAuthority: researchIssuingApprovalAuthority(manager, research, () => runtimeNow(input)),
-    researchGrants,
-    pendingResearchApprovals: pendingResearch,
-    taskDispatcher: createProductionRuntimeTaskDispatcher(runs),
+    researchGrants: research.grants,
+    pendingResearchApprovals: research.pending,
+    // The operator's view of the approved skills (#3417): the catalog's own readiness, never the
+    // live authority or budget of a call, which belong to the invocation that asks them.
+    approvedSkills: operatorSkillsFor(skillCatalog),
+    taskDispatcher: createProductionRuntimeTaskDispatcher(runs, input.diagnostics),
     questionPort: createProductionRuntimeQuestionPort(runs),
     permissionPort: createProductionRuntimePermissionPort(runs),
     cancellationRegistry: { signalFor: (runId) => runs.get(runId)?.controller.signal },
-    runtimeCapabilityAuthenticator: {
-      authenticate: (capability, audience) =>
-        authority.authenticateCapability(capability, audience),
-      reservePromptTokens: (capability, promptTokens) =>
-        authority.reservePromptTokens(capability, promptTokens),
-    },
+    contextUsage: { read: shared.contextUsage.read },
+    runtimeCapabilityAuthenticator: runtimeCapabilityAuthenticatorFor(authority, runs),
+    ...deliveryAuthorityPorts(authority, input),
+    // #3401 CI-repair notify: the setter half of the `notifyVerifiedHeadAdvanced` slot above.
+    // Called exactly once by `codingRuntimeControlPlane.ts` right after it builds the orchestrator
+    // that owns the real method.
+    attachVerifiedHeadNotifier: fillsSlot(verifiedHeadNotifier),
+    attachRepositorySemanticSearch: fillsSlot(shared.semanticSearch),
     ...(input.backend.safeActivityProjection
       ? { safeActivityProjection: input.backend.safeActivityProjection }
       : {}),
   };
 }
 
+// Extracted so `composeRuntime` stays under AGENTS.md §6's 50-line ceiling: bundles the
+// verified-head and tool-facade-bridge notification slots onto `launchResolver`'s call, which
+// `composeRuntime` otherwise builds inline.
+function composedMintLaunch(
+  input: ProductionCodingRuntimeResolverInput,
+  authority: CodingRuntimeAuthorityService,
+  runs: Map<string, ResolverRunRecord>,
+  shared: RunComposition,
+  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+  verifiedHeadNotifier: { current: (runId: string) => void },
+  toolFacadeBridge: { current: OpenCodeToolBridge | undefined },
+): QualifiedProductionCodingRuntime["mintLaunch"] {
+  return launchResolver(
+    input,
+    authority,
+    runs,
+    shared,
+    onRuntimeEvent,
+    (runId): void => {
+      verifiedHeadNotifier.current(runId);
+    },
+    toolFacadeBridge,
+  );
+}
+
+// #3384 wave-3 W3-3 "needs": `settlePromptTokens` (agentAuthorityRegistry.ts) had zero production
+// callers -- this is the wiring. `CodingRuntimeHost["runtimeCapabilityAuthenticator"]` (the
+// interface the return type below is checked against) does not itself declare `settlePromptTokens`
+// yet, so the return type is widened with an explicit intersection instead of touching that shared
+// interface: the object literal below satisfies both the narrower contract every existing consumer
+// still reads and the wider one `coding-sidecar-gateway.ts`'s settlement call site expects.
+function runtimeCapabilityAuthenticatorFor(
+  authority: CodingRuntimeAuthorityService,
+  runs: Map<string, ResolverRunRecord>,
+): NonNullable<QualifiedProductionCodingRuntime["runtimeCapabilityAuthenticator"]> & {
+  readonly settlePromptTokens: (
+    capability: string,
+    reservedPromptTokens: number,
+    actualPromptTokens: number,
+  ) => unknown;
+  // #3384 wave-3 W3-1 redirect: the real per-run fact `coding-sidecar-gateway.ts`'s outgoing
+  // tool-catalog advertisement needs, keyed by runId the same way `ciRepairBudget` already is
+  // above. `undefined` (run not tracked here) preserves the advertisement's prior,
+  // structural-only behaviour rather than claiming every optional tool is unavailable.
+  readonly unavailableOptionalTools: (
+    runId: string,
+  ) => ReadonlySet<OpenCodeOptionalToolName> | undefined;
+} {
+  return {
+    authenticate: (capability, audience) => authority.authenticateCapability(capability, audience),
+    reservePromptTokens: (capability, promptTokens) =>
+      reservePromptWithCiRepair(
+        authority,
+        (runId) => runs.get(runId)?.ciRepairBudget,
+        capability,
+        promptTokens,
+      ),
+    settlePromptTokens: (capability, reservedPromptTokens, actualPromptTokens) =>
+      authority.settlePromptTokens(capability, reservedPromptTokens, actualPromptTokens),
+    unavailableOptionalTools: (runId) => runs.get(runId)?.unavailableOptionalTools(),
+  };
+}
+
+// #3401 (epic #3384 closeout, description-composition-closeout): the MINT capability
+// `gitDeliveryDescriptionAuthority`'s READ port needs a producer for. It receives the actual mode
+// accepted for the calling action and clamps that mode to the deployment ceiling. An invalid or
+// unavailable accepted mode mints nothing; the subsequent authority read therefore denies closed.
+function mintDescriptionAuthorityFor(
+  authority: CodingRuntimeAuthorityService,
+  input: ProductionCodingRuntimeResolverInput,
+): (request: GitDeliveryDescriptionAuthorityMintRequest) => void {
+  return (request): void => {
+    if (!isCodingWorkbenchMode(request.requestedMode)) return;
+    authority.mintGitDeliveryDescriptionAuthority({
+      scope: request.scope,
+      requestedMode: request.requestedMode,
+      deploymentCeiling: input.workspaceAuthority.deploymentCeiling,
+      nowIso: request.nowIso,
+      ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
+    });
+  };
+}
+
+function repositoryPreparationFor(
+  input: ProductionCodingRuntimeResolverInput,
+): ReturnType<typeof createRuntimeGitPreparation> | undefined {
+  return input.verifiedCommit === undefined
+    ? undefined
+    : createRuntimeGitPreparation({
+        deps: input.verifiedCommit,
+        context: (request) => resolveProductionRuntimeContext(input.workspaceAuthority, request),
+        now: () => runtimeNow(input).getTime(),
+      });
+}
+
+function launchContext(
+  input: ProductionCodingRuntimeResolverInput,
+  preparation: ReturnType<typeof createRuntimeGitPreparation> | undefined,
+  request: ProductionRuntimeBackendInput["request"],
+): CodingRuntimeTrustedContext {
+  return preparation === undefined
+    ? resolveProductionRuntimeContext(input.workspaceAuthority, request)
+    : preparation.consume(request);
+}
+
 function launchResolver(
   input: ProductionCodingRuntimeResolverInput,
   authority: CodingRuntimeAuthorityService,
   runs: Map<string, ResolverRunRecord>,
-  research: ResearchComposition,
+  shared: RunComposition,
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+  notifyVerifiedHeadAdvanced: (runId: string) => void,
+  toolFacadeBridge: { current: OpenCodeToolBridge | undefined },
 ): QualifiedProductionCodingRuntime["mintLaunch"] {
+  const preparation = repositoryPreparationFor(input);
   return {
+    ...(preparation === undefined ? {} : { prepare: preparation.prepare }),
     resolve: (request): ReturnType<QualifiedProductionCodingRuntime["mintLaunch"]["resolve"]> => {
-      const context = resolveProductionRuntimeContext(input.workspaceAuthority, request);
+      const context = launchContext(input, preparation, request);
       const intent = startIntent(request, context);
       const nowIso = runtimeNow(input).toISOString();
-      const confirmation = input.confirmationConsumer?.consume(
-        codingRuntimeStartConfirmationClaim(
-          confirmationFacts(request, context),
-          Date.parse(nowIso),
-        ),
-      );
-      if (!isConsumedRuntimeStartConfirmation(confirmation)) {
-        throw new Error("runtime-start-unconfirmed");
-      }
+      const approvalDigest = consumeStartConfirmation(input, request, context, nowIso);
       const minted = authority.mintConfirmedStartForRun(
         request.runId,
         intent,
         context,
-        confirmation.approvalDigest,
+        approvalDigest,
         nowIso,
       );
       if (!minted.ok) throw new Error(minted.reason);
       try {
-        const record = createRunRecord(
+        const record = createRunRecord({
           input,
           request,
           context,
           minted,
           authority,
-          research,
+          research: shared.research,
+          skillCatalog: shared.skillCatalog,
+          semanticSearch: shared.semanticSearch,
+          contextUsage: shared.contextUsage,
           onRuntimeEvent,
-        );
-        runs.set(request.runId, record);
+          notifyVerifiedHeadAdvanced,
+        });
+        runs.set(request.runId, withCurrentToolFacadeBridge(record, toolFacadeBridge));
         return launchRequest(record, context, minted);
       } catch (error) {
         authority.abandonUnlaunched(request.runId, runtimeNow(input).toISOString());
@@ -301,6 +583,20 @@ function launchResolver(
       }
     },
   };
+}
+
+function consumeStartConfirmation(
+  input: ProductionCodingRuntimeResolverInput,
+  request: ProductionRuntimeBackendInput["request"],
+  context: CodingRuntimeTrustedContext,
+  nowIso: string,
+): string {
+  const confirmation = input.confirmationConsumer?.consume(
+    codingRuntimeStartConfirmationClaim(confirmationFacts(request, context), Date.parse(nowIso)),
+  );
+  if (!isConsumedRuntimeStartConfirmation(confirmation))
+    throw new Error("runtime-start-unconfirmed");
+  return confirmation.approvalDigest;
 }
 
 function confirmationFacts(
@@ -312,10 +608,16 @@ function confirmationFacts(
     taskIntent: request.taskIntent,
     requestedMode: request.requestedMode,
     ...(request.runtimePreference ? { runtimePreference: request.runtimePreference } : {}),
+    ...(request.modelId ? { modelId: request.modelId } : {}),
+    ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
+    projectMemoryEnabled: request.projectMemoryEnabled ?? true,
     operatorId: context.operatorId,
     taskId: context.taskId,
     projectId: context.projectId,
     projectDigest: context.projectDigest,
+    ...(context.repositoryIdentity === undefined
+      ? {}
+      : { repositoryIdentity: context.repositoryIdentity }),
     workspaceId: context.workspaceId,
     workspaceRoot: context.workspaceRoot,
     branchRef: context.branchRef,
@@ -324,6 +626,9 @@ function confirmationFacts(
     runtimeSource: context.runtimeSource,
     modelSource: context.modelProfile.source,
     modelProfileId: context.modelProfile.profileId,
+    ...(context.issueBinding === undefined
+      ? {}
+      : { issueBindingDigest: context.issueBinding.bindingDigest }),
   };
 }
 
@@ -332,95 +637,354 @@ function confirmationFacts(
 // managed facade the runtime actually calls. Built as one unit because the facade closes over the
 // other three.
 interface RunToolSurface {
+  readonly ciRepairBudget: CiRepairExecutionBudget | undefined;
   readonly invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>;
   readonly leases: ReturnType<typeof createLeaseCoordinator>;
   readonly explicitSkills: ReturnType<typeof createExplicitSkillInvocationTracker>;
   readonly toolFacade: ReturnType<typeof createManagedToolFacade>;
   readonly codingToolApprovals: CodingToolApprovalBridge;
+  readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
+  /**
+   * #3384 wave-3 W3-1 redirect (reviewer 3941816393 / B1): the SAME real, non-fake per-run
+   * availability fact `createManagedToolFacade` already computes for the child-facing tool ports
+   * below (`deriveOptionalToolAvailability`), retained here so the gateway's OUTGOING tool-catalog
+   * advertisement (coding-sidecar-gateway.ts) can derive its readiness from real bindings instead
+   * of the catalog's static declarations alone (#3413-AC1/#3414-AC4/AC9).
+   */
+  readonly unavailableOptionalTools: () => ReadonlySet<OpenCodeOptionalToolName>;
 }
 
-function createRunToolSurface(
+function codeTaskDeliveryPolicyAllows(
+  authority: Pick<CodingRuntimeAuthorityService, "effectiveMode">,
+  action: CodingWorkbenchCodeTaskDeliveryAction,
+): boolean {
+  const mode = authority.effectiveMode();
+  return mode !== undefined && codingWorkbenchCodeTaskDeliveryEffectFor(mode, action) === "allowed";
+}
+
+function commitServiceFor(
   input: ProductionCodingRuntimeResolverInput,
-  request: ProductionRuntimeBackendInput["request"],
   context: CodingRuntimeTrustedContext,
   minted: MintedRuntime,
   authority: CodingRuntimeAuthorityService,
-  research: ResearchComposition,
+  signal: AbortSignal,
+): VerifiedCommitService | undefined {
+  return createProductionVerifiedCommitService(input.verifiedCommit, {
+    runId: minted.authorityRef.runId,
+    envelopeDigest: minted.authorityRef.envelopeDigest,
+    context,
+    signal,
+    stillAuthorized: () => runtimeMutationLive(input, context, minted, authority),
+    policyAllowsWithoutApproval: (action) => codeTaskDeliveryPolicyAllows(authority, action),
+  });
+}
+
+interface RuntimeGitServices {
+  readonly ciRepairBudget: CiRepairExecutionBudget | undefined;
+  readonly draftDeliveryService: DraftDeliveryService | undefined;
+  readonly ciObservationService: CiObservationService | undefined;
+  readonly verifiedCommitService: VerifiedCommitService | undefined;
+  readonly runtimeGitService: RuntimeGitService | undefined;
+  readonly codingToolApprovals: CodingToolApprovalBridge;
+}
+function runtimeGitServices(
+  input: ProductionCodingRuntimeResolverInput,
+  context: CodingRuntimeTrustedContext,
+  minted: MintedRuntime,
+  authority: CodingRuntimeAuthorityService,
+  signal: AbortSignal,
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
-): RunToolSurface {
-  const invocationRegistry = createCodingToolInvocationRegistry();
-  const codingToolApprovals = createCodingToolApprovalBridge();
+  notifyVerifiedHeadAdvanced: (runId: string) => void,
+): RuntimeGitServices {
+  const binding: VerifiedCommitRuntimeBinding = {
+    runId: minted.authorityRef.runId,
+    envelopeDigest: minted.authorityRef.envelopeDigest,
+    context,
+    signal,
+    stillAuthorized: (): boolean => runtimeMutationLive(input, context, minted, authority),
+    policyAllowsWithoutApproval: (action) => codeTaskDeliveryPolicyAllows(authority, action),
+  };
+  const verifiedCommitService = commitServiceFor(input, context, minted, authority, signal);
+  const { ciRepairBudget, ciObservationService } = runtimeCiServices(
+    input,
+    binding,
+    onRuntimeEvent,
+    notifyVerifiedHeadAdvanced,
+  );
+  const runtimeGitService = createProductionRuntimeGitService(
+    input.verifiedCommit,
+    binding,
+    () => authority.effectiveMode(),
+    () => verifiedCommitService?.invalidate(),
+  );
+  const draftDeliveryService = createProductionDraftDeliveryService(
+    input.draftDelivery,
+    input.verifiedCommit,
+    binding,
+    onRuntimeEvent,
+  );
+  const codingToolApprovals = createCodingToolApprovalBridge(
+    verifiedCommitService,
+    runtimeGitService,
+    draftDeliveryService,
+  );
+  return {
+    verifiedCommitService,
+    ciRepairBudget,
+    runtimeGitService,
+    draftDeliveryService,
+    ciObservationService,
+    codingToolApprovals,
+  };
+}
+
+function runtimeCiServices(
+  input: ProductionCodingRuntimeResolverInput,
+  binding: Parameters<typeof createProductionCiRepairBudget>[2],
+  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+  notifyVerifiedHeadAdvanced: (runId: string) => void,
+): Pick<RuntimeGitServices, "ciRepairBudget" | "ciObservationService"> {
+  const ciRepairBudget = createProductionCiRepairBudget(
+    input.draftDelivery,
+    input.verifiedCommit,
+    binding,
+    notifyVerifiedHeadAdvanced,
+  );
+  const ciObservationService = createProductionCiObservationService(
+    input.draftDelivery,
+    input.verifiedCommit,
+    binding,
+    onRuntimeEvent,
+    ciRepairBudget,
+  );
+  return { ciRepairBudget, ciObservationService };
+}
+
+interface RunToolContextPieces {
+  readonly leases: ReturnType<typeof createLeaseCoordinator>;
+  readonly explicitSkills: ReturnType<typeof createExplicitSkillInvocationTracker>;
+  readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
+}
+
+// Extracted so `createRunToolSurface` stays under AGENTS.md §6's 50-line ceiling: this piece is
+// independent of the git/CI services `runtimeGitServices` builds, only of the invocation registry
+// leases are coordinated against.
+function prepareRunToolContext(
+  input: ProductionCodingRuntimeResolverInput,
+  request: ProductionRuntimeBackendInput["request"],
+  context: CodingRuntimeTrustedContext,
+  invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>,
+  skillCatalog: SkillCatalog,
+): RunToolContextPieces {
   const leases = createLeaseCoordinator(invocationRegistry);
-  const skillCatalog = createServerApprovedSkillCatalog();
   const explicitSkills = createExplicitSkillInvocationTracker(skillCatalog);
+  const resolveWorkspaceRootAccess = runWorkspaceRootAccessResolver(input, context);
+  if (resolveWorkspaceRootAccess() === undefined) throw new Error("runtime-workspace-unqualified");
   explicitSkills.observeTurn(request.taskIntent);
+  return { leases, explicitSkills, resolveWorkspaceRootAccess };
+}
+
+interface RunToolSurfaceInput {
+  readonly input: ProductionCodingRuntimeResolverInput;
+  readonly request: ProductionRuntimeBackendInput["request"];
+  readonly context: CodingRuntimeTrustedContext;
+  readonly minted: MintedRuntime;
+  readonly authority: CodingRuntimeAuthorityService;
+  readonly research: ResearchComposition;
+  readonly skillCatalog: SkillCatalog;
+  // The server's late-bound repository semantic index (#3416). The SLOT travels, not a resolved
+  // value: a run composed before `deps.ts` binds one still sees it the moment it is bound.
+  readonly semanticSearch: { current: RepositorySemanticSearchResolver | undefined };
+  readonly contextUsage: CodingRuntimeContextUsageRegistry;
+  readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
+  readonly signal: AbortSignal;
+  readonly notifyVerifiedHeadAdvanced: (runId: string) => void;
+}
+
+// Reuses the SAME fields `managedResearchOptions`/`createManagedToolFacade` already source for the
+// child-facing tool ports below (never a second, parallel policy source) so the gateway's outgoing
+// advertisement and the actual dispatch-side ports agree on which optional tool is really available
+// (#3384 wave-3 W3-1 redirect).
+function unavailableOptionalToolsFor(
+  minted: MintedRuntime,
+  researchOptions: ReturnType<typeof managedResearchOptions>,
+  skillCatalog: SkillCatalog,
+  childModel: ResolvedChildModelInput,
+): ReadonlySet<OpenCodeOptionalToolName> {
+  return deriveOptionalToolAvailability({
+    ...researchOptions,
+    ...childModel,
+    authorityRef: minted.authorityRef,
+    skillCatalog,
+  });
+}
+
+interface RunToolPorts {
+  readonly researchOptions: ReturnType<typeof managedResearchOptions>;
+  readonly childModel: ReturnType<typeof resolveChildModelForRun>;
+  readonly toolFacade: ReturnType<typeof createManagedToolFacade>;
+}
+
+// The child-facing tool ports, a helper so `createRunToolSurface` stays under AGENTS.md section 6's
+// 50-line ceiling: the managed research options the egress port reads, the child model, and the
+// facade both are mounted on -- every one of them built from the SAME run context the surface has
+// already resolved, never from a second source.
+function composeRunToolPorts(
+  args: RunToolSurfaceInput,
+  services: ReturnType<typeof runtimeGitServices>,
+  invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>,
+  prepared: ReturnType<typeof prepareRunToolContext>,
+): RunToolPorts {
+  const { input, request, context, minted, authority, research, skillCatalog, onRuntimeEvent } =
+    args;
+  const researchOptions = managedResearchOptions(input, context, minted, research, onRuntimeEvent);
+  const childModel = resolveChildModelForRun({
+    authorityRef: minted.authorityRef,
+    modelId: input.childModelId?.(),
+    childModelPortFactory: input.childModelPortFactory,
+  });
   const toolFacade = createManagedToolFacade({
     input,
+    request,
     context,
     minted,
     authority,
     invocationRegistry,
-    leases,
+    leases: prepared.leases,
     research,
     skillCatalog,
-    explicitSkills,
-    codingToolApprovals,
+    explicitSkills: prepared.explicitSkills,
+    semanticSearch: args.semanticSearch,
+    ...services,
     onRuntimeEvent,
+    resolveWorkspaceRootAccess: prepared.resolveWorkspaceRootAccess,
+    researchOptions,
+    childModel,
   });
-  return { invocationRegistry, leases, explicitSkills, toolFacade, codingToolApprovals };
+  return { researchOptions, childModel, toolFacade };
 }
 
-function createRunRecord(
-  input: ProductionCodingRuntimeResolverInput,
-  request: ProductionRuntimeBackendInput["request"],
-  context: CodingRuntimeTrustedContext,
-  minted: MintedRuntime,
-  authority: CodingRuntimeAuthorityService,
-  research: ResearchComposition,
-  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
-): ResolverRunRecord {
+function createRunToolSurface(args: RunToolSurfaceInput): RunToolSurface {
+  const { input, request, context, minted, authority, skillCatalog } = args;
+  const invocationRegistry = createCodingToolInvocationRegistry();
+  const services = runtimeGitServices(
+    input,
+    context,
+    minted,
+    authority,
+    args.signal,
+    args.onRuntimeEvent,
+    args.notifyVerifiedHeadAdvanced,
+  );
+  const prepared = prepareRunToolContext(input, request, context, invocationRegistry, skillCatalog);
+  const ports = composeRunToolPorts(args, services, invocationRegistry, prepared);
+  return {
+    invocationRegistry,
+    ciRepairBudget: services.ciRepairBudget,
+    leases: prepared.leases,
+    explicitSkills: prepared.explicitSkills,
+    toolFacade: ports.toolFacade,
+    codingToolApprovals: services.codingToolApprovals,
+    resolveWorkspaceRootAccess: prepared.resolveWorkspaceRootAccess,
+    unavailableOptionalTools: () =>
+      unavailableOptionalToolsFor(minted, ports.researchOptions, skillCatalog, ports.childModel),
+  };
+}
+
+function createRunRecord(args: Omit<RunToolSurfaceInput, "signal">): ResolverRunRecord {
+  const { input, request, context, minted, authority, research, onRuntimeEvent } = args;
   const controller = new AbortController();
-  const { invocationRegistry, leases, explicitSkills, toolFacade, codingToolApprovals } =
-    createRunToolSurface(input, request, context, minted, authority, research, onRuntimeEvent);
+  const surface = createRunToolSurface({ ...args, signal: controller.signal });
   const backend = createBackendRun({
     input,
     request,
     context,
     minted,
-    toolFacade,
-    codingToolApprovals,
+    ...surface,
     authority,
     controller,
-    invocationRegistry,
-    leases,
     research,
     onRuntimeEvent,
+    contextUsage: args.contextUsage,
   });
-  validateBackendLaunch(backend.launch, context);
-  const detachLease = attachRuntimeMutationLease(input, leases, invocationRegistry);
+  const detachLease = attachedRuntimeMutationLease(input, surface, backend, request.runId);
   return {
     manager: backend.manager,
+    ciRepairBudget: surface.ciRepairBudget,
     launch: backend.launch,
-    turnPort: bindExplicitSkillTurns(backend.turnPort, explicitSkills),
+    turnPort: bindExplicitSkillTurns(backend.turnPort, surface.explicitSkills),
     controller,
     operationGuard: createProductionRuntimeOperationGuard(request.runId, () =>
       runtimeAuthorityLive(input, context, minted, authority),
     ),
-    waitForPendingMutations: (signal) => leases.waitForIdle(signal),
+    waitForPendingMutations: (signal) => surface.leases.waitForIdle(signal),
     ...(backend.questionPort ? { questionPort: backend.questionPort } : {}),
     ...(backend.permissionPort ? { permissionPort: backend.permissionPort } : {}),
-    dispose: createRunDisposer(detachLease, leases, invocationRegistry, backend),
+    toolBridge: backend.toolBridge,
+    dispose: createRunDisposer(detachLease, surface.leases, surface.invocationRegistry, backend),
+    unavailableOptionalTools: surface.unavailableOptionalTools,
   };
 }
 
-function bindExplicitSkillTurns(
+// KfQ-confirmed: `createBackendRun` above has already spawned/supervised the real backend process
+// by the time this runs -- if the lease broker is unavailable (a real server-wide singleton,
+// disposed on shutdown, capped at 64 concurrent ports), the previous code threw straight out of
+// `createRunRecord` with no reference to `backend` in scope at the catch site
+// (`launchResolver`'s `resolve`), leaking the process, its HTTP/SSE client, and its tool bridge.
+function attachedRuntimeMutationLease(
+  input: ProductionCodingRuntimeResolverInput,
+  surface: RunToolSurface,
+  backend: QualifiedProductionRuntimeRun,
+  runId: string,
+): (() => void) | undefined {
+  try {
+    return attachRuntimeMutationLease(input, surface.leases, surface.invocationRegistry);
+  } catch (error) {
+    disposeFailedBackendRun(backend, runId, input.diagnostics);
+    throw error;
+  }
+}
+
+// ADR-0043 D11-D14 (#3390): registers this run's tool bridge as "the current" one the BFF route
+// dispatches to, and wraps disposal so it clears itself -- identity-guarded so a disposal that
+// settles after a NEWER run has already composed its own bridge can never clear the newer one.
+// Kept outside `createRunRecord`/`createRunDisposer` (AGENTS.md §6's 50-line ceiling) since only
+// `launchResolver`'s `resolve` closure, where the record is about to be stored, needs it.
+function withCurrentToolFacadeBridge(
+  record: ResolverRunRecord,
+  toolFacadeBridge: { current: OpenCodeToolBridge | undefined },
+): ResolverRunRecord {
+  toolFacadeBridge.current = record.toolBridge;
+  const dispose = record.dispose;
+  return {
+    ...record,
+    dispose: async (): Promise<void> => {
+      if (toolFacadeBridge.current === record.toolBridge) toolFacadeBridge.current = undefined;
+      await dispose?.();
+    },
+  };
+}
+
+function runWorkspaceRootAccessResolver(
+  input: ProductionCodingRuntimeResolverInput,
+  context: CodingRuntimeTrustedContext,
+): () => WorkspaceRootAccess | undefined {
+  return (): WorkspaceRootAccess | undefined => {
+    const access = input.resolveWorkspaceRootAccess(context.workspaceRoot);
+    return access?.kind === "managed-task" && access.canonicalRoot === context.workspaceRoot
+      ? access
+      : undefined;
+  };
+}
+
+export function bindExplicitSkillTurns(
   turnPort: ProductionRuntimeTurnPort,
   explicitSkills: ExplicitSkillInvocationTracker,
 ): ProductionRuntimeTurnPort {
   return {
-    submitTurn: async (runId, text): Promise<boolean> => {
+    submitTurn: async (runId, text, initialContext): Promise<boolean> => {
       explicitSkills.observeTurn(text);
-      const accepted = await turnPort.submitTurn(runId, text);
+      const accepted = await turnPort.submitTurn(runId, text, initialContext);
       if (!accepted) explicitSkills.clear();
       return accepted;
     },
@@ -489,6 +1053,8 @@ interface CreateBackendRunInput {
   readonly leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>;
   readonly research: ResearchComposition;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
+  readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
+  readonly contextUsage: CodingRuntimeContextUsageRegistry;
 }
 
 function createBackendRun({
@@ -504,86 +1070,321 @@ function createBackendRun({
   leases,
   research,
   onRuntimeEvent,
+  resolveWorkspaceRootAccess,
+  contextUsage,
 }: CreateBackendRunInput): QualifiedProductionRuntimeRun {
-  return input.backend.createRun({
+  const backend = input.backend.createRun({
     request,
     context,
     minted,
     toolFacade,
     codingToolApprovals,
-    authorityLifecycle: authorityLifecycle(
+    authorityLifecycle: authorityLifecycle({
       authority,
       controller,
-      invocationRegistry,
+      invocations: invocationRegistry,
       leases,
       research,
-      () => runtimeNow(input),
-    ),
+      now: () => runtimeNow(input),
+      scriptTrust: input.workspaceScriptTrust,
+      parentCorrelationId: request.correlationId,
+    }),
     onRuntimeEvent,
-    workspaceIsCurrent: () =>
-      input.workspaceAuthority.workspaceLifecycle.getActive()?.instance.workspaceId ===
-      context.workspaceId,
+    // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) reads as "not
+    // current": the runtime must not keep acting on a workspace the product cannot verify.
+    workspaceIsCurrent: (): boolean => {
+      try {
+        return (
+          input.workspaceAuthority.workspaceLifecycle.getActive()?.instance.workspaceId ===
+          context.workspaceId
+        );
+      } catch (error) {
+        if (isIdentityProofFailure(error)) return false;
+        throw error;
+      }
+    },
+    resolveWorkspaceRootAccess,
+    contextUsage,
+  });
+  validateLaunchedBackend(backend, context, request.runId, input.diagnostics);
+  return backend;
+}
+
+// KfQ-confirmed: `validateBackendLaunch` runs AFTER `input.backend.createRun(...)` has already
+// spawned/supervised a real child process plus an HTTP/SSE client and tool bridge for the
+// production OpenCode backend -- a throw here used to discard that already-built `backend` with
+// no disposal path. Split out so `createBackendRun` stays under the repository's per-function
+// line ceiling.
+function validateLaunchedBackend(
+  backend: QualifiedProductionRuntimeRun,
+  context: CodingRuntimeTrustedContext,
+  runId: string,
+  diagnostics: ServerDiagnosticSink | undefined,
+): void {
+  try {
+    validateBackendLaunch(backend.launch, context);
+  } catch (error) {
+    disposeFailedBackendRun(backend, runId, diagnostics);
+    throw error;
+  }
+}
+
+// Mirrors opencodeRuntimeComposition.ts's disposeFailedPrepare/recordPrepareDisposalFailure
+// (KEIKO-0320): best-effort cleanup of a backend that was spawned but never became a usable run.
+// `dispose()` can itself throw synchronously or return a promise that rejects later -- either way
+// the ORIGINAL failure that triggered this disposal is what the caller re-throws, never replaced
+// by a disposal failure, but a disposal failure must still reach an operator diagnostic instead of
+// vanishing (AGENTS.md §7 "no silent failures"): that would be the same leak this fix exists to
+// close, just moved one step later and left with no diagnostic and no retry hook.
+function disposeFailedBackendRun(
+  backend: QualifiedProductionRuntimeRun,
+  runId: string,
+  diagnostics: ServerDiagnosticSink | undefined,
+): void {
+  try {
+    const disposal = backend.dispose?.();
+    if (disposal !== undefined) {
+      void disposal.catch((error: unknown) => {
+        recordBackendDisposalFailure(diagnostics, runId, error);
+      });
+    }
+  } catch (error) {
+    recordBackendDisposalFailure(diagnostics, runId, error);
+  }
+}
+
+function recordBackendDisposalFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.backend-run",
+    source: "production-coding-runtime-resolver.dispose-failed-backend",
+    errorClass: contentFreeErrorClass(error),
+    message: "coding-runtime-backend-disposal-failed",
   });
 }
 
 /** One parameter object: the facade needs the whole run context, not an argument list to mis-order. */
 interface ManagedToolFacadeInput {
+  readonly ciRepairBudget?: CiRepairExecutionBudget | undefined;
+  readonly ciObservationService?: CiObservationService | undefined;
+  readonly draftDeliveryService?: DraftDeliveryService | undefined;
+  readonly verifiedCommitService?: VerifiedCommitService | undefined;
+  readonly runtimeGitService?: RuntimeGitService | undefined;
   readonly input: ProductionCodingRuntimeResolverInput;
+  readonly request: ProductionRuntimeBackendInput["request"];
   readonly context: CodingRuntimeTrustedContext;
   readonly minted: MintedRuntime;
   readonly authority: CodingRuntimeAuthorityService;
   readonly invocationRegistry: ReturnType<typeof createCodingToolInvocationRegistry>;
   readonly leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>;
   readonly research: ResearchComposition;
+  readonly researchOptions?: ReturnType<typeof managedResearchOptions> | undefined;
   readonly skillCatalog: SkillCatalog;
+  readonly semanticSearch: { current: RepositorySemanticSearchResolver | undefined };
   readonly explicitSkills: ExplicitSkillInvocationTracker;
   readonly codingToolApprovals: CodingToolApprovalBridge;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
+  readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
+  readonly childModel: ResolvedChildModelInput;
 }
 
-function createManagedToolFacade({
-  input,
-  context,
-  minted,
-  authority,
-  invocationRegistry,
-  leases,
-  research,
-  skillCatalog,
-  explicitSkills,
-  codingToolApprovals,
+function runtimeGitFacadeOptions({
+  ciObservationService,
+  verifiedCommitService,
+  runtimeGitService,
+  draftDeliveryService,
   onRuntimeEvent,
-}: ManagedToolFacadeInput): CodingToolFacade {
-  const childModelId = input.childModelId?.();
+}: Pick<
+  ManagedToolFacadeInput,
+  | "verifiedCommitService"
+  | "runtimeGitService"
+  | "draftDeliveryService"
+  | "ciObservationService"
+  | "onRuntimeEvent"
+>): Pick<
+  import("./productionManagedWorktreeTools.js").ProductionManagedWorktreeToolInput,
+  | "verifiedCommitService"
+  | "runtimeGitService"
+  | "requestStageApproval"
+  | "requestCommitApproval"
+  | "draftDeliveryService"
+  | "requestDraftDeliveryApproval"
+  | "ciObservationService"
+> {
+  return {
+    ...(ciObservationService === undefined ? {} : { ciObservationService }),
+    ...(verifiedCommitService === undefined ? {} : { verifiedCommitService }),
+    ...(runtimeGitService === undefined ? {} : { runtimeGitService }),
+    ...(draftDeliveryService === undefined ? {} : { draftDeliveryService }),
+    requestDraftDeliveryApproval: (id): void => {
+      requestDraftDeliveryApproval(draftDeliveryService, id, onRuntimeEvent);
+    },
+    requestStageApproval: (proposalId): void => {
+      requestRuntimeStageApproval(runtimeGitService, proposalId, onRuntimeEvent);
+    },
+    requestCommitApproval: (proposalId): void => {
+      requestVerifiedCommitApproval(verifiedCommitService, proposalId, onRuntimeEvent);
+    },
+  };
+}
+
+function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFacade {
+  const {
+    input,
+    request,
+    context,
+    minted,
+    authority,
+    invocationRegistry,
+    leases,
+    research,
+    skillCatalog,
+    explicitSkills,
+    codingToolApprovals,
+    onRuntimeEvent,
+    resolveWorkspaceRootAccess,
+    childModel,
+  } = options;
   return createProductionManagedWorktreeToolFacade({
     authority,
+    ...(options.ciRepairBudget === undefined ? {} : { ciRepairBudget: options.ciRepairBudget }),
     authorityRef: minted.authorityRef,
     taskId: context.taskId,
     // The child agent talks to the gateway directly, so it needs the resolved PROVIDER model id —
     // never the run's launch-profile identifier, which the gateway cannot resolve.
-    ...(childModelId === undefined ? {} : { modelId: childModelId }),
+    ...childModel,
     adapterKind: adapterKind(context),
     workspaceRoot: context.workspaceRoot,
-    ...managedResearchOptions(input, context, minted, research, onRuntimeEvent),
+    resolveWorkspaceRootAccess,
+    ...(options.researchOptions ??
+      managedResearchOptions(input, context, minted, research, onRuntimeEvent)),
     authorityExpiresAt: context.expiresAt,
     effectiveMode: minted.effectiveMode,
     effectiveModeNow: () => authority.effectiveMode(),
-    reservePromptTokens: (promptTokens): boolean =>
-      authority.reservePromptTokens(minted.modelGatewayCapability, promptTokens).ok,
+    reservePromptTokens: managedPromptReservation(options),
     deploymentCeiling: context.deploymentCeiling,
     liveFacts: () => productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
     secureWorkspaceTextRead: input.secureWorkspaceTextRead,
     editorAgentClient: input.editorAgentClient,
     mutationLeaseCoordinator: leases,
     invocationRegistry,
+    repositorySemanticSearch: options.semanticSearch,
     approvalProofVerifier: codingToolApprovals,
+    ...runtimeGitFacadeOptions(options),
     skillCatalog,
     explicitSkillInvocations: explicitSkills,
-    childModelPortFactory: input.childModelPortFactory,
-    verificationRunner: input.verificationRunner,
+    ...(input.commandRunner === undefined ? {} : { commandRunner: input.commandRunner }),
+    ...managedVerificationOptions(input, minted, onRuntimeEvent),
+    ...runManifestAdmission(input, context, minted, request.correlationId),
     onRuntimeEvent,
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
   });
+}
+
+// The run-scoped manifest admission (ADR-0147 D3, autonomous-delivery amendment), bound to this
+// run's worktree, run id and authority expiry; absent when the composition has no trust service.
+export function runManifestAdmission(
+  input: Pick<ProductionCodingRuntimeResolverInput, "workspaceScriptTrust">,
+  context: Pick<CodingRuntimeTrustedContext, "workspaceRoot" | "expiresAt">,
+  minted: Pick<MintedRuntime, "authorityRef">,
+  parentCorrelationId?: string,
+): Pick<ProductionManagedWorktreeToolInput, "admitRunManifest"> {
+  const admit = input.workspaceScriptTrust?.admitRunManifest;
+  if (admit === undefined) return {};
+  return {
+    admitRunManifest: (): void => {
+      admit(
+        context.workspaceRoot,
+        minted.authorityRef.runId,
+        context.expiresAt,
+        parentCorrelationId,
+      );
+    },
+  };
+}
+
+/** The verification port plus the channel a refused verification uses to ask for a decision. */
+function managedVerificationOptions(
+  input: ProductionCodingRuntimeResolverInput,
+  minted: MintedRuntime,
+  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+): Pick<
+  import("./productionManagedWorktreeTools.js").ProductionManagedWorktreeToolInput,
+  "verificationRunner" | "requestOperatorDecision"
+> {
+  return {
+    verificationRunner: input.verificationRunner,
+    requestOperatorDecision: operatorDecisionRequester(
+      () => runtimeNow(input),
+      input.diagnostics,
+      minted.authorityRef.runId,
+      onRuntimeEvent,
+    ),
+  };
+}
+
+/**
+ * Announces a decision only a local human can make, on the one channel a governed tool has to the
+ * run aggregate. An event the contract rejects is not emitted — it would be refused downstream — but
+ * it is never dropped silently either: run 11 (2026-09-10) lost every pause this way, because the
+ * first version validated and discarded in one expression, so the tool waited its full window while
+ * the run, the operator and the log all saw nothing. The rejection is now a diagnostic under the
+ * run's correlation id, and the waiting tool still settles on its own ceiling.
+ *
+ * Exported so a test can drive the REAL requester through the contract validator; the fixture
+ * that only stubbed `requestOperatorDecision` proved the wait and never this seam.
+ */
+export function operatorDecisionRequester(
+  now: () => Date,
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+): (decision: CodingWorkbenchOperatorDecision, outcome?: CodingWorkbenchAuxiliaryStatus) => void {
+  let sequence = 0;
+  return (decision, outcome): void => {
+    sequence += 1;
+    const event: CodingWorkbenchRuntimeEvent = {
+      schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+      eventId: `event-operator-decision-${String(sequence)}`,
+      runId,
+      occurredAt: now().toISOString(),
+      kind: "operator-decision",
+      operatorDecision: decision,
+      ...(outcome === undefined ? {} : { auxiliaryOutcome: outcome }),
+    };
+    const validation = validateCodingWorkbenchRuntimeEvent(event);
+    if (validation.ok) {
+      onRuntimeEvent(event);
+      return;
+    }
+    emitServerDiagnostic(diagnostics, {
+      correlationId: runId,
+      timestamp: now().toISOString(),
+      operation: "coding-runtime.operator-decision",
+      source: "production-coding-runtime-resolver.operator-decision",
+      errorClass: "OperatorDecisionEventRejected",
+      message: "coding-runtime-operator-decision-event-rejected",
+      // The contract's own closed sentences, never event content: they name which field failed.
+      code: validation.errors.join("; ").slice(0, 200),
+    });
+  };
+}
+
+function managedPromptReservation(
+  options: ManagedToolFacadeInput,
+): (promptTokens: number) => boolean {
+  return (promptTokens): boolean =>
+    reservePromptWithCiRepair(
+      options.authority,
+      () => options.ciRepairBudget,
+      options.minted.modelGatewayCapability,
+      promptTokens,
+    ).ok;
 }
 
 function managedResearchOptions(
@@ -637,13 +1438,36 @@ function researchApprovalRequester(
   };
 }
 
+function runtimeMutationLive(
+  input: ProductionCodingRuntimeResolverInput,
+  context: CodingRuntimeTrustedContext,
+  minted: MintedRuntime,
+  authority: CodingRuntimeAuthorityService,
+): boolean {
+  try {
+    return authority.revalidateCapabilityForMutation({
+      capability: minted.toolFacadeCapability,
+      adapterKind: adapterKind(context),
+      liveFacts: productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
+      workspaceRoot: context.workspaceRoot,
+      deploymentCeiling: context.deploymentCeiling,
+      nowIso: runtimeNow(input).toISOString(),
+    }).ok;
+  } catch {
+    return false;
+  }
+}
+
 function runtimeAuthorityLive(
   input: ProductionCodingRuntimeResolverInput,
   context: CodingRuntimeTrustedContext,
   minted: MintedRuntime,
   authority: CodingRuntimeAuthorityService,
 ): boolean {
-  const resolved = authority.revalidateCapabilityForMutation({
+  // Operator admission, not a child tool mutation: the guarded operations (follow-up dispatch,
+  // abort, question answers) are deliberately reachable while the run is paused — sticky pause
+  // holds the runtime, not the human. The tool facade keeps the running-only revalidation.
+  const resolved = authority.revalidateCapabilityForOperatorAdmission({
     capability: minted.toolFacadeCapability,
     adapterKind: adapterKind(context),
     liveFacts: productionRuntimeAuthorityFacts(input.workspaceAuthority, context),
@@ -660,19 +1484,34 @@ function adapterKind(
   return context.runtimeSource === "keiko-sidecar" ? "model-gateway-sidecar" : "codex-cli-adapter";
 }
 
-function authorityLifecycle(
-  authority: CodingRuntimeAuthorityService,
-  controller: AbortController,
-  invocations: ReturnType<typeof createCodingToolInvocationRegistry>,
-  leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>,
-  research: ResearchComposition,
-  now: () => Date,
-): ProductionRuntimeBackendInput["authorityLifecycle"] {
+interface AuthorityLifecycleInput {
+  readonly authority: CodingRuntimeAuthorityService;
+  readonly controller: AbortController;
+  readonly invocations: ReturnType<typeof createCodingToolInvocationRegistry>;
+  readonly leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>;
+  readonly research: ResearchComposition;
+  readonly now: () => Date;
+  readonly scriptTrust: Pick<WorkspaceScriptTrustService, "revokeRunAdmissions"> | undefined;
+  readonly parentCorrelationId: string | undefined;
+}
+
+function authorityLifecycle({
+  authority,
+  controller,
+  invocations,
+  leases,
+  research,
+  now,
+  scriptTrust,
+  parentCorrelationId,
+}: AuthorityLifecycleInput): ProductionRuntimeBackendInput["authorityLifecycle"] {
   return {
     revokeRuntime: (runId): boolean => {
       controller.abort();
       invocations.revokeRun(runId);
       leases.revokeRun(runId);
+      // ADR-0147 D3, autonomous-delivery amendment: the run's own manifest admissions end with it.
+      scriptTrust?.revokeRunAdmissions(runId, parentCorrelationId);
       // Drop every read-only research grant AND any unanswered research ask for the run so a
       // terminate/revoke leaves no orphaned internet reach for the parent or any child (#2387).
       research.grants.invalidateRun(runId);

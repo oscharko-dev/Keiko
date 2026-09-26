@@ -36,6 +36,9 @@ import {
 } from "../../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
 import { qualificationReceiptFor as macosQualificationReceiptFor } from "../qualify-macos-runtime-release.mjs";
 
+const APPROVED_SIDECAR = JSON.parse(readFileSync("portable-runtime-approvals.json", "utf8"))
+  .sidecarRuntimes[0];
+
 const roots = [];
 function root() {
   const path = mkdtempSync(join(tmpdir(), "keiko-macos-signing-"));
@@ -248,9 +251,9 @@ function macManifest(executableBytes, licenseBytes) {
   sidecar.platformTarget = "macos-arm64";
   sidecar.archive = {
     platformTarget: "macos-arm64",
-    url: "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode-darwin-arm64.zip",
-    sizeBytes: 55159915,
-    sha256: "cec03cf8b1119053d583e9afa14a987ca4ffa9dcd76cb79a7cd66774de6411f7",
+    url: APPROVED_SIDECAR.archives["macos-arm64"].url,
+    sizeBytes: APPROVED_SIDECAR.archives["macos-arm64"].sizeBytes,
+    sha256: APPROVED_SIDECAR.archives["macos-arm64"].sha256,
   };
   sidecar.executablePath = "runtime/sidecars/opencode-compatible/bin/opencode";
   sidecar.executableSha256 = sha256(executableBytes);
@@ -259,7 +262,7 @@ function macManifest(executableBytes, licenseBytes) {
     .digest("hex");
   sidecar.license = {
     spdxId: "MIT",
-    url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/LICENSE",
+    url: APPROVED_SIDECAR.license.url,
     sha256: sha256(licenseBytes),
   };
   sidecar.licenseEvidence.sha256 = sidecar.license.sha256;
@@ -398,6 +401,7 @@ function macFinalizeStage() {
     join(stage, "evidence", "sbom.cdx.json"),
     `${JSON.stringify({
       bomFormat: "CycloneDX",
+      specVersion: "1.6",
       components: [
         ...manifest.nativeHelpers.map((helper) => ({
           "bom-ref": helper.sbomBomRef,
@@ -532,6 +536,8 @@ describe("macOS portable signing inventory", () => {
           artifact: { platformTarget: "macos-arm64" },
           runtime: { nodePlatform: "darwin", nodeArchitecture: "arm64" },
           security: { verificationStatus: "verified-production" },
+          // runtimeActivationManifest emits nativeAddons unconditionally (#3455).
+          nativeAddons: [],
           nativeHelpers: [
             {
               name: "keiko-runtime-supervisor",

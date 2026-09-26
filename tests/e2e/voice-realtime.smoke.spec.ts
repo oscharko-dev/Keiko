@@ -16,6 +16,8 @@
 // (the gated WS upgrade integration test boots the real BFF and a real `ws` client).
 
 import { expect, test, type Page } from "@playwright/test";
+import { openChatComposer } from "./support/chat-composer.js";
+import { fakeDictationMediaInit } from "./support/dictation-media.js";
 import { evidenceScreenshotPath } from "./support/evidence.js";
 
 const FULL_REALTIME_CAPABILITY = {
@@ -155,13 +157,6 @@ function fakeRealtimeInit(mode: "grant" | "deny"): string {
   `;
 }
 
-async function openComposer(page: Page): Promise<void> {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Chat History", exact: true }).click();
-  await page.getByRole("button", { name: "New", exact: true }).click();
-  await expect(page.getByRole("textbox", { name: "Chat message" }).first()).toBeVisible();
-}
-
 async function stubCapability(page: Page, body: unknown): Promise<void> {
   await page.route("**/api/voice/capability", (route) =>
     route.fulfill({ contentType: "application/json", body: JSON.stringify(body) }),
@@ -170,7 +165,7 @@ async function stubCapability(page: Page, body: unknown): Promise<void> {
 
 async function noVoiceFlow(page: Page): Promise<void> {
   await stubCapability(page, NO_VOICE_CAPABILITY);
-  await openComposer(page);
+  await openChatComposer(page);
   const composer = page.getByRole("textbox", { name: "Chat message" }).first();
   await composer.fill("plain typed message");
   await expect(composer).toHaveValue("plain typed message");
@@ -179,8 +174,9 @@ async function noVoiceFlow(page: Page): Promise<void> {
 }
 
 async function sttOnlyFlow(page: Page): Promise<void> {
+  await page.addInitScript(fakeDictationMediaInit("grant"));
   await stubCapability(page, STT_CAPABILITY);
-  await openComposer(page);
+  await openChatComposer(page);
   // Dictation is offered for an STT-only deployment, but never the full realtime transport (AC4).
   await expect(page.getByRole("button", { name: "Dictate a message" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Start realtime voice" })).toHaveCount(0);
@@ -190,7 +186,7 @@ async function sttOnlyFlow(page: Page): Promise<void> {
 async function realtimeConnectFlow(page: Page): Promise<void> {
   await page.addInitScript(fakeRealtimeInit("grant"));
   await stubCapability(page, FULL_REALTIME_CAPABILITY);
-  await openComposer(page);
+  await openChatComposer(page);
 
   await expect(page.getByRole("button", { name: "Start realtime voice" })).toHaveCount(0);
   const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
@@ -221,7 +217,7 @@ async function realtimeConnectFlow(page: Page): Promise<void> {
 async function deniedPermissionFlow(page: Page): Promise<void> {
   await page.addInitScript(fakeRealtimeInit("deny"));
   await stubCapability(page, FULL_REALTIME_CAPABILITY);
-  await openComposer(page);
+  await openChatComposer(page);
 
   const dialogSwitch = page.getByRole("switch", { name: "Voice dialogue mode" });
   await dialogSwitch.click();

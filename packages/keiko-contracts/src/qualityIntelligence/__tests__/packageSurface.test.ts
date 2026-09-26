@@ -3,7 +3,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import * as Qi from "../index.js";
-import * as Contracts from "../../index.js";
+import * as ContractsRuntime from "../../index.js";
+import type * as Contracts from "../../index.js";
 
 const QI_SRC_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -29,6 +30,7 @@ const requiredValueExports: readonly string[] = [
   "TEST_QUALITY_RUBRIC_DIMENSIONS",
   "TEST_QUALITY_JUDGE_RESPONSE_SCHEMA",
   "QUALITY_INTELLIGENCE_PLANNER_KINDS",
+  "QUALITY_INTELLIGENCE_STAGE_NAMES",
   "QUALITY_INTELLIGENCE_RUN_EVENT_KINDS",
   "QUALITY_INTELLIGENCE_REVIEWER_KINDS",
   "QUALITY_INTELLIGENCE_REVIEW_STATES",
@@ -36,6 +38,8 @@ const requiredValueExports: readonly string[] = [
   "QUALITY_INTELLIGENCE_TERMINAL_REVIEW_STATES",
   "QUALITY_INTELLIGENCE_REVIEW_ACTION_TARGET",
   "QUALITY_INTELLIGENCE_RUN_STATUSES",
+  "QUALITY_INTELLIGENCE_ERROR_CODES",
+  "deriveQualityIntelligenceTerminalDegradation",
   "QUALITY_INTELLIGENCE_EXPORT_ADAPTERS",
   "QUALITY_INTELLIGENCE_TMS_ADAPTERS",
   "QUALITY_INTELLIGENCE_HANDOFF_PROMPTED_ACTIONS",
@@ -55,11 +59,21 @@ const requiredValueExports: readonly string[] = [
   "reviewActionResultState",
   "assertQualityIntelligenceNever",
   "assertCoverageMapInvariant",
+  "isQualityIntelligenceConfidence",
   "assertExportBundleInvariant",
   "assertRunEventSequenceMonotonic",
   "hasCanonicalSha256Hash",
   "looksLikeBrowserSafeSourceEnvelope",
   "resolveQualityIntelligenceRetentionPolicyId",
+  // KEIKO-0593: handoff-id branding and length ceiling on sourceEnvelopeIds.
+  "asQualityIntelligenceHandoffId",
+  "QUALITY_INTELLIGENCE_HANDOFF_MAX_SOURCE_ENVELOPE_IDS",
+  "assertQualityIntelligenceConversationCenterHandoffInvariant",
+  // KEIKO-0603: modelParameters allow-list enforced by assertExportBundleInvariant.
+  "QUALITY_INTELLIGENCE_MODEL_PARAMETER_ALLOWLIST",
+  // KEIKO-0891: producer-side ceilings on the run-start request the browser must never widen.
+  "QUALITY_INTELLIGENCE_MAX_RUN_SOURCES",
+  "isQualityIntelligenceSeed",
 ];
 
 const QI_SOURCE_FILES: readonly string[] = [
@@ -179,34 +193,27 @@ describe("QI module barrel — value exports", () => {
   });
 });
 
-describe("Outer package barrel — namespace re-export", () => {
-  it("re-exports QI as the QualityIntelligence namespace", () => {
-    expect(Contracts.QualityIntelligence).toBeDefined();
+describe("Outer package barrel", () => {
+  it("keeps runtime values out of the outer type-only entrypoint", () => {
+    expect(Object.keys(ContractsRuntime)).toEqual([]);
   });
+});
 
-  it("the namespace surfaces the same shape as the QI barrel", () => {
-    for (const name of requiredValueExports) {
-      expect(Object.keys(Contracts.QualityIntelligence)).toContain(name);
-    }
-  });
-
-  it("the Contracts.QualityIntelligence namespace exports EXACTLY the required value set", () => {
-    // Symmetrical exactness check for the outer-barrel namespace re-export.
-    // Mutation killed: a name accidentally dropped from the outer re-export shifts the count.
-    const actual = new Set(Object.keys(Contracts.QualityIntelligence));
-    const expected = new Set(requiredValueExports);
-    const undeclared = [...actual].filter((n) => !expected.has(n));
-    const missing = [...expected].filter((n) => !actual.has(n));
-    expect(undeclared).toEqual([]);
-    expect(missing).toEqual([]);
-    expect(actual.size).toBe(requiredValueExports.length);
-  });
-
-  it("flat-exports the test-quality judge schema contract", () => {
-    expect(Contracts.TEST_QUALITY_RUBRIC_DIMENSIONS).toBe(Qi.TEST_QUALITY_RUBRIC_DIMENSIONS);
-    expect(Contracts.TEST_QUALITY_JUDGE_RESPONSE_SCHEMA).toBe(
-      Qi.TEST_QUALITY_JUDGE_RESPONSE_SCHEMA,
-    );
+describe("QI module barrel — type reachability (KEIKO-0605)", () => {
+  it("QualityIntelligenceUiCandidateQualityVerdict is reachable through both the QI barrel and the outer package barrel", () => {
+    // Phantom generic: references the type argument at the call site without producing a runtime
+    // value (the same reachability-pin idiom used across packages/keiko-contracts/src/index.test.ts),
+    // so `verbatimModuleSyntax` stays satisfied and the name stays load-bearing on the public
+    // surface. Before KEIKO-0605, the type was declared and used internally in bffWire.ts but
+    // re-exported from NEITHER `qualityIntelligence/index.ts` NOR the outer `index.ts` — reachable
+    // only via a deep relative import, invisible from `@oscharko-dev/keiko-contracts`. This test
+    // stops compiling if either barrel drops it again.
+    const pin = <T>(_value?: T): T | undefined => undefined;
+    pin<Qi.QualityIntelligenceUiCandidateQualityVerdict>();
+    pin<Contracts.QualityIntelligenceUiCandidateQualityVerdict>();
+    // KEIKO-0891's bounded ADF-tree type has the same barrel-reachability requirement.
+    pin<Qi.QualityIntelligenceAdfNode>();
+    expect(pin<Contracts.QualityIntelligenceAdfNode>()).toBeUndefined();
   });
 });
 

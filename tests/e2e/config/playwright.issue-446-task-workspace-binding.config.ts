@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { e2eStateDir } from "../support/e2e-state-dir.js";
 
 // Issue #446 (Epic #443) — browser evidence that the active task-workspace binding retargets a bound
 // surface in the REAL packaged app, and that an operator switch re-targets it without leaving the
@@ -13,7 +13,7 @@ import { join } from "node:path";
 const root = process.cwd();
 const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32246");
 const stateId = process.env.GITHUB_RUN_ID ?? `issue-446-task-binding-${String(process.pid)}`;
-const stateDir = process.env.KEIKO_E2E_STATE_DIR ?? join(tmpdir(), "keiko-e2e", stateId);
+const stateDir = e2eStateDir(stateId);
 const fixtureConfigPath = join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json");
 const runtimeConfigPath = join(stateDir, "keiko.e2e.config.json");
 const prepareRuntimeConfig = [

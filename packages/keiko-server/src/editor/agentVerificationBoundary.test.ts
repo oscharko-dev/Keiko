@@ -9,11 +9,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  DEFAULT_VERIFICATION_LIMITS,
-  type VerificationReport,
-  type VerificationStep,
-} from "@oscharko-dev/keiko-contracts";
+import type { VerificationReport, VerificationStep } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_VERIFICATION_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { SpawnFn } from "@oscharko-dev/keiko-tools";
 import { runVerification } from "@oscharko-dev/keiko-verification";
@@ -76,7 +73,10 @@ function governedPort(backendAvailable: boolean): GovernedPort {
       workspace: args.workspace,
       signal: args.signal,
       spawn,
-      monitor: { watch: (): (() => void) => (): void => undefined },
+      monitor: {
+        canEnforceProcessTreeMemory: (): boolean => true,
+        watch: (): (() => void) => (): void => undefined,
+      },
       networkEnforcement: "enforce-or-fail-closed",
       enforcedNetworkAvailable: backendAvailable,
       sandboxAvailability: backendAvailable ? BUBBLEWRAP_BACKEND : NO_BACKENDS,
@@ -169,7 +169,10 @@ describe("human and agent verification share the governed sandbox boundary (Issu
     const humanReportPromise = waitForHumanReport(manager);
     manager.execute(input());
     const humanReport = await humanReportPromise;
-    const agentReport = await manager.runToReport(input(), new AbortController().signal);
+    const { report: agentReport } = await manager.runToReport(
+      input(),
+      new AbortController().signal,
+    );
 
     expect(port.plans).toHaveLength(2);
     expect(port.plans[0]).toEqual(port.plans[1]);
@@ -190,7 +193,10 @@ describe("human and agent verification share the governed sandbox boundary (Issu
     const humanReportPromise = waitForHumanReport(manager);
     manager.execute(input());
     const humanReport = await humanReportPromise;
-    const agentReport = await manager.runToReport(input(), new AbortController().signal);
+    const { report: agentReport } = await manager.runToReport(
+      input(),
+      new AbortController().signal,
+    );
 
     expect(port.spawnCalls).toHaveLength(0);
     expect(humanReport.results[0]?.status).toBe("denied");

@@ -15,21 +15,17 @@ The relationship surface supports three density modes. Defaults below assume the
 | Cap dimension                           | Minimal (default)                                             | Standard                                                                                   | Dense                                                                                                       |
 | --------------------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
 | Visible edges                           | Only edges touching focused window.                           | Per active-project filter, capped at **25** ([activity-state.md §5.3](activity-state.md)). | Per active filters, capped at **512** ([api-contract.md §4.8](api-contract.md) default `maxRelationships`). |
-| Concurrent animated activity badges     | **5**                                                         | **25** (`N_VISIBLE`)                                                                       | **25** (`N_VISIBLE` — the animation cap is shared across all modes).                                        |
+| Concurrent animated activity badges     | **25** (`N_VISIBLE` — shared across all modes, see below)     | **25** (`N_VISIBLE`)                                                                       | **25** (`N_VISIBLE` — the animation cap is shared across all modes).                                        |
 | Audit history page size                 | **10**                                                        | **10**                                                                                     | **10**                                                                                                      |
 | Inspector evidence-reference rows       | **5** (inline) + "View all N" link                            | **5** (inline) + "View all N" link                                                         | **5** (inline) + "View all N" link                                                                          |
 | Activity recent-transitions inline rows | **3**                                                         | **5**                                                                                      | **5**                                                                                                       |
-| Edge-bundle aggregation threshold       | bundle aggregates if pair count > **2**                       | bundle aggregates if pair count > **4**                                                    | bundle aggregates if pair count > **4**                                                                     |
+| Edge-bundle aggregation threshold       | bundle aggregates if pair count ≥ **2**                       | bundle aggregates if pair count > **4**                                                    | bundle aggregates if pair count > **4**                                                                     |
 | Tooltip auto-dismiss timeout            | **5 s** (banner inactivity)                                   | **5 s**                                                                                    | **8 s** (operator likely reviewing)                                                                         |
 | Default `prefers-reduced-motion`        | Implicit: minimal renders no motion regardless of preference. | Honoured.                                                                                  | Honoured.                                                                                                   |
 
 ### Why `N_VISIBLE = 25` regardless of mode
 
 The animated-badge cap is **the same in all modes** because it is a privacy + perception cap, not a layout cap (per [activity-state.md §5.3](activity-state.md)). Dense mode shows more **edges**; it does not show more **animated badges**.
-
-### Why minimal mode caps at 5 animated badges
-
-Minimal mode shows only edges touching the focused window. The maximum incident edge count on a single workspace window in practice is bounded by per-window port topology and target workspace cardinality; 5 is conservative even for a deeply connected hub window.
 
 ## URL-state model
 
@@ -87,7 +83,7 @@ The URL param `?relDensity=` overrides the persisted value **for the current URL
 | Operator presses `Escape` with workspace shell focus.                 | Clears `data-relationship-focus`. Restores full opacity to all edges.                                  |
 | Inspector receives focus on a non-relationship-endpoint window.       | No effect on focus mode. The inspector renders the window's relationships independently of focus mode. |
 
-CSS effect (one-line addition to existing `.conn-path` rule at `globals.css:1677`):
+CSS effect (one-line addition to existing `.conn-path` rule in `globals.css`):
 
 ```css
 .workspace[data-relationship-focus] .conn-path:not([data-incident="true"]) {

@@ -22,6 +22,17 @@ describe("AgentGateCard", () => {
     expect(screen.getByRole("button", { name: "Reject" })).toHaveFocus();
   });
 
+  // KEIKO-0140: the scope-row copy was cited as proven by human-loop-1405.spec.ts, which renders a
+  // hand-authored HTML replica rather than this component — so deleting either line below would
+  // have gone unnoticed by the whole suite. This is the only assertion on the live markup.
+  it("renders both permission scope rows with their exact copy", () => {
+    render(<AgentGateCard gate={gate} escalated={false} onApprove={vi.fn()} onReject={vi.fn()} />);
+
+    const scope = screen.getByLabelText("Permission scope");
+    expect(scope).toHaveTextContent(`Allow ${gate.kind} action after review`);
+    expect(scope).toHaveTextContent("No extra BFF authority or autonomous follow-up");
+  });
+
   it("treats Escape as Reject and wires the action buttons", async () => {
     const onApprove = vi.fn();
     const onReject = vi.fn();

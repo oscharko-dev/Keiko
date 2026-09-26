@@ -7,25 +7,27 @@ import {
   type ConsolidationEmbedding,
   type ConsolidationResult,
 } from "@oscharko-dev/keiko-memory-consolidation";
+import type {
+  MemoryEdgeId,
+  MemoryId,
+  MemoryRecord,
+  MemoryScope,
+  MemoryScopeKind,
+  MemoryStatus,
+  MemoryType,
+  MemoryConsolidationJobEnvelopeWire,
+  MemoryConsolidationApplyPreconditionWire,
+  MemoryConsolidationApplicationWire,
+  MemoryConsolidationJobResponseWire,
+  MemoryConsolidationReviewItemWire,
+  MemoryConsolidationResultWire,
+} from "@oscharko-dev/keiko-contracts";
 import {
   MEMORY_SCOPE_KINDS,
-  MEMORY_CONSOLIDATION_EXCERPT_MAX_CHARS,
   MEMORY_STATUSES,
   MEMORY_TYPES,
-  type MemoryEdgeId,
-  type MemoryId,
-  type MemoryRecord,
-  type MemoryScope,
-  type MemoryScopeKind,
-  type MemoryStatus,
-  type MemoryType,
-  type MemoryConsolidationJobEnvelopeWire,
-  type MemoryConsolidationApplyPreconditionWire,
-  type MemoryConsolidationApplicationWire,
-  type MemoryConsolidationJobResponseWire,
-  type MemoryConsolidationReviewItemWire,
-  type MemoryConsolidationResultWire,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/memory";
+import { MEMORY_CONSOLIDATION_EXCERPT_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/memory-consolidation-wire";
 import type {
   ProjectId,
   UserId,
@@ -39,6 +41,7 @@ import {
 import type { UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
+import { contentFreeErrorClass, emitServerDiagnostic } from "./diagnostics-log.js";
 import type {
   ConsolidationJobRecord,
   ConsolidationReviewSnapshot,
@@ -46,6 +49,8 @@ import type {
   ConsolidationJobSettings,
 } from "./memory-consolidation-registry.js";
 import { enrichReviewItemsWithAdvisory } from "./memory-conflict-advisory.js";
+import { readJsonRequestBody } from "./bounded-request-body.js";
+import { consolidationLogSinkFor } from "./process-log-sink.js";
 
 const MAX_BODY_BYTES = 64_000;
 const DEFAULT_JACCARD_THRESHOLD = 0.85;
@@ -61,13 +66,6 @@ const DEFAULT_CONSOLIDATION_STATUSES: readonly MemoryStatus[] = [
   "conflicted",
 ];
 
-class BodyTooLargeError extends Error {
-  public constructor() {
-    super("request body too large");
-    this.name = "BodyTooLargeError";
-  }
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -76,51 +74,16 @@ function isRouteResult(value: unknown): value is RouteResult {
   return isRecord(value) && typeof value.status === "number";
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let capped = false;
-    req.on("data", (chunk: Buffer) => {
-      total += chunk.length;
-      if (total > MAX_BODY_BYTES) {
-        if (!capped) {
-          capped = true;
-          chunks.length = 0;
-          reject(new BodyTooLargeError());
-          req.resume();
-        }
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => {
-      if (!capped) resolve(Buffer.concat(chunks).toString("utf8"));
-    });
-    req.on("error", reject);
-  });
-}
-
-async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown> | RouteResult> {
-  let raw: string;
-  try {
-    raw = await readBody(req);
-  } catch (error) {
-    if (error instanceof BodyTooLargeError) {
-      return { status: 413, body: errorBody("PAYLOAD_TOO_LARGE", "Request body too large.") };
-    }
-    throw error;
-  }
-  let parsed: unknown;
-  try {
-    parsed = raw.length === 0 ? {} : JSON.parse(raw);
-  } catch {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Request body is not valid JSON.") };
-  }
-  if (!isRecord(parsed)) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Request body must be a JSON object.") };
-  }
-  return parsed;
+// Consolidated onto the shared bounded reader (#2902 w5-sse-counters) — the cap above is
+// unchanged, only the ad hoc listener wiring is gone. The read-parse-validate wrapper itself is
+// also consolidated (#2902 audit finding 3): `readJsonRequestBody` (bounded-request-body.ts) is
+// the one owner of "bounded read, then parse+validate as a JSON object", previously hand-rolled
+// identically in this file, memory-handlers.ts and memory-conv-handlers.ts.
+function readJsonBody(
+  req: IncomingMessage,
+  correlationId?: string,
+): Promise<Record<string, unknown> | RouteResult> {
+  return readJsonRequestBody(req, MAX_BODY_BYTES, correlationId);
 }
 
 function resolveVault(deps: UiHandlerDeps): MemoryVaultStore | RouteResult {
@@ -365,16 +328,20 @@ function loadSelectedMemories(
       includeExpired: selection.includeExpired,
       limit: remaining,
       orderBy: "updatedAt",
-      orderDir: "asc",
+      orderDir: "desc",
     });
     for (const record of records) {
       seen.set(record.id, record);
       if (seen.size >= detectionLimit) break;
     }
   }
+  // Newest first, matching the engine's own work-window ordering (boundedEligibleMemories). This
+  // loader slices to maxRecords BEFORE runConsolidation sees the records, so an oldest-first order
+  // here reproduced the frozen-window defect independently of the engine: past the cap the newest
+  // memories were discarded before any duplicate or conflict scan could reach them.
   const sorted = [...seen.values()]
     .sort((a, b) => {
-      if (a.updatedAt !== b.updatedAt) return a.updatedAt - b.updatedAt;
+      if (a.updatedAt !== b.updatedAt) return b.updatedAt - a.updatedAt;
       return a.id.localeCompare(b.id);
     })
     .slice(0, maxRecords);
@@ -468,14 +435,18 @@ function newMemoryEdgeId(): MemoryEdgeId {
   return randomUUID() as unknown as MemoryEdgeId;
 }
 
-function buildRunOptions(
-  scheduledRecord: ConsolidationJobRecord | undefined,
-  createdAt: number,
-  vault: MemoryVaultStore,
-  memories: readonly MemoryRecord[],
-  selection: ConsolidationJobSelection,
-  settings: ConsolidationJobSettings,
-): Parameters<typeof runConsolidation>[1] {
+interface BuildRunOptionsArgs {
+  readonly jobId: string;
+  readonly scheduledRecord: ConsolidationJobRecord | undefined;
+  readonly createdAt: number;
+  readonly vault: MemoryVaultStore;
+  readonly memories: readonly MemoryRecord[];
+  readonly selection: ConsolidationJobSelection;
+  readonly settings: ConsolidationJobSettings;
+}
+
+function buildRunOptions(args: BuildRunOptionsArgs): Parameters<typeof runConsolidation>[1] {
+  const { jobId, scheduledRecord, createdAt, vault, memories, selection, settings } = args;
   const memoryIds = memories.map((memory) => memory.id);
   const embeddings = vault.getEmbeddings(memoryIds);
   const accessStats = vault.getAccessStats(memoryIds);
@@ -506,6 +477,12 @@ function buildRunOptions(
     // every poll — eliminates a theoretical race where the registry entry is replaced under the
     // closure before the signal is first checked.
     cancellationSignal: (): boolean => scheduledRecord?.cancelRequested === true,
+    // Wires the process-wide activity log so `consolidation.summary.fallback` (the ONE line
+    // `chooseSummaryBody`'s deterministic-union fallback emits) is durable rather than silently
+    // unreachable, and stamps this job's own id as the event's `correlationId` — the package's
+    // `ConsolidationLogEvent` carries no jobId field of its own — so an operator can join the
+    // fallback reason back to the job that produced it (#2902 w6).
+    logSink: consolidationLogSinkFor(jobId),
   };
 }
 
@@ -564,15 +541,29 @@ function buildReviewSnapshots(
 }
 
 function failScheduledJob(
+  deps: UiHandlerDeps,
+  correlationId: string,
   registry: NonNullable<UiHandlerDeps["consolidationJobs"]>,
   running: ReturnType<typeof transitionJob>,
   jobId: string,
   memories: readonly MemoryRecord[],
+  error: unknown,
 ): void {
   const completedAt = Date.now();
   // COUPLING-004: persist only the same fixed, cause-free string that finalizeTerminalJob() uses;
   // a raw error can contain a filesystem path or SQL fragment that must not cross into the browser.
   const message = "Consolidation run failed.";
+  // The engine/vault throw that caused this job to fail was previously discarded here: the job was
+  // marked permanently failed with no record of what threw. Log a content-free diagnostic (error
+  // CLASS only, never the raw message) before the job transitions to its terminal "failed" state.
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId,
+    timestamp: new Date(completedAt).toISOString(),
+    operation: "memory.consolidation.job.run",
+    source: "memory-consolidation.scheduled-job",
+    errorClass: contentFreeErrorClass(error),
+    message: "memory-consolidation-scheduled-job-failed",
+  });
   registry.fail(
     jobId,
     transitionJob(running, "failed", { completedAt, error: message }),
@@ -621,8 +612,24 @@ async function enrichConsolidationResult(
   return { ...result, reviewItems: advisory.enrichedItems };
 }
 
+// Shared by both cancellation checkpoints in `runScheduledJob` (before and after the load, which
+// used to duplicate the same transition+complete call inline) — extracted only to keep that
+// function under the AGENTS.md max-lines-per-function ceiling.
+function completeIfCanceled(
+  registry: NonNullable<UiHandlerDeps["consolidationJobs"]>,
+  jobId: string,
+  record: ConsolidationJobRecord,
+  recordCount: number,
+): boolean {
+  if (!record.cancelRequested) return false;
+  const canceled = transitionJob(record.job, "canceled", { completedAt: Date.now() });
+  registry.complete(jobId, canceled, recordCount);
+  return true;
+}
+
 async function runScheduledJob(
   deps: UiHandlerDeps,
+  correlationId: string,
   registry: NonNullable<UiHandlerDeps["consolidationJobs"]>,
   jobId: string,
   vault: MemoryVaultStore,
@@ -631,20 +638,12 @@ async function runScheduledJob(
 ): Promise<void> {
   const queued = registry.get(jobId);
   if (queued?.job.state !== "queued") return;
-  if (queued.cancelRequested) {
-    const canceled = transitionJob(queued.job, "canceled", { completedAt: Date.now() });
-    registry.complete(jobId, canceled, 0);
-    return;
-  }
+  if (completeIfCanceled(registry, jobId, queued, 0)) return;
   const loaded = loadSelectedMemories(vault, selection, settings.maxRecordsPerRun);
   const memories = loaded.records;
   const afterLoad = registry.get(jobId);
   if (afterLoad?.job.state !== "queued") return;
-  if (afterLoad.cancelRequested) {
-    const canceled = transitionJob(afterLoad.job, "canceled", { completedAt: Date.now() });
-    registry.complete(jobId, canceled, memories.length);
-    return;
-  }
+  if (completeIfCanceled(registry, jobId, afterLoad, memories.length)) return;
   if (memories.length === 0 || settings.maxClustersPerRun === 0) {
     const result = emptyConsolidationResult("skipped");
     const skipped = transitionJob(afterLoad.job, "skipped", {
@@ -660,17 +659,40 @@ async function runScheduledJob(
   try {
     const result = runConsolidation(
       memories,
-      buildRunOptions(scheduledRecord, queued.createdAt, vault, memories, selection, settings),
+      buildRunOptions({
+        jobId,
+        scheduledRecord,
+        createdAt: queued.createdAt,
+        vault,
+        memories,
+        selection,
+        settings,
+      }),
     );
-    const enrichedResult = await enrichConsolidationResult(deps, jobId, result, memories);
-    finalizeTerminalJob(registry, running, jobId, memories, enrichedResult, loaded.truncated);
-  } catch {
-    failScheduledJob(registry, running, jobId, memories);
+    await finalizeScheduledConsolidation(deps, registry, running, jobId, memories, result, loaded);
+  } catch (error) {
+    failScheduledJob(deps, correlationId, registry, running, jobId, memories, error);
   }
+}
+
+// Split out of `runScheduledJob` solely to keep that function under the AGENTS.md
+// max-lines-per-function ceiling; behaviourally this is still that function's success path.
+async function finalizeScheduledConsolidation(
+  deps: UiHandlerDeps,
+  registry: NonNullable<UiHandlerDeps["consolidationJobs"]>,
+  running: ReturnType<typeof transitionJob>,
+  jobId: string,
+  memories: readonly MemoryRecord[],
+  result: ConsolidationResult,
+  loaded: { readonly truncated: boolean },
+): Promise<void> {
+  const enrichedResult = await enrichConsolidationResult(deps, jobId, result, memories);
+  finalizeTerminalJob(registry, running, jobId, memories, enrichedResult, loaded.truncated);
 }
 
 function scheduleJob(
   deps: UiHandlerDeps,
+  correlationId: string,
   jobId: string,
   vault: MemoryVaultStore,
   selection: ConsolidationJobSelection,
@@ -679,7 +701,7 @@ function scheduleJob(
   const registry = deps.consolidationJobs;
   if (registry === undefined) return;
   setImmediate(() => {
-    void runScheduledJob(deps, registry, jobId, vault, selection, settings);
+    void runScheduledJob(deps, correlationId, registry, jobId, vault, selection, settings);
   });
 }
 
@@ -705,7 +727,7 @@ export async function handleCreateConsolidationJob(
   if (isRouteResult(vault)) return vault;
   const registry = resolveJobRegistry(deps);
   if (isRouteResult(registry)) return registry;
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
   const input = parseCreateInput(body);
   if (isRouteResult(input)) return input;
@@ -724,7 +746,14 @@ export async function handleCreateConsolidationJob(
   } catch {
     return registerJobLimit();
   }
-  scheduleJob(deps, jobId, vault, input.selection, input.settings);
+  scheduleJob(
+    deps,
+    ctx.correlationId ?? randomUUID(),
+    jobId,
+    vault,
+    input.selection,
+    input.settings,
+  );
   return createJobResponse(deps, record);
 }
 
@@ -1015,7 +1044,7 @@ export async function handleApplyConsolidationReviewItem(
   if (previous !== undefined) return previous;
   const inputs = findApplyInputs(route.record, route.itemId);
   if (isRouteResult(inputs)) return inputs;
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
   const latest = route.registry.get(route.jobId);
   const concurrent = latest === undefined ? undefined : previousApplication(latest, route.itemId);

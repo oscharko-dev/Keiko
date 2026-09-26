@@ -1,15 +1,13 @@
 import { defineConfig, devices } from "@playwright/test";
-import { realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { e2eStateDir } from "../support/e2e-state-dir.js";
 
 const root = process.cwd();
 const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32303");
 const bffPort = Number(process.env.KEIKO_E2E_BFF_PORT ?? "32304");
 const nextPort = Number(process.env.KEIKO_E2E_NEXT_PORT ?? "32305");
 const stateId = process.env.GITHUB_RUN_ID ?? `issue-1992-supervised-coding-${String(process.pid)}`;
-const stateDir =
-  process.env.KEIKO_E2E_STATE_DIR ?? join(realpathSync(tmpdir()), "keiko-e2e", stateId);
+const stateDir = e2eStateDir(stateId);
 const fixtureConfigPath = join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json");
 const runtimeConfigPath = join(stateDir, "keiko.e2e.config.json");
 const prepareRuntimeConfig = [

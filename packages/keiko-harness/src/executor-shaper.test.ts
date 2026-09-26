@@ -8,16 +8,36 @@
 //   - noPortUnchanged: with no port (every existing caller), messages are identical to today.
 
 import { describe, expect, it } from "vitest";
-import {
-  CONTEXT_ENGINEERING_SCHEMA_VERSION,
-  validateContextToolObservation,
+import { CONTEXT_ENGINEERING_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { validateContextToolObservation } from "@oscharko-dev/keiko-contracts/runtime/context-observations-validation";
+import type {
+  ContextToolObservation,
+  ToolShapingDegradedReason,
 } from "@oscharko-dev/keiko-contracts";
-import type { ContextToolObservation } from "@oscharko-dev/keiko-contracts";
 import { contextBytes } from "./context.js";
-import { handleToolCall } from "./executor.js";
+import { completeToolCall, selectToolMessage } from "./executor.js";
+import type { RunContext, StateStep } from "./context.js";
 import type { ToolCallRequest, ToolCallResult, ToolPort } from "./ports.js";
 import type { HarnessShaperInput, HarnessShaperPort } from "./shaper-port.js";
 import { response, toolCall, buildContext } from "./_support.js";
+
+// Retained raw-compaction pins exercise the production post-tool owner directly. They do not
+// claim that a raw 512KB payload passes the canonical tool result ceiling.
+async function handleToolCall(ctx: RunContext): Promise<StateStep> {
+  for (const call of ctx.lastResponse?.toolCalls ?? []) {
+    ctx.emitter.emit({ type: "tool:call:started", toolName: call.name, toolCallId: call.id });
+    const result = await ctx.tools.execute({
+      toolCallId: call.id,
+      toolName: call.name,
+      arguments: call.arguments,
+      signal: ctx.signal,
+    });
+    const selected = selectToolMessage(ctx, [], completeToolCall(ctx, call, result));
+    if ("to" in selected) return selected;
+    ctx.messages = [...selected.messages, ...selected.results, selected.message];
+  }
+  return { to: "model-call", reason: "tool results fed back to model" };
+}
 
 const COMMAND_SANDBOX = {
   envAllowlist: ["PATH"],
@@ -309,4 +329,64 @@ describe("executor — ADR-0055 D4 shaped-observation attach", () => {
     expect(ctx.shapedObservations).toHaveLength(0);
     expect(ctx.messages[ctx.messages.length - 1]?.content).toBe(OUTPUT);
   });
+
+  // Shaping is additive (ADR-0055 D4): the tool has already succeeded and tool:call:completed has
+  // already been emitted by the time it runs. A fault here must not re-enter the failure path,
+  // emit a second terminal event for the same toolCallId, or end the run (KEIKO-0099) — but it
+  // must still be operator-visible via a redacted, non-terminal diagnostic naming which of the two
+  // throwable steps actually failed.
+  const shaperFaults: readonly (readonly [string, HarnessShaperPort, ToolShapingDegradedReason])[] =
+    [
+      [
+        "a throwing port",
+        (): ContextToolObservation => {
+          throw new Error("shaper exploded");
+        },
+        "shaper-threw",
+      ],
+      [
+        "an observation that cannot be serialized",
+        // A BigInt leaf makes JSON.stringify throw inside compactObservationContent.
+        (): ContextToolObservation =>
+          ({ ...DEFAULT_OBSERVATION, unserializable: 1n }) as unknown as ContextToolObservation,
+        "unserializable-observation",
+      ],
+    ];
+
+  for (const [label, port, expectedReason] of shaperFaults) {
+    it(`survives ${label} with the raw tool output and one terminal event`, async () => {
+      const { ctx, sink } = buildContext({
+        task: TASK,
+        model: { call: () => Promise.resolve(response()) },
+        tools: commandTool(OUTPUT),
+        shaperPort: port,
+      });
+      ctx.lastResponse = response({
+        finishReason: "tool_calls",
+        toolCalls: [toolCall("c1", "run_command")],
+      });
+
+      const step = await handleToolCall(ctx);
+
+      expect(step.to).not.toBe("failed");
+      expect(ctx.failure).toBeUndefined();
+      // The deferred commit (KEIKO-0099) must not leave a half-applied accumulator entry: a fault
+      // during shaping means NEITHER the observation nor its compacted message was ever recorded.
+      expect(ctx.shapedObservations).toHaveLength(0);
+      expect(ctx.compactedToolMessages.size).toBe(0);
+      expect(
+        sink
+          .events()
+          .filter((event) => event.type.startsWith("tool:call:"))
+          .map((event) => event.type),
+      ).toEqual(["tool:call:started", "tool:call:completed"]);
+      expect(ctx.messages[ctx.messages.length - 1]?.content).toBe(OUTPUT);
+      const degraded = sink.events().find((event) => event.type === "tool:shaping:degraded");
+      expect(degraded).toMatchObject({
+        toolCallId: "c1",
+        toolName: "run_command",
+        reason: expectedReason,
+      });
+    });
+  }
 });

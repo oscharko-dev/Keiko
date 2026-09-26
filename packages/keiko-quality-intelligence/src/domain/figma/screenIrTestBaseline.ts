@@ -15,6 +15,7 @@
 // baseline shape. Vision-derived semantics are layered separately (see visionAugmentation.ts) and
 // never replace these structural items.
 
+import { fnv1aHex } from "./idHash.js";
 import type { BoundingBox, IrNode, ScreenIr } from "./irTypes.js";
 
 export type StructuralTestCategory =
@@ -270,13 +271,7 @@ function stateLabel(name: string): string | undefined {
 }
 
 function shortHash(input: string): string {
-  // Deterministic non-cryptographic id suffix (FNV-1a) — stable across runs, no IO, no import.
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < input.length; i += 1) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return (hash >>> 0).toString(16).padStart(8, "0");
+  return fnv1aHex(input);
 }
 
 function itemId(screenId: string, category: string, nodeId: string, ordinal: number): string {

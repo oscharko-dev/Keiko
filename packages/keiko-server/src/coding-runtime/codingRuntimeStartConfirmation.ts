@@ -4,6 +4,7 @@ import type {
   CodingWorkbenchModelSource,
   CodingWorkbenchRuntimePreference,
   CodingWorkbenchRuntimeSource,
+  ModelReasoningEffort,
 } from "@oscharko-dev/keiko-contracts";
 
 const DIGEST = /^[a-f0-9]{64}$/u;
@@ -13,6 +14,9 @@ export interface CodingRuntimeStartConfirmationFacts {
   readonly taskIntent: string;
   readonly requestedMode: CodingWorkbenchMode;
   readonly runtimePreference?: CodingWorkbenchRuntimePreference | undefined;
+  readonly modelId?: string | undefined;
+  readonly reasoningEffort?: ModelReasoningEffort | undefined;
+  readonly projectMemoryEnabled: boolean;
   readonly operatorId: string;
   readonly taskId: string;
   readonly projectId: string;
@@ -25,6 +29,11 @@ export interface CodingRuntimeStartConfirmationFacts {
   readonly runtimeSource: CodingWorkbenchRuntimeSource;
   readonly modelSource: CodingWorkbenchModelSource;
   readonly modelProfileId: string;
+  readonly issueBindingDigest?: string | undefined;
+  readonly repositoryIdentity?: {
+    readonly kind: "github-origin" | "foreign-origin" | "local";
+    readonly digest: string;
+  };
 }
 
 export interface CodingRuntimeStartConfirmationClaim {
@@ -61,10 +70,19 @@ export function codingRuntimeStartConfirmationClaim(
           taskIntent: facts.taskIntent,
           requestedMode: facts.requestedMode,
           runtimePreference: facts.runtimePreference,
+          modelId: facts.modelId,
+          reasoningEffort: facts.reasoningEffort,
+          projectMemoryEnabled: facts.projectMemoryEnabled,
         },
         operator: facts.operatorId,
         task: facts.taskId,
+        ...(facts.issueBindingDigest === undefined
+          ? {}
+          : { issueBindingDigest: facts.issueBindingDigest }),
         project: { id: facts.projectId, digest: facts.projectDigest },
+        ...(facts.repositoryIdentity === undefined
+          ? {}
+          : { repositoryIdentity: facts.repositoryIdentity }),
         workspace: { id: facts.workspaceId, rootDigest: sha256Hex(facts.workspaceRoot) },
         branch: { ref: facts.branchRef, headDigest: facts.branchHeadDigest },
         mode: { requested: facts.requestedMode, ceiling: facts.deploymentCeiling },

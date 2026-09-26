@@ -41,9 +41,9 @@ their own ADR-linked controls and regression tests:
 ## Discovered-task validation (why this is not RCE)
 
 Tasks are discovered only from the project's own `package.json` `scripts`. Discovery additionally
-filters script names to a conservative character set and rejects any name that does not start with an
-alphanumeric character, so a discovered name can never smuggle a leading flag (e.g. `-e`) or shell
-metacharacter into `npm run`. Because a run can only reference a discovered task id — and the id maps to
+filters script names to a conservative character set, silently excluding any name that does not
+start with an alphanumeric character, so a discovered name can never smuggle a leading flag (e.g.
+`-e`) or shell metacharacter into `npm run`. Because a run can only reference a discovered task id — and the id maps to
 a frozen argv server-side — an attacker who controls the run request cannot reach an arbitrary command
 or an arbitrary script name.
 

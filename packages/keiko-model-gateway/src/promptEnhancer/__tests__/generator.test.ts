@@ -1,15 +1,20 @@
 import { describe, expect, it } from "vitest";
+import type {
+  ClarificationOrAssumption,
+  GroundingNeedKind,
+  PromptEnhancementProfileId,
+  PromptTaskClass,
+  RawPromptInput,
+} from "@oscharko-dev/keiko-contracts";
+import { analyzePrompt } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-analyzer";
 import {
+  asPromptEnhancementRequestId,
   GROUNDING_NEED_KINDS,
   PROMPT_ENHANCEMENT_PROFILE_IDS,
+  PROMPT_ENHANCER_SCHEMA_VERSION,
   PROMPT_TASK_CLASSES,
-  validateEnhancedPrompt,
-  type ClarificationOrAssumption,
-  type GroundingNeedKind,
-  type PromptEnhancementProfileId,
-  type PromptTaskClass,
-  type RawPromptInput,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
+import { validateEnhancedPrompt } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation";
 import { planPromptEnhancement } from "../planner.js";
 import { GENERATED_INPUT_MAX_CHARS, generateEnhancedPrompt } from "../generator.js";
 import { makeAnalysis, testPromptId } from "./_support.js";
@@ -90,6 +95,24 @@ function generateFor(
   const analysis = makeAnalysis(options);
   const plan = planPromptEnhancement(analysis, planOptions);
   return generateEnhancedPrompt({ promptId: testPromptId(), analysis, plan, input });
+}
+
+function generateForProductionInput(text: string): {
+  readonly analysis: ReturnType<typeof analyzePrompt>;
+  readonly prompt: EnhancedPrompt;
+} {
+  const input = { text };
+  const analysis = analyzePrompt({
+    schemaVersion: PROMPT_ENHANCER_SCHEMA_VERSION,
+    requestId: asPromptEnhancementRequestId("generator-production-pipeline"),
+    input,
+    missingInformationStrategy: "clarify",
+  });
+  const plan = planPromptEnhancement(analysis);
+  return {
+    analysis,
+    prompt: generateEnhancedPrompt({ promptId: testPromptId(), analysis, plan, input }),
+  };
 }
 
 function profileForTaskClass(taskClass: PromptTaskClass): PromptEnhancementProfileId {
@@ -231,6 +254,178 @@ describe("generateEnhancedPrompt — no fabrication and segregated input (AC3)",
 });
 
 describe("generateEnhancedPrompt — intent-specific shaping", () => {
+  it("keeps factual German questions about an introduction decision out of decision support", () => {
+    const { analysis, prompt } = generateForProductionInput(
+      "Was war die Entscheidung über die Einführung eines Wissensmanagement-Tools?",
+    );
+
+    expect(analysis.taskClass).toBe("factual-qa");
+    expect(trustedText(prompt)).not.toMatch(
+      /decision-support analyst|task lens: decision support/i,
+    );
+  });
+
+  it("routes the audited German knowledge-management request through the production pipeline", () => {
+    const { analysis, prompt } = generateForProductionInput(
+      "Bereite eine belastbare Entscheidung über die Einführung eines Wissensmanagement-Tools vor. Alternativen, Budget, Nutzerzahl, Entscheidungskriterien und Zeitrahmen sind noch unbekannt.",
+    );
+
+    expect(analysis.taskClass).toBe("decision-support");
+    expect(trustedText(prompt)).toMatch(/decision-support analyst|task lens: decision support/i);
+    expect(trustedText(prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+  });
+
+  it("does not treat German prices as a travel cue", () => {
+    const { analysis, prompt } = generateForProductionInput(
+      "Bereite eine belastbare Entscheidung über die Einführung eines Wissensmanagement-Tools vor. Vergleiche Preise, Alternativen und Budget.",
+    );
+
+    expect(analysis.taskClass).toBe("decision-support");
+    expect(trustedText(prompt)).toMatch(/decision-support analyst|task lens: decision support/i);
+    expect(trustedText(prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+
+    // Sharper pin on the original false positive: "Preise" embeds the letters "reise", and the
+    // standalone-Reise matcher must not regress to substring matching that revives it.
+    const pricing = generateForProductionInput("Vergleiche die Preise der Anbieter.");
+    expect(trustedText(pricing.prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+  });
+
+  it("keeps non-planning standalone Reise mentions out of the travel frame", () => {
+    // Standalone "Reise" alone is not planning intent: a vocabulary question and a translation
+    // request must not receive itinerary decomposition or volatile-price guidance.
+    const vocabulary = generateForProductionInput("Was bedeutet das Wort Reise?");
+    expect(trustedText(vocabulary.prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+
+    const translation = generateForProductionInput("\u00dcbersetze den Satz: die Reise beginnt.");
+    expect(trustedText(translation.prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+  });
+
+  it("keeps possessive Reise phrases without a planning verb out of the travel frame", () => {
+    // A possessive alone is not planning intent: a translation request quoting "meine Reise"
+    // (or a narrated past trip) must not receive the expert travel-planner frame.
+    const quoted = generateForProductionInput(
+      "\u00dcbersetze \u201emeine Reise\u201c ins Englische.",
+    );
+    expect(trustedText(quoted.prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+
+    const narrative = generateForProductionInput("Meine Reise war sch\u00f6n.");
+    expect(trustedText(narrative.prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+  });
+
+  it("classifies empty and control-only drafts deterministically without a travel frame", () => {
+    const empty = generateForProductionInput("");
+    expect(empty.analysis.taskClass).toBe("factual-qa");
+    expect(empty.prompt.input).toBe("(no input provided)");
+    expect(trustedText(empty.prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+
+    // BEL/NUL/SOH are stripped by normalizePromptDraft, leaving an empty draft.
+    const control = generateForProductionInput("\u0007\u0000\u0001");
+    expect(control.analysis.taskClass).toBe("factual-qa");
+    expect(control.prompt.input).toBe("(no input provided)");
+    expect(trustedText(control.prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+  });
+
+  it("folds adversarial Unicode before matching travel cues", () => {
+    // Combining diacritics (NFKC in normalizePromptDraft, NFKD plus mark strip in the fold) must
+    // land on the same planning-scoped cues as the plain-text request.
+    const accented = generateForProductionInput(
+      "Pla\u0301ne me\u0301ine Re\u0301ise du\u0308rch Euro\u0301pa.",
+    );
+    expect(accented.analysis.taskClass).toBe("decision-support");
+    expect(trustedText(accented.prompt)).toMatch(/travel planner|travel itinerary planning/i);
+
+    // A zero-width space smuggled into "Preise" is stripped before folding, so the pricing
+    // request stays a pricing request instead of exposing a standalone "reise" token.
+    const smuggled = generateForProductionInput("Vergleiche die P\u200Breise der Anbieter.");
+    expect(smuggled.analysis.taskClass).toBe("decision-support");
+    expect(trustedText(smuggled.prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+  });
+
+  it("treats punctuation as a Reise word boundary but never compound embeddings", () => {
+    // Word-boundary side: trailing "." / "," after "Reise" still counts as standalone.
+    const period = generateForProductionInput("Organisiere unsere Reise.");
+    expect(trustedText(period.prompt)).toMatch(/travel planner|travel itinerary planning/i);
+
+    const comma = generateForProductionInput("Plane meine Reise, bitte.");
+    expect(trustedText(comma.prompt)).toMatch(/travel planner|travel itinerary planning/i);
+
+    // Compound side: "Abreise"/"Reisepass" never satisfy the standalone needle — even when a
+    // planning verb is present, the compound embedding must not count as the travel cue.
+    const departure = generateForProductionInput("Plane die Abreise.");
+    expect(trustedText(departure.prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+
+    const passport = generateForProductionInput("Beantrage einen neuen Reisepass.");
+    expect(trustedText(passport.prompt)).not.toMatch(
+      /travel planner|itinerary|route|lodging|visa|destination/i,
+    );
+  });
+
+  it("keeps standalone German Reise requests in the travel frame", () => {
+    const { analysis, prompt } = generateForProductionInput("Plane meine Reise durch Europa.");
+
+    expect(analysis.taskClass).toBe("decision-support");
+    expect(trustedText(prompt)).toMatch(/travel planner|travel itinerary planning/i);
+    expect(trustedText(prompt)).toMatch(/day-by-day route|fresh verification/i);
+  });
+
+  it("keeps the audited German knowledge-management request out of the travel frame", () => {
+    const prompt = generateFor(
+      { taskClass: "factual-qa", domain: "general", recommendedProfile: "precise" },
+      {
+        text: "Bereite eine belastbare Entscheidung über die Einführung eines Wissensmanagement-Tools vor. Alternativen, Budget, Nutzerzahl, Entscheidungskriterien und Zeitrahmen sind noch unbekannt.",
+      },
+    );
+    const trusted = trustedText(prompt);
+
+    expect(trusted).not.toMatch(/travel planner|itinerary|route|lodging|visa|destination/i);
+    expect(prompt.role).toMatch(/decision-support advisor|decision-support analyst/i);
+    expect(prompt.goal).toMatch(/reason through the decision|compare options/i);
+  });
+
+  it("does not activate decision support for unrelated German Entscheidung compounds", () => {
+    const prompt = generateFor(
+      { taskClass: "factual-qa", domain: "general", recommendedProfile: "precise" },
+      { text: "Die Entscheidungstabelle ist vollständig." },
+    );
+
+    expect(trustedText(prompt)).not.toMatch(
+      /decision-support analyst|task lens: decision support/i,
+    );
+  });
+
+  it("keeps German travel requests with decision vocabulary in the travel frame", () => {
+    const prompt = generateFor(
+      { taskClass: "decision-support", domain: "general", recommendedProfile: "precise" },
+      {
+        text: "Plane eine Reise nach Japan; berücksichtige Alternativen und eine Entscheidungstabelle für das Budget.",
+      },
+    );
+
+    expect(trustedText(prompt)).toMatch(/travel planner|travel itinerary planning/i);
+  });
+
   it("changes trusted sections for unrelated user drafts instead of only changing the input JSON", () => {
     const codeReview = generateFor(
       {

@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_OBSERVATION_QUERY_BYTES,
   MAX_TOP_RANGES,
-  validateContextToolObservation,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/context-observations";
+import { validateContextToolObservation } from "@oscharko-dev/keiko-contracts/runtime/context-observations-validation";
 import type { EvidenceAtom } from "@oscharko-dev/keiko-contracts/connected-context";
 import type { SearchResult } from "@oscharko-dev/keiko-workspace";
 

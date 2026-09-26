@@ -15,6 +15,7 @@ import {
   workspaceManifestEventValue,
   WORKSPACE_MANIFEST_CHANGED_EVENT,
 } from "@/lib/workspace-manifest-api";
+import { useCodingAppSessionRedemptions } from "@/lib/coding-app-session-client";
 
 export interface WorkspaceManifestView {
   readonly manifest: WorkspaceManifest | null;
@@ -110,6 +111,8 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
     }
   }, [rootPath]);
 
+  // A re-pair without a page load reads the session answer again (F65).
+  const redemptions = useCodingAppSessionRedemptions();
   useEffect(() => {
     void refresh();
     const onChanged = (event: Event): void => {
@@ -139,7 +142,7 @@ export function useWorkspaceManifest(rootPath: string | undefined): WorkspaceMan
       requestRef.current += 1;
       window.removeEventListener(WORKSPACE_MANIFEST_CHANGED_EVENT, onChanged);
     };
-  }, [refresh, rootPath]);
+  }, [redemptions, refresh, rootPath]);
 
   const mutate = useCallback(
     async (

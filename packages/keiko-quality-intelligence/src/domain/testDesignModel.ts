@@ -12,7 +12,7 @@
 // UI-oriented candidates with screen/route metadata; our Keiko port stays
 // envelope/atom-shaped and policy-driven.
 
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 
 import { isKnownPriority, normaliseCandidateText } from "./assertions.js";

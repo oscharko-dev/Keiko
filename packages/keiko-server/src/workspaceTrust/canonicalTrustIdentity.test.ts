@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
-import {
-  isWorkspaceRootRef,
-  validateWorkspaceTrustBinding,
-  WORKSPACE_MANIFEST_SCHEMA_VERSION,
-} from "@oscharko-dev/keiko-contracts";
+import { isWorkspaceRootRef } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
+import { validateWorkspaceTrustBinding } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
+import { WORKSPACE_MANIFEST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
 import type {
   WorkspaceFact,
   WorkspaceManifest,

@@ -6,13 +6,24 @@
 
 import { createHash } from "node:crypto";
 import type { EvidenceAtom, RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
+import { PathDeniedError } from "./errors.js";
 import type { WorkspaceFs } from "./fs.js";
+import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
-import { assertContainedRealPath } from "./realpath.js";
+import {
+  assertContainedRealPath,
+  containedRealPathInfo,
+  isCanonicalAllowedContainedPath,
+  realRootIsDeniedViaSymlink,
+} from "./realpath.js";
 import { buildCodeIntelligenceIndex, type CodeIntelligenceIndex } from "./codeIntelligence.js";
-import { buildAtom, gatherCandidates } from "./repoSearchScan.js";
+import { buildAtom, gatherCandidates, isIoError } from "./repoSearchScan.js";
 import type { SearchLimits, SearchScope } from "./repoSearch.js";
-import type { StructuralAdapter, StructuralAdapterDeps } from "./structuralAdapters.js";
+import type {
+  StructuralAdapter,
+  StructuralAdapterDeps,
+  StructuralCoverageDiagnostics,
+} from "./structuralAdapters.js";
 
 // Canonical fingerprint shared by every structural adapter: SHA-256({kind,text}) → 16 hex chars.
 function queryFingerprint(query: RetrievalQuery): string {
@@ -271,6 +282,9 @@ interface PairContext {
   readonly nowMs: () => number;
   readonly fingerprint: string;
   readonly allowedPaths: ReadonlySet<string> | undefined;
+  readonly candidatePaths?: readonly string[] | undefined;
+  readonly candidatePathSet?: ReadonlySet<string> | undefined;
+  readonly skippedSymbolicLinkSet?: ReadonlySet<string> | undefined;
   readonly codeIndex: CodeIntelligenceIndex;
 }
 
@@ -278,16 +292,74 @@ function isAllowedPath(ctx: PairContext, relativePath: string): boolean {
   return ctx.allowedPaths === undefined || ctx.allowedPaths.has(relativePath);
 }
 
+function skippedSymbolicLinkAncestor(ctx: PairContext, candidate: string): string | undefined {
+  let path = candidate;
+  while (path !== "") {
+    if (ctx.skippedSymbolicLinkSet?.has(path) === true) return path;
+    const slash = path.lastIndexOf("/");
+    path = slash < 0 ? "" : path.slice(0, slash);
+  }
+  return undefined;
+}
+
+function canonicalPairCandidatePath(ctx: PairContext, candidate: string): string {
+  const absolutePath = resolveWithinWorkspace(ctx.scope.workspace.root, candidate);
+  const contained = containedRealPathInfo(ctx.fs, ctx.scope.workspace.root, absolutePath);
+  const realCandidate = contained.realRelative.replaceAll("\\", "/");
+  const slash = candidate.lastIndexOf("/");
+  const lexicalParent = slash < 0 ? "" : candidate.slice(0, slash);
+  const missingCanonicalLeaf = contained.path === absolutePath && realCandidate === lexicalParent;
+  const missingCanonicalLeafIsAllowed =
+    missingCanonicalLeaf &&
+    !isDenied(candidate) &&
+    !isDenied(realCandidate) &&
+    !realRootIsDeniedViaSymlink(contained.realBase, ctx.scope.workspace.root);
+  if (
+    !missingCanonicalLeafIsAllowed &&
+    !isCanonicalAllowedContainedPath(contained, ctx.scope.workspace.root, candidate)
+  ) {
+    throw new PathDeniedError(
+      `refusing to pair through an unsafe workspace alias: ${candidate}`,
+      candidate,
+    );
+  }
+  return contained.path;
+}
+
+function isCurrentPairCandidate(ctx: PairContext, candidate: string): boolean {
+  try {
+    const contained = canonicalPairCandidatePath(ctx, candidate);
+    const stat = ctx.fs.stat(contained);
+    return stat.isFile && !(stat.hardLinkCount !== undefined && stat.hardLinkCount > 1);
+  } catch (error) {
+    // A request-local inventory is a snapshot: a benign candidate may disappear before lookup.
+    // Treat ordinary filesystem churn as a missing convention, while trust-boundary errors from
+    // containment/deny checks remain fatal and cannot be downgraded to absence.
+    if (!isIoError(error)) throw error;
+    return false;
+  }
+}
+
 function firstExistingPair(ctx: PairContext, candidates: readonly string[]): string | undefined {
   for (const candidate of candidates) {
     if (!isAllowedPath(ctx, candidate)) {
       continue;
     }
-    const abs = resolveWithinWorkspace(ctx.scope.workspace.root, candidate);
-    assertContainedRealPath(ctx.fs, ctx.scope.workspace.root, abs, "scope");
-    if (ctx.fs.exists(abs)) {
-      return candidate;
+    // A request context freezes the adapter's exact candidate inventory. Use it only as a negative
+    // prefilter so repeated queries do not probe missing conventions; a positive candidate still
+    // passes the live containment/stat gate below to preserve TOCTOU-safe evidence emission.
+    if (ctx.candidatePathSet !== undefined && !ctx.candidatePathSet.has(candidate)) {
+      // Discovery intentionally omits symlinks but records their names in this internal inventory.
+      // Revalidate only a candidate that crosses one of those trust-boundary omissions; genuinely
+      // missing naming conventions require no filesystem probe and cannot produce evidence.
+      const skippedLink = skippedSymbolicLinkAncestor(ctx, candidate);
+      if (skippedLink !== undefined) {
+        const absoluteLink = resolveWithinWorkspace(ctx.scope.workspace.root, skippedLink);
+        assertContainedRealPath(ctx.fs, ctx.scope.workspace.root, absoluteLink, "scope");
+      }
+      continue;
     }
+    if (isCurrentPairCandidate(ctx, candidate)) return candidate;
   }
   return undefined;
 }
@@ -367,9 +439,10 @@ function pathsForSymbol(
     }
   }
   const files =
-    ctx.allowedPaths === undefined
+    ctx.candidatePaths ??
+    (ctx.allowedPaths === undefined
       ? gatherCandidates(ctx.scope, limits, ctx.fs).files.map((file) => file.relativePath)
-      : [...ctx.allowedPaths];
+      : [...ctx.allowedPaths]);
   for (const relativePath of files) {
     const parts = extractExtension(relativePath);
     if (parts === undefined) {
@@ -387,11 +460,28 @@ function allowedPathsForScope(
   scope: SearchScope,
   limits: SearchLimits,
   fs: WorkspaceFs,
+  candidatePaths?: readonly string[],
 ): ReadonlySet<string> | undefined {
   if (scope.relativePaths.length === 0) {
     return undefined;
   }
-  return new Set(gatherCandidates(scope, limits, fs).files.map((file) => file.relativePath));
+  return new Set(
+    candidatePaths ?? gatherCandidates(scope, limits, fs).files.map((file) => file.relativePath),
+  );
+}
+
+interface BoundedPairCandidatePaths {
+  readonly paths: readonly string[];
+  readonly truncated: boolean;
+}
+
+function boundedPairCandidatePaths(
+  candidatePaths: readonly string[],
+  limits: SearchLimits,
+): BoundedPairCandidatePaths {
+  const eligible = candidatePaths.filter((scopePath) => extractExtension(scopePath) !== undefined);
+  const fileLimit = Math.max(0, limits.maxFilesScanned);
+  return { paths: eligible.slice(0, fileLimit), truncated: eligible.length > fileLimit };
 }
 
 function inputsForQuery(
@@ -416,46 +506,123 @@ export const testSourcePairingAdapter: StructuralAdapter = {
     deps?: StructuralAdapterDeps,
   ): Promise<readonly EvidenceAtom[]> => {
     try {
-      return Promise.resolve(runLookup(scope, query, limits, fs, deps));
+      deps?.requestContext?.assertGraphBinding(scope, limits, fs);
+      return runLookup(scope, query, limits, fs, deps);
     } catch (err) {
       return Promise.reject(err instanceof Error ? err : new Error(String(err)));
     }
   },
+  coverage: async (scope, limits, fs, deps): Promise<StructuralCoverageDiagnostics> => {
+    deps?.requestContext?.assertGraphBinding(scope, limits, fs);
+    const inventory = pairCandidateInventory(scope, limits, fs, deps);
+    const index = await codeIndexForLookup(scope, limits, fs, deps);
+    deps?.requestContext?.assertGraphBinding(scope, limits, fs);
+    return {
+      name: "test-source-pairing",
+      filesIndexed: index.filesIndexed,
+      filesSkipped: index.filesSkipped,
+      filesPartiallyIndexed: index.filesPartiallyIndexed,
+      candidateLimitReached: inventory.truncated || index.candidateLimitReached === true,
+      parserCoverage: index.parserCoverage,
+    };
+  },
 };
 
-function runLookup(
+async function codeIndexForLookup(
+  scope: SearchScope,
+  limits: SearchLimits,
+  fs: WorkspaceFs,
+  deps: StructuralAdapterDeps | undefined,
+): Promise<CodeIntelligenceIndex> {
+  if (deps?.requestContext !== undefined) {
+    return await deps.requestContext.codeIntelligenceIndex();
+  }
+  return buildCodeIntelligenceIndex(scope, limits, fs, deps);
+}
+
+function collectPairAtoms(
+  ctx: PairContext,
+  query: RetrievalQuery,
+  limits: SearchLimits,
+): readonly EvidenceAtom[] {
+  const atoms: EvidenceAtom[] = [];
+  for (const input of inputsForQuery(ctx, query, limits)) {
+    if (atoms.length >= limits.maxMatchesReturned) break;
+    for (const atom of pairsForPath(ctx, input)) {
+      if (atoms.length >= limits.maxMatchesReturned) break;
+      atoms.push(atom);
+    }
+  }
+  return atoms;
+}
+
+interface PairCandidateInventory {
+  readonly paths: readonly string[];
+  readonly skippedSymbolicLinks: readonly string[];
+  readonly truncated: boolean;
+}
+
+function pairCandidateInventory(
+  scope: SearchScope,
+  limits: SearchLimits,
+  fs: WorkspaceFs,
+  deps: StructuralAdapterDeps | undefined,
+): PairCandidateInventory {
+  if (deps?.requestContext !== undefined) {
+    const bounded = boundedPairCandidatePaths(deps.requestContext.candidatePaths(), limits);
+    return {
+      paths: bounded.paths,
+      skippedSymbolicLinks: deps.requestContext.skippedSymbolicLinks(),
+      truncated: bounded.truncated || deps.requestContext.candidateLimitReached(),
+    };
+  }
+  const candidates = gatherCandidates(scope, limits, fs);
+  const bounded = boundedPairCandidatePaths(
+    candidates.files.map((file) => file.relativePath),
+    limits,
+  );
+  return {
+    paths: bounded.paths,
+    skippedSymbolicLinks: candidates.skippedSymbolicLinks,
+    truncated: bounded.truncated || candidates.truncated,
+  };
+}
+
+async function pairContextForLookup(
   scope: SearchScope,
   query: RetrievalQuery,
   limits: SearchLimits,
   fs: WorkspaceFs,
   deps: StructuralAdapterDeps | undefined,
-): readonly EvidenceAtom[] {
+): Promise<PairContext> {
+  const inventory = pairCandidateInventory(scope, limits, fs, deps);
+  return {
+    scope,
+    fs,
+    nowMs: deps?.nowMs ?? Date.now,
+    fingerprint: queryFingerprint(query),
+    allowedPaths: allowedPathsForScope(scope, limits, fs, inventory.paths),
+    candidatePaths: inventory.paths,
+    candidatePathSet: new Set(inventory.paths),
+    skippedSymbolicLinkSet: new Set(inventory.skippedSymbolicLinks),
+    codeIndex: await codeIndexForLookup(scope, limits, fs, deps),
+  };
+}
+
+async function runLookup(
+  scope: SearchScope,
+  query: RetrievalQuery,
+  limits: SearchLimits,
+  fs: WorkspaceFs,
+  deps: StructuralAdapterDeps | undefined,
+): Promise<readonly EvidenceAtom[]> {
   if (query.kind !== "natural-language" && query.kind !== "exact-symbol") {
     return [];
   }
   if (limits.maxMatchesReturned <= 0) {
     return [];
   }
-  const ctx: PairContext = {
-    scope,
-    fs,
-    nowMs: deps?.nowMs ?? Date.now,
-    fingerprint: queryFingerprint(query),
-    allowedPaths: allowedPathsForScope(scope, limits, fs),
-    codeIndex: buildCodeIntelligenceIndex(scope, limits, fs, deps),
-  };
-  const inputs = inputsForQuery(ctx, query, limits);
-  const atoms: EvidenceAtom[] = [];
-  for (const input of inputs) {
-    if (atoms.length >= limits.maxMatchesReturned) {
-      break;
-    }
-    for (const atom of pairsForPath(ctx, input)) {
-      if (atoms.length >= limits.maxMatchesReturned) {
-        break;
-      }
-      atoms.push(atom);
-    }
-  }
-  return atoms;
+  const pairContext = await pairContextForLookup(scope, query, limits, fs, deps);
+  deps?.requestContext?.assertGraphBinding(scope, limits, fs);
+  return collectPairAtoms(pairContext, query, limits);
 }

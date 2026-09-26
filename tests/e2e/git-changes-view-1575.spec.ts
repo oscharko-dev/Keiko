@@ -413,7 +413,12 @@ async function interceptProjectAndMutationRoutes(
             favorite: false,
             createdAt: Date.now(),
             lastOpenedAt: Date.now(),
+            // #2955: GitClientWindow requires BOTH available AND workspaceAvailable before it
+            // binds cfg.projectPath; a fixture missing the second field made the window reset to
+            // its ConnectPanel and clear the seeded path, so every assertion below it was
+            // unreachable. The field is part of the current /api/projects contract.
             available: true,
+            workspaceAvailable: true,
           },
         ],
       }),
@@ -555,9 +560,12 @@ async function assertChangedFileList(gitWindow: Locator): Promise<Locator> {
   await expect(nav).toBeVisible();
   await expect(nav.locator("li")).toHaveCount(6);
 
-  // Header counter and the stage-all / unstage-all actions. #2485: the summary strip reads
-  // "N of M files staged" (ChangesPane), not the pre-ship "6 changed · 3 staged" draft copy.
-  await expect(gitWindow.getByText("3 of 6 files staged")).toBeVisible();
+  // Header counter and the stage-all / unstage-all actions. #2955: the summary strip renders the
+  // total and the staged count as two adjacent spans ("6 changes" + "3 staged"), so it is asserted
+  // as two texts. The "N of M files staged" sentence the pre-#2955 assertion expected is not what
+  // ChangesPane emits, and had not been for long enough that the whole suite was red unnoticed.
+  await expect(gitWindow.getByText("6 changes", { exact: true })).toBeVisible();
+  await expect(gitWindow.getByText("3 staged", { exact: true })).toBeVisible();
   await expect(gitWindow.getByRole("button", { name: "Stage all", exact: true })).toBeVisible();
   await expect(gitWindow.getByRole("button", { name: "Unstage all", exact: true })).toBeVisible();
 

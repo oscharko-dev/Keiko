@@ -3,9 +3,8 @@
 // process) all derive the SAME hermetic state layout from these helpers, so the spec can locate the
 // git fixture and the managed worktree the REAL server provisioned without any side channel.
 
-import { realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { e2eStateDir } from "./e2e-state-dir.js";
 
 export const TRACER_DEFAULT_UI_PORT = 32485;
 
@@ -19,14 +18,12 @@ export const TRACER_TARGET_RELATIVE_PATH = "src/example.ts";
 // Deterministic (pid-free) state id: the config, the webServer entry, and the workers each
 // re-derive the identical directory. The config's prepare step wipes it before every boot.
 export function tracerStateDir(): string {
-  const override = process.env.KEIKO_E2E_STATE_DIR;
-  if (override !== undefined && override.length > 0) return override;
   const runId = process.env.GITHUB_RUN_ID;
   const stateId =
     runId === undefined || runId.length === 0
       ? "code-task-opencode-tracer"
       : `code-task-opencode-tracer-${runId}`;
-  return join(realpathSync(tmpdir()), "keiko-e2e", stateId);
+  return e2eStateDir(stateId);
 }
 
 // The local git checkout the tracer binds through the Coding Workbench "Code setup" section.

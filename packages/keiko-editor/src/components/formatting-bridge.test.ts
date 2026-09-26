@@ -15,7 +15,7 @@ import {
 import type { MonacoCancellationToken } from "./completion-bridge.js";
 import type { EditorLanguageIntelligenceEvent } from "./language-intelligence.js";
 import type { EditorFormattingResolver, EditorTextEdit } from "../types.js";
-import { EDITOR_BUILTIN_CAPABILITIES } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_BUILTIN_CAPABILITIES } from "@oscharko-dev/keiko-contracts/runtime/editor-builtin-capabilities";
 
 function model(text = "const x   =   1;\n", version = 1): MonacoFormattingModel {
   return {

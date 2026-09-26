@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CancelledError } from "@oscharko-dev/keiko-security";
 
 import {
   extractBoundedDocumentText,
@@ -173,13 +174,13 @@ describe("extractBoundedDocumentText", () => {
     expect(result.format).toBe("docx");
   });
 
-  it("reports timed-out when the caller signal is already aborted", async () => {
-    const result = await extractBoundedDocumentText(
-      { bytes: DOCX_SIMPLE, extension: "docx" },
-      options({ signal: AbortSignal.abort() }),
-    );
-    expect(result.outcome).toBe("timed-out");
-    expect(result.format).toBe("docx");
+  it("preserves caller cancellation instead of reporting a parser timeout", async () => {
+    await expect(
+      extractBoundedDocumentText(
+        { bytes: DOCX_SIMPLE, extension: "docx" },
+        options({ signal: AbortSignal.abort() }),
+      ),
+    ).rejects.toBeInstanceOf(CancelledError);
   });
 
   it("reports empty when the output cap admits no text", async () => {

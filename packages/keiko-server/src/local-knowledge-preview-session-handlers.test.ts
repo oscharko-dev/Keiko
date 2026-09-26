@@ -121,6 +121,7 @@ function ctx(
   headers?: Record<string, string>,
 ): RouteContext {
   return {
+    correlationId: undefined,
     req: request(body, headers),
     res: {} as never,
     params: {},
@@ -506,6 +507,7 @@ function disableLazyPdfBlobBackfill(): void {
 
 function documentContext(handle: string, req: IncomingMessage, res: ServerResponse): RouteContext {
   return {
+    correlationId: undefined,
     req,
     res,
     params: { sessionHandle: handle },
@@ -899,6 +901,7 @@ describe("local-knowledge preview session handlers", () => {
 
     const outcome = await handleGetPdfCitationPreviewDocument(
       {
+        correlationId: undefined,
         req: emptyRequest(),
         res: captured.res,
         params: { sessionHandle: handle },
@@ -1035,6 +1038,7 @@ describe("local-knowledge preview session handlers", () => {
 
     const outcome = await handleGetPdfCitationPreviewDocument(
       {
+        correlationId: undefined,
         req: emptyRequest({ range: "bytes=0-3" }),
         res: captured.res,
         params: { sessionHandle: handle },
@@ -1264,6 +1268,7 @@ describe("local-knowledge preview session handlers", () => {
   it("rejects delivery for a missing or unknown session handle", async () => {
     const result = await handleGetPdfCitationPreviewDocument(
       {
+        correlationId: undefined,
         req: emptyRequest(),
         res: {} as ServerResponse,
         params: { sessionHandle: "missing-handle" },
@@ -1297,6 +1302,7 @@ describe("local-knowledge preview session handlers", () => {
 
     const closed = await handleClosePdfCitationPreviewSession(
       {
+        correlationId: undefined,
         req: emptyRequest(),
         res: {} as never,
         params: { sessionHandle: handle },
@@ -1306,6 +1312,7 @@ describe("local-knowledge preview session handlers", () => {
     );
     const afterClose = await handleGetPdfCitationPreviewDocument(
       {
+        correlationId: undefined,
         req: emptyRequest(),
         res: {} as ServerResponse,
         params: { sessionHandle: handle },
@@ -1355,6 +1362,7 @@ describe("local-knowledge preview session handlers", () => {
     try {
       const closed = await handleClosePdfCitationPreviewSession(
         {
+          correlationId: undefined,
           req: emptyRequest(),
           res: {} as never,
           params: { sessionHandle: handle },
@@ -1399,6 +1407,7 @@ describe("local-knowledge preview session handlers", () => {
 
     const closed = await handleClosePdfCitationPreviewSession(
       {
+        correlationId: undefined,
         req: request({ expectedExpiresAt: staleExpiresAt }),
         res: {} as never,
         params: { sessionHandle: handle },
@@ -1434,6 +1443,7 @@ describe("local-knowledge preview session handlers", () => {
 
     const expired = await handleGetPdfCitationPreviewDocument(
       {
+        correlationId: undefined,
         req: emptyRequest(),
         res: {} as ServerResponse,
         params: { sessionHandle: handle },
@@ -1566,6 +1576,7 @@ describe("local-knowledge preview session handlers", () => {
 
     const outcome = await handleGetPdfCitationPreviewDocument(
       {
+        correlationId: undefined,
         req: emptyRequest(),
         res: captured.res,
         params: { sessionHandle: handle },
@@ -1604,6 +1615,7 @@ describe("local-knowledge preview session handlers", () => {
 
     const outcome = await handleGetPdfCitationPreviewDocument(
       {
+        correlationId: undefined,
         req: emptyRequest(),
         res: captured.res,
         params: { sessionHandle: handle },
@@ -1638,6 +1650,7 @@ describe("local-knowledge preview session handlers", () => {
 
     const outcome = await handleGetPdfCitationPreviewDocument(
       {
+        correlationId: undefined,
         req: emptyRequest(),
         res: captured.res,
         params: { sessionHandle: handle },
@@ -1716,6 +1729,7 @@ describe("local-knowledge preview session handlers", () => {
 
     const invalid = await handleGetPdfCitationPreviewDocument(
       {
+        correlationId: undefined,
         req: emptyRequest({ range: "bytes=0-4,6-10" }),
         res: {} as ServerResponse,
         params: { sessionHandle: handle },

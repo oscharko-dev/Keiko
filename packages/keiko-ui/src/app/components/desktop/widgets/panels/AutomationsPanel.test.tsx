@@ -1,3 +1,6 @@
+// KEIKO-0158 — Automations is an honest placeholder: no scheduler runs behind it, so the
+// rows must not impersonate a live switch, and no fake setting may survive a reload.
+
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,92 +11,64 @@ describe("AutomationsPanel", () => {
     window.localStorage.clear();
   });
 
-  // A test that replaces a prototype method owns putting it back. The persistence-failure case
-  // below stubs `Storage.prototype.setItem` to throw, and neither the vitest configs (no
-  // `restoreMocks`) nor the shared teardown in vitest.setup.ts undoes that — so without this hook
-  // storage stays write-dead for every later test in the file. The panel swallows write failures by
-  // design, so the leak surfaces as silently stale `keiko.automations.v1` reads rather than an
-  // error, and only under a shuffled order (`--sequence.shuffle.tests`) where the stubbing test runs
-  // first. Restoring here rather than in a `finally` inside that one test makes the whole class
-  // impossible for any future spy in this file.
+  // A test that replaces a prototype method owns putting it back (see the equivalent note
+  // this file carried before KEIKO-0158 — the panel no longer touches Storage.prototype at
+  // all, but a future spy in this file should not leak into later tests either).
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("renders default automation states and persists toggles", async () => {
-    const user = userEvent.setup();
+  it("renders automation rows as honest, non-interactive status text", () => {
     render(<AutomationsPanel />);
 
     expect(screen.getByText("Nightly review")).toBeInTheDocument();
     expect(screen.getByText("02:00 daily")).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "Nightly review" })).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
-    expect(screen.getByRole("switch", { name: "Weekly digest" })).toHaveAttribute(
-      "aria-checked",
-      "false",
-    );
+    expect(screen.getByText("On push → lint")).toBeInTheDocument();
+    expect(screen.getByText("Weekly digest")).toBeInTheDocument();
 
-    await user.click(screen.getByRole("switch", { name: "Weekly digest" }));
+    // GEN-UI-INTERACTION-002 (KEIKO-0158): nothing here controls a real scheduler, so no
+    // row may expose switch or button semantics.
+    expect(screen.queryAllByRole("switch")).toHaveLength(0);
+    expect(screen.queryAllByRole("button")).toHaveLength(0);
 
-    expect(screen.getByRole("switch", { name: "Weekly digest" })).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
-    expect(JSON.parse(window.localStorage.getItem("keiko.automations.v1") ?? "{}")).toMatchObject({
-      "weekly-digest": true,
-    });
+    // Status is carried by visible "Preview" copy on every row — never "On/Off", which would
+    // read as a live scheduler state (Codex review, PR #3089).
+    expect(screen.getAllByText("Preview")).toHaveLength(3);
+    expect(screen.queryByText("On")).toBeNull();
+    expect(screen.queryByText("Off")).toBeNull();
   });
 
-  it("loads only known boolean values from storage and falls back on malformed state", () => {
+  it("does not write to window.localStorage when a row is clicked", async () => {
+    const user = userEvent.setup();
+    const setItemSpy = vi.spyOn(Storage.prototype, "setItem");
+    const { container } = render(<AutomationsPanel />);
+
+    const row = container.querySelector(".auto-row");
+    expect(row).not.toBeNull();
+    await user.click(row as Element);
+    // Click exactly where the old interactive control used to sit (the row's trailing
+    // element) — the row itself never had a click handler even before KEIKO-0158, so
+    // clicking only the row would pass trivially either way and prove nothing.
+    const trailing = row?.lastElementChild;
+    expect(trailing).toBeTruthy();
+    await user.click(trailing as Element);
+
+    expect(setItemSpy).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem("keiko.automations.v1")).toBeNull();
+  });
+
+  it("ignores any pre-existing keiko.automations.v1 entry — no fake setting survives a reload", () => {
     window.localStorage.setItem(
       "keiko.automations.v1",
-      JSON.stringify({
-        "nightly-review": false,
-        "weekly-digest": true,
-        "unknown-job": true,
-        "on-push-lint": "yes",
-      }),
+      JSON.stringify({ "nightly-review": false, "weekly-digest": true }),
     );
-
-    const { unmount } = render(<AutomationsPanel />);
-
-    expect(screen.getByRole("switch", { name: "Nightly review" })).toHaveAttribute(
-      "aria-checked",
-      "false",
-    );
-    expect(screen.getByRole("switch", { name: "On push → lint" })).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
-    expect(screen.getByRole("switch", { name: "Weekly digest" })).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
-
-    unmount();
-    window.localStorage.setItem("keiko.automations.v1", "{bad json");
-    render(<AutomationsPanel />);
-    expect(screen.getByRole("switch", { name: "Nightly review" })).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
-  });
-
-  it("keeps the UI responsive when localStorage persistence throws", async () => {
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
-      throw new Error("quota");
-    });
-    const user = userEvent.setup();
 
     render(<AutomationsPanel />);
 
-    await user.click(screen.getByRole("switch", { name: "Weekly digest" }));
-
-    expect(screen.getByRole("switch", { name: "Weekly digest" })).toHaveAttribute(
-      "aria-checked",
-      "true",
-    );
+    // The rows still reflect the fixed, honest placeholder state — not whatever a previous
+    // session (or a hand-crafted storage entry) left behind.
+    expect(screen.getAllByText("Preview")).toHaveLength(3);
+    expect(screen.queryByText("On")).toBeNull();
+    expect(screen.queryByText("Off")).toBeNull();
   });
 });

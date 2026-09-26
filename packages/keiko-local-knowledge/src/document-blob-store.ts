@@ -5,7 +5,7 @@ import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
-import { DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
 
 import { KnowledgeStoreError } from "./errors.js";
 import type { KnowledgeStore } from "./store.js";

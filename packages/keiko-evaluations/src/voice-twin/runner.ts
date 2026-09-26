@@ -6,10 +6,8 @@
 // scorecard, and derives the offline Go/No-Go verdict and the matrix-coverage flags. Pure: no IO, clock,
 // randomness, or model dispatch.
 
-import {
-  VOICE_CONTROL_MESSAGE_KINDS,
-  type VoiceControlMessageKind,
-} from "@oscharko-dev/keiko-contracts";
+import type { VoiceControlMessageKind } from "@oscharko-dev/keiko-contracts";
+import { VOICE_CONTROL_MESSAGE_KINDS } from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
 import { deriveCapabilityCell } from "./capability.js";
 import {
   VOICE_TWIN_REPLAY_CAPACITY,

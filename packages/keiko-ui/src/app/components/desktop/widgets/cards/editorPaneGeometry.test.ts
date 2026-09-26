@@ -6,12 +6,12 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 import type { DragEvent as ReactDragEvent } from "react";
-import {
-  EDITOR_LAYOUT_SCHEMA_VERSION,
-  type EditorLayoutNode,
-  type EditorLayoutStateV2,
-  type EditorPaneStateV2,
+import type {
+  EditorLayoutNode,
+  EditorLayoutStateV2,
+  EditorPaneStateV2,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_LAYOUT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-layout";
 import {
   allDirtyFiles,
   clampNumber,

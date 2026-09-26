@@ -1,9 +1,11 @@
+import type {
+  DebugActivationInput,
+  DebugActivationResolution,
+} from "@oscharko-dev/keiko-contracts";
 import {
   parseDebugActivationInput,
   resolveDebugActivation,
-  type DebugActivationInput,
-  type DebugActivationResolution,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/debug-activation";
 
 /**
  * The policy boundary intentionally delegates all precedence to the contracts resolver. Keeping

@@ -68,6 +68,7 @@ describe("Pyright provider fake-protocol conformance", () => {
       const outcome = await runHostLanguageOperation(request, {
         workspace: {
           root,
+          selectedRoot: root,
           name: undefined,
           version: undefined,
           testFramework: "unknown",
@@ -118,6 +119,7 @@ describe("Pyright provider fake-protocol conformance", () => {
     const options = {
       workspace: {
         root,
+        selectedRoot: root,
         name: undefined,
         version: undefined,
         testFramework: "unknown" as const,

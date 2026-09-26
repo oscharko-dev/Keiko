@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { fetchStartupUpdatePreflight } from "@/lib/api";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import type { UpdatePreflightReport } from "@/lib/types";
 import { Icons } from "../Icons";
@@ -25,6 +26,7 @@ interface UpdateStartupNoticeProps {
 type NoticeState =
   | { readonly status: "idle" }
   | { readonly status: "ready"; readonly report: UpdatePreflightReport }
+  | { readonly status: "failed" }
   | { readonly status: "dismissed" };
 
 const DISMISSED_NOTICE_KEY_PREFIX = "keiko.updateStartupNotice.dismissed.";
@@ -116,7 +118,13 @@ export function UpdateStartupNotice({
         }
         setState({ status: "ready", report });
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (cancelled) return;
+        // Startup can race a BFF restart. Keep the notice non-blocking, but retain a bounded,
+        // body-free diagnostic so the failure is observable without exposing transport details.
+        reportClientDiagnostic("update-startup-notice: preflight-fetch-failed");
+        setState({ status: "failed" });
+      });
     return () => {
       cancelled = true;
     };

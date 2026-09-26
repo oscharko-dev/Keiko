@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { Buffer } from "node:buffer";
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -20,6 +19,7 @@ import {
   readPortableVerificationInput,
 } from "./portable-verification-input.mjs";
 import { rebindExistingSignedArchive, rebindSignedPayload } from "./portable-signed-archive.mjs";
+import { sha256File } from "./lib/digest.mjs";
 
 const TEAM_PATTERN = /^[A-Z0-9]{10}$/u;
 const UUID_PATTERN = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/iu;
@@ -295,10 +295,6 @@ function markNativeHelpersVerified(manifest) {
   );
 }
 
-function sha256(path) {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
-}
-
 function bindRuntimeQualification(stage, manifest) {
   const resourceRoot = join(stage, "payload", "Keiko", "Keiko.app", "Contents", "Resources");
   const path = join(resourceRoot, ".portable", "runtime-qualification.json");
@@ -311,7 +307,7 @@ function bindRuntimeQualification(stage, manifest) {
     suiteVersion: "runtime-tree-qualification-v1",
     platformTarget: manifest.artifact.platformTarget,
     sourceCommitSha: manifest.release.commitSha,
-    activationManifestSha256: sha256(activationPath),
+    activationManifestSha256: sha256File(activationPath),
     supervisorSha256: helpers.get("keiko-runtime-supervisor")?.shippedSha256,
     secureReadSha256: helpers.get("keiko-secure-workspace-read")?.shippedSha256,
     sidecars: [{ name: "opencode-compatible", sha256: sidecar?.payloadSha256 }],
@@ -324,7 +320,7 @@ function bindRuntimeQualification(stage, manifest) {
   manifest.runtimeQualification = {
     schemaVersion: 1,
     path: ".portable/runtime-qualification.json",
-    sha256: sha256(path),
+    sha256: sha256File(path),
     backend: "macos-endpoint-security",
   };
   manifest.releaseImpact.reviewedBinding.runtimeQualification = globalThis.structuredClone(

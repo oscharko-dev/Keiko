@@ -97,7 +97,9 @@ scan events and almost no blocks would otherwise run past `timeoutMs` before any
 consulted.
 
 Measured on maximum-size payloads: ~61 ms for a 2 MB single text run, ~22 ms for a 1.5 MB tag-dense
-page. The parse is single-pass and O(n) in input size. This is a bounded pause on the runtime
+page. These are the pre-cap baseline numbers that sized the 1 MiB ceiling above (chosen to roughly
+halve the worst case measured here); the scanner itself never runs on more than 1 MiB in
+production. The parse is single-pass and O(n) in input size. This is a bounded pause on the runtime
 thread, not an unbounded one — but it is a synchronous pause, and that is the honest description.
 Moving the parse off-thread was considered and judged disproportionate to a measured
 tens-of-milliseconds ceiling on a fetch that already requires a per-URL operator approval and a byte

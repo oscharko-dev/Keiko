@@ -1,8 +1,6 @@
 import type { IncomingMessage } from "node:http";
-import {
-  parseUpdateMemoryAutonomyPolicyWire,
-  type MemoryAutonomyPolicyWire,
-} from "@oscharko-dev/keiko-contracts";
+import type { MemoryAutonomyPolicyWire } from "@oscharko-dev/keiko-contracts";
+import { parseUpdateMemoryAutonomyPolicyWire } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import type { UiHandlerDeps } from "./deps.js";
 import {
   DEFAULT_MEMORY_AUTONOMY_MODE,

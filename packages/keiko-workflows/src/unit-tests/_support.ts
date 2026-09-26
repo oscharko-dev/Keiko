@@ -13,6 +13,7 @@ import type { WorkflowEvent, WorkflowEventSink } from "./events.js";
 export function makeWorkspaceInfo(overrides: Partial<WorkspaceInfo> = {}): WorkspaceInfo {
   return {
     root: "/repo",
+    selectedRoot: "/repo",
     name: "demo",
     version: undefined,
     testFramework: "vitest",

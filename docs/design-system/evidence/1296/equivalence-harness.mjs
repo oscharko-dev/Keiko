@@ -286,7 +286,7 @@ for (const mode of MODES) {
   dRaw.post[mode.id] = await collectD(page, POST, mode);
 
   // ── Screenshot (POST) ────────────────────────────────────────────────────
-  await applyMode(page, POST, mode);
+  // The DOM is already in POST state from the collectD(POST, mode) call above.
   proof[mode.id].mediaProbe = await readMediaProbe(page);
   await page.screenshot({ path: resolve(HERE, `${mode.id}.png`), fullPage: true });
   console.log(`${mode.id}: ${modeProbes} Group-A probes, ${modeDiffs} differing computed values`);
@@ -372,4 +372,6 @@ if (dFailures.length > 0) {
 }
 
 await browser.close();
-process.exit(diffs.length === 0 && dFailures.length === 0 && !mediaFailed ? 0 : 1);
+process.exit(
+  diffs.length === 0 && dFailures.length === 0 && !mediaFailed && missing.size === 0 ? 0 : 1,
+);

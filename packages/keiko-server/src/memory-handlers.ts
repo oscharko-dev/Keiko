@@ -19,6 +19,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   createMemoryVault,
   MemoryStorageError,
+  MemoryStoragePreconditionError,
   MemoryStorageValidationError,
   type MemoryBatchUpdate,
   type MemoryTombstone,
@@ -38,6 +39,26 @@ import {
   supersededValidity,
   type ForgetSelector,
 } from "@oscharko-dev/keiko-memory-governance";
+import type {
+  AcceptMemoryProposalOptions,
+  MemoryConversationId,
+  MemoryCorrectionPredecessorsResponse,
+  MemoryAuditEvent,
+  MemoryEdge,
+  MemoryEdgeId,
+  MemoryForgetReason,
+  MemoryId,
+  MemoryProposal,
+  MemoryProposalId,
+  MemoryRecord,
+  MemoryReviewerId,
+  MemoryScope,
+  MemoryScopeKind,
+  MemorySensitivity,
+  MemoryStatus,
+  MemoryType,
+  MemorySupersession,
+} from "@oscharko-dev/keiko-contracts";
 import {
   checkStatusTransition,
   MEMORY_FORGET_REASON_USER_REQUEST,
@@ -45,25 +66,10 @@ import {
   MEMORY_STATUSES,
   MEMORY_TYPES,
   MEMORY_SENSITIVITIES,
+  isMemoryRecord,
   validateMemoryScope,
   validateMemoryAcceptance,
-  type MemoryConversationId,
-  type MemoryAuditEvent,
-  type MemoryEdge,
-  type MemoryEdgeId,
-  type MemoryForgetReason,
-  type MemoryId,
-  type MemoryProposal,
-  type MemoryProposalId,
-  type MemoryRecord,
-  type MemoryReviewerId,
-  type MemoryScope,
-  type MemoryScopeKind,
-  type MemorySensitivity,
-  type MemoryStatus,
-  type MemoryType,
-  type MemorySupersession,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/memory";
 import type { UiHandlerDeps } from "./deps.js";
 import type { ApiError, RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
@@ -79,6 +85,10 @@ import {
   type MemoryCaptureDecision,
 } from "./memory-capture-projection.js";
 import { refreshMemoryEmbeddingAfterBodyEdit } from "./memory-embedding.js";
+import { readJsonRequestBody } from "./bounded-request-body.js";
+import { processServerLogSink, processServerLogSinkFor } from "./process-log-sink.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { resolveMemoryTargetRecords } from "./memory-target-resolver.js";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -93,6 +103,32 @@ const MAX_TOMBSTONE_CURSOR_CHARS = 1_024;
 const MAX_TOMBSTONE_ID_CHARS = 200;
 const REVIEW_QUEUE_STATUSES: readonly MemoryStatus[] = ["proposed", "conflicted", "expired"];
 
+// KEIKO-0216 / KEIKO-0348: closed-vocabulary sanitisation for user-supplied 'reason'
+// fields on conflict-resolution, proposal-rejection, and explicit-archive routes.
+// Mirrors sanitizeMemoryTombstoneReason for the forget path (AUDIT-MEMSEC-001): any
+// out-of-enum value collapses to a safe default so raw memory bodies or PII from a
+// coerced client cannot end up written to staleReason (which is verbatim-persisted).
+const MEMORY_STATUS_MUTATION_REASONS = [
+  "conflict-resolved",
+  "rejected-by-user",
+  "archived-by-user",
+  "user-request",
+] as const;
+type MemoryStatusMutationReason = (typeof MEMORY_STATUS_MUTATION_REASONS)[number];
+const MEMORY_STATUS_MUTATION_REASON_SET = new Set<string>(MEMORY_STATUS_MUTATION_REASONS);
+
+function sanitizeMemoryStatusMutationReason(
+  reason: string | undefined,
+  fallback: MemoryStatusMutationReason,
+): MemoryStatusMutationReason {
+  if (reason === undefined) return fallback;
+  const trimmed = reason.trim();
+  if (trimmed.length === 0) return fallback;
+  return MEMORY_STATUS_MUTATION_REASON_SET.has(trimmed)
+    ? (trimmed as MemoryStatusMutationReason)
+    : fallback;
+}
+
 // ─── Type guards / helpers ─────────────────────────────────────────────────────
 
 // Sanitise GovernanceError into a code-keyed safe response body. GovernanceError.message
@@ -100,6 +136,43 @@ const REVIEW_QUEUE_STATUSES: readonly MemoryStatus[] = ["proposed", "conflicted"
 // the inner detail string; the public surface should only expose the stable enum `code`.
 function governanceErrorBody(err: GovernanceError): ApiError {
   return errorBody("GOVERNANCE_ERROR", `Governance constraint violated (${err.code}).`);
+}
+
+// Operator diagnostic for a memory-handler failure that is about to become an opaque 500 (or a
+// 404/409 whose cause is still worth tracing). Mirrors `reportProjectTrustGrantFailure`
+// (store-handlers.ts) and `reportRetentionPolicyFailure` (memory-maintenance-handlers.ts): the raw
+// error stays server-side (`serverDiagnosticFromError` extracts only its content-free class/code),
+// and the SAME `deps.redactor` closure the response body already goes through is reused so the
+// diagnostic can never be less redacted than the client-facing response it accompanies.
+// `RouteContext.correlationId` is optional so existing `RouteContext` test literals keep compiling
+// (routes.ts); every failure-reporting call site below needs a concrete id to key its diagnostic
+// on, so this is the ONE place the `?? randomUUID()` fallback is written — isolating it in its own
+// function (rather than inlining `ctx.correlationId ?? randomUUID()` at each call site) keeps that
+// nullish-coalescing branch out of every handler's own cyclomatic-complexity count.
+function handlerCorrelationId(ctx: RouteContext): string {
+  return ctx.correlationId ?? randomUUID();
+}
+
+function reportMemoryHandlerFailure(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  operation: string,
+  source: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(
+    deps.diagnostics,
+    serverDiagnosticFromError({
+      correlationId,
+      operation,
+      source,
+      error,
+      redact: (message: string): string => {
+        const redacted = deps.redactor(message);
+        return typeof redacted === "string" ? redacted : "[REDACTED]";
+      },
+    }),
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -217,59 +290,17 @@ function parseScope(raw: unknown): MemoryScope | RouteResult {
 }
 
 // ─── Body reading ──────────────────────────────────────────────────────────────
+// Consolidated onto the shared bounded reader (#2902 w5-sse-counters) — the caps below are
+// unchanged, only the ad hoc listener wiring is gone. The read-parse-validate wrapper itself is
+// also consolidated (#2902 audit finding 3): `readJsonRequestBody` (bounded-request-body.ts) is
+// the one owner of "bounded read, then parse+validate as a JSON object", previously hand-rolled
+// identically in this file, memory-conv-handlers.ts and memory-consolidation-handlers.ts.
 
-class BodyTooLargeError extends Error {
-  public constructor() {
-    super("request body too large");
-    this.name = "BodyTooLargeError";
-  }
-}
-
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let capped = false;
-    req.on("data", (chunk: Buffer) => {
-      total += chunk.length;
-      if (total > MAX_MEMORY_BODY_BYTES) {
-        if (!capped) {
-          capped = true;
-          chunks.length = 0;
-          reject(new BodyTooLargeError());
-          req.resume();
-        }
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => {
-      if (!capped) resolve(Buffer.concat(chunks).toString("utf8"));
-    });
-    req.on("error", reject);
-  });
-}
-
-async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown> | RouteResult> {
-  let raw: string;
-  try {
-    raw = await readBody(req);
-  } catch (err) {
-    if (err instanceof BodyTooLargeError) {
-      return { status: 413, body: errorBody("PAYLOAD_TOO_LARGE", "Request body too large.") };
-    }
-    throw err;
-  }
-  let parsed: unknown;
-  try {
-    parsed = raw.length === 0 ? {} : JSON.parse(raw);
-  } catch {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Request body is not valid JSON.") };
-  }
-  if (!isRecord(parsed)) {
-    return { status: 400, body: errorBody("BAD_REQUEST", "Request body must be a JSON object.") };
-  }
-  return parsed;
+function readJsonBody(
+  req: IncomingMessage,
+  correlationId?: string,
+): Promise<Record<string, unknown> | RouteResult> {
+  return readJsonRequestBody(req, MAX_MEMORY_BODY_BYTES, correlationId);
 }
 
 function isRouteResult(v: unknown): v is RouteResult {
@@ -295,8 +326,12 @@ function resolveVault(deps: UiHandlerDeps): MemoryVaultStore | RouteResult {
 
 // ─── Redaction helper ──────────────────────────────────────────────────────────
 
-function redactMemory(deps: UiHandlerDeps, record: MemoryRecord): unknown {
-  return deps.redactor(record);
+function redactMemory(deps: UiHandlerDeps, record: MemoryRecord): MemoryRecord {
+  const redacted = deps.redactor(record);
+  if (!isMemoryRecord(redacted)) {
+    throw new TypeError("Memory redaction produced an invalid record shape.");
+  }
+  return redacted;
 }
 
 function redactMemories(deps: UiHandlerDeps, records: readonly MemoryRecord[]): unknown {
@@ -669,13 +704,28 @@ export function handleListMemories(ctx: RouteContext, deps: UiHandlerDeps): Rout
     if (params.kind === "recent") return handleRecentMemories(deps, vault, params);
     return handleLegacyMemories(deps, vault, params);
   } catch (err) {
+    const correlationId = handlerCorrelationId(ctx);
     if (err instanceof MemoryCaptureProjectionReadError) {
+      reportMemoryHandlerFailure(
+        deps,
+        correlationId,
+        "memory.list",
+        "memory-handlers.handleListMemories",
+        err,
+      );
       return {
         status: 500,
         body: errorBody("MEMORY_AUDIT_UNAVAILABLE", "Recent memory history is unavailable."),
       };
     }
     if (err instanceof MemoryStorageError) {
+      reportMemoryHandlerFailure(
+        deps,
+        correlationId,
+        "memory.list",
+        "memory-handlers.handleListMemories",
+        err,
+      );
       return { status: 500, body: errorBody("MEMORY_ERROR", "Failed to list memories.") };
     }
     throw err;
@@ -749,7 +799,7 @@ export function handleListMemoryTombstones(ctx: RouteContext, deps: UiHandlerDep
 
 // ─── Handler: GET /api/memory/review-queue ────────────────────────────────────
 
-export function handleMemoryReviewQueue(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+export function handleMemoryReviewQueue(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
 
@@ -764,6 +814,13 @@ export function handleMemoryReviewQueue(_ctx: RouteContext, deps: UiHandlerDeps)
     };
   } catch (err) {
     if (err instanceof MemoryStorageError) {
+      reportMemoryHandlerFailure(
+        deps,
+        handlerCorrelationId(ctx),
+        "memory.review-queue",
+        "memory-handlers.handleMemoryReviewQueue",
+        err,
+      );
       return { status: 500, body: errorBody("MEMORY_ERROR", "Failed to load review queue.") };
     }
     throw err;
@@ -789,6 +846,13 @@ export function handleGetMemory(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
     return { status: 200, body: { memory: redactMemory(deps, record) } };
   } catch (err) {
     if (err instanceof MemoryStorageError) {
+      reportMemoryHandlerFailure(
+        deps,
+        handlerCorrelationId(ctx),
+        "memory.get",
+        "memory-handlers.handleGetMemory",
+        err,
+      );
       return { status: 500, body: errorBody("MEMORY_ERROR", "Failed to read memory.") };
     }
     throw err;
@@ -861,7 +925,7 @@ function memoryIdFromParams(ctx: RouteContext): MemoryId | RouteResult {
 }
 
 async function readEditRouteInput(ctx: RouteContext): Promise<EditInput | RouteResult> {
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
   return parseEditInput(body);
 }
@@ -899,6 +963,13 @@ export async function handleEditMemory(
     return await applyMemoryEdit(deps, vault, id, input);
   } catch (err) {
     if (err instanceof MemoryStorageError) {
+      reportMemoryHandlerFailure(
+        deps,
+        handlerCorrelationId(ctx),
+        "memory.edit",
+        "memory-handlers.handleEditMemory",
+        err,
+      );
       return {
         status: err.code === "not-found" ? 404 : 500,
         body: errorBody("MEMORY_ERROR", "Failed to update memory."),
@@ -938,6 +1009,13 @@ export function handlePinMemory(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
       };
     }
     if (err instanceof MemoryStorageError) {
+      reportMemoryHandlerFailure(
+        deps,
+        handlerCorrelationId(ctx),
+        "memory.pin",
+        "memory-handlers.handlePinMemory",
+        err,
+      );
       return { status: 500, body: errorBody("MEMORY_ERROR", "Failed to pin memory.") };
     }
     throw err;
@@ -974,6 +1052,13 @@ export function handleUnpinMemory(ctx: RouteContext, deps: UiHandlerDeps): Route
       };
     }
     if (err instanceof MemoryStorageError) {
+      reportMemoryHandlerFailure(
+        deps,
+        handlerCorrelationId(ctx),
+        "memory.unpin",
+        "memory-handlers.handleUnpinMemory",
+        err,
+      );
       return { status: 500, body: errorBody("MEMORY_ERROR", "Failed to unpin memory.") };
     }
     throw err;
@@ -994,10 +1079,11 @@ export async function handleArchiveMemory(
     return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
   }
 
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
 
-  const reason = typeof body.reason === "string" ? body.reason.trim() : undefined;
+  const rawReason = typeof body.reason === "string" ? body.reason : undefined;
+  const reason = sanitizeMemoryStatusMutationReason(rawReason, "archived-by-user");
 
   try {
     const record = vault.getMemory(id as MemoryId);
@@ -1009,7 +1095,14 @@ export async function handleArchiveMemory(
       { reviewerId: reviewerIdForMemoryMutation(deps), nowMs: Date.now() },
       reason,
     );
-    const updated = vault.updateMemory(id as MemoryId, { status: "archived" }, Date.now());
+    // KEIKO-0348: persist the (sanitised) archive reason on the record — before this
+    // wiring the field was validated and then discarded, leaving staleReason undefined
+    // and the archive event without operator context.
+    const updated = vault.updateMemory(
+      id as MemoryId,
+      { status: "archived", staleReason: reason },
+      Date.now(),
+    );
     return { status: 200, body: { memory: redactMemory(deps, updated) } };
   } catch (err) {
     if (err instanceof GovernanceError) {
@@ -1019,6 +1112,13 @@ export async function handleArchiveMemory(
       };
     }
     if (err instanceof MemoryStorageError) {
+      reportMemoryHandlerFailure(
+        deps,
+        handlerCorrelationId(ctx),
+        "memory.archive",
+        "memory-handlers.handleArchiveMemory",
+        err,
+      );
       return { status: 500, body: errorBody("MEMORY_ERROR", "Failed to archive memory.") };
     }
     throw err;
@@ -1264,11 +1364,18 @@ function formatForgetBody(memoryIds: readonly MemoryId[]): Record<string, unknow
   };
 }
 
-function memoryMutationErrorBody(err: unknown, fallbackMessage: string): RouteResult {
+function memoryMutationErrorBody(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  operation: string,
+  err: unknown,
+  fallbackMessage: string,
+): RouteResult {
   if (err instanceof GovernanceError) {
     return { status: 400, body: governanceErrorBody(err) };
   }
   if (err instanceof MemoryStorageError) {
+    reportMemoryHandlerFailure(deps, correlationId, operation, "memory-handlers", err);
     return {
       status: err.code === "not-found" ? 404 : 500,
       body: errorBody("MEMORY_ERROR", fallbackMessage),
@@ -1277,11 +1384,21 @@ function memoryMutationErrorBody(err: unknown, fallbackMessage: string): RouteRe
   throw err;
 }
 
-function preflightPrivacyCriticalAudit(deps: UiHandlerDeps): RouteResult | undefined {
+function preflightPrivacyCriticalAudit(
+  deps: UiHandlerDeps,
+  correlationId: string,
+): RouteResult | undefined {
   try {
     assertMemoryAuditWritable(deps.evidenceStore, Date.now());
     return undefined;
-  } catch {
+  } catch (error) {
+    reportMemoryHandlerFailure(
+      deps,
+      correlationId,
+      "memory.audit.preflight",
+      "memory-handlers.preflightPrivacyCriticalAudit",
+      error,
+    );
     return {
       status: 500,
       body: errorBody(
@@ -1304,12 +1421,15 @@ export async function handleForgetMemory(
     return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
   }
 
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
 
   const input = parseDestructiveInput(body);
   if (isRouteResult(input)) return input;
-  const auditReady = preflightPrivacyCriticalAudit(deps);
+  // Minted once so the preflight check and a later mutation failure report under the SAME id
+  // (ADR-0173 D5 / g12), mirroring handleRunMaintenance's correlationId reuse.
+  const correlationId = handlerCorrelationId(ctx);
+  const auditReady = preflightPrivacyCriticalAudit(deps, correlationId);
   if (auditReady !== undefined) return auditReady;
 
   try {
@@ -1322,7 +1442,13 @@ export async function handleForgetMemory(
     if (isRouteResult(result)) return result;
     return { status: 200, body: formatForgetBody(result.memoryIds) };
   } catch (err) {
-    return memoryMutationErrorBody(err, "Failed to forget memory.");
+    return memoryMutationErrorBody(
+      deps,
+      correlationId,
+      "memory.forget",
+      err,
+      "Failed to forget memory.",
+    );
   }
 }
 
@@ -1333,12 +1459,13 @@ export async function handleForgetMemories(
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
 
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
 
   const input = parseForgetSelectionInput(body);
   if (isRouteResult(input)) return input;
-  const auditReady = preflightPrivacyCriticalAudit(deps);
+  const correlationId = handlerCorrelationId(ctx);
+  const auditReady = preflightPrivacyCriticalAudit(deps, correlationId);
   if (auditReady !== undefined) return auditReady;
 
   try {
@@ -1346,7 +1473,13 @@ export async function handleForgetMemories(
     if (isRouteResult(result)) return result;
     return { status: 200, body: formatForgetBody(result.memoryIds) };
   } catch (err) {
-    return memoryMutationErrorBody(err, "Failed to forget memories.");
+    return memoryMutationErrorBody(
+      deps,
+      correlationId,
+      "memory.forget.batch",
+      err,
+      "Failed to forget memories.",
+    );
   }
 }
 
@@ -1365,12 +1498,13 @@ export async function handleDeleteMemory(
     return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
   }
 
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
 
   const input = parseDestructiveInput(body);
   if (isRouteResult(input)) return input;
-  const auditReady = preflightPrivacyCriticalAudit(deps);
+  const correlationId = handlerCorrelationId(ctx);
+  const auditReady = preflightPrivacyCriticalAudit(deps, correlationId);
   if (auditReady !== undefined) return auditReady;
 
   try {
@@ -1391,7 +1525,13 @@ export async function handleDeleteMemory(
       },
     };
   } catch (err) {
-    return memoryMutationErrorBody(err, "Failed to delete memory.");
+    return memoryMutationErrorBody(
+      deps,
+      correlationId,
+      "memory.delete",
+      err,
+      "Failed to delete memory.",
+    );
   }
 }
 
@@ -1400,7 +1540,7 @@ export async function handleDeleteMemory(
 interface ConflictResolutionInput {
   readonly winner: MemoryId;
   readonly losers: readonly MemoryId[];
-  readonly reason: string;
+  readonly reason: MemoryStatusMutationReason;
 }
 
 function uniqueIds(ids: readonly MemoryId[]): readonly MemoryId[] {
@@ -1423,10 +1563,10 @@ function parseConflictResolutionInput(
       body: errorBody("BAD_REQUEST", "losers must be a non-empty string array."),
     };
   }
-  const reason =
-    typeof raw.reason === "string" && raw.reason.trim().length > 0
-      ? raw.reason.trim()
-      : "conflict resolved from MemoriaViva";
+  const reason = sanitizeMemoryStatusMutationReason(
+    typeof raw.reason === "string" ? raw.reason : undefined,
+    "conflict-resolved",
+  );
   const winner = raw.winner as MemoryId;
   const losers = raw.losers.map((id) => id as MemoryId);
   if (uniqueIds([winner, ...losers]).length !== 1 + losers.length) {
@@ -1610,7 +1750,7 @@ export async function handleResolveMemoryConflict(
   const vault = resolveVault(deps);
   if (isRouteResult(vault)) return vault;
 
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
 
   const input = parseConflictResolutionInput(body);
@@ -1621,7 +1761,13 @@ export async function handleResolveMemoryConflict(
     if (isRouteResult(result)) return result;
     return { status: 200, body: result };
   } catch (err) {
-    return memoryMutationErrorBody(err, "Failed to resolve conflict.");
+    return memoryMutationErrorBody(
+      deps,
+      handlerCorrelationId(ctx),
+      "memory.conflicts.resolve",
+      err,
+      "Failed to resolve conflict.",
+    );
   }
 }
 
@@ -1733,6 +1879,38 @@ function recordCorrectionProposalAuditIfNeeded(
   );
 }
 
+// Split out of `handleCorrectMemory` (w4b, epic #3233) purely to keep the route handler under the
+// repository's 50-line function cap once its catch block gained `reportMemoryHandlerFailure` — no
+// behavior change, same statements in the same order.
+function executeCorrectMemory(
+  vault: MemoryVaultStore,
+  deps: UiHandlerDeps,
+  existing: MemoryRecord,
+  input: { readonly correctedBody: string },
+  id: string,
+): RouteResult {
+  const nowMs = Date.now();
+  const correctionId = randomUUID() as MemoryId;
+  const { proposal, supersession } = buildCorrection({
+    olderMemory: existing,
+    correctedBody: input.correctedBody,
+    context: { reviewerId: reviewerIdForMemoryMutation(deps), nowMs },
+    newProposalId: randomUUID() as MemoryProposalId,
+    newMemoryId: correctionId,
+  });
+  const auditCountBeforeInsert = auditEventCountForDay(deps, nowMs);
+  const inserted = vault.insertMemory(buildCorrectionRecord(proposal, correctionId, nowMs));
+  recordCorrectionProposalAuditIfNeeded(deps, inserted, nowMs, auditCountBeforeInsert);
+  // Bind the reviewer-selected predecessor while the correction is proposed, but do not claim a
+  // supersession before acceptance. The actual `supersedes` edge is committed atomically with the
+  // proposal/origin transition in acceptMemoryProposal.
+  vault.insertEdge({ ...buildEdgeFromSupersession(supersession), kind: "corrects" });
+  return {
+    status: 201,
+    body: { correction: redactMemory(deps, inserted), originalMemoryId: id },
+  };
+}
+
 export async function handleCorrectMemory(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -1745,7 +1923,7 @@ export async function handleCorrectMemory(
     return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
   }
 
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
 
   const input = parseCorrectInput(body);
@@ -1756,28 +1934,19 @@ export async function handleCorrectMemory(
     if (existing === undefined) {
       return { status: 404, body: errorBody("NOT_FOUND", "Memory not found.") };
     }
-    const nowMs = Date.now();
-    const correctionId = randomUUID() as MemoryId;
-    const { proposal, supersession } = buildCorrection({
-      olderMemory: existing,
-      correctedBody: input.correctedBody,
-      context: { reviewerId: reviewerIdForMemoryMutation(deps), nowMs },
-      newProposalId: randomUUID() as MemoryProposalId,
-      newMemoryId: correctionId,
-    });
-    const auditCountBeforeInsert = auditEventCountForDay(deps, nowMs);
-    const inserted = vault.insertMemory(buildCorrectionRecord(proposal, correctionId, nowMs));
-    recordCorrectionProposalAuditIfNeeded(deps, inserted, nowMs, auditCountBeforeInsert);
-    vault.insertEdge(buildEdgeFromSupersession(supersession));
-    return {
-      status: 201,
-      body: { correction: redactMemory(deps, inserted), originalMemoryId: id },
-    };
+    return executeCorrectMemory(vault, deps, existing, input, id);
   } catch (err) {
     if (err instanceof GovernanceError) {
       return { status: 400, body: governanceErrorBody(err) };
     }
     if (err instanceof MemoryStorageError) {
+      reportMemoryHandlerFailure(
+        deps,
+        handlerCorrelationId(ctx),
+        "memory.correct",
+        "memory-handlers.handleCorrectMemory",
+        err,
+      );
       return { status: 500, body: errorBody("MEMORY_ERROR", "Failed to create correction.") };
     }
     throw err;
@@ -1797,30 +1966,24 @@ function assertSupersedable(memory: MemoryRecord): void {
 }
 
 interface CorrectionSupersessionOrigin {
-  readonly edge: MemoryEdge;
   readonly original: MemoryRecord;
+  readonly binding?: MemoryEdge;
 }
 
-function loadCorrectionSupersessionOrigins(
+function loadBoundCorrectionOrigins(
   vault: MemoryVaultStore,
   proposal: MemoryRecord,
 ): readonly CorrectionSupersessionOrigin[] {
   if (proposal.type !== "correction") return [];
-  const incomingSupersessions = vault
+  const bindings = vault
     .listIncomingEdges(proposal.id)
-    .filter((edge) => edge.kind === "supersedes");
-  if (incomingSupersessions.length === 0) {
-    throw new GovernanceError(
-      "invalid-resolution",
-      "correction proposal requires a supersession origin",
-    );
-  }
-  return incomingSupersessions.map((edge) => {
-    const original = vault.getMemory(edge.fromMemoryId);
+    .filter((edge) => edge.kind === "corrects" || edge.kind === "supersedes");
+  return bindings.map((binding) => {
+    const original = vault.getMemory(binding.fromMemoryId);
     if (original === undefined) {
       throw new GovernanceError("invalid-resolution", "correction origin memory is missing");
     }
-    return { edge, original };
+    return { original, binding };
   });
 }
 
@@ -1842,6 +2005,105 @@ function acceptedCorrectionType(
   return first;
 }
 
+type CorrectionPredecessorFailureCode =
+  | "CORRECTION_PREDECESSOR_ALREADY_SUPERSEDED"
+  | "CORRECTION_PREDECESSOR_AMBIGUOUS"
+  | "CORRECTION_PREDECESSOR_FORBIDDEN"
+  | "CORRECTION_PREDECESSOR_MISSING"
+  | "CORRECTION_PREDECESSOR_STALE"
+  | "CORRECTION_PREDECESSOR_SELECTION_INVALID";
+
+function correctionPredecessorFailure(code: CorrectionPredecessorFailureCode): RouteResult {
+  const messages: Readonly<Record<CorrectionPredecessorFailureCode, string>> = {
+    CORRECTION_PREDECESSOR_ALREADY_SUPERSEDED:
+      "The selected predecessor has already been superseded. Reload and review the correction.",
+    CORRECTION_PREDECESSOR_AMBIGUOUS:
+      "Multiple predecessor memories match this correction. Select one predecessor before accepting.",
+    CORRECTION_PREDECESSOR_FORBIDDEN:
+      "The correction predecessor is outside the caller's authorized memory scope.",
+    CORRECTION_PREDECESSOR_MISSING:
+      "No eligible predecessor memory matches this correction. Reclassify or revise the proposal.",
+    CORRECTION_PREDECESSOR_STALE:
+      "The correction predecessor is no longer eligible. Reload and review the proposal.",
+    CORRECTION_PREDECESSOR_SELECTION_INVALID:
+      "The selected predecessor is not an eligible match for this correction.",
+  };
+  return {
+    status: code === "CORRECTION_PREDECESSOR_FORBIDDEN" ? 403 : 409,
+    body: errorBody(code, messages[code]),
+  };
+}
+
+function proposalStaleFailure(): RouteResult {
+  return {
+    status: 409,
+    body: errorBody(
+      "PROPOSAL_STALE",
+      "The proposal changed before it could be accepted. Reload it.",
+    ),
+  };
+}
+
+function correctionOriginFailure(origin: MemoryRecord): RouteResult | null {
+  if (origin.status === "superseded") {
+    return correctionPredecessorFailure("CORRECTION_PREDECESSOR_ALREADY_SUPERSEDED");
+  }
+  if (origin.status !== "accepted") {
+    return correctionPredecessorFailure("CORRECTION_PREDECESSOR_STALE");
+  }
+  return null;
+}
+
+function uniqueCorrectionOrigin(
+  matches: readonly MemoryRecord[],
+  selectedPredecessorId: MemoryId | undefined,
+): CorrectionSupersessionOrigin | RouteResult {
+  if (selectedPredecessorId !== undefined) {
+    const selected = matches.find((candidate) => candidate.id === selectedPredecessorId);
+    if (selected === undefined) {
+      return correctionPredecessorFailure("CORRECTION_PREDECESSOR_SELECTION_INVALID");
+    }
+    const failure = correctionOriginFailure(selected);
+    return failure ?? { original: selected };
+  }
+  const eligible = matches.filter((candidate) => candidate.status === "accepted");
+  const soleEligible = eligible[0];
+  if (eligible.length === 1 && soleEligible !== undefined) return { original: soleEligible };
+  if (eligible.length > 1) {
+    return correctionPredecessorFailure("CORRECTION_PREDECESSOR_AMBIGUOUS");
+  }
+  const superseded = matches.find((candidate) => candidate.status === "superseded");
+  return superseded === undefined
+    ? correctionPredecessorFailure("CORRECTION_PREDECESSOR_MISSING")
+    : correctionPredecessorFailure("CORRECTION_PREDECESSOR_ALREADY_SUPERSEDED");
+}
+
+function resolveCorrectionOrigins(
+  vault: MemoryVaultStore,
+  proposal: MemoryRecord,
+  selectedPredecessorId: MemoryId | undefined,
+): readonly CorrectionSupersessionOrigin[] | RouteResult {
+  if (proposal.type !== "correction") return [];
+  const bound = loadBoundCorrectionOrigins(vault, proposal);
+  if (bound.length > 1) {
+    return correctionPredecessorFailure("CORRECTION_PREDECESSOR_AMBIGUOUS");
+  }
+  if (bound.length === 1) {
+    const origin = bound[0];
+    if (origin === undefined) return correctionPredecessorFailure("CORRECTION_PREDECESSOR_MISSING");
+    if (selectedPredecessorId !== undefined && selectedPredecessorId !== origin.original.id) {
+      return correctionPredecessorFailure("CORRECTION_PREDECESSOR_SELECTION_INVALID");
+    }
+    const failure = correctionOriginFailure(origin.original);
+    return failure ?? [origin];
+  }
+  const resolved = uniqueCorrectionOrigin(
+    resolveMemoryTargetRecords(vault, proposal.body, proposal.scope),
+    selectedPredecessorId,
+  );
+  return isRouteResult(resolved) ? resolved : [resolved];
+}
+
 function buildAcceptProposalPatch(
   origins: readonly CorrectionSupersessionOrigin[],
   bodyOverride?: string,
@@ -1859,14 +2121,20 @@ function buildAcceptProposalPatch(
 }
 
 function buildCorrectionAcceptanceUpdates(
-  proposalId: MemoryId,
+  proposal: MemoryRecord,
   acceptPatch: MemoryBatchUpdate["patch"],
   origins: readonly CorrectionSupersessionOrigin[],
   nowMs: number,
 ): readonly MemoryBatchUpdate[] {
   return [
-    { id: proposalId, patch: acceptPatch, nowMs },
-    ...origins.map(({ edge, original }) => {
+    {
+      id: proposal.id,
+      patch: acceptPatch,
+      nowMs,
+      expectedStatus: proposal.status,
+      expectedUpdatedAt: proposal.updatedAt,
+    },
+    ...origins.map(({ binding, original }) => {
       // Bi-temporal-lite (#204, C1): close the superseded fact's belief window at acceptance time so
       // it drops out of default retrieval and "as of date T" stays answerable. Additive — only when
       // it forms a valid, non-extending interval.
@@ -1875,13 +2143,36 @@ function buildCorrectionAcceptanceUpdates(
         id: original.id,
         patch: {
           status: "superseded" as const,
-          staleReason: edge.provenanceSummary ?? "accepted correction",
+          staleReason: binding?.provenanceSummary ?? "accepted correction",
           ...(validity !== null ? { validity } : {}),
         },
         nowMs,
+        expectedStatus: original.status,
+        expectedUpdatedAt: original.updatedAt,
       };
     }),
   ];
+}
+
+function correctionAcceptanceEdges(
+  proposal: MemoryRecord,
+  origins: readonly CorrectionSupersessionOrigin[],
+  nowMs: number,
+): readonly MemoryEdge[] {
+  return origins.flatMap(({ binding, original }) => {
+    if (binding?.kind === "supersedes") return [];
+    return [
+      {
+        id: randomUUID() as MemoryEdgeId,
+        schemaVersion: "1",
+        fromMemoryId: original.id,
+        toMemoryId: proposal.id,
+        kind: "supersedes" as const,
+        createdAt: nowMs,
+        provenanceSummary: binding?.provenanceSummary ?? "accepted correction",
+      },
+    ];
+  });
 }
 
 function recordCorrectionSupersessionAudits(
@@ -1914,35 +2205,96 @@ function ensureProposedMemory(existing: MemoryRecord | undefined): MemoryRecord 
   return existing;
 }
 
+interface CommittedCorrectionAcceptance {
+  readonly updated: MemoryRecord;
+  readonly nowMs: number;
+}
+
+function commitCorrectionAcceptance(
+  vault: MemoryVaultStore,
+  proposal: MemoryRecord,
+  origins: readonly CorrectionSupersessionOrigin[],
+  bodyOverride: string | undefined,
+): CommittedCorrectionAcceptance | RouteResult {
+  const nowMs = Date.now();
+  const acceptPatch = buildAcceptProposalPatch(origins, bodyOverride);
+  const updates = buildCorrectionAcceptanceUpdates(proposal, acceptPatch, origins, nowMs);
+  try {
+    const mutation = vault.applyGraphMutation({
+      preconditions: [
+        {
+          id: proposal.id,
+          expectedStatus: proposal.status,
+          expectedUpdatedAt: proposal.updatedAt,
+        },
+        ...origins.map((origin) => ({
+          id: origin.original.id,
+          expectedStatus: origin.original.status,
+          expectedUpdatedAt: origin.original.updatedAt,
+        })),
+      ],
+      updates,
+      edges: correctionAcceptanceEdges(proposal, origins, nowMs),
+    });
+    const updated = mutation.memories[0];
+    if (updated === undefined) {
+      throw new GovernanceError("invalid-resolution", "acceptance update produced no records");
+    }
+    return { updated, nowMs };
+  } catch (error) {
+    if (error instanceof MemoryStoragePreconditionError) {
+      if (error.memoryId === proposal.id) return proposalStaleFailure();
+      return correctionPredecessorFailure("CORRECTION_PREDECESSOR_STALE");
+    }
+    throw error;
+  }
+}
+
 function acceptMemoryProposal(
   vault: MemoryVaultStore,
   deps: UiHandlerDeps,
   id: MemoryId,
-  bodyOverride?: string,
+  input: AcceptMemoryProposalOptions,
 ): RouteResult {
   const existing = ensureProposedMemory(vault.getMemory(id));
   if (isRouteResult(existing)) return existing;
-  const nowMs = Date.now();
-  const origins = loadCorrectionSupersessionOrigins(vault, existing);
-  const acceptPatch = buildAcceptProposalPatch(origins, bodyOverride);
-  const updates = buildCorrectionAcceptanceUpdates(id, acceptPatch, origins, nowMs);
-  const [updated] = vault.updateMemories(updates);
-  if (updated === undefined) {
-    throw new GovernanceError("invalid-resolution", "acceptance update produced no records");
+  const authorizedScopes = authorizedMemoryScopes(deps, vault);
+  if (!scopeAuthorized(existing.scope, authorizedScopes)) return forbiddenMemoryScopeResult();
+  const origins = resolveCorrectionOrigins(vault, existing, input.predecessorId);
+  if (isRouteResult(origins)) return origins;
+  if (origins.some((origin) => !scopeAuthorized(origin.original.scope, authorizedScopes))) {
+    return correctionPredecessorFailure("CORRECTION_PREDECESSOR_FORBIDDEN");
   }
+  const committed = commitCorrectionAcceptance(vault, existing, origins, input.bodyOverride);
+  if (isRouteResult(committed)) return committed;
   // Outcome-driven forgetting (#204, O-V1): acceptance is a positive retention outcome for the
   // proposal; any origin it supersedes proved wrong (utility 0). Both feed the maintenance utility
   // factor so the kept memory resists disuse decay and the corrected-away origin fades sooner.
-  vault.recordOutcome([id], 1, nowMs);
+  vault.recordOutcome([id], 1, committed.nowMs);
   const supersededOriginIds = origins.map((origin) => origin.original.id);
   if (supersededOriginIds.length > 0) {
-    vault.recordOutcome(supersededOriginIds, 0, nowMs);
+    vault.recordOutcome(supersededOriginIds, 0, committed.nowMs);
   }
-  recordCorrectionSupersessionAudits(deps, updated, origins, nowMs);
-  return { status: 200, body: { memory: redactMemory(deps, updated) } };
+  recordCorrectionSupersessionAudits(deps, committed.updated, origins, committed.nowMs);
+  return { status: 200, body: { memory: redactMemory(deps, committed.updated) } };
 }
 
 function parseAcceptBody(
+  raw: Record<string, unknown>,
+  id: MemoryId,
+  deps: UiHandlerDeps,
+): AcceptMemoryProposalOptions | RouteResult {
+  const bodyOverride = parseAcceptBodyOverride(raw, id, deps);
+  if (isRouteResult(bodyOverride)) return bodyOverride;
+  const predecessorId = parseCorrectionPredecessorId(raw.predecessorId);
+  if (isRouteResult(predecessorId)) return predecessorId;
+  return {
+    ...(bodyOverride === undefined ? {} : { bodyOverride }),
+    ...(predecessorId === undefined ? {} : { predecessorId }),
+  };
+}
+
+function parseAcceptBodyOverride(
   raw: Record<string, unknown>,
   id: MemoryId,
   deps: UiHandlerDeps,
@@ -1964,6 +2316,17 @@ function parseAcceptBody(
       };
 }
 
+function parseCorrectionPredecessorId(raw: unknown): MemoryId | RouteResult | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,199}$/u.test(raw)) {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "predecessorId must be a bounded safe memory id."),
+    };
+  }
+  return raw as MemoryId;
+}
+
 export async function handleAcceptMemoryProposal(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -1975,25 +2338,74 @@ export async function handleAcceptMemoryProposal(
   if (id === undefined || id.length === 0) {
     return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
   }
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
-  const bodyOverride = parseAcceptBody(body, id as MemoryId, deps);
-  if (isRouteResult(bodyOverride)) return bodyOverride;
+  const input = parseAcceptBody(body, id as MemoryId, deps);
+  if (isRouteResult(input)) return input;
 
   try {
-    return acceptMemoryProposal(vault, deps, id as MemoryId, bodyOverride);
+    return acceptMemoryProposal(vault, deps, id as MemoryId, input);
   } catch (err) {
-    return memoryMutationErrorBody(err, "Failed to accept proposal.");
+    return memoryMutationErrorBody(
+      deps,
+      handlerCorrelationId(ctx),
+      "memory.proposals.accept",
+      err,
+      "Failed to accept proposal.",
+    );
   }
+}
+
+// ─── Handler: GET /api/memory/proposals/:id/correction-predecessors ──────────
+
+// A correction's predecessor remains local review evidence until acceptance. This endpoint lets
+// the review surface show every eligible candidate without leaking records from another scope.
+export function handleGetCorrectionPredecessors(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): RouteResult {
+  const vault = resolveVault(deps);
+  if (isRouteResult(vault)) return vault;
+  const { id } = ctx.params;
+  if (id === undefined || id.length === 0) {
+    return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
+  }
+  const proposal = ensureProposedMemory(vault.getMemory(id as MemoryId));
+  if (isRouteResult(proposal)) return proposal;
+  if (proposal.type !== "correction") {
+    return {
+      status: 400,
+      body: errorBody("BAD_REQUEST", "Memory proposal is not a correction."),
+    };
+  }
+  const authorizedScopes = authorizedMemoryScopes(deps, vault);
+  if (!scopeAuthorized(proposal.scope, authorizedScopes)) return forbiddenMemoryScopeResult();
+  const bound = loadBoundCorrectionOrigins(vault, proposal);
+  const candidates =
+    bound.length > 0
+      ? bound.map((origin) => origin.original)
+      : resolveMemoryTargetRecords(vault, proposal.body, proposal.scope);
+  if (candidates.some((candidate) => !scopeAuthorized(candidate.scope, authorizedScopes))) {
+    return forbiddenMemoryScopeResult();
+  }
+  const response: MemoryCorrectionPredecessorsResponse = {
+    candidates: candidates
+      .filter((candidate) => candidate.status === "accepted")
+      .map((candidate) => redactMemory(deps, candidate)),
+  };
+  return {
+    status: 200,
+    body: response,
+  };
 }
 
 // ─── Handler: POST /api/memory/proposals/:id/reject ───────────────────────────
 
-function parseRejectInput(raw: Record<string, unknown>): { reason: string } {
-  const reason =
-    typeof raw.reason === "string" && raw.reason.trim().length > 0
-      ? raw.reason.trim()
-      : "rejected by user";
+function parseRejectInput(raw: Record<string, unknown>): { reason: MemoryStatusMutationReason } {
+  const reason = sanitizeMemoryStatusMutationReason(
+    typeof raw.reason === "string" ? raw.reason : undefined,
+    "rejected-by-user",
+  );
   return { reason };
 }
 
@@ -2032,7 +2444,7 @@ export async function handleRejectMemoryProposal(
     return { status: 400, body: errorBody("BAD_REQUEST", "Memory id is required.") };
   }
 
-  const body = await readJsonBody(ctx.req);
+  const body = await readJsonBody(ctx.req, ctx.correlationId);
   if (isRouteResult(body)) return body;
 
   const { reason } = parseRejectInput(body);
@@ -2052,6 +2464,13 @@ export async function handleRejectMemoryProposal(
     return { status: 200, body: { memory: redactMemory(deps, updated) } };
   } catch (err) {
     if (err instanceof MemoryStorageError) {
+      reportMemoryHandlerFailure(
+        deps,
+        handlerCorrelationId(ctx),
+        "memory.proposals.reject",
+        "memory-handlers.handleRejectMemoryProposal",
+        err,
+      );
       return {
         status: err.code === "not-found" ? 404 : 500,
         body: errorBody("MEMORY_ERROR", "Failed to reject proposal."),
@@ -2073,14 +2492,33 @@ export function createBffMemoryVault(
     events: readonly import("@oscharko-dev/keiko-memory-vault").MemoryEvent[],
   ) => void,
   env?: Readonly<Record<string, string | undefined>>,
+  bootstrapCorrelationId?: string,
 ): MemoryVaultStore {
   // Optional onMemoryEvent (#214) wires every successful vault mutation into the audit
   // ledger. When undefined, the vault still fires its internal NOOP sink, so the absence
   // of an audit hook is fully backward-compatible with the pre-#214 BFF wiring.
+  //
+  // `logSink` (w4a-memory-vault-fingerprint, epic #3233 §8/g18): wires the process-wide activity
+  // log into the vault's own structural `MemoryVaultLogSink` port (ADR-0019 — see
+  // `keiko-memory-vault/src/vault-log.ts`), so vault-open (with the retained key-resolution
+  // tier), a corruption quarantine, and an encryption migration all land in `server.log` instead
+  // of being unobservable, mirroring `local-knowledge-store-open.ts`'s identical wiring.
+  //
+  // `securityLogSink` (Wave 4a, epic #3233 §8): the SAME sink threaded into the vault's own
+  // structural `SecurityLogSink` port (`@oscharko-dev/keiko-security/log-port.ts`) so the shared
+  // bounded macOS Keychain tier (`cipher.ts`'s `keyFromKeychain`) reports a fall-through to the
+  // keyfile tier as `security.keychain.fallback` instead of failing silently. `keiko-memory-vault`
+  // depends on `keiko-security` (ADR-0019), so importing the port's type here is legal.
+  const activityLog =
+    bootstrapCorrelationId === undefined
+      ? processServerLogSink()
+      : processServerLogSinkFor(bootstrapCorrelationId);
   return createMemoryVault({
     redactString,
     ...(onMemoryEvent === undefined ? {} : { onMemoryEvent }),
     ...(onDeleteEventsBeforeCommit === undefined ? {} : { onDeleteEventsBeforeCommit }),
     ...(env === undefined ? {} : { env }),
+    logSink: activityLog,
+    securityLogSink: activityLog,
   });
 }

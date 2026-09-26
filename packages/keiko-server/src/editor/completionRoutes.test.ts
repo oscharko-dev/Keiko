@@ -5,11 +5,8 @@ import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
-import {
-  EDITOR_AGENT_SCHEMA_VERSION,
-  type EditorAgentSessionSnapshot,
-  type EvidenceStore,
-} from "@oscharko-dev/keiko-contracts";
+import type { EditorAgentSessionSnapshot, EvidenceStore } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import type { GatewayConfig, ModelCapability } from "@oscharko-dev/keiko-model-gateway";
 import type { EditorCompletionWireResponse, LatencyClass } from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
@@ -33,6 +30,7 @@ function postContext(body: unknown): RouteContext {
   ]) as unknown as IncomingMessage;
   (req as { method?: string }).method = "POST";
   return {
+    correlationId: undefined,
     req,
     res: {} as unknown as ServerResponse,
     params: {},

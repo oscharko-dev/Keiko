@@ -297,9 +297,17 @@ describe("@oscharko-dev/keiko-editor dependency boundary (Issue #1191 acceptance
   it("treats React as a peer dependency, never a bundled runtime dependency", () => {
     const manifest = readManifest();
     for (const packageName of ["react", "react-dom"]) {
-      expect(manifest.peerDependencies?.[packageName]).toBe("^19.2.7");
+      // Peer status stays: a consuming host supplies its own React (non-optional per meta).
+      expect(manifest.peerDependencies?.[packageName]).toBe("^19.2.8");
+      // Bundled runtime dependency is still forbidden — that is what this pin was written to
+      // prevent (Issue #1191 acceptance criteria).
       expect(manifest.dependencies?.[packageName]).toBeUndefined();
-      expect(manifest.devDependencies?.[packageName]).toBeUndefined();
+      // KEIKO-1008: the package DOES declare react/react-dom as devDependencies so its own
+      // @testing-library/react-based tests do not depend solely on incidental hoisting from the
+      // keiko-ui sibling. The exact dev pin tracks the product's React version and remains inside
+      // the compatible peer range, so the workspace hoist never resolves a divergent version.
+      const devPin = manifest.devDependencies?.[packageName];
+      expect(devPin).toBe("19.3.0");
     }
   });
 
@@ -307,7 +315,7 @@ describe("@oscharko-dev/keiko-editor dependency boundary (Issue #1191 acceptance
     const manifest = readManifest();
     const rootManifest = readRootManifest();
 
-    expect(manifest.dependencies?.["monaco-editor"]).toBe("0.55.1");
+    expect(manifest.dependencies?.["monaco-editor"]).toBe("0.56.0");
     expect(manifest.dependencies?.["@monaco-editor/react"]).toBe("4.7.0");
     expect(rootManifest.overrides?.["@monaco-editor/loader"]).toBe("1.7.0");
   });

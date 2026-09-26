@@ -51,4 +51,20 @@ describe("CodedHttpError (GEN-DUP-NEAR-008)", () => {
     expect(err.message).toBe("operation failed");
     expect(err.cause).toBe(cause);
   });
+
+  // KEIKO-0859: the doc-comment claim that this helper prevents a silent undefined only holds if
+  // the runtime path returns a real number for an unknown code. An `as C` bypass at the caller or
+  // a hand-maintained map with a forgotten key must fall back to 500 (never undefined), and a
+  // prototype-chain read like `constructor` / `toString` must not return the inherited method's
+  // reference. The finding's `doNot` clause forbids throwing (a callback several call sites use
+  // strictly as `throw new CodedHttpError(msg, httpStatusFor(MAP, code))`), so the fallback must
+  // be 500 rather than an exception.
+  it("returns 500 for an unknown code and treats prototype-chain reads as unknown (KEIKO-0859)", () => {
+    expect(httpStatusFor(SAMPLE_STATUS_MAP, "does-not-exist" as SampleCode)).toBe(500);
+    // Prototype-chain reads: `map["constructor"]` is `Object` (a function, not a number) and
+    // `map["toString"]` is a method reference — pre-fix these were silently truthy and coerced to
+    // NaN in status arithmetic. The typeof-number own-key check refuses both, returning 500.
+    expect(httpStatusFor(SAMPLE_STATUS_MAP, "constructor" as SampleCode)).toBe(500);
+    expect(httpStatusFor(SAMPLE_STATUS_MAP, "toString" as SampleCode)).toBe(500);
+  });
 });

@@ -16,7 +16,7 @@ Accepted
 
 Epic #443 introduces task-scoped isolated workspaces backed by Git worktrees.
 ADR-0088 (#444) delivered the leaf-pure domain contract: 10-state lifecycle,
-8 drift markers, 6 health states, lock model, recovery hints, content-free audit
+10 drift markers, 6 health states, lock model, recovery hints, content-free audit
 events, the durable `WorkspaceInstance`, and the no-duplicate-subsystem delegation
 table. ADR-0089 (#445) provisioned those workspaces: the narrow keiko-tools
 `GIT_WORKTREE_COMMAND_RULES` worktree adapter, the `WorkspaceInstanceStore` over
@@ -143,42 +143,56 @@ Each maps to an unambiguous action:
 | `drifted` | Worktree present **and usable** but HEAD moved, branch deleted, uncommitted work, or a stale lock | Keep lifecycle, set health `drifted`, flag the marker + recovery hint (surface, do not force recovery) |
 | `locked` | A live lock is held by another actor | Defer — leave the instance unchanged (no flag) |
 | `partially-created` | Instance row is in `provisioning`/`failed` lifecycle — provisioning never completed | Leave for the provisioning retry path; flag `worktree-missing`/`pointer-stale` if the partial worktree is gone |
-| `stale-pointer` | Worktree present but its `.git` pointer is missing/corrupt or its gitdir identity moved | Mark `recovery-required`, flag `pointer-stale`/`gitdir-mismatch` |
+| `stale-pointer` | Worktree present but its `.git` pointer is missing/corrupt, its gitdir identity moved, its identity was registered under a retired rule (the inode-only rule or the pre-#3367 pointer-text rule), or its filesystem reports no durable creation time — for an operational instance, and for a `cleanup-pending` one whose tree is still present | Mark `recovery-required`, flag `pointer-stale`/`gitdir-mismatch`/`identity-schema-retired`/`identity-unsupported` |
 | `unmanaged-path` | Stored `managedWorktreePath` resolves outside the Keiko-owned managed root (path-escape condition) | Mark `recovery-required`, flag `path-escape` |
 | `recovery-required` | Instance is already in `recovery-required` lifecycle state — no fresh disk drift; carry-forward | Keep `recovery-required` |
 
 **`WorkspaceReconciliationFacts` — the IO-gathered input to the pure classifier.**
 
-A readonly plain object assembled by the server reconciliation service (IO):
+A readonly plain object assembled by the server reconciliation service (IO). The
+authoritative shape lives in `packages/keiko-contracts/src/task-workspace.ts` under
+the `WorkspaceReconciliationFacts` interface; the fields below mirror it verbatim:
 
 ```ts
 interface WorkspaceReconciliationFacts {
-  readonly workspaceId: string;
   readonly lifecycleState: TaskWorkspaceLifecycleState;
-  readonly managedWorktreePath: string;
-  readonly gitdirIdentity: string;        // stored identity hash
-  readonly lastVerifiedHead: string | undefined;
-  readonly lock: WorkspaceLock | null;
-  readonly nowIso: string;                // ISO timestamp for TTL evaluation
-  // Server-gathered IO facts (booleans derived from filesystem/git):
-  readonly pathExists: boolean;
-  readonly pathContained: boolean;        // realpath check via keiko-workspace
-  readonly gitdirMatches: boolean;        // .git pointer identity == stored gitdirIdentity
-  readonly currentHead: string | undefined;  // current HEAD SHA from worktree adapter
-  readonly branchExists: boolean;         // task branch still present in refs
-  readonly lockExpired: boolean;          // lock !== null && expiresAt < nowIso
-  readonly isActivePointerTarget: boolean; // pointer's workspace_id === this workspaceId
+  // realpath containment of the persisted managed-worktree path inside the managed
+  // root — a persisted path is NEVER trusted without realpath verification.
+  readonly pathContained: boolean;
+  readonly worktreeDirExists: boolean;
+  // the worktree's `.git` linked-worktree pointer file is present and well-formed.
+  readonly gitPointerPresent: boolean;
+  // the pointer's content-free gitdir identity equals the persisted `gitdirIdentity`.
+  readonly gitdirIdentityMatches: boolean;
+  // the persisted identity reproduces the RETIRED inode-only composition (#3376): a migration,
+  // reported by its own marker, never as a replaced pointer.
+  readonly gitdirIdentitySchemaRetired?: boolean;
+  // the filesystem reports no durable creation time, so no current identity can be derived at
+  // all; its own marker, never `pointer-stale` (the pointer IS present).
+  readonly gitdirIdentityUnsupported?: boolean;
+  // the dedicated task branch still exists / the worktree is still bound to it.
+  readonly taskBranchPresent: boolean;
+  // the worktree HEAD equals the persisted `lastVerifiedHead`
+  // (true when no baseline was recorded).
+  readonly headMatches: boolean;
+  readonly uncommittedChanges: boolean;
+  readonly lockPresent: boolean;
+  readonly lockLive: boolean;
+  readonly lockedByOtherActor: boolean;
 }
 ```
 
-All fields are content-free (hashes, booleans, ISO timestamps, enums, opaque IDs).
-The server assembles this struct from four distinct sources WITHOUT duplicating any
-subsystem: `pathExists` and `pathContained` from `keiko-workspace`
-`assertManagedTargetContained` (delegated — ADR-0088 D5); `gitdirMatches`,
-`currentHead`, and `branchExists` from the narrow `listWorktrees` /
-`localBranchExists` adapter already in `keiko-tools` (ADR-0089 D1); `lockExpired`
-from the TTL rule already encoded in the lock model; `isActivePointerTarget` from
-the active pointer store (ADR-0090 D1).
+All fields are content-free (booleans and the persisted lifecycle enum — no path,
+no command output). The server assembles this struct from four distinct sources
+WITHOUT duplicating any subsystem: `worktreeDirExists` from `node:fs` `existsSync`
+against `managedWorktreePath`; `pathContained` from `keiko-workspace`
+`assertManagedTargetContained` (delegated — ADR-0088 D5) — a distinct realpath
+check that never trusts the existence probe as a substitute; `gitPointerPresent`,
+`gitdirIdentityMatches`, `taskBranchPresent`, `headMatches`, and
+`uncommittedChanges` from the narrow `listWorktrees` / `localBranchExists` /
+status adapters already in `keiko-tools` (ADR-0089 D1); `lockPresent`, `lockLive`,
+and `lockedByOtherActor` from the TTL/ownership rules already encoded in the lock
+model.
 
 **`classifyWorkspaceReconciliation(facts)` — pure, deterministic precedence chain.**
 
@@ -194,42 +208,71 @@ function classifyWorkspaceReconciliation(
 
 The classifier applies checks in a strict top-down precedence order. The first
 match wins; later checks are skipped. This makes the outcome deterministic and
-the reasoning auditable:
+the reasoning auditable. The order below matches the shipped
+`classifyWorkspaceReconciliation` in `packages/keiko-contracts/src/task-workspace.ts`
+verbatim (mnemonic: containment escape → live foreign lock → terminal lifecycle →
+partial-creation → on-disk drift → lingering recovery-required → stale lock on an
+otherwise-healthy workspace):
 
 1. **`unmanaged-path`**: `!facts.pathContained` → status `unmanaged-path`, marker
    `path-escape`, hint `operator-repair` (`operatorActionRequired: true`). This is
    highest precedence because a contained path is a security invariant; the
    remaining checks assume containment.
-2. **`missing`**: `!facts.pathExists` → status `missing`, marker `worktree-missing`,
-   hint `recreate-worktree` (`operatorActionRequired: false`). If additionally
-   `!facts.branchExists`, append marker `branch-deleted` and hint `reattach-branch`
-   (`operatorActionRequired: true`).
-3. **`partially-created`**: `facts.lifecycleState === "provisioning"` → status
-   `partially-created`, no additional drift marker (the state itself is
-   diagnostic), hint `recreate-worktree` (`operatorActionRequired: false`).
-4. **`locked`**: `facts.lockExpired` → status `locked`, marker `lock-stale`,
-   hint `release-stale-lock` (`operatorActionRequired: false`).
-5. **`stale-pointer`**: `facts.isActivePointerTarget && !facts.gitdirMatches` →
-   status `stale-pointer`, marker `pointer-stale`, hint `reconcile-pointer`
-   (`operatorActionRequired: false`).
-6. **`drifted`**: the worktree is present and usable but has diverged — a deleted
-   task branch (`branch-deleted` → `reattach-branch`, operator-required), a moved
-   HEAD (`head-moved` → `operator-repair`, operator-required), uncommitted work
-   (`uncommitted-changes` → `commit-or-stash-required`, operator-required), or a
-   stale lock (`lock-stale` → `release-stale-lock`, automatic). A `drifted`
-   workspace keeps its lifecycle (it is not forced to `recovery-required`); only a
-   gone/structurally-unusable worktree (`missing`/`stale-pointer`/`unmanaged-path`)
-   is flagged.
-7. **`recovery-required`** (carry-forward): `facts.lifecycleState === "recovery-required"`
-   and none of the above triggered → status `recovery-required`, preserve the
-   stored `driftMarkers` and `recoveryHints` from the persisted instance (caller
-   passes them through unchanged).
+2. **`locked`**: `facts.lockedByOtherActor` → status `locked`, no additional drift
+   marker (the state itself is diagnostic; a *live* foreign lock is a wait
+   condition, not a fault). The instance is left unchanged — reconciliation defers
+   until the other actor releases the lock or its TTL expires and it is
+   reclassified as a `stale` lock below.
+3. **`healthy` (terminal lifecycle)**: `TERMINAL_LIFECYCLE_STATES` (`merged`,
+   `archived`, `abandoned`, `cleanup-pending`) → status `healthy`, no markers. A
+   missing worktree for a terminal lifecycle is expected (cleanup), so it is
+   treated as settled rather than drifted. One exception precedes this step: a
+   `cleanup-pending` worktree that is still present but no longer proves its
+   identity (`cleanupPendingDrift`) is classified `stale-pointer` with the
+   pointer/identity marker the facts name and flagged `recovery-required` (a
+   legal, precondition-free transition). Reporting it settled left the row with
+   no exit — the governed removal refuses an unproven tree as
+   `ownership-unproven`, no repair applies to a `healthy` status, and the terminal
+   branch of provisioning refuses to re-register it (2026-09-03 audit). The other
+   terminal states never re-enter activity, so their disk state stays irrelevant.
+4. **`partially-created`**: `PARTIAL_LIFECYCLE_STATES` (`provisioning`, `failed`)
+   → status `partially-created`, with the partial-creation markers derived from
+   what is actually gone on disk (a `stale-lock` marker is appended if
+   `lockPresent && !lockLive`).
+5. **On-disk drift** (`classifyOnDiskDrift`), in order:
+   - `!worktreeDirExists` → status `missing`, marker `worktree-missing`, hint
+     `recreate-worktree`. If additionally `!taskBranchPresent`, append marker
+     `branch-deleted` and hint `reattach-branch` (`operatorActionRequired: true`).
+   - `!gitPointerPresent` → status `stale-pointer`, marker `pointer-stale`, hint
+     `operator-repair`; otherwise `!gitdirIdentityMatches` → status `stale-pointer` with the
+     identity marker the facts name — `identity-unsupported` first, then
+     `identity-schema-retired`, else `gitdir-mismatch` — and that marker's hint.
+   - `!taskBranchPresent` → status `drifted`, marker `branch-deleted`, hint
+     `reattach-branch` (`operatorActionRequired: true`).
+   - `!headMatches` → status `drifted`, marker `head-moved`, hint `accept-moved-head`
+     (`operatorActionRequired: false`).
+   - `uncommittedChanges` → status `drifted`, marker `uncommitted-changes`, hint
+     `commit-or-stash-required` (`operatorActionRequired: true`).
+6. **`recovery-required`** (lingering-lifecycle): `facts.lifecycleState === "recovery-required"`
+   and none of the above triggered → status `recovery-required` with empty
+   markers/hints (only a `stale-lock` marker is appended if
+   `lockPresent && !lockLive`). The classifier is pure and content-free, and
+   the shipped `outcome("recovery-required", withStaleLock([], facts))` returns
+   only what the CURRENT facts justify — it does NOT carry the persisted
+   `driftMarkers`/`recoveryHints` forward. If the caller needs the persisted
+   markers alongside a fresh recovery-required outcome (for a repair UI, for
+   example), it must merge them itself outside this classifier.
+7. **`drifted` (stale lock only)**: `facts.lockPresent && !facts.lockLive` on an
+   otherwise-healthy workspace → status `drifted`, marker `lock-stale`, hint
+   `release-stale-lock` (`operatorActionRequired: false`).
 8. **`healthy`**: all checks passed → status `healthy`, empty markers and hints.
 
 This precedence means a path-escape always surfaces before a missing-path report
 (the path may technically "not exist" but the containment failure is the actionable
-fact). A stale lock surfaces before gitdir drift (the lock must be released before
-a worktree re-check is meaningful).
+fact). A live foreign lock defers before any disk classification because the disk
+may be mid-write on the other actor's side. A stale lock is *drift on an otherwise
+healthy workspace* — not a lock condition — so it surfaces only after all other
+classifications have been ruled out.
 
 **`planWorkspaceRecoveryHints(driftMarkers)` — pure mapping of markers to strategies.**
 
@@ -251,18 +294,35 @@ The mapping (closed, derived from the ADR-0088 Entity 5 recovery strategy union)
 |---|---|---|
 | `worktree-missing` | `recreate-worktree` | `false` |
 | `gitdir-mismatch` | `reconcile-pointer` | `false` |
-| `head-moved` | `operator-repair` | `true` |
+| `head-moved` | `accept-moved-head` | `false` |
 | `branch-deleted` | `reattach-branch` | `true` |
 | `uncommitted-changes` | `commit-or-stash-required` | `true` |
 | `lock-stale` | `release-stale-lock` | `false` |
 | `path-escape` | `operator-repair` | `true` |
 | `pointer-stale` | `operator-repair` | `true` |
+| `identity-schema-retired` | `reconcile-pointer` | `false` |
+| `identity-unsupported` | `operator-repair` | `true` |
 
-Only `recreate-worktree`, `reconcile-pointer` (a moved-but-readable gitdir), and
-`release-stale-lock` are applied automatically; a missing/corrupt `.git` pointer
-(`pointer-stale`), a moved HEAD, a deleted branch, and uncommitted work require an
-operator, because the narrow worktree adapter cannot repair them without risking
-loss of the worktree's work.
+Only `recreate-worktree`, `reconcile-pointer` (a moved-but-readable gitdir, or a
+registration under the retired identity rule), `release-stale-lock` and
+`accept-moved-head` are executable by the repair service; a missing/corrupt `.git`
+pointer (`pointer-stale`), a deleted branch, uncommitted work, and a filesystem
+without creation times require an operator, because the narrow worktree adapter
+cannot repair them without risking loss of the worktree's work.
+`operatorActionRequired: false` means the strategy has an executable path, not that it
+runs unattended: every repair request still carries `operatorApproved`, and reissuing a
+managed identity for an existing worktree happens only on that approved path (#3376).
+
+`head-moved` was mapped to `operator-repair` until issue #3382. That strategy is
+`operator-required` by definition and the repair service executes it for no marker, so
+once the marker was persisted nothing could clear it — while
+`productionRuntimeWorkspaceAuthority` refuses any row carrying a drift marker and
+additionally requires `lastVerifiedHead` to equal the live HEAD. Any commit therefore
+made the workspace permanently unstartable. Two changes close that: a commit KEIKO
+ITSELF executes inside a managed worktree restamps `lastVerifiedHead` in the same
+operation (so the marker is never raised for Keiko's own work — see D-Head-Restamp
+below), and a move Keiko did NOT make is resolved by the operator-approved
+`accept-moved-head` repair.
 
 **`WorkspaceReconciliationEntry` and `WorkspaceReconciliationReport` — content-free result types.**
 
@@ -357,29 +417,37 @@ Per-instance reconciliation sequence (the IO the service performs, in order):
 
 1. Load instance from `WorkspaceInstanceStore.getById` (re-validates closed
    allowlist).
-2. Check `pathExists` via `node:fs` `existsSync` on `managedWorktreePath`.
+2. Check `worktreeDirExists` via `node:fs` `existsSync` on `managedWorktreePath`.
 3. Check `pathContained` by calling `@oscharko-dev/keiko-workspace`
    `assertManagedTargetContained(managedRoot, managedWorktreePath)`. **NEVER trust
    a persisted path without realpath verification.** This is a security invariant
    (ADR-0088 D5 / ADR-0089 SC2): a manipulated or migrated path must be
    re-verified before any classification, evidence write, or repair.
-4. Check `gitdirMatches` and gather `currentHead` and `branchExists` via the
-   **existing** keiko-tools worktree adapter's `listWorktrees()` +
-   `localBranchExists()` (ADR-0089 D1). No second git engine.
-5. Check `lockExpired` from `instance.lock?.expiresAt` vs `nowIso`.
-6. Check `isActivePointerTarget` from `activePointerStore.get()?.workspaceId`.
-7. Call `classifyWorkspaceReconciliation(facts)` (pure, no IO).
-8. Compute the legal `lifecycleState` transition: if the classification status is
-   not `healthy` and the current lifecycle state is `active` or `paused`, transition
-   to `recovery-required` (legal per ADR-0088 transition table — no preconditions
+4. Derive `gitPointerPresent`, `gitdirIdentityMatches`, `headMatches`,
+   `taskBranchPresent`, and `uncommittedChanges` via the **existing** keiko-tools
+   worktree adapter's `listWorktrees()` + `localBranchExists()` + status probes
+   (ADR-0089 D1). No second git engine.
+5. Derive `lockPresent`, `lockLive`, and `lockedByOtherActor` from
+   `instance.lock`, `expiresAt` vs `nowIso`, and the persisted lock owner.
+6. Call `classifyWorkspaceReconciliation(facts)` (pure, no IO).
+7. Compute the legal `lifecycleState` transition via
+   `reconciliationRequiresRecoveryFlag(status, lifecycleState)`: it returns `true`
+   only when the current lifecycle state is `active`, `paused`, or `handoff-ready`
+   AND the classification status is one of `missing`, `stale-pointer`, or
+   `unmanaged-path` — the "worktree gone or structurally unusable" set. `locked`
+   is a wait condition and never triggers a transition; `drifted` and
+   `partially-created` are surfaced via health + drift markers + hints without
+   forcing the workspace out of its lifecycle (crisp classification over
+   aggressive auto-healing). When the flag is `true`, transition to
+   `recovery-required` (legal per ADR-0088 transition table — no preconditions
    required). If the status is `healthy` and the current state was
    `recovery-required`, it stays `recovery-required` (automatic promotion to
    `active` is NOT performed — restoration is a controlled `setActive` call, not a
    background side-effect).
-9. Persist the updated `WorkspaceInstance` via `WorkspaceInstanceStore.upsert`,
+8. Persist the updated `WorkspaceInstance` via `WorkspaceInstanceStore.upsert`,
    gated by `validateWorkspaceInstance` (content-free closed-allowlist).
-10. Append a content-free `WorkspaceEvent` of type `drift-detected` or
-    `health-changed` via `appendWorkspaceLifecycleEvidence`.
+9. Append a content-free `WorkspaceEvent` of type `drift-detected` or
+   `health-changed` via `appendWorkspaceLifecycleEvidence`.
 
 After all instances are classified, call `resolveActiveRestoration` (pure) and
 execute its decision:
@@ -394,13 +462,93 @@ execute its decision:
   drift markers — the operator must choose.
 - `none`: clear the pointer (dangling or no prior pointer). Idempotent.
 
+The active pointer is a SINGLETON across every repository, but `reconcile(root)`
+reports only ONE repository's rows, so the pointer is never judged against the
+scoped entry list alone: a pointer the list does not carry is resolved against the
+GLOBAL instance store and only counted dangling when its workspace exists in no
+repository at all. Reporting it dangling from a scoped list — and, on the live path,
+clearing it — deleted a valid pointer held on another repository whenever a bind was
+attempted elsewhere (corrected 2026-09-03).
+
+**Concurrency guarantee (KEIKO-0996, #3339).** Step 8's per-instance re-read,
+fact-gathering, classification, and persisted write (`WorkspaceInstanceStore.upsert`
+inside `reconcileWithContext`, called from the live `reconcile()` path) run as ONE
+critical section serialized under the SAME `ws:<workspaceId>` key every other
+mutating workspace flow uses (ADR-0093 D1): `reconcileImpl` wraps the re-read +
+`gatherFacts` + `reconcileWithContext` sequence in
+`ctx.deps.mutex.runExclusive([workspaceKey(instance.workspaceId)], ...)`, mirroring
+`repair.ts`'s "advisory check → live reconcile → lock acquire → strategy mutation"
+and `cleanup.ts`'s "re-check persisted liveness inside the critical section". This
+was originally a documented gap — ADR-0091 was silent on reconciliation's
+concurrency semantics, and reconciliation's write did not take the shared mutex the
+way `WorkspaceCleanupServiceDeps` (also mutating) already did. Widening the lock to
+cover fact-gathering (not just the write) matters: once the lock is held, the
+callback re-reads `store.getById(workspaceId)` and classifies from THAT record, so
+a concurrent `activate`/`pause`/`repair`/`cleanup` that mutated or deleted the
+workspace while this reconcile pass awaited the lock is observed rather than
+clobbered; when the fresh read comes back `undefined` (the workspace was deleted,
+e.g. by `completeCleanupImpl`), this pass skips it instead of resurrecting a
+deleted row via a stale-instance `upsert`. An operator-triggered
+`POST /api/task-workspaces/reconciliation` racing the startup bootstrap
+reconciliation pass (`reconcileTaskWorkspacesAtStartup`), or racing an
+already-in-flight `activate`/`pause`/`repair`/`cleanup` of the same workspace, can
+no longer land its write inside another flow's critical section for that
+workspace, nor can it write a persisted row that flow has since deleted or
+retargeted. `reconcileSingleInstance` (used by #447 repair and internal callers)
+stays unlocked because its callers (e.g. `repair.ts`) already hold the same
+`ws:<workspaceId>` key for their whole operation before re-entering it — wrapping
+it there again would self-deadlock.
+
+**Worktree-list freshness (PR #3348 review finding, same lock).** The re-read above
+closed the TOCTOU for the persisted store row, but a PR #3348 review pass on this
+change caught that the SAME class of gap still existed one layer down: the git
+worktree list `gatherFacts` classifies `observedHead`/`headMatches` against was, in
+the first version of this fix, still fetched ONCE per repository BEFORE any
+instance in that repository's group attempted its `ws:<workspaceId>` lock — a
+pre-lock snapshot reused across every instance in the group regardless of how long
+each one waited for its own key. A concurrent repair/cleanup that changed the
+worktree while a later instance's reconcile was queued behind that exact key could
+therefore still classify against pre-mutation git state, persisting a false
+missing/mismatched-worktree outcome immediately after the concurrent mutation
+completed. The fix: `gatherFacts` now accepts either an eager array (every caller
+that fetches it immediately before use, with no intervening await —
+`gatherInstanceReconciliationFacts`, `reconcileSingleInstance`) or a lazy
+`() => adapter.listWorktrees()` factory, and the live batch `reconcile()` path
+passes the lazy form, invoked only once this instance's lock is held AND only when
+its worktree still exists on disk (`worktreeDirExists` is itself always freshly
+observed via `existsSync`, never stale). This keeps the documented common case — a
+backlog of paused instances whose worktree is already gone — at ZERO
+`listWorktrees` spawns, and costs exactly one FRESH spawn per instance whose
+worktree does exist, which D4 below bounds to single digits per repository at the
+realistic operating scale, not the N=200 backlog scale the `#449` scale test seeds.
+
+Deadlock re-analysis for the widened section: holding `ws:<workspaceId>` across a
+git subprocess call (`adapter.localBranchExists` inside `gatherFacts`) for every
+instance is not a new risk — `repair.ts` already holds the same key across an
+equivalent `gatherFacts` call (via `reconcileSingleInstance`) for its entire
+operation, so this section is no more exclusion-heavy than an existing one at the
+same key tier. No caller invokes the batch `reconcile()` while already holding a
+`ws:` key — only two call sites invoke it at all, `deps.ts`'s startup wiring and
+the `POST /api/task-workspaces/reconciliation` route handler, neither of which
+holds any mutex key first — so widening the hold cannot create a hold-and-wait
+cycle against `repair`/`cleanup`/`activate`/`pause`, which take at most the single
+`ws:` tier (or `ws:` plus a strictly-lower tier, per the canonical acquisition
+order in `mutex.ts`) and never call back into `reconcile()`.
+
 **D4 — Active-workspace restoration on startup is conservative.**
 
 Conservative means: classify first, restore only if clean. The reconciliation
 service does not auto-promote `recovery-required` → `active`. It does not
 automatically recreate a missing worktree. It does not automatically resolve
 ambiguous active instances. These are all operator-approval-gated repair actions
-(D5). The conservative posture reflects two principles from ADR-0088:
+(D5). An EXPLICIT operator activation of a `recovery-required` workspace is a
+different thing: the provisioning service admits it (since 2026-09-03; it used to
+answer `ILLEGAL_TRANSITION` while the switcher, reading the ADR-0088 transition
+table, offered the action) and re-proves the persisted path, the worktree's
+presence and its managed identity live before the row becomes `active`, dropping
+only the markers those proofs refuted. A row whose drift persists still refuses
+through the same proofs. The conservative posture reflects two principles from
+ADR-0088:
 
 - `recovery-required → active` requires `lock-held-by-actor` and `path-contained`
   preconditions (ADR-0088 D2 transition table). Those preconditions cannot be
@@ -413,7 +561,36 @@ open but before route registration completes, mirroring the QI-retention startup
 pass (ADR-0048). It uses `reconciliationService.reconcile()` wrapped in
 `try/catch`: any error is logged (content-free: error code + workspace IDs only,
 no stack trace with paths or source content) and swallowed. Bootstrap never throws
-from this pass.
+from this pass. Inside the pass, a failure to GATHER a row's live facts is
+isolated to the row or repository it belongs to: a repository the worktree
+adapter cannot consult at all (a vanished root, a denied path, a spawn failure)
+is logged once as the retryable `REPOSITORY_UNREACHABLE` with its frames and
+cause chain, its rows are carried forward unverified (health `unknown`, nothing
+persisted), and the pass continues with every other repository — the health
+report applies the same rule. Once per repository is literal: the first failure of
+a REPOSITORY-WIDE operation latches that repository for the remainder of the
+pass, so twenty rows of a vanished root produce one line and one `git` spawn, not
+twenty of each. Fact-gathering asks exactly two such questions — the adapter build
+and `listWorktrees` — and each classifies its own failure as
+`REPOSITORY_UNREACHABLE` at its call site; nothing else may set the latch. Latching
+on the CLASSIFICATION instead (any unclassified gathering failure, the shape before
+2026-09-03) let a ROW-LOCAL rejection suppress the repository: the durable validator
+accepts any non-empty `taskBranch` while the production adapter rejects one that is
+not a safe ref name, so a single malformed row skipped every healthy row behind it
+in the deterministic enumeration order, indefinitely. A row-local failure is logged
+and carried forward for that row alone. A CLASSIFIED failure (`IDENTITY_PROOF_FAILED`)
+is likewise a fact about one
+worktree and never latches, and a SUCCESSFUL worktree listing is never memoized —
+the freshness rule above requires each row to classify against the list observed
+after its own `ws:<workspaceId>` lock. `reconcileSingleInstance`, which every
+operator-approved repair re-enters, classifies its own adapter build and worktree
+listing under the same code, so a repair attempted while the repository root is
+unavailable is a logged, retryable refusal rather than an unclassified 500. Only
+the gathering is isolated: a failure to
+persist or evidence a verdict is not a fact about the repository, is never
+relabelled as one, and propagates under its own name. Before 2026-09-03 a
+gathering failure escaped the per-instance boundary and silently aborted the
+pass for every repository after the failing one.
 
 **D5 — Repair is a controlled, operator-approval-gated server action that reuses, never duplicates.**
 
@@ -431,7 +608,7 @@ interface WorkspaceRepairRequest {
 interface WorkspaceRepairResult {
   readonly workspaceId: string;
   readonly strategy: WorkspaceRecoveryStrategy;
-  readonly outcome: "repaired" | "operator-action-required" | "no-op";
+  readonly outcome: "repaired" | "operator-required" | "no-op";
   readonly instance: WorkspaceInstance;
 }
 
@@ -445,10 +622,11 @@ Each strategy maps to exactly one action, using only existing subsystems:
 | Strategy | Action | Reuse |
 |---|---|---|
 | `recreate-worktree` | Call `WorkspaceProvisioningService.provision()` re-materialization path (ADR-0089 D7: handles `provisioning`/`failed`/`recovery-required`, prunes the stale worktree admin entry, rebuilds the missing worktree via the adapter, rolls back partial state, emits evidence) | #445 provisioning |
-| `reconcile-pointer` | Re-run the `WorkspaceProvisioningService.provision()` resume path: it resume-completes the still-present worktree and recomputes the content-free `gitdirIdentity` from the live `.git` pointer, refreshing a moved-but-readable gitdir. Applies to `gitdir-mismatch` only (a missing/corrupt pointer is `operator-repair`). | #445 provisioning |
+| `reconcile-pointer` | Re-run the `WorkspaceProvisioningService.provision()` path with `operatorApprovedRepair: true`: it resume-completes the still-present worktree and recomputes the content-free `gitdirIdentity` from the live `.git` pointer, refreshing a moved-but-readable gitdir or reissuing a proof registered under the retired identity rule. Applies to `gitdir-mismatch` and `identity-schema-retired` (a missing/corrupt pointer is `operator-repair`); without the approval flag the provisioning path refuses to reissue an identity for an existing worktree (#3376). | #445 provisioning |
 | `reattach-branch` | Return `outcome: "operator-required"` with no mutation (recreating a deleted branch is a Git delivery operation — ADR-0080; the operator must act via the #470 surface, not via a workspace repair route) | None (no mutation) |
 | `release-stale-lock` | `WorkspaceInstanceStore.upsert` clearing `lock: null`, then re-reconcile so the classification drops the `lock-stale` marker | #445 store |
 | `commit-or-stash-required` | Return `outcome: "operator-required"` with no mutation (uncommitted-changes disposition is a Git delivery decision — ADR-0084; the operator must act via the #470 surface) | None (no mutation) |
+| `accept-moved-head` | Re-gather the live reconciliation facts for the row, require the freshly classified drift to be exactly `["head-moved"]`, a readable HEAD, and a clean tree (a live `worktreeStatus()` probe, fail-closed on an inconclusive result), then persist `lastVerifiedHead := observedHead`, drop the marker and re-derive hints + health through the same contract mapping a live proof uses. No Git and no filesystem mutation. | #447 fact-gathering + #445 store |
 | `operator-repair` | Return `outcome: "operator-required"` with no mutation | None (no mutation) |
 | `abandon-and-cleanup` | Transition instance to `abandoned` (legal only from `paused`/`handoff-ready`/`recovery-required`/`failed`/`cleanup-pending`, requires `operator-approval`; an `active`/`provisioning` source is refused as `REPAIR_NOT_APPLICABLE`); actual worktree cleanup deferred to #448 (governed cleanup controls) | #445 store transition |
 
@@ -456,7 +634,7 @@ Each strategy maps to exactly one action, using only existing subsystems:
 `requiresOperatorApproval: true` in the ADR-0088 D4 operation authority table.
 Every repair invocation acquires the workspace lock first (using the existing
 `WorkspaceInstanceStore` lock acquire path) and releases it on completion or
-error. Every repair — including `operator-action-required` outcomes — appends a
+error. Every repair — including `operator-required` outcomes — appends a
 content-free `WorkspaceEvent` of type `repaired` or `recovery-flagged` via
 `appendWorkspaceLifecycleEvidence`. No repair strategy introduces a new git
 engine, a new containment engine, or a new terminal spawn boundary.
@@ -494,6 +672,29 @@ All responses pass through `deps.redactor` (content-free invariant at the BFF
 boundary). `WorkspaceReconciliationReport.repoRoot` is passed through `deps.redactor`
 before returning to the browser.
 
+**D-Head-Restamp — a commit Keiko itself executes records the head it wrote (issue #3382).**
+
+`lastVerifiedHead` had exactly one production writer (`reconcileWithContext`, on a `healthy`
+outcome), while the classifier answers `drifted` + `head-moved` for any observed head that differs
+from it. Every governed commit inside a managed task worktree therefore moved HEAD away from the
+recorded baseline, the next pass persisted `head-moved`, and the coding runtime's launch authority
+refused the workspace from then on. That is drift only in the sense that the recorded baseline is
+stale: Keiko performed the commit under its own governance and knows the head it wrote.
+
+`WorkspaceProvisioningService.recordVerifiedHead({ managedWorktreePath, correlationId })` records it.
+`gitDelivery/execution.ts` calls it after `executeGovernedMutation` completes, and only when all
+three hold: the command was a `commit`, the kernel reported it `succeeded`, and the managed prover
+(`resolveManagedWorkspaceRootAccess`) still admits the root as a managed task worktree. The head is
+observed through the SAME repository consultation and porcelain entry match the classifier uses, so
+the persisted value is exactly what the next pass compares against. The write is one field on one
+row — nothing is re-proven that does not need to be, no Git or filesystem state changes, and no
+trust is granted. It is best-effort (a governed commit that already happened must not fail because
+the restamp could not be recorded) but never silent: every refusal and failure emits the existing
+`task-workspace.lifecycle` classified line under the commit's correlation id.
+
+A head Keiko did NOT write is untouched and still classifies as `head-moved`; the operator-approved
+`accept-moved-head` repair above is the exit for that case.
+
 ### Reuse map
 
 | Item reused | Source | Reuse point |
@@ -502,7 +703,7 @@ before returning to the browser.
 | `WorkspaceEvent` types (`drift-detected`, `health-changed`, `recovery-flagged`, `repaired`) | ADR-0088 D3 (17-member closed union) | Reconciliation and repair evidence |
 | `validateWorkspaceInstance` closed-allowlist gate | ADR-0088 D3 | Every store write after reconciliation re-validates |
 | `TaskWorkspaceDriftMarker` 8-member union | ADR-0088 Entity 3 | `WorkspaceReconciliationFacts.driftMarkers` + `planWorkspaceRecoveryHints` mapping |
-| `WorkspaceRecoveryStrategy` 7-member union | ADR-0088 Entity 5 | `WorkspaceRepairRequest.strategy` + per-strategy repair dispatch |
+| `WorkspaceRecoveryStrategy` 8-member union | ADR-0088 Entity 5 | `WorkspaceRepairRequest.strategy` + per-strategy repair dispatch |
 | `WorkspaceRecoveryHint` type | ADR-0088 Entity 5 | `classifyWorkspaceReconciliation` return type |
 | `legal transition active|paused → recovery-required` (no preconditions) | ADR-0088 D2 transition table | Classification step 8 (D3 above) — no new transition semantics |
 | `repair` operation (`requiresLock: true`, `requiresOperatorApproval: true`) | ADR-0088 D4 operation authority table | Repair service enforces the same gate |
@@ -510,7 +711,7 @@ before returning to the browser.
 | `WorkspaceInstanceStore.upsert` + re-validate-on-read | ADR-0089 D4 | Reconciliation outcome persist |
 | `WorkspaceProvisioningService.provision()` re-materialization path | ADR-0089 D7 | `recreate-worktree` repair strategy |
 | `assertManagedTargetContained` (keiko-workspace) | ADR-0089 D2 | `pathContained` fact gathering (realpath — never trust persisted path) |
-| `listWorktrees` / `localBranchExists` (keiko-tools narrow adapter, `GIT_WORKTREE_COMMAND_RULES`) | ADR-0089 D1 | `gitdirMatches`, `currentHead`, `branchExists` fact gathering |
+| `listWorktrees` / `localBranchExists` (keiko-tools narrow adapter, `GIT_WORKTREE_COMMAND_RULES`) | ADR-0089 D1 | `gitPointerPresent`, `gitdirIdentityMatches`, `headMatches`, `taskBranchPresent`, `uncommittedChanges` fact gathering |
 | `ActiveWorkspacePointerStore.get` / `.set` / `.clear` | ADR-0090 D1 | Restoration decisions and repair `reconcile-pointer` |
 | `buildBinding(instance)` (exported from #446) | ADR-0090 D2 | `WorkspaceReconciliationReport.entries` derive binding if needed by callers |
 | Validator result shape `{ ok: true } \| { ok: false; reasons: string[] }` | `git-repository.ts` | `validateWorkspaceReconciliationEntry`, `validateWorkspaceReconciliationReport` |
@@ -533,7 +734,7 @@ before returning to the browser.
   same `WorkspaceReconciliationStatus` and `planWorkspaceRecoveryHints` vocabulary
   without discovering or inventing their own (AC5).
 - Every repair strategy either reuses an existing path (#445 provisioning, #445
-  store, #446 pointer store) or explicitly returns `operator-action-required` —
+  store, #446 pointer store) or explicitly returns `operator-required` —
   the set of things a repair can change is closed and auditable.
 - No new table, no new store, no new git engine. The system footprint is smaller
   than the feature it delivers.
@@ -564,11 +765,11 @@ before returning to the browser.
 ### Neutral
 
 - `reattach-branch`, `commit-or-stash-required`, and `operator-repair` strategies
-  return `outcome: "operator-action-required"` with no mutation. This means repair
+  return `outcome: "operator-required"` with no mutation. This means repair
   is not a universal cure — three of the seven strategies explicitly require
   operator action via a different surface. The repair route returning a result
   rather than throwing is the correct boundary: the caller (UI or CLI) decides how
-  to surface the `operator-action-required` outcome.
+  to surface the `operator-required` outcome.
 - The `abandon-and-cleanup` strategy transitions to `abandoned` but defers physical
   worktree cleanup to #448. This leaves the `managedWorktreePath` on disk until
   the cleanup controls (#448) remove it. The instance is clearly in `abandoned`

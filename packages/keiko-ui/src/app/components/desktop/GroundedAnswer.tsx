@@ -9,7 +9,7 @@
 
 import { useState } from "react";
 import type { ReactNode } from "react";
-import { compareStrings } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { formatBytes, formatMs } from "@/lib/format";
 import {
   RepositoryReferenceInline,

@@ -1,10 +1,11 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import {
   SafeMarkdown,
   type AssistantCodeBlockApply,
   type AssistantCodeBlockApplyOutcome,
 } from "./SafeMarkdown";
+import { setClientDiagnosticWriter, resetClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import type { CitationPreviewController } from "./hooks/usePdfCitationPreview";
 import type { LocalKnowledgeEvidenceCitation } from "@/lib/types";
 
@@ -840,5 +841,66 @@ describe("SafeMarkdownBoundary — SM-1 plain-text fallback", () => {
     render(<SafeMarkdownBoundary source="# Boundary Heading" />);
     expect(screen.getByRole("heading", { level: 3 }).textContent).toBe("Boundary Heading");
     expect(document.querySelector('[data-markdown-fallback="true"]')).toBeNull();
+  });
+});
+
+describe("SafeMarkdown — ordered list continuation", () => {
+  afterEach(() => resetClientDiagnosticWriter());
+
+  it("reports a settled continuation once without response content", () => {
+    const writer = vi.fn();
+    resetClientDiagnosticWriter();
+    setClientDiagnosticWriter(writer);
+    const source = "2. Private response";
+    const { rerender } = render(<SafeMarkdown source={source} streaming />);
+    expect(writer).not.toHaveBeenCalled();
+    rerender(<SafeMarkdown source={source} />);
+    expect(writer).toHaveBeenCalledExactlyOnceWith("markdown:ordered-list-source-start", {
+      kind: "markdown-layout",
+      correlationId: undefined,
+      markdownLayout: { listStart: 2, listIndex: 0, depth: 0 },
+    });
+    rerender(<SafeMarkdown source={source} />);
+    expect(writer).toHaveBeenCalledOnce();
+  });
+  it("records nested continuation coordinates under the rendered message identity", () => {
+    const writer = vi.fn();
+    resetClientDiagnosticWriter();
+    setClientDiagnosticWriter(writer);
+    render(
+      <SafeMarkdown
+        source={"1. Parent\n  7. Private child"}
+        diagnosticCorrelationId="message-1234"
+      />,
+    );
+    expect(writer).toHaveBeenCalledWith("markdown:ordered-list-source-start", {
+      kind: "markdown-layout",
+      correlationId: "message-1234",
+      markdownLayout: { listStart: 7, listIndex: 1, depth: 2 },
+    });
+  });
+  it("preserves list numbering across explanatory paragraphs", () => {
+    render(
+      <SafeMarkdown
+        source={
+          "1. **First**\n\nFirst explanation.\n\n2. **Second**\n\nSecond explanation.\n\n3. **Third**"
+        }
+      />,
+    );
+    expect(screen.getAllByRole("list").map((list) => list.getAttribute("start"))).toEqual([
+      "1",
+      "2",
+      "3",
+    ]);
+  });
+
+  it("uses only the starting marker and retains nested list starts", () => {
+    render(
+      <SafeMarkdown source={"3. Third\n9. Fourth\n  7. Nested seventh\n  9. Nested eighth"} />,
+    );
+    expect(screen.getAllByRole("list").map((list) => list.getAttribute("start"))).toEqual([
+      "3",
+      "7",
+    ]);
   });
 });

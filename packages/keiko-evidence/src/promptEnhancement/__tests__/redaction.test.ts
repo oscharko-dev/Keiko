@@ -53,4 +53,47 @@ describe("redactPromptEnhancementEvidence", () => {
     expect(redacted.count).toBe(2);
     expect(summary.patternsMatched["opaque-secret"]).toBe(2);
   });
+
+  // KEIKO-0188: the deep-redactor rebuilds objects field-by-field, so a JSON.parse'd input
+  // carrying a `__proto__` key silently reassigned the reconstructed object's prototype when the
+  // rebuild seed was a plain `{}`. Seeding with Object.create(null) keeps the key as data.
+  it("does not let a __proto__ key in the input pollute the rebuilt prototype", () => {
+    const rawJson = `{"a":"ok","__proto__":{"polluted":"ghp_${"x".repeat(30)}"}}`;
+    const input = JSON.parse(rawJson) as { readonly a: string };
+    const { redacted } = redactPromptEnhancementEvidence(input);
+    expect((redacted as { polluted?: unknown }).polluted).toBeUndefined();
+    expect(({} as { polluted?: unknown }).polluted).toBeUndefined();
+    expect(redacted.a).toBe("ok");
+  });
+
+  // KEIKO-0778: deepRedact had no cycle guard, so a self-referential payload crashed the process
+  // with an uncaught "RangeError: Maximum call stack size exceeded" instead of failing closed.
+  it("throws a controlled error instead of overflowing the stack on a circular reference", () => {
+    const o: Record<string, unknown> = { a: "ok" };
+    o.self = o;
+    expect(() => redactPromptEnhancementEvidence(o)).toThrow(/circular/i);
+  });
+
+  it("throws a controlled error instead of overflowing the stack on a circular array reference", () => {
+    const a: unknown[] = ["ok"];
+    a.push(a);
+    expect(() => redactPromptEnhancementEvidence({ list: a })).toThrow(/circular/i);
+  });
+
+  it("does not mistake two independent references to the same object for a cycle", () => {
+    // A DIAMOND shape (the same object reachable via two sibling branches) is not a cycle: the
+    // guard tracks only the current ancestor path and must backtrack after each branch returns.
+    const shared = { v: `x ${SECRET}` };
+    const { redacted } = redactPromptEnhancementEvidence({ left: shared, right: shared });
+    expect(redacted.left).toEqual(redacted.right);
+    expect(JSON.stringify(redacted)).not.toContain(SECRET);
+  });
+
+  it("throws a controlled error instead of overflowing the stack on excessive nesting depth", () => {
+    let payload: Record<string, unknown> = { leaf: "ok" };
+    for (let i = 0; i < 64; i += 1) {
+      payload = { nested: payload };
+    }
+    expect(() => redactPromptEnhancementEvidence(payload)).toThrow(/depth/i);
+  });
 });

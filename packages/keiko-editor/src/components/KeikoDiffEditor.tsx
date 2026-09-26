@@ -23,6 +23,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactElement,
+  type RefObject,
 } from "react";
 
 import type { EditorThemeVariant } from "../monaco/theme.js";
@@ -33,6 +34,7 @@ import {
   type DiffMountController,
   type MountDiffMonaco,
 } from "./diff-mount.js";
+import { reapplyEditorTheme, type MountMonaco } from "./on-mount.js";
 import {
   deriveDiffSummary,
   deriveDiffTruncationNote,
@@ -428,12 +430,42 @@ interface DiffController {
   readonly goToNext: () => void;
 }
 
+/**
+ * Re-theme the live diff editor when `themeVariant` changes after mount, instead of remounting the
+ * `<DiffEditor>` (mirrors the code editor's Issue 2.2 fix — use-editor-handlers.ts's
+ * `useThemeReapply`). The mount run is skipped: `wireDiffEditorOnMount` already registered the theme
+ * once, so only a LATER change re-defines the variant from the now-current DOM tokens and re-applies
+ * it through the same editor instance, leaving the diff view's scroll position and revealed hunk
+ * untouched.
+ */
+function useDiffThemeReapply(
+  themeVariant: EditorThemeVariant,
+  onThemeError: ((message: string) => void) | undefined,
+  monacoRef: RefObject<MountMonaco | null>,
+  containerRef: RefObject<HTMLElement | null>,
+): void {
+  const mounted = useRef(false);
+  useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true;
+      return;
+    }
+    const monaco = monacoRef.current;
+    const container = containerRef.current;
+    if (monaco === null || container === null) return;
+    reapplyEditorTheme({ monaco, container, themeVariant, onThemeError });
+  }, [themeVariant, onThemeError, monacoRef, containerRef]);
+}
+
 /** Hold the imperative diff-editor handle and expose the mount + hunk-navigation callbacks. */
 function useDiffController(
   themeVariant: EditorThemeVariant,
   onThemeError: ((message: string) => void) | undefined,
+  diffViewRendered: boolean,
 ): DiffController {
   const controllerRef = useRef<DiffMountController | null>(null);
+  const monacoRef = useRef<MountMonaco | null>(null);
+  const containerRef = useRef<HTMLElement | null>(null);
   const onMount = useCallback<DiffOnMount>(
     (editor, monaco): void => {
       controllerRef.current?.dispose();
@@ -446,6 +478,12 @@ function useDiffController(
         themeVariant,
         onThemeError,
       });
+      // Retain the live monaco/container handles so a later themeVariant change (useDiffThemeReapply)
+      // can re-register the theme through the SAME editor instance instead of remounting (cf.
+      // use-editor-handlers.ts's initializeRuntimeMountRefs, which casts the same live namespace the
+      // same way for the code editor).
+      monacoRef.current = monaco as MountMonaco;
+      containerRef.current = editor.getContainerDomNode();
     },
     [themeVariant, onThemeError],
   );
@@ -456,6 +494,17 @@ function useDiffController(
     },
     [],
   );
+  // The inner <DiffEditor> unmounts (binary/unsupported file, load error, or no selection) while
+  // KeikoDiffEditor itself stays mounted. Without this, monacoRef/containerRef keep pointing at the
+  // now-disposed editor and detached container, so a later themeVariant change would reapply against
+  // stale handles and report a spurious theme error. Nulling both here makes useDiffThemeReapply's
+  // existing guard a no-op until onMount refreshes them for a newly live editor.
+  useEffect(() => {
+    if (diffViewRendered) return;
+    monacoRef.current = null;
+    containerRef.current = null;
+  }, [diffViewRendered]);
+  useDiffThemeReapply(themeVariant, onThemeError, monacoRef, containerRef);
   const goToPrev = useCallback((): void => controllerRef.current?.goToPreviousDiff(), []);
   const goToNext = useCallback((): void => controllerRef.current?.goToNextDiff(), []);
   return { onMount, goToPrev, goToNext };
@@ -501,7 +550,9 @@ export function KeikoDiffEditor(props: KeikoDiffEditorProps): ReactElement {
   const variant = themeVariant ?? "dark";
   const [selectedUri, setSelectedUri] = useState<string | null>(null);
   const { file: selected } = resolveSelectedFile(model, selectedUri);
-  const controller = useDiffController(variant, props.onRuntimeError);
+  // Mirrors DiffPane's render conditional below: the only branch that actually mounts <DiffEditor>.
+  const diffViewRendered = loadState.status === "ready" && selected?.diffable === true;
+  const controller = useDiffController(variant, props.onRuntimeError, diffViewRendered);
 
   const { onSelectFile } = props;
   const handleSelect = useCallback(

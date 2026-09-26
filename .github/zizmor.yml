@@ -33,12 +33,12 @@ rules:
       # before removal: `zizmor` reports zero cache-poisoning findings for the pre-#2704 ci.yml with
       # no ignore list at all.
       # USearch runtime: coverage-packages, coverage-ui, coverage-scripts
-      - ci.yml:395
-      - ci.yml:485
-      - ci.yml:551
+      - ci.yml:607
+      - ci.yml:706
+      - ci.yml:777
       # coverage-sonar: npm download cache (the one job that saves it), Sonar Scanner CLI archive
-      - ci.yml:630
-      - ci.yml:716
+      - ci.yml:877
+      - ci.yml:975
   dangerous-triggers:
     ignore:
       # ADR-0161: the infrastructure-signature observer must see runs that have already completed, and
@@ -54,48 +54,18 @@ rules:
       # Verified with the pinned scanner version: zizmor 1.26.1 reports this one finding for this
       # file and nothing else.
       - infra-failure-retry.yml:25
-      # ADR-0170: the Keiko for Quality reviewer must see the pull-request head while executing only
-      # protected-base code, and `pull_request_target` is the only trigger GitHub offers for that.
-      # zizmor's warning is about the classic misuse - a workflow that checks out the candidate head
-      # and runs it with the elevated token. This workflow does the opposite, by construction:
-      # it checks out `github.event.pull_request.base.sha` explicitly and fetches the head only as
-      # Git objects (`git fetch pull/N/head`), so no candidate file is ever written to the working
-      # tree, no candidate script/hook/action/package manager runs, and `--no-recurse-submodules`
-      # keeps submodules uninitialised. Its only write grant is `pull-requests: write`;
-      # `actions: write` exists nowhere in the workflow — the review store persists as a run
-      # artifact (upload needs no scope; the cross-run lookup needs only `actions: read`, which
-      # cannot dispatch). The poisoning BOUNDARY is the context-bound HMAC over the store, keyed
-      # by a keiko-for-quality environment secret that the environment's protected-branches-only
-      # policy withholds from candidate-base runs — the event/path/PR lookup predicates only
-      # SELECT candidates (ADR-0170 D3). Also recorded there: the npm-publish required-reviewer
-      # boundary in front of the one privileged dispatch target. It holds no contents-write,
-      # checks-write, commit, push, or merge authority, and it
-      # publishes no required status context. Approval is deliberately absent from that list:
-      # `pull-requests: write` can submit an APPROVE review, so a compromised action could, and only
-      # the pinned action's behaviour declines to (ADR-0170 D3).
-      # The reviewer itself is an external action pinned to
-      # a full commit SHA, so the executed implementation is immutable and outside candidate reach -
-      # deliberately NOT a digest pin over this repository's own tree, which ADR-0169 D4 prohibits.
-      # The model credential is environment-scoped and passed by variable name, never as an input.
-      # Verified with the version the required job actually pins — zizmor 1.26.1, per
-      # workflow-hygiene.yml — which reports this one finding for this file and nothing else.
-      # This anchor is a LINE NUMBER: adding a comment above the trigger silently invalidates it and
-      # turns the required context red. That happened once already, on this very entry.
-      - keiko-for-quality.yml:14
-  misfeature:
-    ignore:
-      # Windows MSVC toolchain setup must call vswhere.exe and vcvars64.bat, which are
-      # native CMD batch tooling; the step deliberately persists only the single-line
-      # variables the rc/cl compiler needs to GITHUB_ENV (see the inline comment at the
-      # step itself - dumping the full `set` output pollutes GITHUB_ENV with multi-line
-      # values). Rewriting to pwsh/bash risks breaking the Windows production-signing
-      # build and cannot be verified on this platform.
-      - portable-assets.yml:119
-      - portable-assets.yml:192
+      # ADR-0177 D9: release-advance.yml must see that the release request, the stable tag build, or a
+      # release-required check workflow completed, and `workflow_run` is the only trigger GitHub offers
+      # for that. It is not the classic misuse: it checks out `github.sha`, the default-branch commit
+      # its own definition came from (never the triggering run's head), runs only committed repository
+      # code, reads no value of the triggering run, skips every pull-request run in its job condition,
+      # and holds no secret. Its only write grant is `actions: write`, which dispatches release.yml on a
+      # tag; that run's authorize job refuses every commit no allowlisted release owner requested.
+      - release-advance.yml:18
   adhoc-packages:
     ignore:
       # Publishing deliberately uses the separately reviewed npm version required by ADR-0130;
       # bootstrapping npm is inherently outside the lockfile since it changes the binary that
       # later reads that lockfile. The version is pinned exactly (not @latest), which is the
       # practical mitigation for this specific operation (see the inline comment there).
-      - release.yml:136
+      - release.yml:202

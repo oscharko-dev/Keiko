@@ -15,6 +15,7 @@ import {
   type CommandTaskCatalog,
   type CommandTaskRunResult,
 } from "./command-runner.js";
+import { validateRunResultCore } from "./run-result-validation.js";
 
 function baseRequest(): Record<string, unknown> {
   return { projectId: "/work/project", taskId: "npm-script:test" };
@@ -155,6 +156,16 @@ describe("parseCommandTaskRunRequest rejections", () => {
     }
   });
 
+  // KEIKO-0302: every peer validator in this territory enforces a closed key set precisely so an
+  // unexpected field on a documented content-free contract cannot ride through into evidence. These
+  // did not, and the accepted object is passed on as `value`.
+  it("rejects an unknown top-level key on a run request", () => {
+    const parsed = parseCommandTaskRunRequest({ ...baseRequest(), promptText: "leak me" });
+    expect(parsed.ok).toBe(false);
+    if (parsed.ok) return;
+    expect(parsed.errors.some((error) => error.includes("promptText"))).toBe(true);
+  });
+
   it("rejects a requestId with illegal characters or excessive length", () => {
     for (const bad of ["has space", "semi;colon", "x".repeat(129)]) {
       const parsed = parseCommandTaskRunRequest({ ...baseRequest(), requestId: bad });
@@ -164,12 +175,77 @@ describe("parseCommandTaskRunRequest rejections", () => {
       }
     }
   });
+
+  // KEIKO-0456. This boundary's own comment promises that "an oversized or non-token value cannot
+  // reach the manager, the audit ledger, or the SSE fan-out", but only requestId was both bounded
+  // and patterned: projectId had no bound at all and taskId no pattern. A newline or control
+  // character in an identifier that is later interpolated into a log line or an SSE `data:` field is
+  // a log-injection / frame-splitting primitive, which is exactly what this boundary exists to stop.
+  it("bounds projectId, which is a filesystem path and so cannot take a token pattern", () => {
+    expect(parseCommandTaskRunRequest({ ...baseRequest(), projectId: "x".repeat(4_097) }).ok).toBe(
+      false,
+    );
+    expect(parseCommandTaskRunRequest({ ...baseRequest(), projectId: "/work/a b/proj" }).ok).toBe(
+      true,
+    );
+  });
+
+  it.each([
+    ["newline", "/work/proj\ninjected"],
+    ["carriage return", "/work/proj\rinjected"],
+    ["NUL", "/work/proj\u0000"],
+    ["escape", "/work/proj\u001b[31m"],
+  ])("rejects a projectId containing a %s control character", (_label, projectId) => {
+    expect(parseCommandTaskRunRequest({ ...baseRequest(), projectId }).ok).toBe(false);
+  });
+
+  it.each([
+    ["space", "npm-script:my test"],
+    ["newline", "npm-script:test\ndata: injected"],
+    ["traversal", "../../etc/passwd"],
+    ["quote", 'npm-script:"test"'],
+    ["leading punctuation", "-npm-script:test"],
+  ])("rejects a taskId that is not the discovered-script token shape (%s)", (_label, taskId) => {
+    expect(parseCommandTaskRunRequest({ ...baseRequest(), taskId }).ok).toBe(false);
+  });
+
+  it("keeps accepting the real discovered-script token shape", () => {
+    for (const taskId of ["npm-script:test", "a", "A1._:-", "npm-script:build.prod"]) {
+      expect(parseCommandTaskRunRequest({ ...baseRequest(), taskId }).ok).toBe(true);
+    }
+  });
+
+  it.each([
+    ["fractional", 1.5],
+    ["beyond the safe integer range", 1e300],
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+  ])("rejects a timeoutMs that is %s", (_label, timeoutMs) => {
+    expect(parseCommandTaskRunRequest({ ...baseRequest(), timeoutMs }).ok).toBe(false);
+  });
 });
 
 describe("validateCommandTaskCatalog", () => {
   it("accepts a well-formed catalog", () => {
     const parsed = validateCommandTaskCatalog(baseCatalog());
     expect(parsed.ok).toBe(true);
+  });
+
+  // KEIKO-0302: every peer validator in this territory enforces a closed key set precisely so an
+  // unexpected field on a documented content-free contract cannot ride through into evidence — the
+  // accepted object is handed on as `value`.
+  it("rejects an unknown key on the catalog and on a task", () => {
+    expect(validateCommandTaskCatalog({ ...baseCatalog(), promptText: "leak me" }).ok).toBe(false);
+    const catalog = baseCatalog();
+    const firstTask = catalog.tasks[0];
+    expect(firstTask).toBeDefined();
+    if (firstTask === undefined) return;
+    expect(
+      validateCommandTaskCatalog({
+        ...catalog,
+        tasks: [{ ...firstTask, promptText: "leak me" }],
+      }).ok,
+    ).toBe(false);
   });
 
   it("rejects a non-object", () => {
@@ -256,6 +332,10 @@ describe("validateCommandTaskRunResult", () => {
     expect(validateCommandTaskRunResult(baseResult()).ok).toBe(true);
   });
 
+  it("rejects an unknown key on a run result (KEIKO-0302)", () => {
+    expect(validateCommandTaskRunResult({ ...baseResult(), promptText: "leak me" }).ok).toBe(false);
+  });
+
   it("accepts a null exit code (timed-out / cancelled run)", () => {
     const parsed = validateCommandTaskRunResult({
       ...baseResult(),
@@ -305,5 +385,97 @@ describe("validateCommandTaskRunResult", () => {
         ]),
       );
     }
+  });
+});
+
+// KEIKO-0601: command-runner.ts's and container-runtime.ts's run-result validators now both call
+// this single shared, parameterized core (run-result-validation.ts) instead of each independently
+// re-declaring the field-by-field checks. This test exercises the shared core directly, with a
+// synthetic vocabulary that is neither executor's real one, proving the module (a) exists and
+// (b) is genuinely parameterized rather than hard-coded to one executor's kinds/failure reasons.
+describe("validateRunResultCore (shared with container-runtime.ts, KEIKO-0601)", () => {
+  it("collects the full common field set in fixed order for an arbitrary vocabulary", () => {
+    const errors: string[] = [];
+    validateRunResultCore(
+      {
+        schemaVersion: "wrong",
+        runId: "",
+        taskId: "",
+        kind: "not-a-real-kind",
+        failureReason: "not-a-real-reason",
+        exitCode: 1.5,
+        durationMs: -2,
+        truncated: "no",
+        timedOut: 1,
+        stdout: 0,
+        stderr: null,
+      },
+      { schemaVersion: "synthetic-v1", kinds: ["alpha", "beta"], failureReasons: ["ok", "boom"] },
+      errors,
+    );
+    expect(errors).toEqual([
+      "schemaVersion is invalid",
+      "runId must be a non-empty string",
+      "taskId must be a non-empty string",
+      "kind is invalid",
+      "failureReason is invalid",
+      "exitCode must be an integer or null",
+      "durationMs must be a non-negative finite number",
+      "truncated must be a boolean",
+      "timedOut must be a boolean",
+      "stdout must be a string",
+      "stderr must be a string",
+    ]);
+  });
+
+  it("accepts a well-formed value against its own vocabulary and pushes no errors", () => {
+    const errors: string[] = [];
+    validateRunResultCore(
+      {
+        schemaVersion: "synthetic-v1",
+        runId: "run-1",
+        taskId: "task-1",
+        kind: "alpha",
+        failureReason: "ok",
+        exitCode: 0,
+        durationMs: 1,
+        truncated: false,
+        timedOut: false,
+        stdout: "",
+        stderr: "",
+      },
+      { schemaVersion: "synthetic-v1", kinds: ["alpha", "beta"], failureReasons: ["ok", "boom"] },
+      errors,
+    );
+    expect(errors).toEqual([]);
+  });
+
+  it("splices an executor's own afterKind field validator between kind and failureReason", () => {
+    // This is the exact mechanism container-runtime.ts uses to validate `engine` at the position
+    // container-runtime.test.ts's fixed-order test pins: immediately after `kind`, before
+    // `failureReason`. A regression here (e.g. running afterKind before kind, or after
+    // failureReason) would silently reorder container-runtime's error output.
+    const errors: string[] = [];
+    validateRunResultCore(
+      {
+        schemaVersion: "synthetic-v1",
+        runId: "run-1",
+        taskId: "task-1",
+        kind: "alpha",
+        failureReason: "not-a-real-reason",
+        exitCode: 0,
+        durationMs: 1,
+        truncated: false,
+        timedOut: false,
+        stdout: "",
+        stderr: "",
+      },
+      { schemaVersion: "synthetic-v1", kinds: ["alpha", "beta"], failureReasons: ["ok", "boom"] },
+      errors,
+      (_value, pushErrors) => {
+        pushErrors.push("engine is invalid");
+      },
+    );
+    expect(errors).toEqual(["engine is invalid", "failureReason is invalid"]);
   });
 });

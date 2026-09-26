@@ -244,3 +244,7 @@ against every workspace manifest) keep this enforced.
   [`docs/voice/architecture.md`](../voice/architecture.md).
 - [ADR-0038](ADR-0038-outbound-egress.md) (`gatewayFetch` egress), [ADR-0046](ADR-0046-local-credential-vault.md)
   (sealed credentials).
+
+## Date
+
+2026-06-24

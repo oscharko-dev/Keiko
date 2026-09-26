@@ -12,7 +12,7 @@
 // contracts so a contract change surfaces here at compile time.
 
 import type { MemoryRecord } from "./memory-records.js";
-import type { MemoryScope, UserId } from "./memory.js";
+import type { MemoryScope, UserId } from "./memory-contracts.js";
 
 /**
  * Fixed epoch-ms "now" used by the fixture defaults. Exported so tests that assert on the

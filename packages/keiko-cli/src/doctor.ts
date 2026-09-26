@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 // From the contracts leaf, not the keiko-sdk fat barrel (GEN-PERF-CLI-001).
-import { KEIKO_PRODUCT_VERSION as SDK_VERSION } from "@oscharko-dev/keiko-contracts";
+import { KEIKO_PRODUCT_VERSION as SDK_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import type { CliIo } from "./runner.js";
 import {
   hasBuiltKeikoLayout,

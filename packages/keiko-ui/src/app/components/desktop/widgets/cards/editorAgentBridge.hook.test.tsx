@@ -152,7 +152,7 @@ afterEach(() => {
 // ─── GEN-PERF-EDITOR-002 — snapshot POST debounce ──────────────────────────────
 
 describe("useEditorAgentBridge — snapshot debounce (GEN-PERF-EDITOR-002)", () => {
-  it("collapses a burst of registerSnapshot identity changes into a bounded number of calls", () => {
+  it("collapses a burst of registerSnapshot identity changes into a bounded number of calls", async () => {
     vi.useFakeTimers();
     const registerSnapshot = registeredSnapshot(capability("A"));
     const { rerender } = renderHook(
@@ -172,15 +172,14 @@ describe("useEditorAgentBridge — snapshot debounce (GEN-PERF-EDITOR-002)", () 
       rerender({ rs: vi.fn(registerSnapshot) as typeof registerSnapshot });
     }
     // Nothing has fired yet; the burst is still within the debounce window.
-    return act(async () => {
+    await act(async () => {
       vi.advanceTimersByTime(EDITOR_SNAPSHOT_DEBOUNCE_MS);
       await Promise.resolve();
       await Promise.resolve();
-    }).then(() => {
-      // One bootstrap plus at most one trailing refresh — far fewer than 30.
-      expect(registerSnapshot.mock.calls.length).toBeLessThanOrEqual(2);
-      expect(registerSnapshot.mock.calls.length).toBeGreaterThanOrEqual(1);
     });
+    // One bootstrap plus at most one trailing refresh — far fewer than 30.
+    expect(registerSnapshot.mock.calls.length).toBeLessThanOrEqual(2);
+    expect(registerSnapshot.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 
   it("keeps the issued capability in bridge memory and attaches it to refreshes and results", async () => {

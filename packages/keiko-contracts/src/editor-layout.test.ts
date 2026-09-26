@@ -319,6 +319,37 @@ describe("EditorLayoutStateV2 contracts", () => {
     expect(collapsed.tree).toEqual({ type: "pane", paneId: "pane-1" });
   });
 
+  // KEIKO-0781: same-pane move-tab and centre drop-tab must not insert a phantom tab. The
+  // cross-pane branch already refuses to move a file the source pane does not list; the same-pane
+  // branch used to skip that guard, so referencing an un-opened file inserted a phantom entry
+  // into the pane's tabOrder.
+  it("returns the layout unchanged for a same-pane move-tab of an un-opened file (KEIKO-0781)", () => {
+    const base = layout();
+    const paneId = "pane-1";
+    const originalTabOrder = base.panes[paneId]?.tabOrder ?? [];
+    const noop = editorLayoutReducer(base, {
+      type: "move-tab",
+      fromPaneId: paneId,
+      toPaneId: paneId,
+      file: "never-opened.ts",
+    });
+    expect(noop).toBe(base);
+    expect(noop.panes[paneId]?.tabOrder).toEqual(originalTabOrder);
+    expect(noop.panes[paneId]?.openFiles).not.toContain("never-opened.ts");
+
+    const droppedCentre = editorLayoutReducer(base, {
+      type: "drop-tab",
+      intent: {
+        fromPaneId: paneId,
+        toPaneId: paneId,
+        file: "never-opened.ts",
+        zone: "center",
+      },
+    });
+    expect(droppedCentre.panes[paneId]?.openFiles).not.toContain("never-opened.ts");
+    expect(droppedCentre.panes[paneId]?.tabOrder).toEqual(originalTabOrder);
+  });
+
   it("keeps empty and missing structural actions safe", () => {
     const empty = layout({ file: "", openFiles: [] });
     expect(activeEditorPane(empty)).toEqual({
@@ -357,6 +388,16 @@ describe("EditorLayoutStateV2 contracts", () => {
         collapsed: true,
       }),
     ).toEqual(expect.objectContaining({ sidebarWidth: 320, sidebarCollapsed: true }));
+
+    // KEIKO-0769: an action carrying NaN or a negative width must yield a finite in-range
+    // sidebarWidth on the returned layout — the read-side clamp already handled persisted
+    // hostile state; the write path used to accept it verbatim.
+    const nanApplied = editorLayoutReducer(base, { type: "set-sidebar", width: Number.NaN });
+    expect(Number.isFinite(nanApplied.sidebarWidth)).toBe(true);
+    expect(nanApplied.sidebarWidth).toBeGreaterThanOrEqual(0);
+    const negativeApplied = editorLayoutReducer(base, { type: "set-sidebar", width: -1 });
+    expect(negativeApplied.sidebarWidth).toBeGreaterThanOrEqual(0);
+    expect(negativeApplied.sidebarWidth).toBeLessThan(5000);
     expect(editorLayoutReducer(base, { type: "replace-root", root: "/next" })).toEqual(
       expect.objectContaining({
         root: "/next",
@@ -538,6 +579,61 @@ describe("EditorLayoutStateV2 contracts", () => {
     const removed = editorLayoutReducer(split, { type: "remove-file", file: "src/a.ts" });
     expect(editorLayoutPaneIds(removed)).toHaveLength(1);
     expect(editorLayoutOpenFiles(removed)).toEqual(["src/b.ts"]);
+  });
+});
+
+// KEIKO-0426: pane existence was decided by indexing a plain object with an untrusted persisted
+// string, so `panes["constructor"] !== undefined` was true and a pane node naming a prototype member
+// passed normalization — `visiblePanesForTree` then stored the Object constructor FUNCTION where an
+// EditorPaneStateV2 is typed, and `activeEditorPane` returned it. Reading `pane.openFiles` off that
+// is the "persisted white screen" class this repo has already paid for (#2802). Symmetrically,
+// `panes["__proto__"] = pane` wrote the prototype instead of creating an own key. Both contradict
+// the module's invariant 5 (every tree pane node resolves to an entry in panes) and invariant 6
+// (malformed persisted state falls back to a fresh single-pane layout).
+describe("persisted layout prototype safety", () => {
+  it("does not resolve a prototype-named pane id to an inherited value", () => {
+    const state = layout({
+      layoutJson: JSON.stringify({
+        schemaVersion: EDITOR_LAYOUT_SCHEMA_VERSION,
+        root: "/repo",
+        activePaneId: "constructor",
+        tree: { type: "pane", paneId: "constructor" },
+        panes: { "pane-1": { id: "pane-1", activeFile: "src/a.ts", openFiles: ["src/a.ts"] } },
+        sidebarWidth: 260,
+        sidebarCollapsed: false,
+      }),
+    });
+
+    const active = activeEditorPane(state);
+    expect(Array.isArray(active.openFiles)).toBe(true);
+    expect(typeof active).not.toBe("function");
+    for (const paneId of editorLayoutPaneIds(state)) {
+      expect(Object.hasOwn(state.panes, paneId)).toBe(true);
+      expect(Array.isArray(state.panes[paneId]?.openFiles)).toBe(true);
+    }
+  });
+
+  it("keeps a persisted pane whose id is __proto__ as an own key or drops it entirely", () => {
+    const state = layout({
+      layoutJson: JSON.stringify({
+        schemaVersion: EDITOR_LAYOUT_SCHEMA_VERSION,
+        root: "/repo",
+        activePaneId: "__proto__",
+        tree: { type: "pane", paneId: "__proto__" },
+        panes: {
+          __proto__: { id: "__proto__", activeFile: "src/a.ts", openFiles: ["src/a.ts"] },
+        },
+        sidebarWidth: 260,
+        sidebarCollapsed: false,
+      }),
+    });
+
+    // Whichever way the parser resolves it, the invariant holds: every pane id reachable from the
+    // tree has an OWN entry in panes, and the active pane is a real pane state.
+    for (const paneId of editorLayoutPaneIds(state)) {
+      expect(Object.hasOwn(state.panes, paneId)).toBe(true);
+    }
+    expect(Array.isArray(activeEditorPane(state).openFiles)).toBe(true);
   });
 });
 

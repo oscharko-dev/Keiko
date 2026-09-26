@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
+import { gzipSync } from "node:zlib";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -13,12 +14,16 @@ import {
 } from "../portable-runtime-approvals.mjs";
 import { checkPortableRuntimeApprovals } from "../check-portable-runtime-approvals.mjs";
 import {
+  createPortableTarAdapter,
   extractApprovedExecutable,
   sidecarSbomDocument,
   sidecarSpecDocument,
   validateProtocolSchemaBytes,
 } from "../prepare-approved-sidecar-payloads.mjs";
-import { updatePortableRuntimeApprovals } from "../update-portable-runtime-approvals.mjs";
+import {
+  updatedOpencodeRuntime,
+  updatePortableRuntimeApprovals,
+} from "../update-portable-runtime-approvals.mjs";
 import { hashDirectoryTree } from "../portable-runtime.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -54,6 +59,28 @@ function crc32(buffer) {
     crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
   }
   return (crc ^ 0xffffffff) >>> 0;
+}
+
+function gzippedTar(entries) {
+  const blocks = [];
+  for (const [name, content] of entries) {
+    const header = Buffer.alloc(512);
+    header.write(name, 0, "utf8");
+    header.write("000644 \0", 100, "utf8");
+    header.write("000000 \0", 108, "utf8");
+    header.write("000000 \0", 116, "utf8");
+    header.write(`${content.length.toString(8).padStart(11, "0")} `, 124, "utf8");
+    header.write("00000000000 ", 136, "utf8");
+    header.write("0", 156, "utf8");
+    header.write("ustar\0" + "00", 257, "utf8");
+    header.write("        ", 148, "utf8");
+    let sum = 0;
+    for (const byte of header) sum += byte;
+    header.write(`${sum.toString(8).padStart(6, "0")}\0 `, 148, "utf8");
+    blocks.push(header, content, Buffer.alloc((512 - (content.length % 512)) % 512));
+  }
+  blocks.push(Buffer.alloc(1024));
+  return gzipSync(Buffer.concat(blocks));
 }
 
 function storeOnlyZip(entries) {
@@ -110,40 +137,10 @@ function committedFixture(overrides = {}) {
 
 function schemaV2Fixture() {
   const approvals = committedFixture();
-  approvals.schemaVersion = 2;
   const runtime = approvals.sidecarRuntimes[0];
-  runtime.upstream = {
-    owner: "anomalyco",
-    repository: "opencode",
-    name: "opencode",
-    version: "1.17.17",
-    tag: "v1.17.17",
-    commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
-  };
-  runtime.protocolSchema = {
-    path: "packages/sdk/openapi.json",
-    url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/sdk/openapi.json",
-    sha256: "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de",
-    hashAlgorithm: "sha256",
-    hashEncoding: "lowercase-hex",
-    digestInput: "upstream-raw-bytes",
-    transport: "http-sse",
-  };
-  runtime.releaseApproval = {
-    redistribution: {
-      status: "approved",
-      reviewReference: "https://github.com/oscharko-dev/Keiko/issues/2253",
-    },
-    subscriptionAuth: {
-      status: "not-applicable",
-      reviewReference: "https://github.com/oscharko-dev/Keiko/issues/2253",
-    },
-  };
-  runtime.executableTreeAlgorithm = "keiko-directory-tree-sha256-v1";
-  delete runtime.adapterCompatibility.protocolVersion;
-  runtime.adapterCompatibility.transport = "http-sse";
   for (const archive of Object.values(runtime.archives)) {
     archive.executableTreeSha256 = "a".repeat(64);
+    archive.sbomSha256 = "b".repeat(64);
   }
   return approvals;
 }
@@ -177,7 +174,7 @@ describe("portable runtime approvals validation", () => {
     const approvals = validatePortableRuntimeApprovals(schemaV2Fixture());
     const runtime = approvals.sidecarRuntimes[0];
     expect(approvals.schemaVersion).toBe(2);
-    expect(runtime.upstream.commit).toBe("474abdd7ee60f4b67476cfcef7e5311beff4a824");
+    expect(runtime.upstream.commit).toBe(committedFixture().sidecarRuntimes[0].upstream.commit);
     expect(runtime.protocolSchema.digestInput).toBe("upstream-raw-bytes");
     expect(runtime.releaseApproval.redistribution.status).toBe("approved");
     expect(runtime.releaseApproval.subscriptionAuth.status).toBe("not-applicable");
@@ -247,6 +244,14 @@ describe("portable runtime approvals validation", () => {
     expect(summary.sidecarRuntimes).toContain("opencode-compatible");
   });
 
+  it("anchors the generated sidecar SBOM for every supported target", () => {
+    const approvals = loadPortableRuntimeApprovals(repoRoot);
+    const runtime = approvals.sidecarRuntimes[0];
+    for (const archive of Object.values(runtime.archives)) {
+      expect(archive.sbomSha256).toMatch(/^[a-f0-9]{64}$/u);
+    }
+  });
+
   it("rejects non-https and unapproved hosts", () => {
     const approvals = approvedFixture();
     approvals.node.archives["windows-x64"].url =
@@ -276,8 +281,8 @@ describe("portable runtime approvals validation", () => {
     drift.node.version = "24.99.0";
     expect(() => validatePortableRuntimeApprovals(drift)).toThrow(/v24\.99\.0/u);
     const unknown = approvedFixture();
-    unknown.node.archives["linux-x64"] = unknown.node.archives["windows-x64"];
-    expect(() => validatePortableRuntimeApprovals(unknown)).toThrow(/unknown key linux-x64/u);
+    unknown.node.archives["freebsd-x64"] = unknown.node.archives["windows-x64"];
+    expect(() => validatePortableRuntimeApprovals(unknown)).toThrow(/unknown key freebsd-x64/u);
     const traversal = approvedFixture();
     traversal.sidecarRuntimes[0].archives["windows-x64"].executableName = "../opencode.exe";
     expect(() => validatePortableRuntimeApprovals(traversal)).toThrow(/plain file name/u);
@@ -318,6 +323,12 @@ describe("prepare approved sidecar payloads", () => {
       sizeBytes: zip.length,
       executableTreeSha256: executableTreeSha256("opencode", binary),
     };
+    runtime.archives["macos-arm64"].sbomSha256 = sha256Hex(
+      Buffer.from(
+        `${JSON.stringify(sidecarSbomDocument(runtime, "macos-arm64", sha256Hex(binary)), null, 2)}\n`,
+        "utf8",
+      ),
+    );
     runtime.license = { ...runtime.license, sha256: sha256Hex(license) };
     return approvals;
   }
@@ -347,6 +358,21 @@ describe("prepare approved sidecar payloads", () => {
     expect(spec.platformTarget).toBe("macos-arm64");
     expect(spec.executablePath).toBe("bin/opencode");
     expect(spec.expectedPayloadSha256).toBe(hashDirectoryTree(payloadRoot));
+  });
+
+  it("refuses staging when the freshly generated SBOM is not the catalog-approved document", async () => {
+    const { archivePath, binary, licensePath, zip, license } = localInputs();
+    const approvals = approvalsForLocal(zip, license, binary);
+    approvals.sidecarRuntimes[0].archives["macos-arm64"].sbomSha256 = "0".repeat(64);
+    const fakeRepoRoot = fixtureRepoRoot(approvals);
+
+    await expect(
+      prepareApprovedSidecarPayloadsForTest(
+        ["--target", "macos-arm64", "--output-root", join(tempRoot(), "out")],
+        { archivePath, licensePath },
+        fakeRepoRoot,
+      ),
+    ).rejects.toThrow(/generated sidecar SBOM digest does not match approved catalog/u);
   });
 
   it("fails closed on digest mismatch and multi-entry archives", async () => {
@@ -386,6 +412,44 @@ describe("prepare approved sidecar payloads", () => {
     expect(list).toHaveBeenCalledWith("approved.zip");
     expect(extract).toHaveBeenCalledWith("approved.zip", expect.any(String));
     expect(readFileSync(destination, "utf8")).toBe("approved executable\n");
+  });
+
+  it("fails closed across malformed TAR listings and extraction failures", () => {
+    const adapterFor = (names, details, extractionError) =>
+      createPortableTarAdapter((_command, args) => {
+        if (args[0] === "-tzf") return { stdout: names };
+        if (args[0] === "-tvzf") return { stdout: details };
+        if (extractionError !== undefined) throw new Error(extractionError);
+        return { stdout: "" };
+      });
+    const destination = join(tempRoot(), "bin", "opencode");
+    const regular = "-rwxr-xr-x owner/group 1 2026-01-01 00:00 opencode\n";
+
+    expect(() =>
+      extractApprovedExecutable("empty.tar.gz", "opencode", destination, adapterFor("", "")),
+    ).toThrow(/exactly one entry/u);
+    expect(() =>
+      extractApprovedExecutable(
+        "extra.tar.gz",
+        "opencode",
+        destination,
+        adapterFor("opencode\nextra\n", `${regular}${regular.replace("opencode", "extra")}`),
+      ),
+    ).toThrow(/exactly one entry/u);
+    expect(() => adapterFor("opencode\n", regular.replace("-", "l")).list("link.tar.gz")).toThrow(
+      /only regular files/u,
+    );
+    expect(() => adapterFor("opencode\n", regular.replace("-", "h")).list("hard.tar.gz")).toThrow(
+      /only regular files/u,
+    );
+    expect(() => adapterFor("opencode\nextra\n", regular).list("mismatch.tar.gz")).toThrow(
+      /only regular files/u,
+    );
+
+    const failed = adapterFor("opencode\n", regular, "dependency details /sensitive/input");
+    expect(() => failed.extract("/sensitive/input", "/sensitive/output")).toThrow(
+      "prepare-sidecar-payloads: approved tar archive command failed",
+    );
   });
 
   it("rejects an extracted executable tree that differs from the independent approval", async () => {
@@ -564,6 +628,72 @@ describe("portable assets stage helper", () => {
     expect(args).not.toContain("--apple-team-id");
   });
 
+  // ACCIDENT PREVENTION: absent by default, present exactly once when explicitly requested. There
+  // is no environment variable and no approval-file field that can introduce the flag.
+  it("omits the evaluation opt-in unless the caller asks for it, and then emits it exactly once", async () => {
+    const { stageArgumentsForTarget } = await import("../run-portable-assets-stage.mjs");
+    const approvals = loadPortableRuntimeApprovals(repoRoot);
+    const base = { outDir: "/tmp/out", payloadRoot: tempRoot(), target: "windows-x64" };
+
+    const plain = stageArgumentsForTarget(base, approvals, "a".repeat(40), "0.2.14", {
+      runAttempt: 3,
+      runId: 987654321,
+    });
+    expect(plain).not.toContain("--evaluation-build");
+    expect(plain).not.toContain("--evaluation");
+
+    const evaluation = stageArgumentsForTarget(
+      { ...base, evaluation: true },
+      approvals,
+      "a".repeat(40),
+      "0.2.14",
+      { runAttempt: 3, runId: 987654321 },
+    );
+    expect(evaluation.filter((arg) => arg === "--evaluation-build")).toHaveLength(1);
+    // The opt-in is additive: it changes nothing else the wrapper derives.
+    expect(evaluation.filter((arg) => arg !== "--evaluation-build")).toEqual(plain);
+
+    const release = stageArgumentsForTarget(
+      { ...base, release: true },
+      approvals,
+      "a".repeat(40),
+      "0.2.14",
+      { runAttempt: 3, runId: 987654321 },
+    );
+    expect(release.filter((arg) => arg === "--release-build")).toHaveLength(1);
+    expect(release).not.toContain("--evaluation-build");
+
+    const production = stageArgumentsForTarget(
+      { ...base, windowsGenerationProduction: true },
+      approvals,
+      "a".repeat(40),
+      "0.2.14",
+      { runAttempt: 3, runId: 987654321 },
+    );
+    expect(production.filter((arg) => arg === "--windows-generation-production")).toHaveLength(1);
+    expect(plain).not.toContain("--windows-generation-production");
+  });
+
+  it("rejects generation staging outside its explicit production Windows lane before spawning", async () => {
+    const { runPortableAssetsStage } = await import("../run-portable-assets-stage.mjs");
+
+    expect(() => runPortableAssetsStage(["--target"])).toThrow("--target requires a value");
+    expect(() =>
+      runPortableAssetsStage(["--target", "macos-arm64", "--windows-generation-production"]),
+    ).toThrow("requires non-evaluation windows-x64 staging");
+    expect(() =>
+      runPortableAssetsStage([
+        "--target",
+        "windows-x64",
+        "--evaluation",
+        "--windows-generation-production",
+      ]),
+    ).toThrow("requires non-evaluation windows-x64 staging");
+    expect(() =>
+      runPortableAssetsStage(["--target", "windows-x64", "--unexpected", "value"]),
+    ).toThrow("unsupported argument --unexpected");
+  });
+
   it("collects sidecar specs and derives approved stage arguments", async () => {
     const { collectSidecarSpecPaths, stageArgumentsForTarget } =
       await import("../run-portable-assets-stage.mjs");
@@ -627,7 +757,7 @@ describe("assemble portable release assets", () => {
     const bundleRoot = tempRoot();
     mkdirSync(join(bundleRoot, "artifacts", "portable-stage-windows-x64"), { recursive: true });
     await expect(assemblePortableReleaseAssets(["--bundle-root", bundleRoot])).rejects.toThrow(
-      /downloaded artifacts must be exactly the three canonical target names/u,
+      /downloaded artifacts must be exactly the four canonical target names/u,
     );
   });
 });
@@ -647,12 +777,41 @@ describe("update portable runtime approvals", () => {
         },
         fakeRepoRoot,
       ),
-    ).rejects.toThrow(/only the independently approved OpenCode version 1\.17\.17/u);
+    ).rejects.toThrow(
+      `only the independently approved OpenCode version ${schemaV2Fixture().sidecarRuntimes[0].upstream.version}`,
+    );
     expect(fetchCalled).toBe(false);
   });
 
-  it("updates node and opencode pins from fake verified sources", async () => {
+  // KEIKO-0157: executableTreeSha256 describes the EXTRACTED executable tree and this script has no
+  // extractor, so it can only carry the previous value forward. That is honest when the archive
+  // bytes are unchanged and a lie when they are not. These two cases pin both halves: unchanged
+  // bytes still carry the tree pin forward, changed bytes fail closed here instead of at tag time.
+  const OPENCODE_ARCHIVES = new Map([
+    ["opencode-linux-x64.tar.gz", gzippedTar([["opencode", Buffer.from("l1")]])],
+    ["opencode-darwin-arm64.zip", storeOnlyZip([["opencode", Buffer.from("m1")]])],
+    ["opencode-darwin-x64.zip", storeOnlyZip([["opencode", Buffer.from("m2")]])],
+    ["opencode-windows-x64.zip", storeOnlyZip([["opencode.exe", Buffer.from("w1")]])],
+  ]);
+  const ARCHIVE_NAME_BY_TARGET = {
+    "linux-x64": "opencode-linux-x64.tar.gz",
+    "macos-arm64": "opencode-darwin-arm64.zip",
+    "macos-x64": "opencode-darwin-x64.zip",
+    "windows-x64": "opencode-windows-x64.zip",
+  };
+
+  /** Fixture whose approved sha256 values match OPENCODE_ARCHIVES, i.e. a re-download of the same
+   * bytes. Without this the "updates pins" case below would be exercising the drift path. */
+  function fixtureMatchingFakeArchives() {
     const approvals = approvedFixture();
+    for (const [target, archive] of Object.entries(approvals.sidecarRuntimes[0].archives)) {
+      archive.sha256 = sha256Hex(OPENCODE_ARCHIVES.get(ARCHIVE_NAME_BY_TARGET[target]));
+    }
+    return approvals;
+  }
+
+  it("updates node and opencode pins from fake verified sources", async () => {
+    const approvals = fixtureMatchingFakeArchives();
     const treePins = Object.fromEntries(
       Object.entries(approvals.sidecarRuntimes[0].archives).map(([target, archive]) => [
         target,
@@ -660,13 +819,10 @@ describe("update portable runtime approvals", () => {
       ]),
     );
     const fakeRepoRoot = fixtureRepoRoot(approvals);
-    const zipByName = new Map([
-      ["opencode-darwin-arm64.zip", storeOnlyZip([["opencode", Buffer.from("m1")]])],
-      ["opencode-darwin-x64.zip", storeOnlyZip([["opencode", Buffer.from("m2")]])],
-      ["opencode-windows-x64.zip", storeOnlyZip([["opencode.exe", Buffer.from("w1")]])],
-    ]);
+    const archiveByName = OPENCODE_ARCHIVES;
     const license = Buffer.from("MIT License\n");
     const shasums = [
+      `${"0".repeat(64)}  node-v23.1.0-linux-x64.tar.gz`,
       `${"1".repeat(64)}  node-v23.1.0-win-x64.zip`,
       `${"2".repeat(64)}  node-v23.1.0-darwin-arm64.tar.gz`,
       `${"3".repeat(64)}  node-v23.1.0-darwin-x64.tar.gz`,
@@ -677,7 +833,7 @@ describe("update portable runtime approvals", () => {
         ? Buffer.from(shasums)
         : String(url).endsWith("LICENSE")
           ? license
-          : zipByName.get(name);
+          : archiveByName.get(name);
       if (body === undefined) return Promise.reject(new Error(`unexpected url ${String(url)}`));
       return Promise.resolve({
         ok: true,
@@ -690,16 +846,21 @@ describe("update portable runtime approvals", () => {
       });
     };
     const summary = await updatePortableRuntimeApprovals(
-      ["--node-version", "23.1.0", "--opencode-version", "1.17.17"],
+      [
+        "--node-version",
+        "23.1.0",
+        "--opencode-version",
+        schemaV2Fixture().sidecarRuntimes[0].upstream.version,
+      ],
       { fetchFn },
       fakeRepoRoot,
     );
     expect(summary.nodeVersion).toBe("23.1.0");
-    expect(summary.opencodeVersion).toBe("1.17.17");
+    expect(summary.opencodeVersion).toBe(schemaV2Fixture().sidecarRuntimes[0].upstream.version);
     const updated = loadPortableRuntimeApprovals(fakeRepoRoot);
     expect(updated.node.archives["windows-x64"].sha256).toBe("1".repeat(64));
     expect(updated.sidecarRuntimes[0].archives["windows-x64"].sha256).toBe(
-      sha256Hex(zipByName.get("opencode-windows-x64.zip")),
+      sha256Hex(archiveByName.get("opencode-windows-x64.zip")),
     );
     expect(
       Object.fromEntries(
@@ -709,5 +870,144 @@ describe("update portable runtime approvals", () => {
         ]),
       ),
     ).toEqual(treePins);
+  });
+
+  it("fails closed when the OpenCode archive bytes changed under an unchanged version", async () => {
+    // Same approved version, so the version-provenance guard does not short-circuit first;
+    // the archive contents differ from what is pinned. Before KEIKO-0157 this wrote a file pairing
+    // the NEW sha256 with the OLD executableTreeSha256 and reported success — check:portable-
+    // approvals validates JSON shape only, so review saw a clean diff and the mismatch surfaced at
+    // tag time in portable-assets.yml, mid-release.
+    const approvals = fixtureMatchingFakeArchives();
+    const fakeRepoRoot = fixtureRepoRoot(approvals);
+    const drifted = new Map([
+      ["opencode-linux-x64.tar.gz", Buffer.from("materially-different-content")],
+      [
+        "opencode-darwin-arm64.zip",
+        storeOnlyZip([["opencode", Buffer.from("materially-different-content")]]),
+      ],
+      [
+        "opencode-darwin-x64.zip",
+        storeOnlyZip([["opencode", Buffer.from("materially-different-content")]]),
+      ],
+      [
+        "opencode-windows-x64.zip",
+        storeOnlyZip([["opencode.exe", Buffer.from("materially-different-content")]]),
+      ],
+    ]);
+    const shasums = [
+      `${"0".repeat(64)}  node-v23.1.0-linux-x64.tar.gz`,
+      `${"1".repeat(64)}  node-v23.1.0-win-x64.zip`,
+      `${"2".repeat(64)}  node-v23.1.0-darwin-arm64.tar.gz`,
+      `${"3".repeat(64)}  node-v23.1.0-darwin-x64.tar.gz`,
+    ].join("\n");
+    const fetchFn = (url) => {
+      const name = String(url).split("/").pop() ?? "";
+      const body = String(url).includes("SHASUMS256")
+        ? Buffer.from(shasums)
+        : String(url).endsWith("LICENSE")
+          ? Buffer.from("MIT License\n")
+          : drifted.get(name);
+      if (body === undefined) return Promise.reject(new Error(`unexpected url ${String(url)}`));
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        url: String(url),
+        body: (async function* streamBody() {
+          yield body;
+        })(),
+        arrayBuffer: () => Promise.reject(new Error("response buffering is forbidden")),
+      });
+    };
+
+    const before = readFileSync(join(fakeRepoRoot, "portable-runtime-approvals.json"), "utf8");
+    await expect(
+      updatePortableRuntimeApprovals(
+        [
+          "--node-version",
+          "23.1.0",
+          "--opencode-version",
+          schemaV2Fixture().sidecarRuntimes[0].upstream.version,
+        ],
+        { fetchFn },
+        fakeRepoRoot,
+      ),
+    ).rejects.toThrow(/executableTreeSha256 can no longer be carried forward/u);
+    // It must refuse BEFORE writing: a half-updated approvals file is the defect, not the warning.
+    expect(readFileSync(join(fakeRepoRoot, "portable-runtime-approvals.json"), "utf8")).toBe(
+      before,
+    );
+  });
+
+  // A version LIFT is the opposite question from the drift case above: the bytes are SUPPOSED to
+  // differ, so carrying the reviewed tree digest forward would describe the outgoing release. Both
+  // digests must be re-derived from the new bytes, and every commit-bound fact -- tag, commit and
+  // the protocol-schema pin -- must move with them. Asserted through the producer's own functions,
+  // never a second copy of their formulas.
+  it("regenerates both archive digests and every commit-bound fact on a version lift", async () => {
+    const existing = schemaV2Fixture().sidecarRuntimes[0];
+    existing.upstream = { ...existing.upstream, version: "2.0.9", tag: "v2.0.9" };
+    const schemaBytes = Buffer.from('{"openapi":"3.1.0"}');
+    const license = Buffer.from("MIT License\n");
+    const fetchFn = (url) => {
+      const text = String(url);
+      const name = text.split("/").pop() ?? "";
+      const body = text.endsWith("openapi.json")
+        ? schemaBytes
+        : text.endsWith("LICENSE")
+          ? license
+          : OPENCODE_ARCHIVES.get(name);
+      if (body === undefined) return Promise.reject(new Error(`unexpected url ${text}`));
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        url: text,
+        body: (async function* streamBody() {
+          yield body;
+        })(),
+        arrayBuffer: () => Promise.reject(new Error("response buffering is forbidden")),
+      });
+    };
+
+    const lifted = await updatedOpencodeRuntime(
+      existing,
+      schemaV2Fixture().sidecarRuntimes[0].upstream.version,
+      { fetchFn },
+    );
+
+    const approved = schemaV2Fixture().sidecarRuntimes[0];
+    expect(lifted.upstream).toEqual(approved.upstream);
+    expect(lifted.protocolSchema.url).toBe(approved.protocolSchema.url);
+    expect(lifted.protocolSchema.sha256).toBe(sha256Hex(schemaBytes));
+    expect(lifted.license.url).toBe(approved.license.url);
+
+    for (const target of Object.keys(lifted.archives)) {
+      const archive = lifted.archives[target];
+      const payload = OPENCODE_ARCHIVES.get(ARCHIVE_NAME_BY_TARGET[target]);
+      expect(archive.url).toBe(approved.archives[target].url);
+      expect(archive.sha256).toBe(sha256Hex(payload));
+      expect(archive.sizeBytes).toBe(payload.byteLength);
+      // Neither digest may survive the lift: the fixture pins them to "a"/"b" repeated.
+      expect(archive.executableTreeSha256).not.toBe("a".repeat(64));
+      expect(archive.sbomSha256).not.toBe("b".repeat(64));
+
+      // Derive the expectation by extracting independently and calling the producer, so a change to
+      // either formula fails here instead of moving both sides together.
+      const work = tempRoot();
+      const archivePath = join(work, ARCHIVE_NAME_BY_TARGET[target]);
+      writeFileSync(archivePath, payload);
+      const sourceRoot = join(work, "payload");
+      const executablePath = join(sourceRoot, "bin", archive.executableName);
+      extractApprovedExecutable(archivePath, archive.executableName, executablePath);
+      expect(archive.executableTreeSha256).toBe(hashDirectoryTree(sourceRoot));
+      expect(archive.sbomSha256).toBe(
+        sha256Hex(
+          Buffer.from(
+            `${JSON.stringify(sidecarSbomDocument(lifted, target, sha256Hex(readFileSync(executablePath))), null, 2)}\n`,
+            "utf8",
+          ),
+        ),
+      );
+    }
   });
 });

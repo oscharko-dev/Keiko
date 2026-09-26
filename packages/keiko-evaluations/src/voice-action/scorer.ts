@@ -14,10 +14,8 @@
 // Determinism: pure. Rationales are harness-authored and content-free (counts, closed-vocabulary
 // labels, numbers) — they never echo committed text or any raw transcript content.
 
-import {
-  spokenActionRequiresConfirmation,
-  type SpokenActionAuditRecord,
-} from "@oscharko-dev/keiko-contracts";
+import type { SpokenActionAuditRecord } from "@oscharko-dev/keiko-contracts";
+import { spokenActionRequiresConfirmation } from "@oscharko-dev/keiko-contracts/runtime/voice-action-intent";
 import {
   VOICE_ACTION_DIMENSIONS,
   type VoiceActionDimension,
@@ -123,13 +121,17 @@ function scoreConfirmationDiscipline(
       rationale: "failed: confirmation-discipline declared but no proposal was derived.",
     };
   }
-  const expectedRequires =
-    oracle.expectedRequiresConfirmation ?? spokenActionRequiresConfirmation(proposal.effectClass);
+  // KEIKO-0664: both oracle fields must be independently authored whenever this dimension is
+  // scored. An omitted expectedEffectClass used to pass vacuously; an omitted
+  // expectedRequiresConfirmation used to fall back to re-deriving the expectation from
+  // spokenActionRequiresConfirmation -- the very function under test on the neighboring "fail-closed
+  // taxonomy" check -- making that check and this one a tautology against the same bug. Both fields
+  // now fail closed when absent instead of silently opting the fixture out of verification.
   return gate("confirmation-discipline", [
     {
       label: "effect class matches oracle expectation",
       ok:
-        oracle.expectedEffectClass === undefined ||
+        oracle.expectedEffectClass !== undefined &&
         proposal.effectClass === oracle.expectedEffectClass,
     },
     {
@@ -138,7 +140,9 @@ function scoreConfirmationDiscipline(
     },
     {
       label: "requiresConfirmation matches oracle expectation",
-      ok: proposal.requiresConfirmation === expectedRequires,
+      ok:
+        oracle.expectedRequiresConfirmation !== undefined &&
+        proposal.requiresConfirmation === oracle.expectedRequiresConfirmation,
     },
     {
       // A confirmation-requiring proposal must START in `awaiting-confirmation`, never `proposed` — it
@@ -231,6 +235,13 @@ function scoreEvidenceSafety(obs: VoiceActionObservation): VoiceActionDimensionR
     {
       label: "audit bindingDigest is the empty sentinel or a content-free digest",
       ok: audit.bindingDigest === "" || /^[0-9a-f]{64}$/.test(audit.bindingDigest),
+    },
+    {
+      // KEIKO-0242: an unconfirmed confirmation-required action can never carry outcome `routed` — the
+      // governance layer denies it. A `routed` here alongside `confirmationRequired && !confirmed` would
+      // misrepresent the security posture (a denied action reported as executed).
+      label: "confirmation-required proposal without confirmation is not `routed`",
+      ok: !(audit.confirmationRequired && !audit.confirmed && audit.outcome === "routed"),
     },
   ]);
 }

@@ -269,4 +269,29 @@ describe("encrypted editor local history contracts", () => {
     expect(validateEditorLocalHistoryEntry(hostile).ok).toBe(false);
     expect(validateEditorLocalHistoryIndex(hostile).ok).toBe(false);
   });
+
+  // KEIKO-0940: the pre-fix validator ran `entries.every(isHistoryEntry)` up to four times per
+  // validation call. Prove the fix keeps it at ONCE with a Proxy that counts entry access.
+  it("validates each index entry only once per validateEditorLocalHistoryIndex call (KEIKO-0940)", () => {
+    const entries = Array.from({ length: 32 }, (_, i) => indexedEntry(i + 1));
+    let accessCount = 0;
+    const observed = entries.map((raw): EditorLocalHistoryEntry => {
+      return new Proxy(raw, {
+        get(target: EditorLocalHistoryEntry, key: string | symbol, receiver: unknown): unknown {
+          if (key === "kind") accessCount += 1;
+          return Reflect.get(target, key, receiver);
+        },
+      });
+    });
+    const result = validateEditorLocalHistoryIndex({
+      ...index(entries),
+      entries: observed as unknown as readonly EditorLocalHistoryEntry[],
+    });
+    expect(result.ok).toBe(true);
+    // The `kind` field is the very first thing isHistoryEntry reads (via isWorkspaceRecord →
+    // exactKeys). Pre-fix ran that four times per entry (128 total for 32 entries); post-fix
+    // runs it once each (32). A ratio ≤2×entries is a comfortable guard against silent
+    // regression to the O(4·n) shape.
+    expect(accessCount).toBeLessThanOrEqual(entries.length * 2);
+  });
 });

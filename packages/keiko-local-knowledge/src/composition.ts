@@ -19,18 +19,20 @@
 
 import { randomUUID } from "node:crypto";
 
+import type {
+  CapsuleSet,
+  CapsuleSetId,
+  KnowledgeCapsule,
+  KnowledgeCapsuleId,
+  KnowledgeSource,
+  KnowledgeSourceId,
+  KnowledgeSourceScopeKind,
+} from "@oscharko-dev/keiko-contracts";
 import {
   compareEmbeddingProfiles,
   embeddingProfileFromModelIdentity,
-  validateKnowledgeSourceScope,
-  type CapsuleSet,
-  type CapsuleSetId,
-  type KnowledgeCapsule,
-  type KnowledgeCapsuleId,
-  type KnowledgeSource,
-  type KnowledgeSourceId,
-  type KnowledgeSourceScopeKind,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-embedding-profiles";
+import { validateKnowledgeSourceScope } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-validation";
 
 import { getCapsule } from "./capsule-lifecycle.js";
 import { assertSafeDisplayField, assertSafeOptionalDisplayField } from "./display-validation.js";
@@ -40,7 +42,13 @@ import {
   createCapsuleSetWithinTxn,
 } from "./capsule-set-lifecycle.js";
 import { KnowledgeNotFoundError, KnowledgeStoreError } from "./errors.js";
-import { listCapsuleSources, type AddCapsuleSourceInput } from "./source-lifecycle.js";
+import {
+  INSERT_KNOWLEDGE_SOURCE_SQL,
+  INSERT_SQL,
+  listCapsuleSources,
+  scopeToJson,
+  type AddCapsuleSourceInput,
+} from "./source-lifecycle.js";
 import { validateSourceRoutingForCapsule } from "./source-routing-validation.js";
 import type { KnowledgeStore } from "./store.js";
 
@@ -309,12 +317,11 @@ function runAddSourcesTransaction(
   // insert against the same `capsule_sources` table.
   db.exec("BEGIN");
   try {
-    const insertKnowledgeSource = db.prepare(
-      "INSERT INTO knowledge_sources (id, display_name, description, tags_json, scope_kind, scope_json, created_at, updated_at) VALUES (:id, :display_name, :description, :tags_json, :scope_kind, :scope_json, :created_at, :updated_at) ON CONFLICT(id) DO UPDATE SET display_name = excluded.display_name, description = excluded.description, tags_json = excluded.tags_json, scope_kind = excluded.scope_kind, scope_json = excluded.scope_json, updated_at = excluded.updated_at",
-    );
-    const insertSource = db.prepare(
-      "INSERT INTO capsule_sources (id, capsule_id, display_name, description, tags_json, scope_kind, scope_json, created_at, updated_at) VALUES (:id, :capsule_id, :display_name, :description, :tags_json, :scope_kind, :scope_json, :created_at, :updated_at)",
-    );
+    // KEIKO-0246: use the same INSERT text and scope serialiser as source-lifecycle.ts's
+    // single-row addSourceToCapsule path so a future schema/serialiser change applied there
+    // automatically propagates to this batch path — the two must stay one implementation.
+    const insertKnowledgeSource = db.prepare(INSERT_KNOWLEDGE_SOURCE_SQL);
+    const insertSource = db.prepare(INSERT_SQL);
     const insertAudit = db.prepare(INSERT_AUDIT_SQL);
     for (const input of inputs) {
       const params = {
@@ -323,7 +330,7 @@ function runAddSourcesTransaction(
         description: input.description ?? null,
         tags_json: JSON.stringify(input.tags),
         scope_kind: input.scope.kind,
-        scope_json: scopeJsonWithoutKind(input.scope),
+        scope_json: scopeToJson(input.scope),
         created_at: now,
         updated_at: now,
       };
@@ -348,15 +355,6 @@ function runAddSourcesTransaction(
     capsuleId,
     addedSourceIds: inputs.map((i) => i.id),
   };
-}
-
-function scopeJsonWithoutKind(scope: AddCapsuleSourceInput["scope"]): string {
-  const copy: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(scope)) {
-    if (key === "kind") continue;
-    copy[key] = value;
-  }
-  return JSON.stringify(copy);
 }
 
 // ─── composeCapsules ────────────────────────────────────────────────────────────

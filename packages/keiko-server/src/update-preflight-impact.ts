@@ -25,7 +25,14 @@ const REQUIRED_PUBLISH_GATES: readonly ReleaseImpactPublishGate[] = [
   "package-surface",
   "qi-supply-chain",
 ];
-const RUNTIME_APPROVAL_REFERENCE_PATTERN = /^github-pr-review:([^#/\s]+\/[^#/\s]+)#\d+#\d+$/u;
+// Both artifact forms the publish gate verifies live against the GitHub API before a release may
+// go out (scripts/check-release-impact.mjs): a review on the release pull request, and an owner
+// comment on the release epic. Accepting only the first here would make a release the gate
+// approved look unapproved to the runtime, which withholds the governed one-click update and
+// reports the target as missing reviewed metadata (Codex finding on #3054). The runtime checks
+// shape only — the live authorship and version-binding checks stay in the publish gate.
+const RUNTIME_APPROVAL_REFERENCE_PATTERN =
+  /^github-(?:pr-review|issue-comment):([^#/\s]+\/[^#/\s]+)#\d+#\d+$/u;
 
 export interface CatalogImpactResolution {
   readonly impact?: UpdatePreflightImpactSummary;
@@ -168,6 +175,18 @@ export function uniqueBlockers(
   return out;
 }
 
+/**
+ * An internal record with no observable impact describes repository machinery, not the product an
+ * operator is updating — the portable staging contract is one. It says nothing about whether the
+ * update may run, and `releaseNoteBullets` already omits it from what the operator is shown for
+ * exactly that reason. Aggregating its `oneClickEligible: false` into the operator's blockers made
+ * every historical staging record permanently disable the governed update for anyone below its
+ * version (Codex finding on #3054). The customer-facing records in the range still decide.
+ */
+function describesOperatorUpdate(entry: ReleaseImpactEntry): boolean {
+  return !entry.internalOnly || entry.observableImpact;
+}
+
 function blockersFromEntries(
   entries: readonly ReleaseImpactEntry[],
 ): readonly UpdatePreflightBlocker[] {
@@ -302,18 +321,25 @@ export function impactFromCatalog(
   if (catalog === undefined) {
     return missingImpactResolution();
   }
-  const matching = matchingImpactEntries(catalog, currentVersion, targetVersion);
-  const targetReviewed = matching.some((entry) => entry.packageVersion === targetVersion);
-  if (matching.length === 0 || !targetReviewed) {
+  // The whole resolution speaks about the OPERATOR's update, so internal machinery records are
+  // filtered out ONCE, here, before any aggregation. A localized filter in the blocker path
+  // alone would still let an internal staging record shape the summary, the severity, and the
+  // supported-from floor of the operator report (Codex findings on #3054). A target whose only
+  // reviewed record is internal is missing its metadata, which is what it reports.
+  const operatorEntries = matchingImpactEntries(catalog, currentVersion, targetVersion).filter(
+    describesOperatorUpdate,
+  );
+  const targetReviewed = operatorEntries.some((entry) => entry.packageVersion === targetVersion);
+  if (!targetReviewed) {
     return missingImpactResolution(targetReviewed);
   }
-  const supportBlocker = supportedFromBlocker(matching, currentVersion);
+  const supportBlocker = supportedFromBlocker(operatorEntries, currentVersion);
   return {
-    impact: buildImpactSummary(matching),
+    impact: buildImpactSummary(operatorEntries),
     targetReviewed,
-    severity: severityFromEntries(matching),
+    severity: severityFromEntries(operatorEntries),
     blockers: uniqueBlockers([
-      ...blockersFromEntries(matching),
+      ...blockersFromEntries(operatorEntries),
       ...(supportBlocker !== undefined ? [supportBlocker] : []),
     ]),
   };

@@ -6,12 +6,12 @@
 // `keiko-memory-*` package and `keiko-model-gateway` at once (ADR-0120 D2), so this call cannot
 // live inside the consolidation engine or the governance package.
 
+import type { ResponseFormat } from "@oscharko-dev/keiko-contracts";
 import {
   containsPseudoRoleMarker,
   redactAbsolutePaths,
   stripUnsafeFormatChars,
-  type ResponseFormat,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts/memory";
 import {
   memoryTextEgressRejectionReason,
@@ -233,6 +233,7 @@ async function callAdvisoryModel(
   modelId: string,
   prompt: string,
   responseFormat: ResponseFormat,
+  jobId: string,
 ): Promise<AdvisoryCallResult> {
   const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -256,6 +257,7 @@ async function callAdvisoryModel(
           temperature: 0,
           topP: 1,
           responseFormat,
+          logContext: { correlationId: jobId },
         },
         controller.signal,
       ),
@@ -390,20 +392,66 @@ function emitAdvisoryPhaseSummary(
   if (counts.truncatedByCap === 0 && counts.truncatedByBudget === 0 && counts.timeouts === 0) {
     return;
   }
+  // Issue #3245: `message` is now the fixed closed-vocabulary condition label. The three counts
+  // this line used to compose into free text (then pass through the general redactor, which is
+  // not the closed-vocabulary allowlist this record's contract requires) move to `code` as a
+  // compact machine-readable string — bounded numeric data, not user/model content, so nothing is
+  // lost; `deps.redactor` is no longer the right tool for a value that was never foreign text.
   emitServerDiagnostic(deps.diagnostics, {
     correlationId: jobId,
     timestamp: new Date().toISOString(),
     operation: ADVISORY_OPERATION,
     source: ADVISORY_SOURCE,
     errorClass: "AdvisoryPhaseSummary",
-    message: String(
-      deps.redactor(
-        `advisory phase: ${String(counts.timeouts)} timed out, ` +
-          `${String(counts.truncatedByCap)} skipped over the per-job cap, ` +
-          `${String(counts.truncatedByBudget)} skipped over the wall-clock budget`,
-      ),
-    ),
+    message: "advisory-phase-summary",
+    code:
+      `timeouts=${String(counts.timeouts)}:` +
+      `truncatedByCap=${String(counts.truncatedByCap)}:` +
+      `truncatedByBudget=${String(counts.truncatedByBudget)}`,
   });
+}
+
+interface AdvisoryPhaseSharedContext {
+  readonly deps: UiHandlerDeps;
+  readonly jobId: string;
+  readonly model: ModelPort;
+  readonly modelId: string;
+  readonly memoriesById: ReadonlyMap<MemoryId, MemoryRecord>;
+  readonly policy: CapturePolicyOptions;
+  readonly startedAt: number;
+}
+
+// Split out of runAdvisoryPhase to keep it within the line budget: one review item's candidate
+// gate, cap/budget truncation, and (sequential, ADR-0120 D8) advisory model call. `counts` is
+// mutated in place — the caller owns its lifetime across the whole phase.
+async function processAdvisoryReviewItem(
+  ctx: AdvisoryPhaseSharedContext,
+  item: ReviewItem,
+  attempted: number,
+  counts: AdvisoryPhaseCounts,
+): Promise<{ readonly item: ReviewItem; readonly attemptedCall: boolean }> {
+  const candidate = prepareAdvisoryCandidate(item, ctx.memoriesById, ctx.deps.redactor, ctx.policy);
+  if (candidate === undefined) return { item, attemptedCall: false };
+  if (attempted >= MAX_ADVISORY_CALLS_PER_JOB) {
+    counts.truncatedByCap += 1;
+    return { item, attemptedCall: false };
+  }
+  if (Date.now() - ctx.startedAt >= ADVISORY_PHASE_BUDGET_MS) {
+    counts.truncatedByBudget += 1;
+    return { item, attemptedCall: false };
+  }
+  const call = await callAdvisoryModel(
+    ctx.model,
+    ctx.modelId,
+    candidate.prompt,
+    advisoryResponseFormat(candidate.labels),
+    ctx.jobId,
+  );
+  const outcome = advisoryOutcomeFromCall(call, candidate, ctx.deps.redactor, ctx.policy);
+  return {
+    item: applyAdvisoryOutcome(item, outcome, ctx.deps, ctx.jobId, counts),
+    attemptedCall: true,
+  };
 }
 
 async function runAdvisoryPhase(
@@ -429,35 +477,20 @@ async function runAdvisoryPhase(
     truncatedByCap: 0,
     truncatedByBudget: 0,
   };
-  const startedAt = Date.now();
+  const sharedCtx: AdvisoryPhaseSharedContext = {
+    deps,
+    jobId,
+    model,
+    modelId,
+    memoriesById,
+    policy,
+    startedAt: Date.now(),
+  };
   let attempted = 0;
   for (const item of reviewItems) {
-    const candidate = prepareAdvisoryCandidate(item, memoriesById, deps.redactor, policy);
-    if (candidate === undefined) {
-      enriched.push(item);
-      continue;
-    }
-    if (attempted >= MAX_ADVISORY_CALLS_PER_JOB) {
-      counts.truncatedByCap += 1;
-      enriched.push(item);
-      continue;
-    }
-    if (Date.now() - startedAt >= ADVISORY_PHASE_BUDGET_MS) {
-      counts.truncatedByBudget += 1;
-      enriched.push(item);
-      continue;
-    }
-    attempted += 1;
-    // Sequential by design (ADR-0120 D8): bounds concurrency to 1 and keeps the wall-clock
-    // budget check above accurate between calls, rather than a call-per-item fan-out.
-    const call = await callAdvisoryModel(
-      model,
-      modelId,
-      candidate.prompt,
-      advisoryResponseFormat(candidate.labels),
-    );
-    const outcome = advisoryOutcomeFromCall(call, candidate, deps.redactor, policy);
-    enriched.push(applyAdvisoryOutcome(item, outcome, deps, jobId, counts));
+    const result = await processAdvisoryReviewItem(sharedCtx, item, attempted, counts);
+    enriched.push(result.item);
+    if (result.attemptedCall) attempted += 1;
   }
   emitAdvisoryPhaseSummary(deps, jobId, counts);
   // Re-check cancellation after the (possibly multi-second) advisory window closes (ADR-0120

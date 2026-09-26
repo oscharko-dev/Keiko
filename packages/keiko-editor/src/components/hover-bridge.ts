@@ -38,6 +38,8 @@ import {
 } from "./completion-bridge.js";
 import {
   classifyResultKind,
+  composeDisposers,
+  controllerForToken,
   runLanguageBridgeCall,
   type EditorLanguageIntelligenceReporter,
 } from "./language-intelligence.js";
@@ -152,17 +154,6 @@ function buildRequest(
   };
 }
 
-function controllerForToken(token: MonacoCancellationToken): AbortController {
-  const controller = new AbortController();
-  if (token.isCancellationRequested) {
-    controller.abort();
-  }
-  token.onCancellationRequested(() => {
-    controller.abort();
-  });
-  return controller;
-}
-
 /**
  * Create a Monaco hover provider backed by the host resolver. The provider:
  *  - builds a content-free {@link EditorHoverRequest} with a monotonic per-stream sequence,
@@ -184,7 +175,7 @@ export function createKeikoHoverProvider(deps: KeikoHoverProviderDeps): MonacoHo
       sequence += 1;
       const request = buildRequest(deps, documentUri, position, sequence);
       latest = request.request;
-      const controller = controllerForToken(token);
+      const { controller, dispose } = controllerForToken(token);
       const query: EditorHoverQuery = { request, documentText: model.getValue() };
       return runLanguageBridgeCall<EditorHoverResponse, MonacoHover | undefined>({
         operation: "hover",
@@ -195,6 +186,8 @@ export function createKeikoHoverProvider(deps: KeikoHoverProviderDeps): MonacoHo
         classify: (response) => classifyResultKind((response.hover.contents ?? "").length),
         present: hoverResponseToMonaco,
         report: deps.report,
+      }).finally(() => {
+        dispose();
       });
     },
   };
@@ -209,16 +202,6 @@ export interface RegisterKeikoHoverProviderArgs {
   readonly streamId: string;
   readonly newRequestId: () => string;
   readonly report?: EditorLanguageIntelligenceReporter | undefined;
-}
-
-function composeDisposers(disposers: readonly MonacoDisposable[]): MonacoDisposable {
-  return {
-    dispose(): void {
-      for (const disposer of disposers) {
-        disposer.dispose();
-      }
-    },
-  };
 }
 
 /**

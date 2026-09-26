@@ -1,7 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
-import { realpathSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { e2eStateDir } from "./support/e2e-state-dir.js";
 
 const root = process.cwd();
 const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32551");
@@ -9,8 +8,7 @@ const bffPort = Number(process.env.KEIKO_E2E_BFF_PORT ?? "32552");
 const nextPort = Number(process.env.KEIKO_E2E_NEXT_PORT ?? "32553");
 const modelPort = Number(process.env.KEIKO_E2E_MODEL_PORT ?? "32554");
 const stateId = `memoriaviva-m1-${process.env.GITHUB_RUN_ID ?? String(process.pid)}`;
-const stateDir =
-  process.env.KEIKO_E2E_STATE_DIR ?? join(realpathSync(tmpdir()), "keiko-e2e", stateId);
+const stateDir = e2eStateDir(stateId);
 const fixtureConfigPath = join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json");
 const runtimeConfigPath = join(stateDir, "keiko.e2e.config.json");
 const modelMock = join(

@@ -9,10 +9,10 @@
 //   - redactor invocation (single call site)
 //   - happy paths for the read routes
 
-import { describe, expect, it, beforeEach, vi } from "vitest";
+import { afterEach, describe, expect, it, beforeEach, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import { EventEmitter } from "node:events";
-import { promises as fs } from "node:fs";
+import { promises as fs, realpathSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -40,11 +40,20 @@ import { buildUiHandlerDeps, type UiHandlerDeps } from "./deps.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { STREAMING } from "./routes.js";
 import { createRunRegistry } from "./runs.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
 
 interface FakeReq extends EventEmitter {
   headers: Record<string, string>;
   url: string;
   method: string;
+  // The shared bounded-body reader calls `resume()` to drain an oversized/cancelled body
+  // (#2902 w5-sse-counters); a bare EventEmitter has no such method.
+  resume(): void;
 }
 
 function makeReq(opts: {
@@ -57,6 +66,7 @@ function makeReq(opts: {
   e.headers = opts.headers ?? {};
   e.url = opts.url ?? "/";
   e.method = opts.method ?? "GET";
+  e.resume = (): void => undefined;
   // Defer body emission to next tick so consumer can attach `data`/`end` listeners.
   process.nextTick(() => {
     if (opts.body !== undefined) {
@@ -104,12 +114,7 @@ function makeCtx(
       destroyed: (): boolean => destroyed,
     },
   } as unknown as ServerResponse;
-  return {
-    req: req as unknown as IncomingMessage,
-    res,
-    params,
-    url,
-  };
+  return { correlationId: undefined, req: req as unknown as IncomingMessage, res, params, url };
 }
 
 function trackingRedactor(): {
@@ -480,6 +485,26 @@ describe("POST /api/relationships (create + validate-before-persist)", () => {
     expect((res.body as { error: { code: string } }).error.code).toBe("relationship/bad-request");
   });
 
+  // #2902 w5-sse-counters: readJsonBody now consolidates onto the shared readBoundedRequestBody,
+  // so an oversized body must still yield this handler's own 413 shape (16 KiB cap unchanged).
+  it("rejects an oversized body using the shared bounded-body reader", async () => {
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-a", store, redactor);
+    const req = makeReq({
+      method: "POST",
+      url: "/api/relationships/validate",
+      body: "x".repeat(17 * 1024),
+    });
+
+    const res = await handleRelationshipValidate(makeCtx(req), deps);
+
+    expect(res.status).toBe(413);
+    expect((res.body as { error: { code: string } }).error.code).toBe(
+      "relationship/payload-too-large",
+    );
+  });
+
   it("replays an identical body via cached idempotency record", async () => {
     const store = freshStore();
     const { redactor } = trackingRedactor();
@@ -662,7 +687,7 @@ describe("POST /api/relationships (create + validate-before-persist)", () => {
 
 describe("PATCH /api/relationships/:id (optimistic concurrency + If-Match)", () => {
   async function seed(
-    store: ReturnType<typeof createRelationshipStorePort>,
+    _store: ReturnType<typeof createRelationshipStorePort>,
     deps: UiHandlerDeps,
   ): Promise<{ id: string; etag: string }> {
     const req = makeReq({
@@ -676,7 +701,6 @@ describe("PATCH /api/relationships/:id (optimistic concurrency + If-Match)", () 
     // is the opaque string used by If-Match. `relationship.etag` is the legacy numeric
     // updated_at field (see store/relationships.ts:225) and is NOT a valid If-Match token.
     const body = res.body as { relationship: { id: string }; etag: string };
-    void store;
     return { id: body.relationship.id, etag: body.etag };
   }
 
@@ -1499,6 +1523,81 @@ describe("GET /api/relationships/:id/dependencies + impact + health + explain + 
   });
 });
 
+// Finding 0 (#2902 audit): the request-scoped correlationId never reached the terminal
+// `sse.stream.closed` line on /api/relationships/events. On an idle workspace (no activity
+// snapshots), the `retry: … \n: connected` frame written directly in handleRelationshipEvents is
+// the ONLY write on the stream until the 30s ping, so correlationId must be attached there.
+describe("GET /api/relationships/events correlationId threading (#2902 audit finding 0)", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  // Like makeCtx, but the response double also implements `on("close", …)` so the shared SSE
+  // write path (sse-write.ts) tracks and emits the per-stream terminal line, and carries a
+  // request-scoped correlationId the way the real server.ts request entry point does.
+  function makeListenableCtx(req: FakeReq, correlationId?: string): RouteContext {
+    const url = new URL(`http://localhost${req.url}`);
+    const emitter = new EventEmitter();
+    const res = {
+      writeHead: (): void => undefined,
+      flushHeaders: (): void => undefined,
+      write: () => true,
+      end: (): void => undefined,
+      destroy: (): void => undefined,
+      writableEnded: false,
+      on: (event: string, handler: (...args: unknown[]) => void) => {
+        emitter.on(event, handler);
+      },
+      _fireClose: () => emitter.emit("close"),
+    } as unknown as ServerResponse;
+    return {
+      req: req as unknown as IncomingMessage,
+      res,
+      params: {},
+      url,
+      correlationId,
+    };
+  }
+
+  it("attaches the supplied correlationId to the sse.stream.closed terminal line", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-corr-idle", store, redactor);
+    const req = makeReq({ method: "GET", url: "/api/relationships/events" });
+    const ctx = makeListenableCtx(req, "corr-relhandlers-1");
+
+    const result = handleRelationshipEvents(ctx, deps);
+    expect(result).toBe(STREAMING);
+    (ctx.res as unknown as { _fireClose: () => void })._fireClose();
+
+    const closed = sink.events.filter((event) => event.op === "sse.stream.closed");
+    expect(closed).toHaveLength(1);
+    expect(closed[0]?.correlationId).toBe("corr-relhandlers-1");
+    req.emit("close");
+  });
+
+  it("omits correlationId from the terminal line when none is supplied (unchanged behavior)", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const store = freshStore();
+    const { redactor } = trackingRedactor();
+    const deps = buildDeps("ws-corr-idle-2", store, redactor);
+    const req = makeReq({ method: "GET", url: "/api/relationships/events" });
+    const ctx = makeListenableCtx(req);
+
+    const result = handleRelationshipEvents(ctx, deps);
+    expect(result).toBe(STREAMING);
+    (ctx.res as unknown as { _fireClose: () => void })._fireClose();
+
+    const closed = sink.events.filter((event) => event.op === "sse.stream.closed");
+    expect(closed).toHaveLength(1);
+    expect(closed[0]?.correlationId).toBeUndefined();
+    req.emit("close");
+  });
+});
+
 describe("POST /api/relationships/validate (preview)", () => {
   it("returns decision.allowed=true for a valid proposal", async () => {
     const store = freshStore();
@@ -1564,7 +1663,7 @@ describe("Issue #539 audit regressions", () => {
   // Architect GAP-1 / security C1: the BFF wiring must compose `relationship` into UiHandlerDeps
   // so production calls (`keiko ui`) reach the handlers instead of HTTP 500.
   it("BFF buildUiHandlerDeps wires the relationship deps with a scopeResolver", async () => {
-    const tmpDir = await fs.mkdtemp(join(tmpdir(), "keiko-issue539-"));
+    const tmpDir = await fs.mkdtemp(join(realpathSync(tmpdir()), "keiko-issue539-"));
     const dbPath = join(tmpDir, "ui.db");
     try {
       const env: Record<string, string> = { KEIKO_UI_DATA_DIR: tmpDir };

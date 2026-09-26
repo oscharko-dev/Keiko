@@ -1,13 +1,15 @@
+import type {
+  DebugEvent,
+  DebugLifecycleReason,
+  DebugOutputCategory,
+  DebugProcessErrorCode,
+  DebugSessionStopReason,
+  DebugStopReason,
+} from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_DEBUG_PAYLOAD_LIMITS,
   projectDebugText,
-  type DebugEvent,
-  type DebugLifecycleReason,
-  type DebugOutputCategory,
-  type DebugProcessErrorCode,
-  type DebugSessionStopReason,
-  type DebugStopReason,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/dap-debug";
 import type { QualifiedDebugCapsuleHandle } from "./dapCapsuleSupervisor.js";
 import {
   preflightDapAdapter,
@@ -271,6 +273,7 @@ async function prepareReservedStartup(
   try {
     plan = await deps.validateCapsulePlan.validateAndRederive({
       candidate: input.planCandidate,
+      correlationId: input.identity.sessionId,
       binding,
       adapter: {
         providerId: spec.providerId,

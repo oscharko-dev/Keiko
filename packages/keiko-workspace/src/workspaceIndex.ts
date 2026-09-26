@@ -21,6 +21,8 @@ import type { WorkspaceFs, WorkspaceStat } from "./fs.js";
 import { isDenied } from "./ignore.js";
 import { resolveWithinWorkspace } from "./paths.js";
 import { cachedContentScores } from "./repoSearchCachedLexical.js";
+import { canonicalSearchScopeRelativePaths } from "./repoSearchEntries.js";
+import { enclosingLineRangesForIndices } from "./repoSearchLineSelection.js";
 import { stripTestIdentifierSuffix } from "./repoSearchIdentifier.js";
 import { definitionSymbolsInStructuralLine } from "./repoSearchMatchers.js";
 import {
@@ -34,18 +36,26 @@ import {
   type SearchPolicy,
   type SearchPolicyMode,
 } from "./repoSearchPolicy.js";
-import { containedRealPathInfo } from "./realpath.js";
+import { containedRealPathInfo, isCanonicalAllowedContainedPath } from "./realpath.js";
 import type { DiscoveredFile, WorkspaceInfo } from "./types.js";
+import { workspaceDirectoryFingerprint } from "./workspaceDirectorySnapshot.js";
 
 type MaybePromise<T> = T | Promise<T>;
 
-export const WORKSPACE_INDEX_SNAPSHOT_VERSION = 4;
+export const WORKSPACE_INDEX_SNAPSHOT_VERSION = 5;
+
+export interface WorkspaceIndexCandidatePathPolicy {
+  readonly include: readonly string[];
+  readonly exclude: readonly string[];
+}
 
 export type WorkspaceIndexRecordKind = "text" | "binary" | "size-exceeded";
 
 export interface WorkspaceIndexScopeKey {
   readonly workspaceRoot: string;
   readonly relativePaths: readonly string[];
+  readonly ignorePolicySha256: string;
+  readonly candidatePathPolicySha256: string;
   readonly policyMode: SearchPolicyMode;
   readonly applyGitignore: boolean;
   readonly omitLowValueWorkspaceFiles: boolean;
@@ -57,6 +67,10 @@ export interface WorkspaceIndexDiscoveredFile {
   readonly scopePath: string;
   readonly sizeBytes: number;
   readonly mtimeMs?: number | undefined;
+  readonly fileIdentityHash?: string | undefined;
+  readonly mtimeNs?: string | undefined;
+  readonly ctimeNs?: string | undefined;
+  readonly hardLinkCount?: number | undefined;
 }
 
 export interface WorkspaceIndexLexicalLine {
@@ -69,6 +83,7 @@ export interface WorkspaceIndexLexicalLine {
 export interface WorkspaceIndexLexicalRecord {
   readonly truncated: boolean;
   readonly termHashes: readonly string[];
+  readonly maxTermLength?: number | undefined;
   readonly lines: readonly WorkspaceIndexLexicalLine[];
 }
 
@@ -97,6 +112,8 @@ export interface WorkspaceIndexRecord extends WorkspaceIndexDiscoveredFile {
 export interface WorkspaceIndexSnapshot {
   readonly version: number;
   readonly relativePaths: readonly string[];
+  readonly ignorePolicySha256: string;
+  readonly candidatePathPolicySha256: string;
   readonly policyMode: SearchPolicyMode;
   readonly applyGitignore: boolean;
   readonly omitLowValueWorkspaceFiles: boolean;
@@ -147,6 +164,10 @@ export interface PreparedWorkspaceIndexEntry {
   readonly absolutePath: string;
   readonly file: DiscoveredFile;
   readonly mtimeMs?: number | undefined;
+  readonly fileIdentityHash?: string | undefined;
+  readonly mtimeNs?: string | undefined;
+  readonly ctimeNs?: string | undefined;
+  readonly hardLinkCount?: number | undefined;
   readonly record: WorkspaceIndexRecord | undefined;
   readonly stale: boolean;
 }
@@ -173,6 +194,7 @@ export interface PreparedWorkspaceIndexSnapshot {
 export interface WorkspaceIndexCandidateSet {
   readonly files: readonly DiscoveredFile[];
   readonly directories: readonly string[];
+  readonly directorySnapshots: readonly WorkspaceIndexDirectorySnapshot[];
   readonly truncated: boolean;
   readonly diagnostics: SearchDiagnostics;
 }
@@ -184,6 +206,8 @@ interface ScopeShape {
 
 interface ScopeKeyShape {
   readonly relativePaths: readonly string[];
+  readonly workspace?: Pick<WorkspaceInfo, "ignoreLines"> | undefined;
+  readonly candidatePathGlobs?: WorkspaceIndexCandidatePathPolicy | undefined;
 }
 
 interface PolicyShape {
@@ -237,6 +261,41 @@ function sha256Hex(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+export function workspaceIgnorePolicyFingerprint(ignoreLines: readonly string[]): string {
+  const hash = createHash("sha256");
+  hash.update("keiko-workspace-index:ignore-policy:v1\0");
+  for (const line of ignoreLines) {
+    const encoded = Buffer.from(line, "utf8");
+    hash.update(`${String(encoded.byteLength)}:`);
+    hash.update(encoded);
+    hash.update("\0");
+  }
+  return hash.digest("hex");
+}
+
+export function workspaceCandidatePathPolicyFingerprint(
+  policy: WorkspaceIndexCandidatePathPolicy | undefined,
+): string {
+  const hash = createHash("sha256");
+  hash.update("keiko-workspace-index:candidate-path-policy:v1\0");
+  for (const [kind, patterns] of [
+    ["include", policy?.include ?? []],
+    ["exclude", policy?.exclude ?? []],
+  ] as const) {
+    hash.update(`${kind}\0`);
+    // S2871: the comparator must stay code-unit stable, not locale-collated -- this ordering
+    // feeds a persisted candidate-path policy fingerprint, so `compareStrings` reproduces the
+    // exact order a bare `.sort()` produced and keeps every already-stored fingerprint valid.
+    for (const pattern of [...new Set(patterns)].sort(compareStrings)) {
+      const encoded = Buffer.from(pattern, "utf8");
+      hash.update(`${String(encoded.byteLength)}:`);
+      hash.update(encoded);
+      hash.update("\0");
+    }
+  }
+  return hash.digest("hex");
+}
+
 function compareStrings(a: string, b: string): number {
   if (a === b) return 0;
   return a < b ? -1 : 1;
@@ -251,18 +310,9 @@ function isSafeIndexScopePath(scopePath: string): boolean {
 }
 
 function normalizeRelativePaths(relativePaths: readonly string[]): readonly string[] {
-  const seen = new Set<string>();
-  const normalized: string[] = [];
-  for (const entry of relativePaths) {
-    const scopePath = normalizeScopePath(entry);
-    if (!isSafeIndexScopePath(scopePath) || seen.has(scopePath)) {
-      continue;
-    }
-    seen.add(scopePath);
-    normalized.push(scopePath);
-  }
-  normalized.sort(compareStrings);
-  return normalized;
+  return canonicalSearchScopeRelativePaths(
+    relativePaths.filter((entry) => isSafeIndexScopePath(normalizeScopePath(entry))),
+  );
 }
 
 function normalizeWholeNumber(value: unknown): number | undefined {
@@ -281,6 +331,48 @@ function normalizeMtimeMs(value: unknown): number | undefined {
     return undefined;
   }
   return value;
+}
+
+function normalizeFileIdentityHash(value: unknown): string | undefined {
+  return typeof value === "string" && /^[0-9a-f]{64}$/u.test(value) ? value : undefined;
+}
+
+function normalizeNanoseconds(value: unknown): string | undefined {
+  if (typeof value !== "string" || !/^(?:0|[1-9]\d{0,30})$/u.test(value)) {
+    return undefined;
+  }
+  return value;
+}
+
+function normalizeHardLinkCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
+}
+
+function bodyFreeFileIdentityHash(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.length === 0 || value.length > 1_024) {
+    return undefined;
+  }
+  return sha256Hex(`workspace-index-file-identity:v1\0${value}`);
+}
+
+export function workspaceIndexFileMetadata(
+  scopePath: string,
+  stat: WorkspaceStat,
+): WorkspaceIndexDiscoveredFile {
+  const mtimeMs = normalizeMtimeMs(stat.mtimeMs);
+  const fileIdentityHash = bodyFreeFileIdentityHash(stat.fileIdentity);
+  const mtimeNs = normalizeNanoseconds(stat.mtimeNs);
+  const ctimeNs = normalizeNanoseconds(stat.ctimeNs);
+  const hardLinkCount = normalizeHardLinkCount(stat.hardLinkCount);
+  return {
+    scopePath,
+    sizeBytes: stat.size,
+    ...(mtimeMs !== undefined ? { mtimeMs } : {}),
+    ...(fileIdentityHash !== undefined ? { fileIdentityHash } : {}),
+    ...(mtimeNs !== undefined ? { mtimeNs } : {}),
+    ...(ctimeNs !== undefined ? { ctimeNs } : {}),
+    ...(hardLinkCount !== undefined ? { hardLinkCount } : {}),
+  };
 }
 
 function hashLexicalTerm(term: string): string {
@@ -312,10 +404,18 @@ function normalizeDiscoveredFile(
     return undefined;
   }
   const mtimeMs = normalizeMtimeMs(file.mtimeMs);
+  const fileIdentityHash = normalizeFileIdentityHash(file.fileIdentityHash);
+  const mtimeNs = normalizeNanoseconds(file.mtimeNs);
+  const ctimeNs = normalizeNanoseconds(file.ctimeNs);
+  const hardLinkCount = normalizeHardLinkCount(file.hardLinkCount);
   return {
     scopePath,
     sizeBytes,
     ...(mtimeMs !== undefined ? { mtimeMs } : {}),
+    ...(fileIdentityHash !== undefined ? { fileIdentityHash } : {}),
+    ...(mtimeNs !== undefined ? { mtimeNs } : {}),
+    ...(ctimeNs !== undefined ? { ctimeNs } : {}),
+    ...(hardLinkCount !== undefined ? { hardLinkCount } : {}),
   };
 }
 
@@ -360,12 +460,14 @@ function normalizeLexicalRecord(
   const termHashes = [
     ...new Set(lexical.termHashes.filter((term) => typeof term === "string" && term.length > 0)),
   ].sort(compareStrings);
+  const maxTermLength = normalizeWholeNumber(lexical.maxTermLength);
   if (termHashes.length === 0 && lines.length === 0) {
     return undefined;
   }
   return {
     truncated: lexical.truncated,
     termHashes,
+    ...(maxTermLength === undefined || maxTermLength === 0 ? {} : { maxTermLength }),
     lines,
   };
 }
@@ -497,7 +599,16 @@ function normalizeDiscoverySnapshot(
   };
 }
 
-function normalizeSnapshot(snapshot: WorkspaceIndexSnapshot): WorkspaceIndexSnapshot | undefined {
+interface NormalizedWorkspaceIndexHeader {
+  readonly maxBytesPerFileScanned: number;
+  readonly maxFilesScanned: number;
+  readonly ignorePolicySha256: string;
+  readonly candidatePathPolicySha256: string;
+}
+
+function normalizeWorkspaceIndexHeader(
+  snapshot: WorkspaceIndexSnapshot,
+): NormalizedWorkspaceIndexHeader | undefined {
   if (
     normalizeWholeNumber(snapshot.version) !== WORKSPACE_INDEX_SNAPSHOT_VERSION ||
     typeof snapshot.applyGitignore !== "boolean" ||
@@ -507,7 +618,11 @@ function normalizeSnapshot(snapshot: WorkspaceIndexSnapshot): WorkspaceIndexSnap
   }
   const maxBytesPerFileScanned = normalizeWholeNumber(snapshot.maxBytesPerFileScanned);
   const maxFilesScanned = normalizeWholeNumber(snapshot.maxFilesScanned);
+  const ignorePolicySha256 = normalizeFingerprint(snapshot.ignorePolicySha256);
+  const candidatePathPolicySha256 = normalizeFingerprint(snapshot.candidatePathPolicySha256);
   if (
+    ignorePolicySha256 === undefined ||
+    candidatePathPolicySha256 === undefined ||
     maxBytesPerFileScanned === undefined ||
     maxBytesPerFileScanned === 0 ||
     maxFilesScanned === undefined ||
@@ -515,6 +630,19 @@ function normalizeSnapshot(snapshot: WorkspaceIndexSnapshot): WorkspaceIndexSnap
   ) {
     return undefined;
   }
+  return {
+    maxBytesPerFileScanned,
+    maxFilesScanned,
+    ignorePolicySha256,
+    candidatePathPolicySha256,
+  };
+}
+
+function normalizeSnapshot(snapshot: WorkspaceIndexSnapshot): WorkspaceIndexSnapshot | undefined {
+  const header = normalizeWorkspaceIndexHeader(snapshot);
+  if (header === undefined) return undefined;
+  const { maxBytesPerFileScanned, maxFilesScanned, ignorePolicySha256, candidatePathPolicySha256 } =
+    header;
   const discovery = normalizeDiscoverySnapshot(snapshot.discovery);
   if (discovery === undefined) {
     return undefined;
@@ -530,6 +658,8 @@ function normalizeSnapshot(snapshot: WorkspaceIndexSnapshot): WorkspaceIndexSnap
   return {
     version: WORKSPACE_INDEX_SNAPSHOT_VERSION,
     relativePaths,
+    ignorePolicySha256,
+    candidatePathPolicySha256,
     policyMode: snapshot.policyMode,
     applyGitignore: snapshot.applyGitignore,
     omitLowValueWorkspaceFiles: snapshot.omitLowValueWorkspaceFiles,
@@ -545,6 +675,8 @@ function storageKey(scopeKey: WorkspaceIndexScopeKey): string {
     JSON.stringify({
       workspaceRoot: scopeKey.workspaceRoot,
       relativePaths: normalizeRelativePaths(scopeKey.relativePaths),
+      ignorePolicySha256: scopeKey.ignorePolicySha256,
+      candidatePathPolicySha256: scopeKey.candidatePathPolicySha256,
       policyMode: scopeKey.policyMode,
       applyGitignore: scopeKey.applyGitignore,
       omitLowValueWorkspaceFiles: scopeKey.omitLowValueWorkspaceFiles,
@@ -554,15 +686,36 @@ function storageKey(scopeKey: WorkspaceIndexScopeKey): string {
   )}`;
 }
 
+function snapshotMatchesScopeKey(
+  snapshot: WorkspaceIndexSnapshot,
+  scopeKey: WorkspaceIndexScopeKey,
+): boolean {
+  const relativePaths = normalizeRelativePaths(scopeKey.relativePaths);
+  return (
+    snapshot.ignorePolicySha256 === scopeKey.ignorePolicySha256 &&
+    snapshot.candidatePathPolicySha256 === scopeKey.candidatePathPolicySha256 &&
+    snapshot.policyMode === scopeKey.policyMode &&
+    snapshot.applyGitignore === scopeKey.applyGitignore &&
+    snapshot.omitLowValueWorkspaceFiles === scopeKey.omitLowValueWorkspaceFiles &&
+    snapshot.maxBytesPerFileScanned === scopeKey.maxBytesPerFileScanned &&
+    snapshot.maxFilesScanned === scopeKey.maxFilesScanned &&
+    snapshot.relativePaths.length === relativePaths.length &&
+    snapshot.relativePaths.every((entry, index) => entry === relativePaths[index])
+  );
+}
+
 export function buildWorkspaceIndexScopeKey(
   scope: ScopeShape,
   policy: PolicyShape,
   maxBytesPerFileScanned: number,
   maxFilesScanned: number,
+  candidatePathGlobs?: WorkspaceIndexCandidatePathPolicy,
 ): WorkspaceIndexScopeKey {
   return {
     workspaceRoot: scope.workspace.root,
     relativePaths: normalizeRelativePaths(scope.relativePaths),
+    ignorePolicySha256: workspaceIgnorePolicyFingerprint(scope.workspace.ignoreLines),
+    candidatePathPolicySha256: workspaceCandidatePathPolicyFingerprint(candidatePathGlobs),
     policyMode: policy.policyMode,
     applyGitignore: policy.applyGitignore,
     omitLowValueWorkspaceFiles: policy.omitLowValueWorkspaceFiles,
@@ -1053,6 +1206,35 @@ function storedSnapshotEnvelopeMatches(
   );
 }
 
+function isObject(value: unknown): value is object {
+  return typeof value === "object" && value !== null;
+}
+
+function isStaleSnapshotFormat(value: unknown): boolean {
+  return isObject(value) && isLegacyUnwrappedSnapshot(value);
+}
+
+function parseStoredSnapshotObject(
+  parsed: unknown,
+  maxSnapshotEntries: number,
+  runtimeDirBinding: string,
+  storageKey: string,
+): StoredSnapshotParseResult {
+  if (!isObject(parsed)) {
+    return { status: "rejected", reason: "authentication-or-corruption" };
+  }
+  if (isLegacyUnwrappedSnapshot(parsed)) return { status: "stale-format" };
+  if (!storedSnapshotEnvelopeMatches(parsed, runtimeDirBinding, storageKey)) {
+    return { status: "rejected", reason: "authentication-or-corruption" };
+  }
+  if (isStaleSnapshotFormat(parsed.snapshot)) return { status: "stale-format" };
+  const normalized = normalizeSnapshot(parsed.snapshot as WorkspaceIndexSnapshot);
+  if (normalized === undefined || !snapshotFitsStoreBounds(normalized, maxSnapshotEntries)) {
+    return { status: "rejected", reason: "invalid-snapshot" };
+  }
+  return { status: "loaded", snapshot: normalized };
+}
+
 function parseStoredSnapshot(
   raw: string,
   encryptionKey: Buffer,
@@ -1068,20 +1250,7 @@ function parseStoredSnapshot(
   }
   try {
     const parsed: unknown = JSON.parse(plaintext);
-    if (typeof parsed !== "object" || parsed === null) {
-      return { status: "rejected", reason: "authentication-or-corruption" };
-    }
-    if (isLegacyUnwrappedSnapshot(parsed)) {
-      return { status: "stale-format" };
-    }
-    if (!storedSnapshotEnvelopeMatches(parsed, runtimeDirBinding, storageKey)) {
-      return { status: "rejected", reason: "authentication-or-corruption" };
-    }
-    const normalized = normalizeSnapshot(parsed.snapshot as WorkspaceIndexSnapshot);
-    if (normalized === undefined || !snapshotFitsStoreBounds(normalized, maxSnapshotEntries)) {
-      return { status: "rejected", reason: "invalid-snapshot" };
-    }
-    return { status: "loaded", snapshot: normalized };
+    return parseStoredSnapshotObject(parsed, maxSnapshotEntries, runtimeDirBinding, storageKey);
   } catch {
     return { status: "rejected", reason: "invalid-snapshot" };
   }
@@ -1867,7 +2036,11 @@ export function createWorkspaceIndex(
       // so a second normalizeSnapshot here would be a redundant O(records) pass on the
       // grounded-ask hot path. normalizeSnapshot is idempotent, so returning the store's
       // snapshot directly is behavior-preserving.
-      return store.loadSnapshot(storageKey(scopeKey));
+      const snapshot = await store.loadSnapshot(storageKey(scopeKey));
+      return snapshot?.version === WORKSPACE_INDEX_SNAPSHOT_VERSION &&
+        snapshotMatchesScopeKey(snapshot, scopeKey)
+        ? snapshot
+        : undefined;
     },
     saveSnapshot: async (
       scopeKey: WorkspaceIndexScopeKey,
@@ -1875,6 +2048,9 @@ export function createWorkspaceIndex(
     ): Promise<void> => {
       const normalized = normalizeSnapshot(snapshot);
       if (normalized === undefined) {
+        return;
+      }
+      if (!snapshotMatchesScopeKey(normalized, scopeKey)) {
         return;
       }
       await store.saveSnapshot(storageKey(scopeKey), normalized);
@@ -2047,6 +2223,7 @@ function routeMarkersAt(
 interface PreparedLexicalLine {
   readonly definitionTermHashes: readonly string[];
   readonly termHashes: readonly string[];
+  readonly maxTermLength: number;
   readonly truncated: boolean;
 }
 
@@ -2060,6 +2237,7 @@ function prepareLexicalLine(
   const termHashes = [...new Set(lexical.terms.map((term) => hashLexicalTerm(term)))].sort(
     compareStrings,
   );
+  const maxTermLength = lexical.terms.reduce((max, term) => Math.max(max, term.length), 0);
   const definitions = new Set(
     definitionSymbolsInStructuralLine(structuralLine).map((symbol) => symbol.toLowerCase()),
   );
@@ -2067,7 +2245,7 @@ function prepareLexicalLine(
     .filter((term) => definitions.has(term.toLowerCase()))
     .map((term) => hashLexicalTerm(term))
     .sort(compareStrings);
-  return { definitionTermHashes, termHashes, truncated: lexical.truncated };
+  return { definitionTermHashes, termHashes, maxTermLength, truncated: lexical.truncated };
 }
 
 function addFileTermHashes(hashes: readonly string[], target: Set<string>): boolean {
@@ -2081,10 +2259,11 @@ function addFileTermHashes(hashes: readonly string[], target: Set<string>): bool
 function lexicalLineRecord(
   prepared: PreparedLexicalLine,
   index: number,
+  range: { readonly startLine: number; readonly endLine: number } | undefined,
 ): WorkspaceIndexLexicalLine {
   return {
-    startLine: index + 1,
-    endLine: index + 1,
+    startLine: range?.startLine ?? index + 1,
+    endLine: range?.endLine ?? index + 1,
     termHashes: prepared.termHashes,
     ...(prepared.definitionTermHashes.length === 0
       ? {}
@@ -2099,7 +2278,9 @@ export function buildWorkspaceIndexLexicalRecord(
   const lines = content.split("\n");
   const sourceLines = repositorySourceLines(content, scopePath);
   const lexicalLines: WorkspaceIndexLexicalLine[] = [];
+  const preparedLines: { readonly index: number; readonly value: PreparedLexicalLine }[] = [];
   const termHashes = new Set<string>();
+  let maxTermLength = 0;
   let truncated = false;
   for (let index = 0; index < lines.length; index += 1) {
     const prepared = prepareLexicalLine(
@@ -2109,41 +2290,32 @@ export function buildWorkspaceIndexLexicalRecord(
     );
     if (prepared === undefined) continue;
     if (prepared.truncated) truncated = true;
-    if (lexicalLines.length >= MAX_WORKSPACE_INDEX_LEXICAL_LINES) {
+    if (preparedLines.length >= MAX_WORKSPACE_INDEX_LEXICAL_LINES) {
       truncated = true;
       break;
     }
     if (!addFileTermHashes(prepared.termHashes, termHashes)) truncated = true;
-    lexicalLines.push(lexicalLineRecord(prepared, index));
+    maxTermLength = Math.max(maxTermLength, prepared.maxTermLength);
+    preparedLines.push({ index, value: prepared });
     if (truncated) {
       break;
     }
   }
+  const enclosingRanges = enclosingLineRangesForIndices(
+    content,
+    preparedLines.map((line) => line.index),
+  );
+  lexicalLines.push(
+    ...preparedLines.map((line) =>
+      lexicalLineRecord(line.value, line.index, enclosingRanges.get(line.index)),
+    ),
+  );
   return {
     truncated,
     termHashes: [...termHashes].sort(compareStrings),
+    maxTermLength,
     lines: lexicalLines,
   };
-}
-
-function dirFingerprint(
-  entries: readonly {
-    readonly name: string;
-    readonly isDirectory: boolean;
-    readonly isFile: boolean;
-  }[],
-): string {
-  return sha256Hex(
-    JSON.stringify(
-      entries
-        .map((entry) => ({
-          name: entry.name,
-          isDirectory: entry.isDirectory,
-          isFile: entry.isFile,
-        }))
-        .sort((a, b) => compareStrings(a.name, b.name)),
-    ),
-  );
 }
 
 export interface WorkspaceIndexDirectoryDelta {
@@ -2156,6 +2328,7 @@ export interface WorkspaceIndexDirectoryDelta {
 export interface WorkspaceIndexDirectoryInspection {
   readonly valid: boolean;
   readonly deltas: readonly WorkspaceIndexDirectoryDelta[];
+  readonly snapshots: readonly WorkspaceIndexDirectorySnapshot[];
 }
 
 interface WorkspaceIndexDirectoryEntryShape {
@@ -2252,6 +2425,29 @@ function removedDirectoryNames(
   return removed;
 }
 
+function oldDirectoryChildKind(
+  files: readonly WorkspaceIndexDiscoveredFile[],
+  directoryScopePath: string,
+  childName: string,
+): "directory" | "file" | undefined {
+  const childPath = childScopePath(directoryScopePath, childName);
+  if (files.some((file) => file.scopePath === childPath)) return "file";
+  return files.some((file) => file.scopePath.startsWith(`${childPath}/`)) ? "directory" : undefined;
+}
+
+function directoryChildTypeChanged(
+  files: readonly WorkspaceIndexDiscoveredFile[],
+  directoryScopePath: string,
+  newChildren: ReadonlyMap<string, WorkspaceIndexDirectoryEntryShape>,
+): boolean {
+  for (const [name, entry] of newChildren) {
+    const oldKind = oldDirectoryChildKind(files, directoryScopePath, name);
+    if (oldKind === "file" && entry.isDirectory) return true;
+    if (oldKind === "directory" && entry.isFile) return true;
+  }
+  return false;
+}
+
 function directoryDelta(
   normalized: WorkspaceIndexSnapshot,
   directory: WorkspaceIndexDirectorySnapshot,
@@ -2266,7 +2462,9 @@ function directoryDelta(
     directory.scopePath,
     removedNames,
   );
-  const rescanDirectory = addedPaths.length === 0 && removedPaths.length === 0;
+  const rescanDirectory =
+    directoryChildTypeChanged(normalized.discovery.files, directory.scopePath, newChildren) ||
+    (addedPaths.length === 0 && removedPaths.length === 0);
   return {
     scopePath: directory.scopePath,
     addedPaths,
@@ -2279,62 +2477,195 @@ function directoryChanged(
   directory: WorkspaceIndexDirectorySnapshot,
   absolutePath: string,
   fs: WorkspaceFs,
+  maxEntries: number,
 ): {
+  readonly valid: boolean;
   readonly changed: boolean;
-  readonly entries?: readonly WorkspaceIndexDirectoryEntryShape[] | undefined;
+  readonly entries: readonly WorkspaceIndexDirectoryEntryShape[];
 } {
   try {
-    const current = fs.stat(absolutePath);
-    if (
-      directory.mtimeMs !== undefined &&
-      typeof current.mtimeMs === "number" &&
-      current.mtimeMs === directory.mtimeMs
-    ) {
-      return { changed: false };
-    }
-    const entries = fs.readDir(absolutePath);
-    return { changed: dirFingerprint(entries) !== directory.fingerprint, entries };
+    const entries = fs.readDir(absolutePath, maxEntries + 1);
+    if (entries.length > maxEntries) return { valid: false, changed: true, entries: [] };
+    return {
+      valid: true,
+      changed: workspaceDirectoryFingerprint(entries) !== directory.fingerprint,
+      entries,
+    };
   } catch {
-    return { changed: true, entries: [] };
+    return { valid: false, changed: true, entries: [] };
   }
+}
+
+function workspaceIndexDirectoryEntryBudget(maxFilesScanned: number): number {
+  return Math.max(maxFilesScanned * 25, maxFilesScanned + 1);
+}
+
+function workspaceIndexDirectoryAbsolutePath(workspaceRoot: string, scopePath: string): string {
+  return scopePath.length === 0 ? workspaceRoot : resolveWithinWorkspace(workspaceRoot, scopePath);
+}
+
+function isSafeWorkspaceIndexDirectoryScopePath(scopePath: string): boolean {
+  return scopePath.length === 0 || isSafeIndexScopePath(scopePath);
+}
+
+export function resolveContainedWorkspaceIndexDirectory(
+  workspaceRoot: string,
+  scopePath: string,
+  fs: WorkspaceFs,
+): string | undefined {
+  const normalized = normalizeScopePath(scopePath);
+  if (normalized !== scopePath || !isSafeWorkspaceIndexDirectoryScopePath(normalized)) {
+    return undefined;
+  }
+  try {
+    const absolutePath = workspaceIndexDirectoryAbsolutePath(workspaceRoot, normalized);
+    const contained = containedRealPathInfo(fs, workspaceRoot, absolutePath);
+    if (!isCanonicalAllowedContainedPath(contained, workspaceRoot, normalized)) {
+      return undefined;
+    }
+    const stat = fs.stat(contained.path);
+    return stat.isDirectory && !stat.isSymbolicLink ? contained.path : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+interface InspectedWorkspaceIndexDirectory {
+  readonly valid: boolean;
+  readonly entriesRead: number;
+  readonly delta?: WorkspaceIndexDirectoryDelta | undefined;
+  readonly snapshot?: WorkspaceIndexDirectorySnapshot | undefined;
+}
+
+function inspectWorkspaceIndexDirectory(
+  normalized: WorkspaceIndexSnapshot,
+  directory: WorkspaceIndexDirectorySnapshot,
+  workspace: WorkspaceInfo,
+  fs: WorkspaceFs,
+  remainingEntries: number,
+): InspectedWorkspaceIndexDirectory {
+  const absolutePath = resolveContainedWorkspaceIndexDirectory(
+    workspace.root,
+    directory.scopePath,
+    fs,
+  );
+  if (absolutePath === undefined) return { valid: false, entriesRead: 0 };
+  const result = directoryChanged(directory, absolutePath, fs, remainingEntries);
+  if (!result.valid) return { valid: false, entriesRead: 0 };
+  const snapshot = {
+    scopePath: directory.scopePath,
+    fingerprint: workspaceDirectoryFingerprint(result.entries),
+  };
+  if (!result.changed) return { valid: true, entriesRead: result.entries.length, snapshot };
+  const delta =
+    result.entries.length === 0
+      ? {
+          scopePath: directory.scopePath,
+          addedPaths: [],
+          removedPaths: normalized.discovery.files
+            .filter((file) => isWithinDirectory(file.scopePath, directory.scopePath))
+            .map((file) => file.scopePath),
+          rescanDirectory: false,
+        }
+      : directoryDelta(normalized, directory, result.entries);
+  return {
+    valid: true,
+    entriesRead: result.entries.length,
+    snapshot,
+    ...(delta === undefined ? {} : { delta }),
+  };
+}
+
+function fixedFileSelectionPaths(
+  normalized: WorkspaceIndexSnapshot,
+): readonly string[] | undefined {
+  if (
+    normalized.relativePaths.length === 0 ||
+    normalized.discovery.directories.length > 0 ||
+    normalized.discovery.truncated ||
+    normalized.discovery.filesDiscovered !== normalized.discovery.files.length
+  ) {
+    return undefined;
+  }
+  const discoveredPaths = new Set(normalized.discovery.files.map((file) => file.scopePath));
+  if (
+    discoveredPaths.size !== normalized.relativePaths.length ||
+    normalized.relativePaths.some((scopePath) => !discoveredPaths.has(scopePath))
+  ) {
+    return undefined;
+  }
+  return normalized.relativePaths;
+}
+
+function fixedFileIsCurrent(scopePath: string, workspace: WorkspaceInfo, fs: WorkspaceFs): boolean {
+  try {
+    const absolutePath = resolveWithinWorkspace(workspace.root, scopePath);
+    const contained = containedRealPathInfo(fs, workspace.root, absolutePath);
+    if (!isCanonicalAllowedContainedPath(contained, workspace.root, scopePath)) return false;
+    const stat = fs.stat(contained.path);
+    return (
+      stat.isFile &&
+      !stat.isSymbolicLink &&
+      (stat.hardLinkCount === undefined || stat.hardLinkCount <= 1)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function fixedFileSelectionIsCurrent(
+  normalized: WorkspaceIndexSnapshot,
+  workspace: WorkspaceInfo,
+  fs: WorkspaceFs,
+  shouldContinue: () => boolean,
+): boolean {
+  const scopePaths = fixedFileSelectionPaths(normalized);
+  if (scopePaths === undefined) return false;
+  for (const scopePath of scopePaths) {
+    if (!shouldContinue() || !fixedFileIsCurrent(scopePath, workspace, fs)) return false;
+  }
+  return true;
 }
 
 export function inspectWorkspaceIndexDirectories(
   snapshot: WorkspaceIndexSnapshot,
   workspace: WorkspaceInfo,
   fs: WorkspaceFs,
+  shouldContinue: () => boolean = () => true,
 ): WorkspaceIndexDirectoryInspection {
   const normalized = normalizeSnapshot(snapshot);
-  if (normalized === undefined || normalized.discovery.directories.length === 0) {
-    return { valid: false, deltas: [] };
+  if (normalized === undefined) {
+    return { valid: false, deltas: [], snapshots: [] };
+  }
+  if (normalized.discovery.directories.length === 0) {
+    return {
+      valid: fixedFileSelectionIsCurrent(normalized, workspace, fs, shouldContinue),
+      deltas: [],
+      snapshots: [],
+    };
   }
   const deltas: WorkspaceIndexDirectoryDelta[] = [];
+  const snapshots: WorkspaceIndexDirectorySnapshot[] = [];
+  let remainingEntries = workspaceIndexDirectoryEntryBudget(normalized.maxFilesScanned);
   for (const directory of normalized.discovery.directories) {
-    const absolutePath =
-      directory.scopePath.length === 0
-        ? workspace.root
-        : resolveWithinWorkspace(workspace.root, directory.scopePath);
-    const { changed, entries } = directoryChanged(directory, absolutePath, fs);
-    if (!changed) {
-      continue;
+    if (!shouldContinue() || remainingEntries <= 0) {
+      return { valid: false, deltas: [], snapshots: [] };
     }
-    if (entries === undefined || entries.length === 0) {
-      deltas.push({
-        scopePath: directory.scopePath,
-        addedPaths: [],
-        removedPaths: normalized.discovery.files
-          .filter((file) => isWithinDirectory(file.scopePath, directory.scopePath))
-          .map((file) => file.scopePath),
-        rescanDirectory: false,
-      });
-      continue;
+    const result = inspectWorkspaceIndexDirectory(
+      normalized,
+      directory,
+      workspace,
+      fs,
+      remainingEntries,
+    );
+    if (!result.valid || result.snapshot === undefined) {
+      return { valid: false, deltas: [], snapshots: [] };
     }
-    const delta = directoryDelta(normalized, directory, entries);
-    if (delta !== undefined) {
-      deltas.push(delta);
-    }
+    remainingEntries -= result.entriesRead;
+    snapshots.push(result.snapshot);
+    if (result.delta !== undefined) deltas.push(result.delta);
   }
-  return { valid: true, deltas };
+  return { valid: true, deltas, snapshots };
 }
 
 export function isWorkspaceIndexSnapshotFresh(
@@ -2346,24 +2677,24 @@ export function isWorkspaceIndexSnapshotFresh(
   if (normalized === undefined) {
     return false;
   }
+  if (normalized.discovery.directories.length === 0) {
+    return fixedFileSelectionIsCurrent(normalized, workspace, fs, () => true);
+  }
+  let remainingEntries = workspaceIndexDirectoryEntryBudget(normalized.maxFilesScanned);
   for (const directory of normalized.discovery.directories) {
-    const absolutePath =
-      directory.scopePath.length === 0
-        ? workspace.root
-        : resolveWithinWorkspace(workspace.root, directory.scopePath);
+    if (remainingEntries <= 0) return false;
+    const absolutePath = resolveContainedWorkspaceIndexDirectory(
+      workspace.root,
+      directory.scopePath,
+      fs,
+    );
+    if (absolutePath === undefined) return false;
     try {
-      const entries = fs.readDir(absolutePath);
-      if (dirFingerprint(entries) !== directory.fingerprint) {
+      const entries = fs.readDir(absolutePath, remainingEntries + 1);
+      if (entries.length > remainingEntries) return false;
+      remainingEntries -= entries.length;
+      if (workspaceDirectoryFingerprint(entries) !== directory.fingerprint) {
         return false;
-      }
-      if (directory.mtimeMs !== undefined) {
-        const current = fs.stat(absolutePath);
-        if (
-          typeof current.mtimeMs !== "number" ||
-          Math.trunc(current.mtimeMs) !== directory.mtimeMs
-        ) {
-          return false;
-        }
       }
     } catch {
       return false;
@@ -2373,12 +2704,39 @@ export function isWorkspaceIndexSnapshotFresh(
 }
 
 function currentMetadata(scopePath: string, stat: WorkspaceStat): WorkspaceIndexDiscoveredFile {
-  const mtimeMs = normalizeMtimeMs(stat.mtimeMs);
-  return {
-    scopePath,
-    sizeBytes: stat.size,
-    ...(mtimeMs !== undefined ? { mtimeMs } : {}),
-  };
+  return workspaceIndexFileMetadata(scopePath, stat);
+}
+
+function sameStrongFileIdentity(
+  record: WorkspaceIndexDiscoveredFile,
+  metadata: WorkspaceIndexDiscoveredFile,
+): boolean {
+  if (
+    record.fileIdentityHash === undefined ||
+    record.mtimeNs === undefined ||
+    record.ctimeNs === undefined
+  ) {
+    return false;
+  }
+  return (
+    record.fileIdentityHash === metadata.fileIdentityHash &&
+    record.mtimeNs === metadata.mtimeNs &&
+    record.ctimeNs === metadata.ctimeNs &&
+    record.hardLinkCount === 1 &&
+    metadata.hardLinkCount === 1
+  );
+}
+
+export function isWorkspaceIndexFileMetadataCurrent(
+  previous: WorkspaceIndexDiscoveredFile | undefined,
+  current: WorkspaceIndexDiscoveredFile,
+): boolean {
+  if (previous === undefined) return false;
+  return (
+    previous.sizeBytes === current.sizeBytes &&
+    previous.mtimeMs === current.mtimeMs &&
+    sameStrongFileIdentity(previous, current)
+  );
 }
 
 function sameRecordMetadata(
@@ -2388,7 +2746,7 @@ function sameRecordMetadata(
   if (record === undefined) {
     return false;
   }
-  return record.sizeBytes === metadata.sizeBytes && record.mtimeMs === metadata.mtimeMs;
+  return isWorkspaceIndexFileMetadataCurrent(record, metadata);
 }
 
 export function isWorkspaceIndexRecordCurrent(
@@ -2434,23 +2792,19 @@ function preparedDiscoveryFile(entry: PreparedWorkspaceIndexEntry): WorkspaceInd
     scopePath: entry.scopePath,
     sizeBytes: entry.file.sizeBytes,
     ...(entry.mtimeMs !== undefined ? { mtimeMs: entry.mtimeMs } : {}),
+    ...(entry.fileIdentityHash !== undefined ? { fileIdentityHash: entry.fileIdentityHash } : {}),
+    ...(entry.mtimeNs !== undefined ? { mtimeNs: entry.mtimeNs } : {}),
+    ...(entry.ctimeNs !== undefined ? { ctimeNs: entry.ctimeNs } : {}),
+    ...(entry.hardLinkCount !== undefined ? { hardLinkCount: entry.hardLinkCount } : {}),
   };
 }
 
 function matchedRecord(
   recordByPath: ReadonlyMap<string, WorkspaceIndexRecord>,
   scopePath: string,
-  requestedPath: string,
 ): MatchedWorkspaceIndexRecord | undefined {
   const direct = recordByPath.get(scopePath);
-  if (direct !== undefined) {
-    return { path: scopePath, record: direct };
-  }
-  if (scopePath === requestedPath) {
-    return undefined;
-  }
-  const requested = recordByPath.get(requestedPath);
-  return requested === undefined ? undefined : { path: requestedPath, record: requested };
+  return direct === undefined ? undefined : { path: scopePath, record: direct };
 }
 
 function statFile(fs: WorkspaceFs, absolutePath: string): WorkspaceStat | undefined {
@@ -2474,6 +2828,12 @@ function retainedPreparedEntry(
       absolutePath: containedPath,
       file: { relativePath: scopePath, sizeBytes: metadata.sizeBytes },
       ...(metadata.mtimeMs !== undefined ? { mtimeMs: metadata.mtimeMs } : {}),
+      ...(metadata.fileIdentityHash !== undefined
+        ? { fileIdentityHash: metadata.fileIdentityHash }
+        : {}),
+      ...(metadata.mtimeNs !== undefined ? { mtimeNs: metadata.mtimeNs } : {}),
+      ...(metadata.ctimeNs !== undefined ? { ctimeNs: metadata.ctimeNs } : {}),
+      ...(metadata.hardLinkCount !== undefined ? { hardLinkCount: metadata.hardLinkCount } : {}),
       record: matched?.record,
       stale: !sameRecordMetadata(matched?.record, metadata),
     },
@@ -2493,16 +2853,20 @@ function prepareWorkspaceIndexEntry(
     return { kind: "skipped" };
   }
   const absolutePath = resolveWithinWorkspace(workspace.root, requestedPath);
-  if (!fs.exists(absolutePath)) {
-    return { kind: "deleted" };
-  }
   const contained = containedRealPathInfo(fs, workspace.root, absolutePath);
   const scopePath = normalizeScopePath(contained.realRelative);
-  if (!isSafeIndexScopePath(scopePath) || seen.has(scopePath)) {
+  const canonicalPathIsSafe =
+    isCanonicalAllowedContainedPath(contained, workspace.root, requestedPath) &&
+    isSafeIndexScopePath(scopePath) &&
+    !seen.has(scopePath);
+  if (!canonicalPathIsSafe && contained.path !== absolutePath) {
     return { kind: "skipped" };
   }
   const stat = statFile(fs, contained.path);
-  if (stat?.isFile !== true) {
+  if (stat === undefined) {
+    return { kind: "deleted" };
+  }
+  if (!canonicalPathIsSafe || !stat.isFile) {
     return { kind: "skipped" };
   }
   seen.add(scopePath);
@@ -2510,7 +2874,7 @@ function prepareWorkspaceIndexEntry(
     contained.path,
     scopePath,
     currentMetadata(scopePath, stat),
-    matchedRecord(recordByPath, scopePath, requestedPath),
+    matchedRecord(recordByPath, scopePath),
   );
 }
 
@@ -2572,15 +2936,18 @@ function finalizePreparationReport(
   };
 }
 
-export function prepareWorkspaceIndexSnapshot(
-  snapshot: WorkspaceIndexSnapshot,
+interface CollectedPreparedWorkspaceIndexEntries {
+  readonly entries: PreparedWorkspaceIndexEntry[];
+  readonly report: WorkspaceIndexPreparationReport;
+  readonly usedRecordPaths: ReadonlySet<string>;
+}
+
+function collectPreparedWorkspaceIndexEntries(
+  normalized: WorkspaceIndexSnapshot,
   workspace: WorkspaceInfo,
   fs: WorkspaceFs,
-): PreparedWorkspaceIndexSnapshot {
-  const normalized = normalizeSnapshot(snapshot);
-  if (normalized === undefined) {
-    return emptyPreparedWorkspaceIndexSnapshot();
-  }
+  shouldContinue: () => boolean,
+): CollectedPreparedWorkspaceIndexEntries | undefined {
   const entries: PreparedWorkspaceIndexEntry[] = [];
   let report = emptyPreparationReport();
   const recordByPath = new Map(
@@ -2589,16 +2956,31 @@ export function prepareWorkspaceIndexSnapshot(
   const seen = new Set<string>();
   const usedRecordPaths = new Set<string>();
   for (const discovered of normalized.discovery.files) {
+    if (!shouldContinue()) return undefined;
     const outcome = prepareWorkspaceIndexEntry(discovered, workspace, fs, seen, recordByPath);
     report = updatePreparationReport(report, outcome);
-    if (outcome.kind !== "retained") {
-      continue;
-    }
+    if (outcome.kind !== "retained") continue;
     entries.push(outcome.entry);
-    if (outcome.matchedRecordPath !== undefined) {
-      usedRecordPaths.add(outcome.matchedRecordPath);
-    }
+    if (outcome.matchedRecordPath !== undefined) usedRecordPaths.add(outcome.matchedRecordPath);
   }
+  return { entries, report, usedRecordPaths };
+}
+
+export function prepareWorkspaceIndexSnapshot(
+  snapshot: WorkspaceIndexSnapshot,
+  workspace: WorkspaceInfo,
+  fs: WorkspaceFs,
+  shouldContinue: () => boolean = () => true,
+): PreparedWorkspaceIndexSnapshot {
+  if (!shouldContinue()) return emptyPreparedWorkspaceIndexSnapshot();
+  const normalized = normalizeSnapshot(snapshot);
+  if (normalized === undefined || !shouldContinue()) {
+    return emptyPreparedWorkspaceIndexSnapshot();
+  }
+  const collected = collectPreparedWorkspaceIndexEntries(normalized, workspace, fs, shouldContinue);
+  if (collected === undefined) return emptyPreparedWorkspaceIndexSnapshot();
+  if (!shouldContinue()) return emptyPreparedWorkspaceIndexSnapshot();
+  const { entries, report, usedRecordPaths } = collected;
   entries.sort((a, b) => compareStrings(a.scopePath, b.scopePath));
   return {
     valid: true,
@@ -2606,6 +2988,25 @@ export function prepareWorkspaceIndexSnapshot(
     entries,
     discovery: preparedDiscoverySnapshot(normalized, entries),
     report: finalizePreparationReport(report, usedRecordPaths, normalized),
+  };
+}
+
+function cachedPreparedEntry(
+  file: WorkspaceIndexDiscoveredFile,
+  record: WorkspaceIndexRecord | undefined,
+  workspace: WorkspaceInfo,
+): PreparedWorkspaceIndexEntry {
+  return {
+    scopePath: file.scopePath,
+    absolutePath: resolveWithinWorkspace(workspace.root, file.scopePath),
+    file: { relativePath: file.scopePath, sizeBytes: file.sizeBytes },
+    ...(file.mtimeMs !== undefined ? { mtimeMs: file.mtimeMs } : {}),
+    ...(file.fileIdentityHash !== undefined ? { fileIdentityHash: file.fileIdentityHash } : {}),
+    ...(file.mtimeNs !== undefined ? { mtimeNs: file.mtimeNs } : {}),
+    ...(file.ctimeNs !== undefined ? { ctimeNs: file.ctimeNs } : {}),
+    ...(file.hardLinkCount !== undefined ? { hardLinkCount: file.hardLinkCount } : {}),
+    record,
+    stale: record === undefined,
   };
 }
 
@@ -2627,14 +3028,7 @@ export function prepareCachedWorkspaceIndexSnapshot(
     if (record !== undefined) {
       usedRecordPaths.add(record.scopePath);
     }
-    entries.push({
-      scopePath: file.scopePath,
-      absolutePath: resolveWithinWorkspace(workspace.root, file.scopePath),
-      file: { relativePath: file.scopePath, sizeBytes: file.sizeBytes },
-      ...(file.mtimeMs !== undefined ? { mtimeMs: file.mtimeMs } : {}),
-      record,
-      stale: record === undefined,
-    });
+    entries.push(cachedPreparedEntry(file, record, workspace));
   }
   const indexedRecords = entries.filter((entry) => entry.record !== undefined).length;
   const report: WorkspaceIndexPreparationReport = {
@@ -2680,6 +3074,7 @@ export function workspaceIndexCandidateSet(
   return {
     files: ordered.files,
     directories: prepared.discovery.directories.map((directory) => directory.scopePath),
+    directorySnapshots: prepared.discovery.directories,
     truncated: prepared.discovery.truncated,
     diagnostics: {
       ...ordered.diagnostics,
@@ -2720,6 +3115,10 @@ export function buildWorkspaceIndexSnapshot(
   return {
     version: WORKSPACE_INDEX_SNAPSHOT_VERSION,
     relativePaths: normalizeRelativePaths(input.scope.relativePaths),
+    ignorePolicySha256: workspaceIgnorePolicyFingerprint(input.scope.workspace?.ignoreLines ?? []),
+    candidatePathPolicySha256: workspaceCandidatePathPolicyFingerprint(
+      input.scope.candidatePathGlobs,
+    ),
     policyMode: input.policy.policyMode,
     applyGitignore: input.policy.applyGitignore,
     omitLowValueWorkspaceFiles: input.policy.omitLowValueWorkspaceFiles,

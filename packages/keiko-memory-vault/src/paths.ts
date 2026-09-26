@@ -11,7 +11,7 @@
 // points back into a sensitive location.
 
 import { homedir } from "node:os";
-import { existsSync, lstatSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, join, normalize, parse, resolve, sep } from "node:path";
 import { MemoryStorageError } from "./errors.js";
 
@@ -35,16 +35,34 @@ function isInsideRuntimeStateRoot(candidate: string): boolean {
   return r === runtimeRoot || r.startsWith(`${runtimeRoot}${sep}`);
 }
 
+// Walk every ancestor from dirname(path) up to the filesystem root and return true as soon as ANY
+// existing ancestor is a symlink. Do NOT short-circuit at the first existing directory: a real
+// subdirectory pre-created inside a symlinked target would otherwise defeat the guard, because the
+// walk would see the real subdirectory (not a symlink) at the first-existing position and never
+// inspect the shallower symlinked ancestor. Audit KEIKO-0478; the same fix must stay applied to
+// packages/keiko-server/src/store/paths.ts's byte-identical copy.
 function hasSymlinkAncestor(path: string): boolean {
   let current = dirname(path);
   const root = parse(current).root;
   while (current !== root) {
-    if (existsSync(current)) {
-      return lstatSync(current).isSymbolicLink();
-    }
+    // PR-review follow-up (Codex thread 3771256639): use lstatSync directly. existsSync
+    // returned false on transient EACCES/EIO, letting the walk pass an inaccessible
+    // symlinked ancestor we could not verify. Only ENOENT means the segment truly does
+    // not exist; every other errno propagates so the caller sees the storage failure.
+    const stat = lstatOrNull(current);
+    if (stat?.isSymbolicLink()) return true;
     current = dirname(current);
   }
   return false;
+}
+
+function lstatOrNull(path: string): Stats | null {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
 }
 
 function guard(path: string, label: string): string {
@@ -89,7 +107,32 @@ export function resolveMemoryDir(
       "KEIKO_STATE_DIR/memory",
     );
   }
-  return join(homedir(), DEFAULT_STATE_DIR, MEMORY_DIR_NAME);
+  // The default branch is guarded exactly like the three configured branches above: it is the one
+  // every install without explicit configuration takes, and it is where the encrypted DB — plus,
+  // on the keyfile tier, the plaintext vault key — lands. A ~/.keiko planted as a symlink would
+  // otherwise redirect both silently. The CWD-containment check inside guard() is a no-op for a
+  // homedir path unless the process is started from $HOME, where .keiko is the gitignored runtime
+  // state root guard() already allows.
+  return guard(defaultMemoryDirCandidate(), "Default memory vault directory");
+}
+
+// The home directory itself may legitimately BE a symlink — a relocated or mounted home is an
+// ordinary setup, not the planted redirect this module defends against. hasSymlinkAncestor stops
+// at the first EXISTING ancestor, so before ~/.keiko is created (i.e. on first run) that ancestor
+// IS the home directory, and guarding the unresolved path rejected those installs outright.
+// Resolving the home to its real location keeps every guard aimed at what the threat model is
+// about: a symlinked .keiko, or a symlinked memory/ inside it, are both still rejected because the
+// resolved path is checked in full.
+function defaultMemoryDirCandidate(): string {
+  const home = homedir();
+  try {
+    return join(realpathSync(home), DEFAULT_STATE_DIR, MEMORY_DIR_NAME);
+  } catch {
+    // A home that cannot be resolved (missing, or unreadable) is not decided here: the unresolved
+    // path still goes through guard(), which rejects it with the same typed error as any other
+    // invalid path rather than letting it through unchecked.
+    return join(home, DEFAULT_STATE_DIR, MEMORY_DIR_NAME);
+  }
 }
 
 export function resolveMemoryDbPath(

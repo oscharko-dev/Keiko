@@ -18,15 +18,18 @@ import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../
 import { clampWorkspaceWindowOrigin } from "../windowRecovery";
 import type {
   ChatBindingTarget,
+  ChatUnbindTarget,
   UseWorkspaceResult,
   ViewportWorld,
   WorkspaceApi,
+  WorkspaceClipboardCaptureResult,
+  WorkspaceClipboardCutResult,
+  WorkspaceClipboardPasteResult,
 } from "./useWorkspace.types";
 import {
-  parsePersistedConnections,
-  parsePersistedWindows,
-  sanitizePersistedConnections,
-  sanitizePersistedWindows,
+  MAX_WORKSPACE_WINDOWS,
+  enforceWorkspaceWindowInvariants,
+  sanitizePersistedWorkspace,
 } from "./workspace-persistence";
 import {
   WORKSPACE_CLIPBOARD_PASTE_OFFSET_PX,
@@ -34,9 +37,11 @@ import {
   duplicateWorkspaceClipboardWindows,
 } from "./workspaceClipboard";
 import {
+  boundGitChangeRelationshipIdOf,
   boundConnectorScopeOf,
   connectorChatBind,
   boundScopeOf,
+  chatUnbindTarget,
   filesChatBindScope,
   isWorkspaceWindowSelectable,
   makeConnectActions,
@@ -47,8 +52,9 @@ import {
   normalizeWorkspaceSelection,
   replaceWorkspaceSelection,
   toggleWorkspaceSelection,
+  type GitChangeBindSelection,
 } from "./workspaceActions";
-import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
+import type { ChatConnectedScope, ChatGitChangeScope, ChatLocalKnowledgeScope } from "@/lib/types";
 import type { WorkspaceUiSelectionState } from "@oscharko-dev/keiko-contracts";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
@@ -114,7 +120,15 @@ function clampViewZoom(z: number): number {
   return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
 }
 
+// Review finding on #3305 — NaN must not escape as a zoom. Both Math.min and
+// Math.max propagate it, so `Math.max(min, Math.min(max, NaN))` is NaN, and a
+// hostile or malformed wheel delta (deltaY: NaN, or a NaN zoom already in
+// persisted state) would be written straight into the window and render it at
+// an invalid scale. NaN carries no direction to saturate toward, so it falls
+// back to the neutral zoom; ±Infinity does carry one and still clamps to the
+// bounds below.
 function clampContentZoom(z: number): number {
+  if (Number.isNaN(z)) return 1;
   return Math.max(CONTENT_MIN_ZOOM, Math.min(CONTENT_MAX_ZOOM, Math.round(z * 10) / 10));
 }
 
@@ -269,34 +283,6 @@ function nextContentZoom(current: number, key: string): number {
   return clampContentZoom(current + 0.1);
 }
 
-export function nextContentZoomFromWheel(current: number, deltaY: number): number {
-  return clampContentZoom(current * Math.exp(-deltaY * 0.0015));
-}
-
-export function applyContentWheelZoom(win: AppWindow, deltaY: number): AppWindow {
-  const current = win.zoom ?? 1;
-  const zoom = nextContentZoomFromWheel(current, deltaY);
-  return zoom === current ? win : { ...win, zoom };
-}
-
-// GEN-UI-WORKSPACE-S2004 — extracted so the ctrl/cmd-wheel content-zoom updater
-// passed to setWins does not nest a `.map()` closure inside the wheel handler
-// inside the effect callback (SonarCloud S2004: nesting > 4 levels).
-function applyWheelZoomToWindows(
-  ws: AppWindow[] | null,
-  windowId: string,
-  deltaY: number,
-): AppWindow[] | null {
-  return ws === null
-    ? ws
-    : ws.map((w) => (w.id === windowId ? applyContentWheelZoom(w, deltaY) : w));
-}
-
-function windowIdFromWheelTarget(target: EventTarget | null): string | null {
-  if (!(target instanceof Element)) return null;
-  return target.closest<HTMLElement>(".window[data-window-id]")?.dataset.windowId ?? null;
-}
-
 // GEN-UI-KEYBOARD-006 — resolve which window a keyboard chord (move/resize/content
 // zoom/snap) acts on from where focus currently is, instead of always the topmost
 // window. Walk up from document.activeElement to the nearest
@@ -316,8 +302,8 @@ interface UsePanZoomArgs {
   readonly view: View;
   readonly cameraSmoothness: number;
   readonly winsRef: CurrentRef<AppWindow[]>;
+  readonly selectionRef: CurrentRef<WorkspaceUiSelectionState>;
   readonly setView: Dispatch<SetStateAction<View>>;
-  readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
 }
 
 interface QueueViewOptions {
@@ -344,6 +330,157 @@ function wheelDeltaMultiplier(deltaMode: number): number {
 export function normalizeWheelDelta(e: WheelEvent): { readonly x: number; readonly y: number } {
   const multiplier = wheelDeltaMultiplier(e.deltaMode);
   return { x: e.deltaX * multiplier, y: e.deltaY * multiplier };
+}
+
+function overflowCanScroll(value: string): boolean {
+  return value === "auto" || value === "scroll" || value === "overlay";
+}
+
+function canScrollVertically(element: HTMLElement, deltaY: number): boolean {
+  if (deltaY === 0) return false;
+  const style = window.getComputedStyle(element);
+  if (!overflowCanScroll(style.overflowY)) return false;
+  const maxScrollTop = element.scrollHeight - element.clientHeight;
+  if (maxScrollTop <= 1) return false;
+  if (deltaY < 0) return element.scrollTop > 0;
+  return element.scrollTop < maxScrollTop - 1;
+}
+
+function canScrollHorizontally(element: HTMLElement, deltaX: number): boolean {
+  if (deltaX === 0) return false;
+  const style = window.getComputedStyle(element);
+  if (!overflowCanScroll(style.overflowX)) return false;
+  const maxScrollLeft = element.scrollWidth - element.clientWidth;
+  if (maxScrollLeft <= 1) return false;
+  if (deltaX < 0) return element.scrollLeft > 0;
+  return element.scrollLeft < maxScrollLeft - 1;
+}
+
+function scrollTargetCanConsumeWheel(
+  target: EventTarget | null,
+  delta: { readonly x: number; readonly y: number },
+): boolean {
+  if (!(target instanceof Element)) return false;
+  const windowElement = target.closest(".window[data-window-id]");
+  if (windowElement === null) return false;
+  let current: Element | null = target;
+  while (current !== null && current !== windowElement) {
+    if (
+      current instanceof HTMLElement &&
+      (canScrollVertically(current, delta.y) || canScrollHorizontally(current, delta.x))
+    ) {
+      return true;
+    }
+    current = current.parentElement;
+  }
+  return false;
+}
+
+function activeSelectedWindowId(selection: WorkspaceUiSelectionState): string | null {
+  if (
+    selection.focusedWindowId !== null &&
+    selection.selectedWindowIds.includes(selection.focusedWindowId)
+  ) {
+    return selection.focusedWindowId;
+  }
+  return selection.selectedWindowIds.length === 1 ? (selection.selectedWindowIds[0] ?? null) : null;
+}
+
+function windowIdFromWheelTarget(target: EventTarget | null): string | null {
+  if (!(target instanceof Element)) return null;
+  return target.closest<HTMLElement>(".window[data-window-id]")?.dataset.windowId ?? null;
+}
+
+function activeWindowOwnsWheelTarget(
+  target: EventTarget | null,
+  selection: WorkspaceUiSelectionState,
+): boolean {
+  const activeWindowId = activeSelectedWindowId(selection);
+  return activeWindowId !== null && windowIdFromWheelTarget(target) === activeWindowId;
+}
+
+function frontmostLayoutWindowId(
+  wins: readonly AppWindow[],
+  options: { readonly includeMinimized: boolean },
+): string | null {
+  let frontmost: AppWindow | null = null;
+  for (const win of wins) {
+    if (!options.includeMinimized && win.minimized === true) continue;
+    if (frontmost === null || win.z > frontmost.z) frontmost = win;
+  }
+  return frontmost?.id ?? null;
+}
+
+function toolToggleActivationWindowId(
+  wins: readonly AppWindow[],
+  type: AppWindow["type"],
+): string | null {
+  const existing = wins.find((win) => win.type === type);
+  if (existing === undefined) return wins.length >= MAX_WORKSPACE_WINDOWS ? null : type;
+  return existing.minimized === true ? existing.id : null;
+}
+
+type ReusableWindowIdentity = {
+  readonly key: "chatId" | "runId";
+  readonly type: "chat" | "qiRun";
+  readonly value: string;
+};
+
+function cfgString(cfg: AppWindow["cfg"] | undefined, key: "chatId" | "runId"): string | null {
+  const value = cfg?.[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function singletonWindowId(wins: readonly AppWindow[], type: AppWindow["type"]): string | null {
+  if (WIN_TYPES[type].singleton !== true) return null;
+  return wins.find((win) => win.type === type)?.id ?? null;
+}
+
+function reusableWindowIdentity(
+  type: AppWindow["type"],
+  cfg: AppWindow["cfg"] | undefined,
+): ReusableWindowIdentity | null {
+  if (type === "qiRun") {
+    const runId = cfgString(cfg, "runId");
+    return runId === null ? null : { key: "runId", type, value: runId };
+  }
+  if (type === "chat") {
+    const chatId = cfgString(cfg, "chatId");
+    return chatId === null ? null : { key: "chatId", type, value: chatId };
+  }
+  return null;
+}
+
+function reusableWindowId(
+  wins: readonly AppWindow[],
+  identity: ReusableWindowIdentity,
+): string | null {
+  return (
+    wins.find((win) => win.type === identity.type && win.cfg[identity.key] === identity.value)
+      ?.id ?? null
+  );
+}
+
+function existingAddWindowId(
+  wins: readonly AppWindow[],
+  type: AppWindow["type"],
+  cfg: AppWindow["cfg"] | undefined,
+): string | null {
+  const singletonId = singletonWindowId(wins, type);
+  if (singletonId !== null) return singletonId;
+  const identity = reusableWindowIdentity(type, cfg);
+  return identity === null ? null : reusableWindowId(wins, identity);
+}
+
+function predictableAddWindowId(
+  wins: readonly AppWindow[],
+  type: AppWindow["type"],
+  cfg: AppWindow["cfg"] | undefined,
+): string | null {
+  const existingId = existingAddWindowId(wins, type, cfg);
+  if (existingId !== null) return existingId;
+  if (wins.length >= MAX_WORKSPACE_WINDOWS) return null;
+  return WIN_TYPES[type].singleton === true ? type : null;
 }
 
 export function fitWorkspaceViewToWindows(
@@ -402,8 +539,8 @@ function usePanZoom({
   view,
   cameraSmoothness,
   winsRef,
+  selectionRef,
   setView,
-  setWins,
 }: UsePanZoomArgs): PanZoomResult {
   const viewRef = useRef<View>(view);
   viewRef.current = view;
@@ -537,15 +674,6 @@ function usePanZoom({
     [cameraSmoothness, setView],
   );
 
-  const settleCameraAnimation = useCallback((): void => {
-    if (animationFrameRef.current !== null && typeof window.cancelAnimationFrame === "function") {
-      window.cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
-      setView(animationTargetRef.current);
-      renderedViewRef.current = animationTargetRef.current;
-    }
-  }, [setView]);
-
   const queueView = useCallback(
     (next: View | ((current: View) => View), options: QueueViewOptions = {}): void => {
       const base = pendingViewRef.current ?? viewRef.current;
@@ -606,13 +734,11 @@ function usePanZoom({
     };
     const onWheel = (e: WheelEvent): void => {
       if (e.metaKey || e.ctrlKey) {
-        e.preventDefault();
-        const windowId = windowIdFromWheelTarget(e.target);
-        if (windowId !== null) {
-          settleCameraAnimation();
-          setWins((ws) => applyWheelZoomToWindows(ws, windowId, e.deltaY));
+        if (activeWindowOwnsWheelTarget(e.target, selectionRef.current)) {
+          e.preventDefault();
           return;
         }
+        e.preventDefault();
         const r = gestureRect();
         const v = viewRef.current;
         const delta = normalizeWheelDelta(e);
@@ -626,22 +752,23 @@ function usePanZoom({
         });
         return;
       }
-      const target = e.target;
-      if (target instanceof Element && target.closest(".window") !== null) {
+      const delta = normalizeWheelDelta(e);
+      if (activeWindowOwnsWheelTarget(e.target, selectionRef.current)) {
+        if (scrollTargetCanConsumeWheel(e.target, delta)) return;
+        e.preventDefault();
         return;
       }
       e.preventDefault();
-      const delta = normalizeWheelDelta(e);
       queueView((v) => ({ ...v, x: v.x - delta.x, y: v.y - delta.y }), {
         minDurationMs: 0,
         smoothnessScale: DIRECT_PAN_SMOOTHNESS_SCALE,
       });
     };
-    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("wheel", onWheel, { passive: false, capture: true });
     return () => {
-      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("wheel", onWheel, { capture: true });
     };
-  }, [wsRef, setWins, queueView, settleCameraAnimation]);
+  }, [wsRef, queueView, selectionRef]);
 
   const rect = useCallback(
     (): DOMRect | null => (wsRef.current === null ? null : wsRef.current.getBoundingClientRect()),
@@ -712,32 +839,36 @@ function snapshotFromRaw(
   windows: readonly unknown[],
   connections: readonly unknown[],
 ): WorkspaceSnapshot {
-  const wins = sanitizePersistedWindows(windows as readonly AppWindow[]);
-  return {
-    wins,
-    conns: sanitizePersistedConnections(connections as readonly Connection[], wins),
-  };
+  return sanitizePersistedWorkspace(windows, connections, {
+    onWindowScanLimitReached: (): void => {
+      reportClientDiagnostic(`workspace-state: persisted window scan limit exceeded (${WS_LS})`);
+    },
+    onConnectionScanLimitReached: (): void => {
+      reportClientDiagnostic(
+        `workspace-state: persisted connection scan limit exceeded (${CONN_LS})`,
+      );
+    },
+  });
+}
+
+function readPersistedArray(key: string): readonly unknown[] {
+  try {
+    const raw = window.localStorage.getItem(key);
+    if (raw === null) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed;
+    reportClientDiagnostic(`workspace-state: local persistence shape invalid (${key})`);
+  } catch {
+    reportClientDiagnostic(`workspace-state: local persistence parse failed (${key})`);
+  }
+  return [];
 }
 
 function readPersistedWorkspaceSnapshot(): {
   readonly wins: AppWindow[];
   readonly conns: Connection[];
 } {
-  let wins: AppWindow[] | null = null;
-  try {
-    wins = parsePersistedWindows(window.localStorage.getItem(WS_LS));
-  } catch {
-    wins = null;
-  }
-  const resolvedWins = wins ?? [];
-  try {
-    return {
-      wins: resolvedWins,
-      conns: parsePersistedConnections(window.localStorage.getItem(CONN_LS), resolvedWins),
-    };
-  } catch {
-    return { wins: resolvedWins, conns: [] };
-  }
+  return snapshotFromRaw(readPersistedArray(WS_LS), readPersistedArray(CONN_LS));
 }
 
 function workspaceStateEtag(revision: number): string {
@@ -864,6 +995,10 @@ function surfaceWorkspaceKeepaliveOvercap(byteLength: number): void {
   );
 }
 
+export function reportConnectionUnbindFailure(): void {
+  reportClientDiagnostic("[keiko] workspace connection unbind callback failed");
+}
+
 // Server sync failures were swallowed by bare `catch { return null; }` — network
 // errors, non-OK statuses (e.g. a 413 over the server body cap) and malformed
 // payloads were indistinguishable and invisible, silently degrading the workspace
@@ -969,6 +1104,99 @@ async function putServerWorkspaceSnapshot(
   }
 }
 
+// Retry half of the PUT conflict continuation, extracted from the `.then` arrow to keep its
+// complexity within the lint ceiling. Re-sends the still-dirty snapshot ONCE through the
+// debounce — bounded per serialized snapshot, suppressed after the sync hook unmounted (a late
+// PUT would overwrite the next shell's state). Positional ref parameters on purpose: an options
+// object would ship its property names un-minified in the first-load bundle, and this exact
+// spot once tipped the editor-bundle-size budget by a few dozen gzip bytes.
+function scheduleWorkspaceConflictRetry(
+  serializedSnapshot: string,
+  localDirtyRef: CurrentRef<boolean>,
+  serverSyncStoppedRef: CurrentRef<boolean>,
+  conflictRetriedSnapshotRef: CurrentRef<string | null>,
+  putDebounceRef: CurrentRef<TrailingDebounce | null>,
+  runServerPutRef: CurrentRef<(keepalive: boolean) => void>,
+): void {
+  if (!localDirtyRef.current) return;
+  if (serverSyncStoppedRef.current) return;
+  if (conflictRetriedSnapshotRef.current === serializedSnapshot) return;
+  conflictRetriedSnapshotRef.current = serializedSnapshot;
+  putDebounceRef.current?.schedule(() => {
+    runServerPutRef.current(false);
+  });
+}
+
+// Issue #1580 — poll only while the document is visible; the old fixed interval kept
+// fetching/parsing forever in background tabs. Returning to visible does an immediate
+// catch-up pull so multi-tab convergence is unchanged. Extracted from the sync effect to
+// keep it inside the per-function line ceiling; `sync` is a stable reference so the effect
+// can add and remove the same visibilitychange listener.
+function createVisibilityPoller(
+  pull: () => void,
+  intervalMs: number,
+): { readonly sync: () => void; readonly stop: () => void } {
+  let interval: number | null = null;
+  const start = (): void => {
+    if (interval !== null) return;
+    interval = window.setInterval(pull, intervalMs);
+  };
+  const stop = (): void => {
+    if (interval === null) return;
+    window.clearInterval(interval);
+    interval = null;
+  };
+  const sync = (): void => {
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+      stop();
+    } else {
+      pull();
+      start();
+    }
+  };
+  return { sync, stop };
+}
+
+// Dirty-poll branch of the server pull: the payload stays local-authoritative, but the
+// strictly newer server revision is adopted so the pending PUT carries a current If-Match
+// (instead of the guaranteed-stale revision 0 every reload with restored windows once
+// produced). Newer revision information also RE-ARMS the bounded conflict retry and schedules
+// the dirty write — if the PUT and its single retry both conflicted before this poll landed
+// (e.g. an intermediary strips ETags), the snapshot would otherwise stay parked until the
+// next local mutation. Bounded by the poll: each re-arm requires the revision to advance.
+function adoptPolledRevisionWhileDirty(
+  revision: number,
+  revisionRef: CurrentRef<number>,
+  conflictRetriedSnapshotRef: CurrentRef<string | null>,
+  putDebounceRef: CurrentRef<TrailingDebounce | null>,
+  runServerPutRef: CurrentRef<(keepalive: boolean) => void>,
+): void {
+  revisionRef.current = revision;
+  conflictRetriedSnapshotRef.current = null;
+  putDebounceRef.current?.schedule(() => {
+    runServerPutRef.current(false);
+  });
+}
+
+// A stale, lower conflict ETag usually belongs to a delayed PUT response and must not roll the
+// client back behind a newer poll. The one legitimate lower value we have to accept is the BFF
+// restart shape: the tab still remembers a non-zero workspace revision, the in-memory server store
+// restarted at 0, and every PUT conflicts until the client retries against revision 0.
+function adoptConflictRevision(
+  revision: number | null,
+  baseRevision: number,
+  revisionRef: CurrentRef<number>,
+): void {
+  if (revision === null) return;
+  if (revision > revisionRef.current) {
+    revisionRef.current = revision;
+    return;
+  }
+  if (revision === 0 && baseRevision === revisionRef.current && revisionRef.current > 0) {
+    revisionRef.current = 0;
+  }
+}
+
 function buildServerWorkspaceSnapshot(
   wins: readonly AppWindow[],
   conns: readonly Connection[],
@@ -977,12 +1205,11 @@ function buildServerWorkspaceSnapshot(
   readonly conns: readonly Connection[];
   readonly serialized: string;
 } {
-  const persistedWins = sanitizePersistedWindows(wins);
-  const persistedConns = sanitizePersistedConnections(conns, persistedWins);
+  const persisted = sanitizePersistedWorkspace(wins, conns);
   return {
-    wins: persistedWins,
-    conns: persistedConns,
-    serialized: JSON.stringify({ windows: persistedWins, connections: persistedConns }),
+    wins: persisted.wins,
+    conns: persisted.conns,
+    serialized: JSON.stringify({ windows: persisted.wins, connections: persisted.conns }),
   };
 }
 
@@ -1033,10 +1260,10 @@ function serializePersistedSnapshot(snapshot: {
   readonly wins: readonly AppWindow[];
   readonly conns: readonly Connection[];
 }): string {
-  const persistedWins = sanitizePersistedWindows(snapshot.wins);
+  const persisted = sanitizePersistedWorkspace(snapshot.wins, snapshot.conns);
   return JSON.stringify({
-    windows: persistedWins,
-    connections: sanitizePersistedConnections(snapshot.conns, persistedWins),
+    windows: persisted.wins,
+    connections: persisted.conns,
   });
 }
 
@@ -1107,6 +1334,17 @@ function useWorkspaceServerSync({
   connsRef.current = conns;
   const putDebounceRef = useRef<TrailingDebounce | null>(null);
   putDebounceRef.current ??= createTrailingDebounce(PERSIST_DEBOUNCE_MS);
+  // Latest runServerPut for the conflict-retry below — a ref (mirroring winsRef) so the
+  // debounced retry closure never captures a stale callback and the useCallback deps stay [].
+  const runServerPutRef = useRef<(keepalive: boolean) => void>(() => undefined);
+  // One conflict retry PER serialized snapshot: a second concurrent writer advancing the
+  // revision on every attempt must not chain unbounded retries — the poll and the next local
+  // mutation provide further convergence. A NEW snapshot (different serialization) re-arms it.
+  const conflictRetriedSnapshotRef = useRef<string | null>(null);
+  // True after the sync effect's cleanup ran: a conflict resolving AFTER unmount must not
+  // re-arm the debounce, or an SPA navigation could late-PUT the unmounted shell's stale
+  // windows over the newly mounted shell's state.
+  const serverSyncStoppedRef = useRef(false);
   const putAbortRef = useRef<AbortController | null>(null);
   const localDirtyRef = useRef(false);
   const lastAcknowledgedSnapshotRef = useRef<string | null>(null);
@@ -1137,17 +1375,33 @@ function useWorkspaceServerSync({
       keepalive,
     }).then((result) => {
       if (result?.kind === "conflict") {
-        if (result.revision !== null && result.revision > revisionRef.current) {
-          revisionRef.current = result.revision;
-        }
+        // A 412 is a handled concurrency signal: adopt a usable conflict revision when doing so is
+        // safe, and ALWAYS schedule the bounded retry — the send uses the freshest adopted revision
+        // at fire time, so a stale, equal, restart-reset, or missing conflict ETag never parks the
+        // dirty snapshot. The per-snapshot marker and the unmount guard inside the scheduler bound
+        // the attempt; no revision comparison is needed for loop safety.
+        adoptConflictRevision(result.revision, baseRevision, revisionRef);
+        scheduleWorkspaceConflictRetry(
+          snapshot.serialized,
+          localDirtyRef,
+          serverSyncStoppedRef,
+          conflictRetriedSnapshotRef,
+          putDebounceRef,
+          runServerPutRef,
+        );
         return;
       }
       if (result?.kind !== "ok") return;
       lastAcknowledgedSnapshotRef.current = snapshot.serialized;
       localDirtyRef.current = false;
+      // An acknowledged save ends the conflict sequence: re-arm the one-retry cap so a LATER
+      // conflict of the same serialization (state B, then back to byte-identical A) gets its
+      // retry instead of being parked by a marker from a long-finished sequence.
+      conflictRetriedSnapshotRef.current = null;
       if (result.revision > revisionRef.current) revisionRef.current = result.revision;
     });
   }, []);
+  runServerPutRef.current = runServerPut;
 
   const applyServerSnapshot = useCallback(
     (serverSnapshot: ServerWorkspaceSnapshot): void => {
@@ -1169,7 +1423,6 @@ function useWorkspaceServerSync({
   useEffect(() => {
     if (!serverSyncEnabled) return;
     let stopped = false;
-    let interval: number | null = null;
     const pull = async (): Promise<void> => {
       const serverSnapshot = await fetchServerWorkspaceSnapshot(revisionRef.current);
       if (stopped || serverSnapshot === null) return;
@@ -1181,37 +1434,27 @@ function useWorkspaceServerSync({
       ) {
         return;
       }
-      if (localDirtyRef.current) return;
+      if (localDirtyRef.current) {
+        adoptPolledRevisionWhileDirty(
+          serverSnapshot.revision,
+          revisionRef,
+          conflictRetriedSnapshotRef,
+          putDebounceRef,
+          runServerPutRef,
+        );
+        return;
+      }
       applyServerSnapshot(serverSnapshot);
     };
-    const startPolling = (): void => {
-      if (interval !== null) return;
-      interval = window.setInterval(() => {
-        void pull();
-      }, WORKSPACE_STATE_POLL_MS);
-    };
-    const stopPolling = (): void => {
-      if (interval === null) return;
-      window.clearInterval(interval);
-      interval = null;
-    };
-    // Issue #1580 — only poll while the document is visible; the old fixed interval
-    // kept fetching/parsing forever in background tabs. Returning to visible does an
-    // immediate catch-up pull so multi-tab convergence is unchanged.
-    const sync = (): void => {
-      if (typeof document !== "undefined" && document.visibilityState === "hidden") {
-        stopPolling();
-      } else {
-        void pull();
-        startPolling();
-      }
-    };
-    sync();
-    document.addEventListener("visibilitychange", sync);
+    const poller = createVisibilityPoller(() => {
+      void pull();
+    }, WORKSPACE_STATE_POLL_MS);
+    poller.sync();
+    document.addEventListener("visibilitychange", poller.sync);
     return () => {
       stopped = true;
-      stopPolling();
-      document.removeEventListener("visibilitychange", sync);
+      poller.stop();
+      document.removeEventListener("visibilitychange", poller.sync);
     };
   }, [applyServerSnapshot, serverSyncEnabled]);
 
@@ -1249,6 +1492,7 @@ function useWorkspaceServerSync({
   // flush any pending PUT on unmount.
   useEffect(() => {
     if (!serverSyncEnabled) return;
+    serverSyncStoppedRef.current = false;
     const debounce = putDebounceRef.current;
     const flushKeepalive = (): void => {
       debounce?.cancel();
@@ -1261,6 +1505,10 @@ function useWorkspaceServerSync({
     window.addEventListener("pagehide", flushKeepalive);
     document.addEventListener("visibilitychange", onHide);
     return () => {
+      // Stop BEFORE the final flush: the flush itself is the deliberate last write, but a
+      // conflict resolving after this cleanup must not re-arm the debounce (see
+      // serverSyncStoppedRef above).
+      serverSyncStoppedRef.current = true;
       window.removeEventListener("pagehide", flushKeepalive);
       document.removeEventListener("visibilitychange", onHide);
       debounce?.flush();
@@ -1449,7 +1697,7 @@ function useKeyboardCtrls({ setWins, rect, cancelConnectRef, snapRef }: UseKeybo
         runContentZoomChord(e, setWins, zoomKey, targetId);
         return;
       }
-      if (!/^Arrow/.test(e.key)) return;
+      if (!e.key.startsWith("Arrow")) return;
       // GEN-UI-KEYBOARD-009 — Cmd/Ctrl+Alt+Arrow snaps the focused window to a
       // half/maximized region (the keyboard equivalent of an edge/quadrant drag
       // snap). Checked before the move/resize branch below because it shares the
@@ -1543,6 +1791,7 @@ function useConnectionPrune(
 // reached or persistence failed) vetoes the edge so no dangling ungrounded edge is drawn.
 export interface UseWorkspaceOptions {
   readonly cameraSmoothness?: number | undefined;
+  readonly onWindowLimitReached?: ((limit: number) => void) | undefined;
   readonly onScopeBind?:
     | ((
         chatWindowId: string,
@@ -1550,7 +1799,13 @@ export interface UseWorkspaceOptions {
         target?: ChatBindingTarget,
       ) => boolean | Promise<boolean>)
     | undefined;
-  readonly onScopeUnbind?: ((chatWindowId: string, scope: ChatConnectedScope) => void) | undefined;
+  readonly onScopeUnbind?:
+    | ((
+        chatWindowId: string,
+        scope: ChatConnectedScope,
+        target?: ChatUnbindTarget,
+      ) => boolean | Promise<boolean>)
+    | undefined;
   readonly onConnectorBind?:
     | ((
         chatWindowId: string,
@@ -1559,7 +1814,26 @@ export interface UseWorkspaceOptions {
       ) => boolean | Promise<boolean>)
     | undefined;
   readonly onConnectorUnbind?:
-    ((chatWindowId: string, scope: ChatLocalKnowledgeScope) => void) | undefined;
+    | ((
+        chatWindowId: string,
+        scope: ChatLocalKnowledgeScope,
+        target?: ChatUnbindTarget,
+      ) => boolean | Promise<boolean>)
+    | undefined;
+  readonly onGitChangeBind?:
+    | ((
+        chatWindowId: string,
+        selection: GitChangeBindSelection,
+        target?: ChatBindingTarget,
+      ) => ChatGitChangeScope | false | null | Promise<ChatGitChangeScope | false | null>)
+    | undefined;
+  readonly onGitChangeUnbind?:
+    | ((
+        chatWindowId: string,
+        relationshipId: string,
+        target?: ChatUnbindTarget,
+      ) => boolean | Promise<boolean>)
+    | undefined;
 }
 
 // S3776 — closeWithTeardown's per-connection unbind logic (below) used to run inside a
@@ -1595,32 +1869,156 @@ function connectionUnbindScope(
   return filesChatBindScope(win, other, Date.now());
 }
 
-function unbindClosedWindowConnection(
+function connectionOtherWindow(
+  conn: Connection,
+  closedWindowId: string,
+  winsById: ReadonlyMap<string, AppWindow>,
+): AppWindow | null {
+  const otherId = connectionOtherEndpoint(conn, closedWindowId);
+  return otherId === null ? null : (winsById.get(otherId) ?? null);
+}
+
+function addGitChangeTeardown(
+  results: Promise<boolean>[],
+  chatWindowId: string,
+  relationshipId: string | null,
+  target: ChatUnbindTarget | undefined,
+  unbindGitChangeScope: (
+    chatWindowId: string,
+    relationshipId: string,
+    target?: ChatUnbindTarget,
+  ) => boolean | Promise<boolean>,
+): void {
+  if (relationshipId === null) return;
+  results.push(Promise.resolve(unbindGitChangeScope(chatWindowId, relationshipId, target)));
+}
+
+// Runs a connection's teardown at most once across OVERLAPPING close operations:
+// a second caller reaching the same edge while the first is still in flight
+// awaits that result instead of issuing a duplicate server-side unbind. The
+// entry is dropped once it settles, so a later, genuinely new close still runs.
+function teardownConnectionOnce(
+  inFlight: Map<string, Promise<boolean>>,
+  conn: Connection,
+  run: () => Promise<boolean>,
+): Promise<boolean> {
+  const existing = inFlight.get(conn.id);
+  if (existing !== undefined) return existing;
+  const started = run().finally(() => {
+    inFlight.delete(conn.id);
+  });
+  inFlight.set(conn.id, started);
+  return started;
+}
+
+// One teardown per connection for a batch close: both endpoints of the same
+// edge can be in the batch, and every one of them reads the same pre-close
+// snapshot, so without this the edge's server-side unbind would run twice.
+function batchConnectionTeardowns(
+  targets: readonly string[],
+  connsByEndpoint: ReadonlyMap<string, readonly Connection[]>,
+): readonly { readonly conn: Connection; readonly ownerId: string }[] {
+  const byConnection = new Map<string, { conn: Connection; ownerId: string }>();
+  for (const id of targets) {
+    for (const conn of connsByEndpoint.get(id) ?? []) {
+      if (!byConnection.has(conn.id)) byConnection.set(conn.id, { conn, ownerId: id });
+    }
+  }
+  return [...byConnection.values()];
+}
+
+// A refused edge blocks only the batch endpoints that belong to it; the rest of
+// the batch still closes.
+function refusedTeardownEndpoints(
+  outcomes: readonly { readonly conn: Connection; readonly accepted: boolean }[],
+  targets: ReadonlySet<string>,
+): ReadonlySet<string> {
+  const refused = new Set<string>();
+  for (const { conn, accepted } of outcomes) {
+    if (accepted) continue;
+    if (targets.has(conn.a)) refused.add(conn.a);
+    if (targets.has(conn.b)) refused.add(conn.b);
+  }
+  return refused;
+}
+
+async function unbindClosedWindowConnection(
   closedWindowId: string,
   closedWin: AppWindow,
   conn: Connection,
   winsById: ReadonlyMap<string, AppWindow>,
-  unbindScope: (chatWindowId: string, scope: ChatConnectedScope) => void,
-  unbindConnectorScope: (chatWindowId: string, scope: ChatLocalKnowledgeScope) => void,
-): void {
-  const otherId = connectionOtherEndpoint(conn, closedWindowId);
-  if (otherId === null) return;
-  const other = winsById.get(otherId);
-  if (other === undefined) return;
+  unbindScope: (
+    chatWindowId: string,
+    scope: ChatConnectedScope,
+    target?: ChatUnbindTarget,
+  ) => boolean | Promise<boolean>,
+  unbindConnectorScope: (
+    chatWindowId: string,
+    scope: ChatLocalKnowledgeScope,
+    target?: ChatUnbindTarget,
+  ) => boolean | Promise<boolean>,
+  unbindGitChangeScope: (
+    chatWindowId: string,
+    relationshipId: string,
+    target?: ChatUnbindTarget,
+  ) => boolean | Promise<boolean>,
+): Promise<boolean> {
+  const other = connectionOtherWindow(conn, closedWindowId, winsById);
+  if (other === null) return true;
   const chatWindowId = connectionChatWindowId(conn, closedWin, other);
+  const chatWindow = chatWindowId === closedWin.id ? closedWin : winsById.get(chatWindowId ?? "");
+  const target = chatUnbindTarget(chatWindow);
   const scope = connectionUnbindScope(conn, closedWin, other);
-  if (scope !== null && chatWindowId !== null) unbindScope(chatWindowId, scope);
   const connectorScope = boundConnectorScopeOf(conn) ?? connectorChatBind(closedWin, other);
-  if (connectorScope !== null && chatWindowId !== null) {
-    unbindConnectorScope(chatWindowId, connectorScope);
+  const gitChangeRelationshipId = boundGitChangeRelationshipIdOf(conn);
+  if (chatWindowId === null) return true;
+  try {
+    const results: Promise<boolean>[] = [];
+    if (scope !== null) results.push(Promise.resolve(unbindScope(chatWindowId, scope, target)));
+    if (connectorScope !== null) {
+      results.push(Promise.resolve(unbindConnectorScope(chatWindowId, connectorScope, target)));
+    }
+    addGitChangeTeardown(
+      results,
+      chatWindowId,
+      gitChangeRelationshipId,
+      target,
+      unbindGitChangeScope,
+    );
+    return (await Promise.all(results)).every(Boolean);
+  } catch {
+    reportConnectionUnbindFailure();
+    return false;
   }
+}
+
+function useWorkspaceWindowState(): {
+  readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
+  readonly wins: AppWindow[] | null;
+  readonly winsReadyRef: RefObject<boolean>;
+  readonly winsRef: RefObject<AppWindow[]>;
+} {
+  const [wins, setWins] = useState<AppWindow[] | null>(null);
+  const committedWinsRef = useRef<AppWindow[] | null>(null);
+  const winsRef = useRef<AppWindow[]>([]);
+  const winsReadyRef = useRef(false);
+  const setBoundedWins = useCallback<Dispatch<SetStateAction<AppWindow[] | null>>>((update) => {
+    const current = committedWinsRef.current;
+    const next = typeof update === "function" ? update(current) : update;
+    const bounded = next === null ? null : enforceWorkspaceWindowInvariants(next);
+    committedWinsRef.current = bounded;
+    winsRef.current = bounded ?? [];
+    winsReadyRef.current = bounded !== null;
+    setWins(bounded);
+  }, []);
+  return { setWins: setBoundedWins, wins, winsReadyRef, winsRef };
 }
 
 export function useWorkspace(
   wsRef: RefObject<HTMLElement | null>,
   opts: UseWorkspaceOptions = {},
 ): UseWorkspaceResult {
-  const [wins, setWins] = useState<AppWindow[] | null>(null);
+  const { setWins, wins, winsReadyRef, winsRef } = useWorkspaceWindowState();
   const [selection, setSelection] = useState<WorkspaceUiSelectionState>({
     focusedWindowId: null,
     selectedWindowIds: [],
@@ -1640,6 +2038,9 @@ export function useWorkspace(
     onScopeUnbind,
     onConnectorBind,
     onConnectorUnbind,
+    onGitChangeBind,
+    onGitChangeUnbind,
+    onWindowLimitReached,
   } = opts;
   // GEN-PERF-RENDER-001 — route the optional scope-bind callbacks through refs so the
   // connectActions/api memos never rebind when a parent (AppShell) passes NEW callback
@@ -1655,6 +2056,12 @@ export function useWorkspace(
   onConnectorBindRef.current = onConnectorBind;
   const onConnectorUnbindRef = useRef(onConnectorUnbind);
   onConnectorUnbindRef.current = onConnectorUnbind;
+  const onGitChangeBindRef = useRef(onGitChangeBind);
+  onGitChangeBindRef.current = onGitChangeBind;
+  const onGitChangeUnbindRef = useRef(onGitChangeUnbind);
+  onGitChangeUnbindRef.current = onGitChangeUnbind;
+  const onWindowLimitReachedRef = useRef(onWindowLimitReached);
+  onWindowLimitReachedRef.current = onWindowLimitReached;
   const stableScopeBind = useCallback(
     (
       chatWindowId: string,
@@ -1663,9 +2070,15 @@ export function useWorkspace(
     ): boolean | Promise<boolean> => onScopeBindRef.current?.(chatWindowId, scope, target) ?? true,
     [],
   );
-  const stableScopeUnbind = useCallback((chatWindowId: string, scope: ChatConnectedScope): void => {
-    onScopeUnbindRef.current?.(chatWindowId, scope);
-  }, []);
+  const stableScopeUnbind = useCallback(
+    (
+      chatWindowId: string,
+      scope: ChatConnectedScope,
+      target?: ChatUnbindTarget,
+    ): boolean | Promise<boolean> =>
+      onScopeUnbindRef.current?.(chatWindowId, scope, target) ?? true,
+    [],
+  );
   const stableConnectorBind = useCallback(
     (
       chatWindowId: string,
@@ -1676,11 +2089,35 @@ export function useWorkspace(
     [],
   );
   const stableConnectorUnbind = useCallback(
-    (chatWindowId: string, scope: ChatLocalKnowledgeScope): void => {
-      onConnectorUnbindRef.current?.(chatWindowId, scope);
-    },
+    (
+      chatWindowId: string,
+      scope: ChatLocalKnowledgeScope,
+      target?: ChatUnbindTarget,
+    ): boolean | Promise<boolean> =>
+      onConnectorUnbindRef.current?.(chatWindowId, scope, target) ?? true,
     [],
   );
+  const stableGitChangeBind = useCallback(
+    (
+      chatWindowId: string,
+      selection: GitChangeBindSelection,
+      target?: ChatBindingTarget,
+    ): ChatGitChangeScope | false | null | Promise<ChatGitChangeScope | false | null> =>
+      onGitChangeBindRef.current?.(chatWindowId, selection, target) ?? null,
+    [],
+  );
+  const stableGitChangeUnbind = useCallback(
+    (
+      chatWindowId: string,
+      relationshipId: string,
+      target?: ChatUnbindTarget,
+    ): boolean | Promise<boolean> =>
+      onGitChangeUnbindRef.current?.(chatWindowId, relationshipId, target) ?? true,
+    [],
+  );
+  const stableWindowLimitReached = useCallback((limit: number): void => {
+    onWindowLimitReachedRef.current?.(limit);
+  }, []);
 
   const zc = useRef<number>(3);
   const snapZone = useRef<SnapZone | null>(null);
@@ -1694,14 +2131,25 @@ export function useWorkspace(
     suppressNextServerPersistRef.current = true;
   }, []);
 
-  const winsRef = useRef<AppWindow[]>([]);
-  winsRef.current = wins ?? [];
-  const winsReadyRef = useRef(false);
-  winsReadyRef.current = wins !== null;
   const selectionRef = useRef<WorkspaceUiSelectionState>(selection);
   selectionRef.current = selection;
   const workspaceClipboardRef = useRef<string | null>(null);
   const workspaceClipboardPasteCountRef = useRef(1);
+  // Cut is a MOVE, and the clipboard descriptor is content-free by ADR-0123 D5 —
+  // right for a duplicate, but restoring only geometry would silently destroy a
+  // cut window's state (a Files root and active path, an Editor's file, a
+  // Terminal's cwd, a Browser's URL). The windows this session just removed are
+  // therefore held verbatim here until the next paste puts them back. This
+  // buffer stays in memory for this workspace only: it is never serialized into
+  // the clipboard payload, never written to localStorage, and never reaches the
+  // OS clipboard, so D5's "no content leaves the workspace" property is intact.
+  const workspaceCutBufferRef = useRef<readonly AppWindow[] | null>(null);
+  // A cut settles asynchronously, so the user can copy (or cut again) before it
+  // finishes. Each cut takes a generation; copy bumps it. Only the completion
+  // whose generation is still current may write the move buffer or the paste
+  // offset — otherwise a stale cut would resurrect its windows on the next
+  // paste instead of duplicating what was copied last.
+  const workspaceClipboardGenerationRef = useRef(0);
   const connsRef = useRef<Connection[]>([]);
   connsRef.current = conns;
   const winsById = useMemo<ReadonlyMap<string, AppWindow>>(
@@ -1730,6 +2178,14 @@ export function useWorkspace(
   connsByIdRef.current = connsById;
   const connsByEndpointRef = useRef<ReadonlyMap<string, readonly Connection[]>>(connsByEndpoint);
   connsByEndpointRef.current = connsByEndpoint;
+  const pendingWindowClosesRef = useRef(new Set<string>());
+  // In-flight connection teardowns, keyed by connection id. Batch dedupe only
+  // covers one operation: while a cut waits for its unbinds, a close (or a
+  // second cut) of the OTHER endpoint reads the same pre-close connection
+  // snapshot and would start that edge's server-side unbind again. Overlapping
+  // operations share this promise instead, so each connection is torn down
+  // exactly once no matter how many closes reach it.
+  const pendingConnectionTeardownsRef = useRef(new Map<string, Promise<boolean>>());
   // Refs for the click-to-connect flow. connectingRef is a synchronous view of
   // the `connecting` state for handlers fired from child components (confirm).
   // connectCleanupRef stores the global pointermove listener disposer so we
@@ -1748,8 +2204,8 @@ export function useWorkspace(
     view,
     cameraSmoothness,
     winsRef,
+    selectionRef,
     setView,
-    setWins,
   });
 
   useHydrate({ wsRef, setWins, setConns, zc, lastAppliedSerializedRef });
@@ -1797,15 +2253,14 @@ export function useWorkspace(
       suppressNextLocalPersistRef.current = false;
       return;
     }
-    const persistedWins = sanitizePersistedWindows(wins);
-    const persistedConns = sanitizePersistedConnections(conns, persistedWins);
-    persistList(WS_LS, persistedWins);
-    persistList(CONN_LS, persistedConns);
+    const persisted = sanitizePersistedWorkspace(wins, conns);
+    persistList(WS_LS, persisted.wins);
+    persistList(CONN_LS, persisted.conns);
     // Track what is now durably applied so a cross-tab storage event echoing this
     // exact value is recognised as a no-op (PERSISTENCE-001 equality guard).
     lastAppliedSerializedRef.current = JSON.stringify({
-      windows: persistedWins,
-      connections: persistedConns,
+      windows: persisted.wins,
+      connections: persisted.conns,
     });
   }, [conns, wins]);
 
@@ -1822,8 +2277,15 @@ export function useWorkspace(
   // now routed through refs (stable* wrappers, GEN-PERF-RENDER-001), so even a parent
   // swapping their identities every render no longer rebinds connectActions/api.
   const mutations = useMemo(
-    () => makeMutations({ setWins, zc, worldVP, winsRef }),
-    [setWins, zc, worldVP, winsRef],
+    () =>
+      makeMutations({
+        onWindowLimitReached: stableWindowLimitReached,
+        setWins,
+        zc,
+        worldVP,
+        winsRef,
+      }),
+    [setWins, stableWindowLimitReached, worldVP, winsRef],
   );
   const focusWindow = useCallback<WorkspaceApi["focus"]>(
     (id) => {
@@ -1840,7 +2302,72 @@ export function useWorkspace(
     },
     [mutations, winsByIdRef, winsRef],
   );
+  const activateWindow = useCallback<WorkspaceApi["activateWindow"]>(
+    (id) => {
+      const target = winsByIdRef.current.get(id);
+      if (target !== undefined && isWorkspaceWindowSelectable(target)) {
+        const replacesSelection = !selectionRef.current.selectedWindowIds.includes(id);
+        setSelection((current) =>
+          replacesSelection
+            ? replaceWorkspaceSelection(winsRef.current, [id])
+            : normalizeWorkspaceSelection(winsRef.current, {
+                ...current,
+                focusedWindowId: id,
+              }),
+        );
+      }
+      mutations.focus(id);
+    },
+    [mutations, selectionRef, winsByIdRef, winsRef],
+  );
+  const currentWindowStack = useCallback(
+    (): readonly string[] =>
+      [...winsRef.current].sort((left, right) => right.z - left.z).map((window) => window.id),
+    [winsRef],
+  );
   const layout = useMemo(() => makeLayoutActions({ setWins, worldVP }), [setWins, worldVP]);
+  const activateLayoutOwner = useCallback(
+    (ownerId: string | null): void => {
+      if (ownerId === null || worldVP() === null) return;
+      setSelection({ focusedWindowId: ownerId, selectedWindowIds: [ownerId] });
+      mutations.focus(ownerId);
+    },
+    [mutations, setSelection, worldVP],
+  );
+  const addWithActivation = useCallback<WorkspaceApi["add"]>(
+    (type, cfg) => {
+      if (worldVP() === null) return null;
+      const predictedId = predictableAddWindowId(winsRef.current, type, cfg);
+      const createdId = mutations.add(type, cfg);
+      const activatedId = createdId ?? predictedId;
+      activateLayoutOwner(activatedId);
+      return activatedId;
+    },
+    [activateLayoutOwner, mutations, winsRef, worldVP],
+  );
+  const toggleToolWithActivation = useCallback<WorkspaceApi["toggleTool"]>(
+    (type) => {
+      const ownerId = toolToggleActivationWindowId(winsRef.current, type);
+      mutations.toggleTool(type);
+      activateLayoutOwner(ownerId);
+    },
+    [activateLayoutOwner, mutations, winsRef],
+  );
+  const tileAllWithActivation = useCallback<WorkspaceApi["tileAll"]>(() => {
+    const ownerId = frontmostLayoutWindowId(winsRef.current, { includeMinimized: true });
+    layout.tileAll();
+    activateLayoutOwner(ownerId);
+  }, [activateLayoutOwner, layout, winsRef]);
+  const splitFrontWithActivation = useCallback<WorkspaceApi["splitFront"]>(() => {
+    const ownerId = frontmostLayoutWindowId(winsRef.current, { includeMinimized: false });
+    layout.splitFront();
+    activateLayoutOwner(ownerId);
+  }, [activateLayoutOwner, layout, winsRef]);
+  const cascadeWithActivation = useCallback<WorkspaceApi["cascade"]>(() => {
+    const ownerId = frontmostLayoutWindowId(winsRef.current, { includeMinimized: true });
+    layout.cascade();
+    activateLayoutOwner(ownerId);
+  }, [activateLayoutOwner, layout, winsRef]);
   const snap = useMemo(
     () => makeSnapActions({ setSnapPrev, snapZone, worldVP, update: mutations.update }),
     [setSnapPrev, snapZone, worldVP, mutations],
@@ -1868,6 +2395,9 @@ export function useWorkspace(
         onScopeUnbind: stableScopeUnbind,
         onConnectorBind: stableConnectorBind,
         onConnectorUnbind: stableConnectorUnbind,
+        onGitChangeBind: stableGitChangeBind,
+        onGitChangeUnbind: stableGitChangeUnbind,
+        onConnectionUnbindFailure: reportConnectionUnbindFailure,
       }),
     [
       wsRef,
@@ -1886,6 +2416,8 @@ export function useWorkspace(
       stableScopeUnbind,
       stableConnectorBind,
       stableConnectorUnbind,
+      stableGitChangeBind,
+      stableGitChangeUnbind,
     ],
   );
   cancelConnectRef.current = connectActions.cancelConnect;
@@ -1896,24 +2428,73 @@ export function useWorkspace(
   // do this: by the time it runs, the closed window is gone from winsRef and the bind roots can
   // no longer be derived — so the teardown runs here, BEFORE the window list shrinks. The prune
   // effect afterwards only sweeps the now-orphaned edge objects.
+  // Resolves to the ids that actually left the workspace. Batch-aware on
+  // purpose: when BOTH endpoints of one connection are closed together (a cut
+  // whose selection contains both), every caller works from the same pre-close
+  // connection snapshot, so a per-window loop would issue that edge's
+  // server-side unbind TWICE. A non-idempotent second unbind can fail and leave
+  // the batch half-applied, so each connection is torn down exactly once here,
+  // keyed by connection id, and a refused edge blocks only the endpoints that
+  // belong to it.
+  const closeWindowsWithTeardown = useCallback(
+    async (ids: readonly string[]): Promise<readonly string[]> => {
+      const targets = ids.filter(
+        (id) => !pendingWindowClosesRef.current.has(id) && winsByIdRef.current.has(id),
+      );
+      if (targets.length === 0) return [];
+      const byConnection = batchConnectionTeardowns(targets, connsByEndpointRef.current);
+      // Unconnected windows keep the synchronous close they have always had.
+      if (byConnection.length === 0) {
+        for (const id of targets) mutations.close(id);
+        return targets;
+      }
+      for (const id of targets) pendingWindowClosesRef.current.add(id);
+      try {
+        const outcomes = await Promise.all(
+          byConnection.map(async ({ conn, ownerId }) => {
+            const accepted = await teardownConnectionOnce(
+              pendingConnectionTeardownsRef.current,
+              conn,
+              () => {
+                const owner = winsByIdRef.current.get(ownerId);
+                if (owner === undefined) return Promise.resolve(true);
+                return unbindClosedWindowConnection(
+                  ownerId,
+                  owner,
+                  conn,
+                  winsByIdRef.current,
+                  stableScopeUnbind,
+                  stableConnectorUnbind,
+                  stableGitChangeUnbind,
+                );
+              },
+            );
+            return { conn, accepted };
+          }),
+        );
+        const refused = refusedTeardownEndpoints(outcomes, new Set(targets));
+        const closed = targets.filter((id) => !refused.has(id));
+        for (const id of closed) mutations.close(id);
+        return closed;
+      } finally {
+        for (const id of targets) pendingWindowClosesRef.current.delete(id);
+      }
+    },
+    [
+      winsByIdRef,
+      connsByEndpointRef,
+      mutations,
+      stableScopeUnbind,
+      stableConnectorUnbind,
+      stableGitChangeUnbind,
+    ],
+  );
+
   const closeWithTeardown = useCallback<WorkspaceApi["close"]>(
     (id) => {
-      const win = winsByIdRef.current.get(id);
-      if (win !== undefined) {
-        for (const c of connsByEndpointRef.current.get(id) ?? []) {
-          unbindClosedWindowConnection(
-            id,
-            win,
-            c,
-            winsByIdRef.current,
-            stableScopeUnbind,
-            stableConnectorUnbind,
-          );
-        }
-      }
-      mutations.close(id);
+      void closeWindowsWithTeardown([id]);
     },
-    [winsByIdRef, connsByEndpointRef, mutations, stableScopeUnbind, stableConnectorUnbind],
+    [closeWindowsWithTeardown],
   );
 
   const updateConnBoundScope = useCallback<WorkspaceApi["updateConnBoundScope"]>(
@@ -1929,6 +2510,21 @@ export function useWorkspace(
                   ? { boundRelativePath: scope.relativePaths[0] }
                   : {}),
               }
+            : conn,
+        ),
+      );
+    },
+    [setConns],
+  );
+
+  const updateConnGitChangeScope = useCallback<
+    NonNullable<WorkspaceApi["updateConnGitChangeScope"]>
+  >(
+    (connId, scope) => {
+      setConns((cs) =>
+        cs.map((conn) =>
+          conn.id === connId
+            ? { ...conn, boundGitChangeRelationshipId: scope.relationshipId }
             : conn,
         ),
       );
@@ -1988,20 +2584,129 @@ export function useWorkspace(
     [selectionRef, setWins, winsRef, worldVP],
   );
   const copySelectedWindows = useCallback<WorkspaceApi["copySelectedWindows"]>(() => {
-    if (!winsReadyRef.current) return false;
-    const payload = buildWorkspaceClipboardPayload(
+    if (!winsReadyRef.current) return { captured: 0, skipped: 0, overflow: 0 };
+    const built = buildWorkspaceClipboardPayload(
       winsRef.current,
       selectionRef.current.selectedWindowIds,
     );
-    if (payload === null) return false;
-    workspaceClipboardRef.current = payload;
+    if (built.payload === null) {
+      return { captured: 0, skipped: built.skippedCount, overflow: built.overflowCount };
+    }
+    workspaceClipboardRef.current = built.payload;
     workspaceClipboardPasteCountRef.current = 1;
-    return true;
+    // A copy supersedes a pending move: the next paste must duplicate what was
+    // just copied, not restore windows an earlier cut removed. Bumping the
+    // generation also disarms a cut that has not settled yet.
+    workspaceCutBufferRef.current = null;
+    workspaceClipboardGenerationRef.current += 1;
+    return {
+      captured: built.capturedWindowIds.length,
+      skipped: built.skippedCount,
+      overflow: built.overflowCount,
+    };
   }, [selectionRef, winsReadyRef, winsRef]);
+  // Issue #2150 follow-up — cut captures the same content-free descriptors copy
+  // does, then closes exactly the captured windows. Only duplicable windows are
+  // ever closed, so the first paste can always restore what a cut removed.
+  // Removal goes through closeWithTeardown, not a raw setWins filter: a cut
+  // window can be a connected chat/files/connector endpoint, and only
+  // closeWithTeardown fires the scope/connector unbind callbacks that keep the
+  // chat's server-side grounding in sync with the visible connection (see the
+  // uiux-fix F008 C120 comment on closeWithTeardown below) — a bare filter would
+  // silently orphan that server-side binding while the edge and window vanish.
+  const cutSelectedWindows = useCallback<WorkspaceApi["cutSelectedWindows"]>(() => {
+    const empty = (capture: WorkspaceClipboardCaptureResult): WorkspaceClipboardCutResult => ({
+      ...capture,
+      settled: Promise.resolve(capture),
+    });
+    if (!winsReadyRef.current) return empty({ captured: 0, skipped: 0, overflow: 0 });
+    const built = buildWorkspaceClipboardPayload(
+      winsRef.current,
+      selectionRef.current.selectedWindowIds,
+    );
+    if (built.payload === null) {
+      return empty({ captured: 0, skipped: built.skippedCount, overflow: built.overflowCount });
+    }
+    workspaceClipboardRef.current = built.payload;
+    // Cut/paste is a move, so the FIRST paste restores at the original geometry
+    // (offset 0) from the buffer below. Anything the teardown refuses stays
+    // open, so it is neither buffered nor reported, and the offset falls back to
+    // the ordinary duplicate spacing.
+    workspaceClipboardPasteCountRef.current = 0;
+    workspaceCutBufferRef.current = null;
+    workspaceClipboardGenerationRef.current += 1;
+    const generation = workspaceClipboardGenerationRef.current;
+    const snapshot = new Map(winsRef.current.map((win) => [win.id, win]));
+    const settled = closeWindowsWithTeardown(built.capturedWindowIds).then(
+      (closed): WorkspaceClipboardCaptureResult => {
+        const moved = closed
+          .map((id) => snapshot.get(id))
+          .filter((win): win is AppWindow => win !== undefined);
+        // A copy or a newer cut that landed while this teardown was in flight
+        // owns the clipboard now; this completion only reports what it closed.
+        if (workspaceClipboardGenerationRef.current === generation) {
+          workspaceCutBufferRef.current = moved.length > 0 ? moved : null;
+          if (closed.length !== built.capturedWindowIds.length) {
+            workspaceClipboardPasteCountRef.current = 1;
+          }
+        }
+        return {
+          captured: closed.length,
+          skipped: built.skippedCount,
+          overflow: built.overflowCount,
+        };
+      },
+    );
+    return {
+      captured: built.capturedWindowIds.length,
+      skipped: built.skippedCount,
+      overflow: built.overflowCount,
+      settled,
+    };
+  }, [closeWindowsWithTeardown, selectionRef, winsReadyRef, winsRef]);
+  // Completes a pending move: puts the windows a cut removed back exactly as
+  // they were — same ids where still free, same cfg, same geometry — instead of
+  // pasting the content-free duplicate descriptor. Returns null when no move is
+  // pending, so paste falls through to the ordinary duplicate path.
+  const restoreCutWindows = useCallback((): WorkspaceClipboardPasteResult | null => {
+    const buffered = workspaceCutBufferRef.current;
+    if (buffered === null) return null;
+    const taken = new Set(winsRef.current.map((win) => win.id));
+    const pending = buffered.filter((win) => !taken.has(win.id));
+    const capacity = Math.max(0, MAX_WORKSPACE_WINDOWS - winsRef.current.length);
+    const restorable = pending.slice(0, capacity);
+    const limitReached = restorable.length < pending.length;
+    if (limitReached) stableWindowLimitReached(MAX_WORKSPACE_WINDOWS);
+    // The buffer is the ONLY copy of each cut window's state, so what capacity
+    // could not take stays buffered for a later paste rather than being dropped.
+    const remaining = pending.slice(restorable.length);
+    workspaceCutBufferRef.current = remaining.length > 0 ? remaining : null;
+    if (restorable.length === 0) return { pasted: 0, limitReached };
+    let z = zc.current;
+    const restored = restorable.map((win) => ({ ...win, z: ++z }));
+    zc.current = z;
+    const next = [...winsRef.current, ...restored];
+    // Once the whole move has landed, the next paste of the same clipboard is a
+    // duplicate again, so it offsets.
+    if (remaining.length === 0) workspaceClipboardPasteCountRef.current = 1;
+    setWins(next);
+    setSelection(
+      replaceWorkspaceSelection(
+        next,
+        restored.map((win) => win.id),
+      ),
+    );
+    return { pasted: restored.length, limitReached };
+  }, [setWins, stableWindowLimitReached, winsRef, zc]);
+
   const pasteCopiedWindows = useCallback<WorkspaceApi["pasteCopiedWindows"]>(() => {
-    if (!winsReadyRef.current || workspaceClipboardRef.current === null) return false;
+    const none = { pasted: 0, limitReached: false } as const;
+    if (!winsReadyRef.current) return none;
+    const restored = restoreCutWindows();
+    if (restored !== null) return restored;
+    if (workspaceClipboardRef.current === null) return none;
     const vp = worldVP();
-    if (vp === null) return false;
+    if (vp === null) return none;
     const result = duplicateWorkspaceClipboardWindows({
       wins: winsRef.current,
       payload: workspaceClipboardRef.current,
@@ -2010,13 +2715,16 @@ export function useWorkspace(
       nowMs: Date.now(),
       pasteOffsetPx: WORKSPACE_CLIPBOARD_PASTE_OFFSET_PX * workspaceClipboardPasteCountRef.current,
     });
-    if (result === null) return false;
+    if (result === null) return none;
+    if (result.limitReached) stableWindowLimitReached(MAX_WORKSPACE_WINDOWS);
+    if (result.pastedWindowIds.length === 0)
+      return { pasted: 0, limitReached: result.limitReached };
     zc.current = result.nextZ;
     workspaceClipboardPasteCountRef.current += 1;
     setWins(result.wins as AppWindow[]);
     setSelection(replaceWorkspaceSelection(result.wins, result.pastedWindowIds));
-    return true;
-  }, [setWins, winsReadyRef, winsRef, worldVP, zc]);
+    return { pasted: result.pastedWindowIds.length, limitReached: result.limitReached };
+  }, [restoreCutWindows, setWins, stableWindowLimitReached, winsReadyRef, winsRef, worldVP, zc]);
 
   // Component unmount must also drop the global listener.
   useEffect(
@@ -2036,16 +2744,19 @@ export function useWorkspace(
   // storm from O(N windows) to O(windows that actually changed).
   const api = useMemo<WorkspaceApi>(
     () => ({
-      add: mutations.add,
+      add: addWithActivation,
       openEditorFile: mutations.openEditorFile,
-      toggleTool: mutations.toggleTool,
+      toggleTool: toggleToolWithActivation,
+      activateWindow,
       focus: focusWindow,
+      currentWindowStack,
       currentSelection,
       replaceSelection,
       toggleWindowSelection,
       clearSelection,
       moveSelectedWindowsBy,
       copySelectedWindows,
+      cutSelectedWindows,
       pasteCopiedWindows,
       close: closeWithTeardown,
       minimize: mutations.minimize,
@@ -2054,14 +2765,15 @@ export function useWorkspace(
       update: mutations.update,
       setSnap: snap.setSnap,
       commitSnap: snap.commitSnap,
-      tileAll: layout.tileAll,
-      splitFront: layout.splitFront,
-      cascade: layout.cascade,
+      tileAll: tileAllWithActivation,
+      splitFront: splitFrontWithActivation,
+      cascade: cascadeWithActivation,
       startConnect: connectActions.startConnect,
       confirmConnect: connectActions.confirmConnect,
       cancelConnect: connectActions.cancelConnect,
       removeConn: connectActions.removeConn,
       updateConnBoundScope,
+      updateConnGitChangeScope,
       connect: connectActions.connect,
       linkedFilesRoot: connectActions.linkedFilesRoot,
       linkedFilesContext: connectActions.linkedFilesContext,
@@ -2071,6 +2783,7 @@ export function useWorkspace(
       linkedFigmaSnapshotRunIds: connectActions.linkedFigmaSnapshotRunIds,
       linkedFigmaSnapshotSources: connectActions.linkedFigmaSnapshotSources,
       linkedImageSources: connectActions.linkedImageSources,
+      linkedGitChangeComparisons: connectActions.linkedGitChangeComparisons,
       currentFilesContext: connectActions.currentFilesContext,
       zoomTo,
       fitView,
@@ -2082,18 +2795,26 @@ export function useWorkspace(
     [
       mutations,
       snap,
-      layout,
+      addWithActivation,
+      toggleToolWithActivation,
+      tileAllWithActivation,
+      splitFrontWithActivation,
+      cascadeWithActivation,
       connectActions,
       closeWithTeardown,
+      activateWindow,
       focusWindow,
+      currentWindowStack,
       currentSelection,
       replaceSelection,
       toggleWindowSelection,
       clearSelection,
       moveSelectedWindowsBy,
       copySelectedWindows,
+      cutSelectedWindows,
       pasteCopiedWindows,
       updateConnBoundScope,
+      updateConnGitChangeScope,
       currentView,
       zoomTo,
       fitView,

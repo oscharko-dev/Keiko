@@ -21,12 +21,12 @@ import {
   runAtlassianSyncFetch,
   type AtlassianSyncFetchOutcome,
 } from "@oscharko-dev/keiko-connectors";
-import {
-  DEFAULT_ATLASSIAN_SYNC_BOUNDS,
-  type AtlassianSyncFailureReason,
-  type AtlassianSyncJobStatus,
-  type KnowledgePodReadiness,
+import type {
+  AtlassianSyncFailureReason,
+  AtlassianSyncJobStatus,
+  KnowledgePodReadiness,
 } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_ATLASSIAN_SYNC_BOUNDS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import {
   CONNECTOR_BASE_URL,
   DEGRADATION_CONDITIONS,

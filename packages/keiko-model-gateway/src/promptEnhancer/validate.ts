@@ -22,25 +22,27 @@
 //
 // Determinism: pure. No IO, clock, or randomness.
 
+import type {
+  EnhancedPrompt,
+  EnhancedPromptId,
+  LeastPrivilegeConstraint,
+  PromptSafetyAssessment,
+  PromptSafetyFinding,
+  PromptSafetyRuleId,
+  PromptSafetySeverity,
+  PromptSafetyViolationCode,
+  PromptTaskAnalysis,
+  RawPromptInput,
+} from "@oscharko-dev/keiko-contracts";
 import {
   assessEnhancedPromptStructuralSafety,
   collectProhibitedPromptTextFindings,
   leastPrivilegeForAnalysis,
   requiresHumanReviewForAnalysis,
   summarizePromptSafety,
-  PROMPT_ENHANCER_SCHEMA_VERSION,
   PROMPT_SAFETY_VIOLATION_DETAILS,
-  type EnhancedPrompt,
-  type EnhancedPromptId,
-  type LeastPrivilegeConstraint,
-  type PromptSafetyAssessment,
-  type PromptSafetyFinding,
-  type PromptSafetyRuleId,
-  type PromptSafetySeverity,
-  type PromptSafetyViolationCode,
-  type PromptTaskAnalysis,
-  type RawPromptInput,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-safety";
+import { PROMPT_ENHANCER_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
 import {
   detectPromptInjectionSignals,
   type PromptInjectionSignal,

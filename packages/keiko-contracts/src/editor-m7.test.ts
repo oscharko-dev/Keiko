@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  __validateEditorM7KeybindingForTests,
   EDITOR_M7_COMMAND_REGISTRY,
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
@@ -18,6 +19,8 @@ import {
   serializeEditorM7KeybindingOverride,
   validateEditorM7Keybinding,
   type EditorM7AiActivationInput,
+  type EditorM7CommandDefinition,
+  type EditorM7CommandScope,
   type EditorM7ModelEntry,
   type EditorM7SettingId,
   type EditorM7SettingsSnapshot,
@@ -62,6 +65,20 @@ describe("M7 editor setting registry", () => {
     expect(defaults.gitCommitMessagePolicy).toBe("keiko-conventional");
     expect(EDITOR_M7_SETTING_REGISTRY.every((entry) => entry.description.length > 0)).toBe(true);
     expect(EDITOR_M7_SETTING_REGISTRY.every((entry) => entry.scopes.length > 0)).toBe(true);
+  });
+
+  // Codex-sweep finding (same bug class as command-runner.ts's COMMAND_TASK_RULES, KEIKO-0139):
+  // each entry's `scopes` array was individually frozen at declaration time, but the entry
+  // OBJECT itself was not — only the outer array was, via Object.freeze — so
+  // `EDITOR_M7_SETTING_REGISTRY[0].minimum = -1` (widening a bound parseEditorM7SettingPatch
+  // enforces) succeeded. Modules run in strict mode, so a write to a genuinely frozen object
+  // throws.
+  it("freezes each setting entry itself, not just the registry array holding them", () => {
+    const [first] = EDITOR_M7_SETTING_REGISTRY;
+    expect(first).toBeDefined();
+    expect(() => {
+      (first as { defaultValue: unknown }).defaultValue = "tampered";
+    }).toThrow(TypeError);
   });
 
   it("accepts only the two governed commit-message policy modes", () => {
@@ -246,8 +263,55 @@ describe("M7 watcher and model-retention contracts", () => {
 });
 
 describe("M7 keybinding, snippet, and AI activation contracts", () => {
+  // Codex-sweep finding: the editorCommand() factory returns a plain, unfrozen object per call
+  // (its own contexts/defaultBindings sub-arrays are individually frozen, but the command object
+  // itself is not) and EDITOR_M7_COMMAND_REGISTRY only froze the outer array — so a command's
+  // own field, e.g. dispatchOwner, was writable after construction.
+  it("freezes each command entry itself, not just the registry array holding them", () => {
+    const [first] = EDITOR_M7_COMMAND_REGISTRY;
+    expect(first).toBeDefined();
+    expect(() => {
+      (first as { rebindable: boolean }).rebindable = !first?.rebindable;
+    }).toThrow(TypeError);
+  });
+
+  // KEIKO-0875 (#3332): "explorer" and "git" were legal EditorM7CommandScope values with zero
+  // registered commands using either -- two unreachable branches in scopeLabel and two
+  // unexercisable i18n keys. The product owner decided to narrow the type rather than keep it as
+  // a forward declaration; this pin proves the union no longer admits either value.
+  it("rejects explorer and git as EditorM7CommandScope values", () => {
+    // The assertion here is the `@ts-expect-error` directive itself, enforced by `npm run
+    // typecheck`: if either literal were ever legal again, tsc would fail on an unused
+    // `@ts-expect-error`. A runtime `expect(...).toBe(...)` on a value just assigned from the
+    // same literal would be tautological (SonarJS S5914) and prove nothing `tsc` doesn't already.
+    // @ts-expect-error -- "explorer" is not a legal EditorM7CommandScope; no registered command
+    // uses it, and the KeyboardShortcutsPanel branch that read it was deleted alongside the
+    // "settings.keyboard.scopeExplorer" i18n key.
+    const _explorerScope: EditorM7CommandScope = "explorer";
+    // @ts-expect-error -- same for "git"; the "settings.keyboard.scopeGit" i18n key was deleted
+    // alongside its branch too.
+    const _gitScope: EditorM7CommandScope = "git";
+
+    // Real runtime assertion (not a restatement of the type check above): the type-level guard
+    // only stops a literal "explorer"/"git" from being written in source. It cannot stop a value
+    // smuggled in via a wider-typed variable or an `as EditorM7CommandScope` cast from reaching
+    // the actual runtime registry. This proves the operational invariant the type narrowing is
+    // meant to protect -- no registered command actually carries either retired scope -- against
+    // the real array scopeLabel and every other registry consumer reads.
+    const registeredScopes: ReadonlySet<string> = new Set(
+      EDITOR_M7_COMMAND_REGISTRY.map((entry) => entry.scope),
+    );
+    expect(registeredScopes.has("explorer")).toBe(false);
+    expect(registeredScopes.has("git")).toBe(false);
+  });
+
   it("keeps a closed command registry and rejects reserved, malformed, unknown, and colliding bindings", () => {
     expect(EDITOR_M7_COMMAND_REGISTRY.map((entry) => entry.id)).toContain("editor.save");
+    expect(
+      EDITOR_M7_COMMAND_REGISTRY.find((entry) => entry.id === "open-editor-settings"),
+    ).toMatchObject({
+      contexts: ["settings", "editor"],
+    });
     expect(
       validateEditorM7Keybinding({
         commandId: "quick-access.files",
@@ -307,6 +371,69 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
         activeBindings: {},
       }),
     ).toMatchObject({ ok: false, reasonCode: "RESERVED_KEYBINDING" });
+  });
+
+  it.each(["U", "Space", "Esc", "F5", "Shift+U"])(
+    "rejects the unsafe bare or Shift-only binding %s",
+    (binding) => {
+      expect(
+        validateEditorM7Keybinding({
+          commandId: "undo",
+          binding,
+          activeBindings: {},
+        }),
+      ).toMatchObject({ ok: false, reasonCode: "INVALID_INPUT" });
+    },
+  );
+
+  it("rejects malformed input before applying a command's policy lock", () => {
+    expect(
+      validateEditorM7Keybinding({
+        commandId: "editor.renameSymbol",
+        binding: "CtrlOrMeta+",
+        activeBindings: {},
+      }),
+    ).toMatchObject({ ok: false, reasonCode: "INVALID_INPUT" });
+  });
+
+  it("rejects a binding whose serialized override record exceeds the byte cap", () => {
+    const binding = `Alt+${"A".repeat(168)}`;
+    const record = serializeEditorM7KeybindingOverride({
+      schemaVersion: "1",
+      commandId: "quick-access.files",
+      binding,
+    });
+    expect(parseEditorM7KeybindingOverrides([record])).toMatchObject({
+      ok: false,
+      reasonCode: "OVERSIZED",
+    });
+
+    expect(
+      validateEditorM7Keybinding({
+        commandId: "quick-access.files",
+        binding,
+        activeBindings: {},
+      }),
+    ).toMatchObject({ ok: false, reasonCode: "INVALID_INPUT" });
+  });
+
+  it.each([
+    "",
+    " ",
+    "+",
+    "+S",
+    "CtrlOrMeta+",
+    "CtrlOrMeta++S",
+    "CtrlOrMeta+\u0000S",
+    `CtrlOrMeta+${"A".repeat(4096)}`,
+  ])("rejects the malformed or hostile binding %j", (binding) => {
+    expect(
+      validateEditorM7Keybinding({
+        commandId: "quick-access.files",
+        binding,
+        activeBindings: {},
+      }),
+    ).toMatchObject({ ok: false, reasonCode: "INVALID_INPUT" });
   });
 
   // 0.3.0 release audit (#2802) — `Ctrl` and `Meta` name the same position in the chord vocabulary
@@ -413,7 +540,43 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
     ).toMatchObject({ ok: false, reasonCode: "KEYBINDING_COLLISION" });
   });
 
-  it("allows explicit context-disjoint reuse and normalizes persisted override records", () => {
+  it("rejects overlapping context reuse and normalizes persisted override records", () => {
+    const disjointCommands = [
+      {
+        id: "settings-only",
+        labelKey: "command.settingsOnly",
+        descriptionKey: "command.settingsOnly.description",
+        scope: "settings",
+        contexts: ["settings"],
+        defaultBindings: [],
+        rebindable: true,
+        dispatchOwner: "keiko",
+      },
+      {
+        id: "explorer-only",
+        labelKey: "command.explorerOnly",
+        descriptionKey: "command.explorerOnly.description",
+        // KEIKO-0875 (#3332): "explorer" was narrowed out of EditorM7CommandScope (zero commands
+        // used it); "editor" here is an arbitrary scope disjoint from "settings" below -- this
+        // fixture pins context-disjoint reuse, which the collision check keys on `contexts`, not
+        // `scope`. The still-valid "explorer" EditorM7CommandContext is untouched (out of scope).
+        scope: "editor",
+        contexts: ["explorer"],
+        defaultBindings: [],
+        rebindable: true,
+        dispatchOwner: "keiko",
+      },
+    ] as const satisfies readonly EditorM7CommandDefinition[];
+    expect(
+      __validateEditorM7KeybindingForTests(
+        {
+          commandId: "settings-only",
+          binding: "Alt+S",
+          activeBindings: [{ commandId: "explorer-only", binding: "Alt+S" }],
+        },
+        disjointCommands,
+      ),
+    ).toStrictEqual({ ok: true, value: "Alt+S" });
     expect(
       validateEditorM7Keybinding({
         commandId: "view.splitRight",
@@ -427,7 +590,7 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
         binding: "Shift+Alt+X",
         activeBindings: [{ commandId: "open-editor-settings", binding: "Shift+Alt+X" }],
       }),
-    ).toStrictEqual({ ok: true, value: "Alt+Shift+X" });
+    ).toMatchObject({ ok: false, reasonCode: "KEYBINDING_COLLISION" });
     const record = serializeEditorM7KeybindingOverride({
       schemaVersion: "1",
       commandId: "view.splitRight",
@@ -729,6 +892,29 @@ describe("M7 malformed input rejection paths", () => {
     expect(plan.evicted).toStrictEqual([]);
     expect(plan.retained).toStrictEqual(["dirty", "pinned", "active", "pending"]);
     expect(plan.protected).toStrictEqual(["dirty", "pinned", "active", "pending"]);
+  });
+
+  // KEIKO-0822: two entries sharing an `identity` used to make the second iteration's
+  // `retained.findIndex(...)` return -1, and `splice(-1, 1)` then removed the LAST retained
+  // entry — a possibly-protected entry that was never eligible to be evicted. Guard the splice
+  // so a missing match is a no-op and the evicted list stays honest.
+  it("does not remove a bystander when two entries share an identity (KEIKO-0822)", () => {
+    const entries: readonly EditorM7ModelEntry[] = [
+      model("dup", 1, 5, {}),
+      model("dup", 2, 5, {}),
+      model("safe", 3, 5, {}),
+    ];
+    const plan = planEditorM7ModelEviction({ entries, maximumCount: 1, maximumBytes: 5 });
+    // `safe` must survive: no entry with that identity was ever eligible / evicted.
+    expect(plan.retained).toContain("safe");
+    for (const evictedIdentity of plan.evicted) {
+      // Every identity claimed as evicted must have been in the original entries list.
+      expect(entries.some((entry) => entry.identity === evictedIdentity)).toBe(true);
+    }
+    // No entry in `retained` should ever be an identity that was never in the input.
+    for (const retainedIdentity of plan.retained) {
+      expect(entries.some((entry) => entry.identity === retainedIdentity)).toBe(true);
+    }
   });
 
   it.each<[string, unknown]>([

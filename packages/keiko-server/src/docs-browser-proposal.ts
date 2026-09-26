@@ -20,12 +20,19 @@
 // polls the projected `HtmlManualPodJob` for live progress. This proposal/approval surface stays
 // side-effect-free; the trigger routes are the live indexing entry point.
 
+import type {
+  DocumentationIndexingApproval,
+  DocumentationIndexingProposal,
+  DocumentationManualSourceKind,
+  DocumentationNavigationReason,
+  DocumentationTargetClass,
+  KnowledgePodSummary,
+} from "@oscharko-dev/keiko-contracts";
 import {
   applyAuthenticationRequiredOverride,
   asAlreadyIndexedProposal,
   buildDocumentationIndexingProposal,
   buildManualScopePreview,
-  classifyDocumentationTarget,
   DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
   DOCUMENTATION_MANUAL_PROPOSAL_SCHEMA_VERSION,
   detectIndexableManual,
@@ -36,13 +43,8 @@ import {
   summarizeManualPathPrefix,
   validateDocumentationIndexingApproval,
   validateDocumentationIndexingProposal,
-  type DocumentationIndexingApproval,
-  type DocumentationIndexingProposal,
-  type DocumentationManualSourceKind,
-  type DocumentationNavigationReason,
-  type DocumentationTargetClass,
-  type KnowledgePodSummary,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
+import { classifyDocumentationTarget } from "@oscharko-dev/keiko-contracts/runtime/documentation-browser";
 import { listKnowledgePodSummaries } from "@oscharko-dev/keiko-local-knowledge";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { UiHandlerDeps } from "./deps.js";

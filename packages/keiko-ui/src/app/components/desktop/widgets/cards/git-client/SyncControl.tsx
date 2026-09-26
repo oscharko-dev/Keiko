@@ -4,12 +4,7 @@ import { useId } from "react";
 import type { ReactNode } from "react";
 import type { GitRepositorySummary, GitRepositorySummaryRemote } from "@/lib/types";
 import { Icons } from "../../../Icons";
-import {
-  PRIMARY_BTN,
-  STATUS_PILL_STYLE,
-  SUBTLE_TEXT_STYLE,
-  disabledStyle,
-} from "./git-client-styles";
+import { PRIMARY_BTN, SUBTLE_TEXT_STYLE, disabledStyle } from "./git-client-styles";
 import type { SyncOutcomeView } from "./sync-outcome";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
@@ -167,11 +162,17 @@ export function SyncControl({
   // and must not be painted in the neutral colour just because the request itself did not throw.
   const failed = error !== null || outcome?.failed === true;
   return (
-    <div style={{ display: "inline-flex", flexDirection: "column", gap: 3, minWidth: 0 }}>
+    <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
       <button
         type="button"
         disabled={disabled}
-        style={{ ...PRIMARY_BTN, minWidth: 112, ...disabledStyle(disabled) }}
+        style={{
+          ...PRIMARY_BTN,
+          minWidth: 88,
+          height: 34,
+          padding: "0 12px",
+          ...disabledStyle(disabled),
+        }}
         aria-label={`Run sync: ${busy ? "syncing" : view.label}`}
         aria-describedby={descriptionId}
         onClick={onRun}
@@ -193,11 +194,16 @@ export function SyncControl({
         aria-atomic="true"
         aria-labelledby={`${syncLabelId} ${descriptionId}`}
         style={{
-          ...STATUS_PILL_STYLE,
-          maxWidth: 320,
-          whiteSpace: "normal",
+          display: "block",
+          minWidth: 0,
+          maxWidth: 172,
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          whiteSpace: "nowrap",
+          font: "500 11.5px var(--font-ui)",
           color: failed ? "var(--danger)" : "var(--fg-muted)",
         }}
+        title={error ?? outcome?.message ?? view.description}
       >
         {error ?? outcome?.message ?? view.description}
       </span>

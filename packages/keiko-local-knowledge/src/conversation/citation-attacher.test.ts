@@ -113,6 +113,21 @@ describe("attachCitationsToAnswer", () => {
     expect(result.citations[0]?.index).toBe(1);
   });
 
+  // #2906 KEIKO-0643 — MARKER_PATTERN's open-bracket and close-bracket character classes
+  // are independent by design so any of the three opens ({[, 【, ［}) can pair with any of
+  // the three closes. The comment at citation-attacher.ts calls this deliberate tolerance
+  // for untrusted LLM output. Pin the cross-family behavior so a future "fix" that requires
+  // matching families cannot silently regress citation recovery for a model that emits
+  // mismatched glyphs.
+  it("tolerates a mismatched bracket-pair marker (ASCII open, CJK lenticular close)", () => {
+    const refs = [reference("ch-mixed")];
+    const result = attachCitationsToAnswer("see [1】 here", refs);
+    expect(result.citations).toHaveLength(1);
+    expect(result.citations[0]?.marker).toBe("[1】");
+    expect(result.citations[0]?.index).toBe(1);
+    expect(result.citations[0]?.reference.chunkId).toBe("ch-mixed");
+  });
+
   it("keeps a marker when the claim sentence overlaps the cited excerpt", () => {
     const refs = [reference("ch-a")];
     const result = attachCitationsToAnswer(

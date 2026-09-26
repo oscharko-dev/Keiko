@@ -26,17 +26,19 @@ import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import { readWorkspaceFile } from "@oscharko-dev/keiko-workspace";
 import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import type {
+  CommandFailureReason,
+  CommandRunnerEvent,
+  CommandRunnerEventKind,
+  CommandTask,
+  CommandTaskCatalog,
+  CommandTaskKind,
+  CommandTaskRunResult,
+} from "@oscharko-dev/keiko-contracts";
 import {
   COMMAND_RUNNER_SCHEMA_VERSION,
   COMMAND_TASK_RULES,
-  type CommandFailureReason,
-  type CommandRunnerEvent,
-  type CommandRunnerEventKind,
-  type CommandTask,
-  type CommandTaskCatalog,
-  type CommandTaskKind,
-  type CommandTaskRunResult,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/command-runner";
 import { DEFAULT_RETENTION, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { CommandRunnerError } from "./command-runner-errors.js";
 import {
@@ -44,10 +46,15 @@ import {
   buildCommandRunEvidenceEntry,
 } from "./command-runner-evidence.js";
 import type { Project, UiStore } from "./store/index.js";
-import {
-  evidenceRetentionDiagnosticObserver,
-  type ServerDiagnosticSink,
-} from "./diagnostics-log.js";
+import { type ServerDiagnosticSink } from "./diagnostics-log.js";
+import { evidenceRetentionObserver } from "./evidence-retention-log.js";
+import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
+import type { ServerLogSink } from "./observability/server-log.js";
+import type { WorkspaceRootAccess } from "./task-workspace/workspace-root-access.js";
+// ONE definition of "may this worktree run its repository's scripts" (ADR-0147 D3). The verification
+// runner owns it; this runner asks it rather than restating the rule, so the two governed
+// script-spawn boundaries can never drift apart (PR #3381 review P1).
+import { decideScriptTrust } from "./editor/verificationRunner.js";
 
 const MAX_CONCURRENT_RUNS = 8;
 const MIN_TIMEOUT_MS = 1_000;
@@ -69,6 +76,7 @@ export interface CommandRunInput {
   readonly taskId: string;
   readonly timeoutMs?: number | undefined;
   readonly requestId?: string | undefined;
+  readonly signal?: AbortSignal | undefined;
 }
 
 export type CommandRunnerEventEmitter = (event: CommandRunnerEvent) => void;
@@ -92,9 +100,21 @@ export interface CommandRunnerManagerOptions {
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly redactor?: ((input: string) => string) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  // Activity-log port for the runCommand termination-evidence seam (AGENTS.md §8 Rule 1).
+  // Defaults to processServerLogSink() — the same process-wide sink every other server
+  // composition site uses — so production logging works with no wiring required; tests inject a
+  // buffered sink to assert on the emitted line.
+  readonly activityLog?: ServerLogSink | undefined;
   readonly runDeps?: Partial<RunCommandDeps> | undefined;
   readonly isWorkspaceTrustedForPackageScripts?: CommandRunnerWorkspaceTrustDecider | undefined;
+  // ADR-0147 D3 — the managed worktree root's own explicit human grant; see the verification
+  // runner's option of the same name. Defaults fail closed.
+  readonly isWorktreeTrustedByHumanGrant?: ((canonicalRoot: string) => boolean) | undefined;
+  /** ADR-0147 D3, autonomous-delivery amendment: see `VerificationRunnerManagerOptions`. */
+  readonly isWorktreeManifestRunAdmitted?: ((canonicalRoot: string) => boolean) | undefined;
   readonly now?: (() => number) | undefined;
+  readonly resolveWorkspaceRootAccess?:
+    ((requestedRoot: string) => WorkspaceRootAccess | undefined) | undefined;
 }
 
 // ─── Discovery (package.json scripts → name-vetted task catalog) ─────────────────
@@ -108,9 +128,9 @@ function projectFor(store: UiStore, projectId: string): Project | undefined {
   return undefined;
 }
 
-function projectRootOrThrow(project: Project): string {
+function projectRootOrThrow(project: Project, fs: WorkspaceFs): string {
   try {
-    return nodeWorkspaceFs.realPath(project.path);
+    return fs.realPath(project.path);
   } catch {
     throw new CommandRunnerError("PROJECT_NOT_FOUND", "Project root path could not be resolved.");
   }
@@ -119,6 +139,7 @@ function projectRootOrThrow(project: Project): string {
 function buildWorkspaceInfo(projectRoot: string): WorkspaceInfo {
   return {
     root: projectRoot,
+    selectedRoot: projectRoot,
     name: undefined,
     version: undefined,
     testFramework: "unknown",
@@ -273,6 +294,23 @@ interface InFlightRun {
   cancelledByUser: boolean;
 }
 
+interface ResolvedCommandWorkspace {
+  readonly access: WorkspaceRootAccess;
+  readonly workspace: WorkspaceInfo;
+  // The project whose standing script trust governs this workspace, and that project's own
+  // workspace facts. For an ordinary root that is the root itself; for a managed task worktree it is
+  // the REPOSITORY it was bound from. A worktree is not a registered trust decision of its own — a
+  // governed run can create and rewrite files inside it, its own row included — so taking the
+  // decision from its own root is what let workspace-contained work grant itself script trust
+  // (PR #3381 review P1, closed for the verification runner and now for this runner too).
+  readonly trustProjectId: string;
+  readonly trustWorkspace: WorkspaceInfo;
+  // The repository a managed worktree's own `package.json` must STILL match is read from `access`
+  // on every ask (`decideScriptTrust`), never as a boolean taken once: the at-effect answer is read
+  // in the same synchronous step that admits the run, so a manifest replaced between discovery and
+  // execution cannot be spawned (ADR-0147 D3).
+}
+
 class CommandRunnerManagerImpl implements CommandRunnerManager {
   private readonly store: UiStore;
   private readonly evidenceStore: EvidenceStore | undefined;
@@ -280,9 +318,14 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
   private readonly processEnv: NodeJS.ProcessEnv;
   private readonly redactor: (input: string) => string;
   private readonly diagnostics: ServerDiagnosticSink | undefined;
+  private readonly activityLog: ServerLogSink;
   private readonly runDeps: Partial<RunCommandDeps>;
   private readonly isWorkspaceTrustedForPackageScripts: CommandRunnerWorkspaceTrustDecider;
+  private readonly worktreeHumanGrant: (canonicalRoot: string) => boolean;
+  private readonly runAdmittedManifest: (canonicalRoot: string) => boolean;
   private readonly now: () => number;
+  private readonly rootAccessResolver:
+    ((requestedRoot: string) => WorkspaceRootAccess | undefined) | undefined;
   private readonly runs = new Map<string, InFlightRun>();
   private readonly subscribers = new Set<CommandRunnerEventEmitter>();
 
@@ -293,10 +336,14 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
     this.processEnv = opts.processEnv ?? process.env;
     this.redactor = opts.redactor ?? ((input: string): string => input);
     this.diagnostics = opts.diagnostics;
+    this.activityLog = opts.activityLog ?? processServerLogSink();
     this.runDeps = opts.runDeps ?? {};
     this.isWorkspaceTrustedForPackageScripts =
       opts.isWorkspaceTrustedForPackageScripts ?? ((): boolean => false);
+    this.worktreeHumanGrant = opts.isWorktreeTrustedByHumanGrant ?? ((): boolean => false);
+    this.runAdmittedManifest = opts.isWorktreeManifestRunAdmitted ?? ((): boolean => false);
     this.now = opts.now ?? Date.now;
+    this.rootAccessResolver = opts.resolveWorkspaceRootAccess;
   }
 
   public readonly inFlightCount = (): number => this.runs.size;
@@ -317,28 +364,29 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
   };
 
   public readonly discover = (projectId: string): CommandTaskCatalog => {
-    const workspace = this.resolveWorkspace(projectId);
+    const resolved = this.resolveWorkspace(projectId);
     return {
       schemaVersion: COMMAND_RUNNER_SCHEMA_VERSION,
       projectId,
       tasks: discoverTasks(
-        workspace,
-        this.fs(),
-        this.workspaceTrustedForPackageScripts(projectId, workspace),
+        resolved.workspace,
+        resolved.access.fs,
+        this.trustedForScripts(resolved),
       ),
     };
   };
 
   public readonly execute = async (input: CommandRunInput): Promise<CommandTaskRunResult> => {
-    const workspace = this.resolveWorkspace(input.projectId);
+    const resolved = this.resolveWorkspace(input.projectId);
+    const { workspace } = resolved;
     // Re-discover the catalog at execute time on purpose: the requested taskId is untrusted, so the
     // server re-derives the name-vetted task from the CURRENT package.json rather than trusting a
     // catalog the client fetched earlier (which may be stale or forged). The extra manifest read is a
     // deliberate security re-validation on a low-frequency, user-triggered path, not a hot loop.
     const task = discoverTasks(
       workspace,
-      this.fs(),
-      this.workspaceTrustedForPackageScripts(input.projectId, workspace),
+      resolved.access.fs,
+      this.trustedForScripts(resolved),
     ).find((entry) => entry.id === input.taskId);
     if (task === undefined) {
       throw new CommandRunnerError("TASK_NOT_FOUND", "Task is not in the discovered catalog.");
@@ -352,39 +400,73 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
     if (this.runs.size >= MAX_CONCURRENT_RUNS) {
       throw new CommandRunnerError("RUN_LIMIT_EXCEEDED", "Too many in-flight command runs.");
     }
-    this.assertWorkspaceTrustAtEffect(input.projectId, workspace);
-    return this.runExecution(task, workspace, input);
+    this.assertWorkspaceTrustAtEffect(resolved);
+    return this.runExecution(task, resolved, input);
   };
 
   private fs(): WorkspaceFs {
     return this.runDeps.fs ?? nodeWorkspaceFs;
   }
 
-  private workspaceTrustedForPackageScripts(projectId: string, workspace: WorkspaceInfo): boolean {
-    try {
-      return this.isWorkspaceTrustedForPackageScripts(projectId, workspace);
-    } catch {
-      return false;
-    }
+  // The ONE script-trust rule (`decideScriptTrust`, shared with the verification runner): the
+  // standing grant of the root that OWNS the decision, AND — for a managed task worktree — the
+  // ADR-0147 D3 basis equality that keeps the repository's grant bound to the worktree's actual
+  // `package.json` bytes, or failing that the worktree's own explicit human grant. Re-derived on
+  // every ask, so discovery and the at-effect gate can never disagree with the filesystem.
+  private trustedForScripts(resolved: ResolvedCommandWorkspace): boolean {
+    return decideScriptTrust({
+      access: resolved.access,
+      repositoryFs: this.fs(),
+      standingTrust: (): boolean =>
+        this.isWorkspaceTrustedForPackageScripts(resolved.trustProjectId, resolved.trustWorkspace),
+      worktreeHumanGrant: (): boolean => this.worktreeHumanGrant(resolved.access.canonicalRoot),
+      runAdmittedManifest: (): boolean => this.runAdmittedManifest(resolved.access.canonicalRoot),
+    }).trusted;
   }
 
-  private assertWorkspaceTrustAtEffect(projectId: string, workspace: WorkspaceInfo): void {
-    if (this.workspaceTrustedForPackageScripts(projectId, workspace)) return;
+  private assertWorkspaceTrustAtEffect(resolved: ResolvedCommandWorkspace): void {
+    if (this.trustedForScripts(resolved)) return;
     throw new CommandRunnerError(
       "TASK_REQUIRES_TRUST",
       "Repository package scripts require server-side workspace trust before execution.",
     );
   }
 
-  private resolveWorkspace(projectId: string): WorkspaceInfo {
+  private resolveWorkspace(projectId: string): ResolvedCommandWorkspace {
     const project = projectFor(this.store, projectId);
     if (project === undefined) {
       throw new CommandRunnerError("PROJECT_NOT_FOUND", "Project not found.");
     }
-    return buildWorkspaceInfo(projectRootOrThrow(project));
+    const fallbackFs = this.fs();
+    const access =
+      this.rootAccessResolver === undefined
+        ? {
+            kind: "ordinary" as const,
+            canonicalRoot: projectRootOrThrow(project, fallbackFs),
+            fs: fallbackFs,
+          }
+        : this.rootAccessResolver(project.path);
+    if (access === undefined) {
+      throw new CommandRunnerError("PROJECT_NOT_FOUND", "Project root path could not be resolved.");
+    }
+    const workspace = buildWorkspaceInfo(access.canonicalRoot);
+    if (access.kind !== "managed-task") {
+      return {
+        access,
+        workspace,
+        trustProjectId: projectId,
+        trustWorkspace: workspace,
+      };
+    }
+    return {
+      access,
+      workspace,
+      trustProjectId: access.repositoryRoot,
+      trustWorkspace: buildWorkspaceInfo(access.repositoryRoot),
+    };
   }
 
-  private buildRunDeps(workspace: WorkspaceInfo): RunCommandDeps {
+  private buildRunDeps(workspace: WorkspaceInfo, fs: WorkspaceFs): RunCommandDeps {
     return {
       workspace,
       policy: this.policy,
@@ -392,10 +474,10 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
       spawn: this.runDeps.spawn ?? nodeSpawnFn,
       processEnv: this.processEnv,
       now: this.runDeps.now ?? this.now,
+      fs,
       ...(this.runDeps.resolveExecutable === undefined
         ? {}
         : { resolveExecutable: this.runDeps.resolveExecutable }),
-      ...(this.runDeps.fs === undefined ? {} : { fs: this.runDeps.fs }),
       ...(this.runDeps.home === undefined ? {} : { home: this.runDeps.home }),
       ...(this.runDeps.sandboxAvailability === undefined
         ? {}
@@ -406,12 +488,17 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
 
   private async runExecution(
     task: CommandTask,
-    workspace: WorkspaceInfo,
+    resolved: ResolvedCommandWorkspace,
     input: CommandRunInput,
   ): Promise<CommandTaskRunResult> {
     const runId = randomUUID();
     const controller = new AbortController();
     const entry: InFlightRun = { controller, cancelledByUser: false };
+    const relayAbort = (): void => {
+      controller.abort();
+    };
+    if (input.signal?.aborted === true) controller.abort();
+    else input.signal?.addEventListener("abort", relayAbort, { once: true });
     this.runs.set(runId, entry);
     const startedAt = this.now();
     this.emit({
@@ -420,8 +507,9 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
       payload: { taskId: task.id, kind: task.kind, startedAt, ...requestIdPayload(input) },
     });
     try {
-      return await this.invoke(runId, task, workspace, input, entry, startedAt);
+      return await this.invoke(runId, task, resolved, input, entry, startedAt);
     } finally {
+      input.signal?.removeEventListener("abort", relayAbort);
       this.runs.delete(runId);
     }
   }
@@ -429,12 +517,12 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
   private async invoke(
     runId: string,
     task: CommandTask,
-    workspace: WorkspaceInfo,
+    resolved: ResolvedCommandWorkspace,
     input: CommandRunInput,
     entry: InFlightRun,
     startedAt: number,
   ): Promise<CommandTaskRunResult> {
-    const deps = this.buildRunDeps(workspace);
+    const deps = this.buildRunDeps(resolved.workspace, resolved.access.fs);
     const timeoutMs = clampTimeout(input.timeoutMs, this.policy.defaultTimeoutMs);
     let outcome: SettledOutcome;
     try {
@@ -445,6 +533,9 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
           cwd: undefined,
           timeoutMs,
           signal: entry.controller.signal,
+          onTerminated: (evidence): void => {
+            logCommandTermination(this.activityLog, runId, evidence);
+          },
         },
         deps,
       );
@@ -525,7 +616,7 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
         evidence,
         this.redactor,
         DEFAULT_RETENTION,
-        evidenceRetentionDiagnosticObserver(this.diagnostics, "command-runner"),
+        evidenceRetentionObserver("command-runner"),
       );
     } catch {
       throw new CommandRunnerError(

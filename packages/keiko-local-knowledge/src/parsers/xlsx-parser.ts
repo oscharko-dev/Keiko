@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 
 import type { ParsedUnit, ParserDiagnostic, ParserResult } from "@oscharko-dev/keiko-contracts";
-import { LOCAL_KNOWLEDGE_XLSX_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts";
+import { LOCAL_KNOWLEDGE_XLSX_FILE_EXTENSIONS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
 import yauzl from "yauzl";
 
 import {
@@ -534,7 +534,7 @@ function columnName(ref: string | undefined, fallbackIndex: number): string {
   let out = "";
   while (n > 0) {
     const rem = (n - 1) % 26;
-    out = String.fromCharCode(65 + rem) + out;
+    out = String.fromCodePoint(65 + rem) + out;
     n = Math.floor((n - 1) / 26);
   }
   return out;

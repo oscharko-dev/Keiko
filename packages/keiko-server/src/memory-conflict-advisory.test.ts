@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDefaultChatCapability,
+  type GatewayCallRequest,
   type GatewayConfig,
   type GatewayRequest,
   type NormalizedResponse,
@@ -248,6 +249,38 @@ describe("enrichReviewItemsWithAdvisory — eligibility carve-out (ADR-0120 D4)"
     );
 
     expect(calls).toHaveLength(1);
+  });
+
+  // ADR-0173 D5: this background consolidation job has no live HTTP request in scope, so the job's
+  // own id is the stable correlation key stamped into the advisory model's GatewayCallRequest.logContext.
+  it("stamps the job id into the advisory model gateway call's logContext", async () => {
+    const calls: GatewayRequest[] = [];
+    const winner = memoryId("mem-winner");
+    const loser = memoryId("mem-loser");
+    const item: ReviewItem = {
+      id: "rv-multi-logcontext",
+      reason: "multi-way-duplicate",
+      relatedMemoryIds: [winner, loser],
+      sourceMemoryIds: [winner, loser],
+      proposedAction: { kind: "merge", winner, losers: [loser] },
+      detectedAt: NOW,
+    };
+    const deps = baseDeps(
+      respondingModel(calls, () =>
+        structuredResponse({ keep: "A", rationale: "Clear duplicate." }),
+      ),
+      [],
+    );
+
+    await enrichReviewItemsWithAdvisory(
+      deps,
+      JOB_ID,
+      [item],
+      [record(winner, "Prefers TypeScript."), record(loser, "Prefers TypeScript.")],
+    );
+
+    expect(calls).toHaveLength(1);
+    expect((calls[0] as GatewayCallRequest | undefined)?.logContext?.correlationId).toBe(JOB_ID);
   });
 
   it("is NOT eligible for a potential-conflict pair whose only evidence is a clean negation flip", async () => {
@@ -676,8 +709,14 @@ describe("enrichReviewItemsWithAdvisory — wall-clock phase budget (ADR-0120 D8
     expect(calls).toHaveLength(1);
     expect(outcome.enrichedItems[0]?.suggestedResolution).toBeDefined();
     expect(outcome.enrichedItems[1]?.suggestedResolution).toBeUndefined();
+    // Issue #3245: `message` is the fixed closed-vocabulary condition label; the per-invocation
+    // counts (previously composed into free text here) now live on `code`.
     expect(
-      diagnosticsSink.some((entry) => entry.message.includes("skipped over the wall-clock budget")),
+      diagnosticsSink.some(
+        (entry) =>
+          entry.message === "advisory-phase-summary" &&
+          entry.code?.includes("truncatedByBudget=1") === true,
+      ),
     ).toBe(true);
   });
 });

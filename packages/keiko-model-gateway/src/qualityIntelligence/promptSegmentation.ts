@@ -101,9 +101,22 @@ export function buildPromptSegments(
   instruction: string,
   untrustedEvidence: readonly QualityIntelligenceUntrustedEvidenceInput[],
 ): QualityIntelligencePromptSegments {
+  return buildTrustedEvidencePromptSegments(
+    buildSystemTrusted(profile),
+    buildInstructionTrusted(profile.id, instruction),
+    untrustedEvidence,
+  );
+}
+
+/** Profile-independent trust split reused by bounded transformations outside the QI workflow. */
+export function buildTrustedEvidencePromptSegments(
+  systemTrusted: string,
+  instructionTrusted: string,
+  untrustedEvidence: readonly QualityIntelligenceUntrustedEvidenceInput[],
+): QualityIntelligencePromptSegments {
   return Object.freeze({
-    systemTrusted: buildSystemTrusted(profile),
-    instructionTrusted: buildInstructionTrusted(profile.id, instruction),
+    systemTrusted,
+    instructionTrusted,
     evidenceUntrusted: buildEvidence(untrustedEvidence),
   });
 }

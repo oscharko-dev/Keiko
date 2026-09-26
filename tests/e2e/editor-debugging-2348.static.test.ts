@@ -52,4 +52,30 @@ describe("#2348 D12 cap evidence harness", () => {
     expect(spec).toContain("collectStoppedProjectionSamples");
     expect(spec).toContain("CAP_SAMPLE_COUNT");
   });
+
+  it("keeps forced heap collection outside the output-flood long-task window", () => {
+    const spec = readFileSync(SPEC_PATH, "utf8");
+    const start = spec.indexOf("async function measureOutputFloodEvidence(");
+    const end = spec.indexOf("\n}\n\nfunction requiredEvidenceDigest", start);
+    const measurement = spec.slice(start, end);
+
+    const baselineHeap = measurement.indexOf("const baselineHeap = await readHeap(heapClient);");
+    const observerDrain = measurement.indexOf("await awaitNextPaint(page);");
+    const reset = measurement.indexOf("await resetLongTasks(page);");
+    const close = measurement.indexOf("await closeDebugPanel(page, panel);");
+    const longTaskRead = measurement.indexOf("const observedLongTasks = await longTasks(page);");
+    const residualHeap = measurement.indexOf(
+      "const residualHeapBytes = Math.max(0, (await readHeap(heapClient)) - baselineHeap);",
+    );
+
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    expect(baselineHeap).toBeGreaterThanOrEqual(0);
+    expect(observerDrain).toBeGreaterThan(baselineHeap);
+    expect(reset).toBeGreaterThan(observerDrain);
+    expect(close).toBeGreaterThan(reset);
+    expect(longTaskRead).toBeGreaterThan(close);
+    expect(residualHeap).toBeGreaterThan(longTaskRead);
+    expect(measurement.slice(reset, longTaskRead)).not.toContain("readHeap(");
+  });
 });

@@ -5,6 +5,7 @@ import {
   EMPTY_LANGUAGE_INTELLIGENCE_STATE,
   classifyLanguageFailure,
   classifyResultKind,
+  controllerForToken,
   isCancellation,
   languageIntelligenceNotice,
   outcomeForError,
@@ -12,6 +13,8 @@ import {
   runLanguageBridgeCall,
   summarizeLanguageIntelligence,
   type EditorLanguageIntelligenceEvent,
+  type LanguageBridgeCancellationToken,
+  type LanguageBridgeDisposer,
 } from "./language-intelligence.js";
 
 function abortError(): Error {
@@ -328,5 +331,80 @@ describe("EDITOR_LANGUAGE_OPERATIONS", () => {
   it("lists every operation exactly once", () => {
     expect(new Set(EDITOR_LANGUAGE_OPERATIONS).size).toBe(EDITOR_LANGUAGE_OPERATIONS.length);
     expect(EDITOR_LANGUAGE_OPERATIONS).toHaveLength(14);
+  });
+});
+
+// #2906 round-3 review: onCancellationRequested returns an IDisposable for the listener it
+// registers. A fake token that behaves like Monaco's real one -- dispose() actually unregisters the
+// listener, so a fired cancellation after dispose is a no-op -- proves both that the disposer is
+// returned to the caller at all (the old signature made that a compile error) and that calling it
+// really releases the subscription rather than merely existing on the return value.
+function fakeCancellationToken(initiallyCancelled = false): {
+  readonly token: LanguageBridgeCancellationToken;
+  readonly fire: () => void;
+  readonly listenerInvocations: { count: number };
+  readonly disposeCalls: { count: number };
+} {
+  let listener: (() => void) | undefined;
+  const listenerInvocations = { count: 0 };
+  const disposeCalls = { count: 0 };
+  const token: LanguageBridgeCancellationToken = {
+    isCancellationRequested: initiallyCancelled,
+    onCancellationRequested(next): LanguageBridgeDisposer {
+      // Wraps (rather than assigns) `next` so `listenerInvocations` counts only actual deliveries
+      // of the registered listener -- not every `fire()` call, which must be a no-op post-dispose.
+      listener = (): void => {
+        listenerInvocations.count += 1;
+        next();
+      };
+      return {
+        dispose(): void {
+          disposeCalls.count += 1;
+          listener = undefined;
+        },
+      };
+    },
+  };
+  return {
+    token,
+    fire: (): void => listener?.(),
+    listenerInvocations,
+    disposeCalls,
+  };
+}
+
+describe("controllerForToken", () => {
+  it("aborts immediately when the token has already fired", () => {
+    const { token } = fakeCancellationToken(true);
+    const { controller } = controllerForToken(token);
+    expect(controller.signal.aborted).toBe(true);
+  });
+
+  it("aborts when the token later fires cancellation", () => {
+    const { token, fire } = fakeCancellationToken();
+    const { controller } = controllerForToken(token);
+    expect(controller.signal.aborted).toBe(false);
+    fire();
+    expect(controller.signal.aborted).toBe(true);
+  });
+
+  it("releases the underlying cancellation subscription when dispose() is called", () => {
+    const { token, disposeCalls } = fakeCancellationToken();
+    const { dispose } = controllerForToken(token);
+    expect(disposeCalls.count).toBe(0);
+    dispose();
+    expect(disposeCalls.count).toBe(1);
+  });
+
+  // The regression: before this fix, the shared helper dropped onCancellationRequested's
+  // IDisposable outright, so a bridge had no way to release the listener a successful,
+  // never-cancelled call leaves registered -- it lived until Monaco destroyed the token source.
+  it("stops the listener from firing again once disposed, matching a real Monaco IDisposable", () => {
+    const { token, fire, listenerInvocations } = fakeCancellationToken();
+    const { controller, dispose } = controllerForToken(token);
+    dispose();
+    fire();
+    expect(listenerInvocations.count).toBe(0);
+    expect(controller.signal.aborted).toBe(false);
   });
 });

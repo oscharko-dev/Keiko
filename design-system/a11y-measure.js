@@ -57,12 +57,33 @@
 
   var root = document.documentElement;
   var probe = null;
+
+  // KEIKO-0404: `var(--nonexistent)` in a color property is treated as `unset` at
+  // computed-value time (CSS Custom Properties §7.4), which INHERITS from the parent. We
+  // exploit that: the probe sits inside a parent carrying an unresolved-sentinel colour
+  // that no legitimate design token would produce. When getComputedStyle(probe).color
+  // equals the sentinel AND the expression itself doesn't literally name that triple,
+  // the resolution failed and resolveLive() returns null instead of a fabricated RGBA
+  // that would let measure() emit a fake pass/fail verdict. See KEIKO-0404 disposition.
+  var UNRESOLVED_SENTINEL = "rgb(1, 2, 3)";
+  function isUnresolvedColor(computedColor, expr) {
+    // Someone could legitimately author `rgb(1, 2, 3)` (or `rgb(1,2,3)`) as an actual
+    // colour. That's still distinguishable from an unresolved var() because in that case
+    // the expression itself carries the triple. Normalize whitespace before checking.
+    var stripped = String(expr).replace(/\s+/gu, "");
+    return computedColor === UNRESOLVED_SENTINEL && stripped.indexOf("rgb(1,2,3)") === -1;
+  }
+
   function getProbe() {
     if (probe) return probe;
+    var probeParent = document.createElement("span");
+    probeParent.setAttribute("aria-hidden", "true");
+    probeParent.style.cssText =
+      "position:fixed;left:-9999px;top:0;width:0;height:0;pointer-events:none;color:" +
+      UNRESOLVED_SENTINEL;
     probe = document.createElement("span");
-    probe.setAttribute("aria-hidden", "true");
-    probe.style.cssText = "position:fixed;left:-9999px;top:0;width:0;height:0;pointer-events:none";
-    document.body.appendChild(probe);
+    probeParent.appendChild(probe);
+    document.body.appendChild(probeParent);
     return probe;
   }
 
@@ -84,11 +105,16 @@
   }
 
   // Resolve a CSS colour expression to RGBA in whatever mode is currently set on root.
+  // Returns null when the expression cannot be resolved (e.g. `var(--undefined-token)`),
+  // so callers can fail closed rather than emit a fabricated verdict from a sentinel-
+  // inherited value. See isUnresolvedColor above.
   function resolveLive(expr) {
     var p = getProbe();
     p.style.setProperty("color", "");
     p.style.setProperty("color", expr);
-    return toRGBA(getComputedStyle(p).color);
+    var computed = getComputedStyle(p).color;
+    if (isUnresolvedColor(computed, expr)) return null;
+    return toRGBA(computed);
   }
   // Public single-mode resolve (sets the mode on root, reads, restores).
   function resolve(expr, modeKey) {
@@ -101,16 +127,26 @@
 
   /* Measure one check across all four modes.
      check = { fg, bg, base?, min } — base is the opaque surface a
-     translucent bg/fg is composited over (default --card). */
+     translucent bg/fg is composited over (default --card).
+     KEIKO-0404: when any input expression fails to resolve (resolveLive returns null),
+     mark the whole check unresolved rather than feed fabricated colours into over()/
+     ratio() to emit a fake pass/fail verdict. The ratio for the affected mode is set to
+     NaN so consumers that call `.toFixed(2)` render a visible "NaN" placeholder instead
+     of crashing on undefined. */
   function measure(check) {
     var baseExpr = check.base || "var(--card)";
-    var out = { ratios: {}, min: Infinity, pass: true };
+    var out = { ratios: {}, min: Infinity, pass: true, unresolved: false };
     var s = snapshot();
     MODES.forEach(function (m) {
       setMode(m);
       var fg = resolveLive(check.fg);
       var bgRaw = resolveLive(check.bg);
       var baseRGB = resolveLive(baseExpr);
+      if (fg === null || bgRaw === null || baseRGB === null) {
+        out.unresolved = true;
+        out.ratios[m] = NaN;
+        return;
+      }
       var bg = bgRaw[3] < 1 ? over(bgRaw, baseRGB) : bgRaw;
       var fgC = fg[3] < 1 ? over(fg, bg) : fg;
       var r = ratio(fgC, bg);
@@ -118,8 +154,14 @@
       if (r < out.min) out.min = r;
     });
     restore(s);
-    out.pass = out.min >= check.min;
-    out.aaa = out.min >= (check.min >= 4.5 ? 7 : 4.5);
+    if (out.unresolved) {
+      out.min = NaN;
+      out.pass = false;
+      out.aaa = false;
+    } else {
+      out.pass = out.min >= check.min;
+      out.aaa = out.min >= (check.min >= 4.5 ? 7 : 4.5);
+    }
     return out;
   }
 
@@ -129,5 +171,8 @@
     resolve: resolve,
     measure: measure,
     MODES: MODES,
+    // Exposed for the KEIKO-0404 regression pin (design-system pages have no test harness
+    // co-located; the pure sentinel comparator is testable without a real browser or jsdom).
+    _isUnresolvedColor: isUnresolvedColor,
   };
 })();

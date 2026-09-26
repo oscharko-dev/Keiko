@@ -2,11 +2,9 @@
 // isolation from model answers: top file, top-k recall, MRR, nDCG@k, line-level evidence, and
 // generated/prose decoy leakage over fixed synthetic repositories.
 
-import { Buffer } from "node:buffer";
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { TextEncoder } from "node:util";
 
 import {
   LocalKnowledgeEval,
@@ -16,6 +14,7 @@ import {
   runRegressionProbes,
 } from "@oscharko-dev/keiko-evaluations";
 import { DEFAULT_SEARCH_LIMITS, readExcerpt, searchText } from "@oscharko-dev/keiko-workspace";
+import { memFs } from "@oscharko-dev/keiko-workspace/testing";
 
 const {
   ALL_FIXTURES,
@@ -313,77 +312,14 @@ export function evaluateQualityBudget(summary, budget) {
 }
 
 // ─── In-memory workspace fixture ─────────────────────────────────────────────
-
-function toAbs(rel) {
-  return rel === MEM_ROOT ? MEM_ROOT : `${MEM_ROOT}/${rel}`.replace(/\/+/g, "/");
-}
-
-function dirEntry(name, isDirectory) {
-  return { name, isDirectory, isFile: !isDirectory, isSymbolicLink: false };
-}
-
-function childrenOf(keys, dirAbs) {
-  const prefix = dirAbs === MEM_ROOT ? `${MEM_ROOT}/` : `${dirAbs}/`;
-  const fileNames = new Set();
-  const dirNames = new Set();
-  for (const key of keys) {
-    const full = toAbs(key);
-    if (!full.startsWith(prefix)) {
-      continue;
-    }
-    const rest = full.slice(prefix.length);
-    const slash = rest.indexOf("/");
-    if (slash === -1) {
-      fileNames.add(rest);
-    } else {
-      dirNames.add(rest.slice(0, slash));
-    }
-  }
-  return [
-    ...[...dirNames].map((name) => dirEntry(name, true)),
-    ...[...fileNames].map((name) => dirEntry(name, false)),
-  ];
-}
+// Delegates to the package's own sanctioned in-memory `WorkspaceFs` double. It is the ONE
+// implementation of the port's bounded-read semantics (`readFileUtf8SameDescriptor`, the stat
+// snapshot fields it reconfirms against, the hard-link policy and the "too-large"/"changed"
+// `WorkspaceDescriptorReadError` reasons) that tracks `fs.ts` whenever the port moves, so this
+// gate exercises the real contract instead of a local restatement that can silently drift from it.
 
 function buildFixtureFs(files) {
-  const keys = Object.keys(files);
-  const encoder = new TextEncoder();
-  const findKey = (abs) => keys.find((key) => toAbs(key) === abs);
-  return {
-    readFileUtf8: (abs) => {
-      const key = findKey(abs);
-      if (key === undefined) throw new Error(`ENOENT: ${abs}`);
-      return files[key];
-    },
-    stat: (abs) => {
-      const key = findKey(abs);
-      if (key === undefined) {
-        return { size: 0, isFile: false, isDirectory: true, isSymbolicLink: false };
-      }
-      return {
-        size: Buffer.byteLength(files[key], "utf8"),
-        isFile: true,
-        isDirectory: false,
-        isSymbolicLink: false,
-      };
-    },
-    readDir: (abs) => childrenOf(keys, abs),
-    realPath: (abs) => abs,
-    exists: (abs) => findKey(abs) !== undefined || abs === MEM_ROOT,
-    readFileBytes: (abs, maxBytes) => {
-      const key = findKey(abs);
-      if (key === undefined) return Promise.reject(new Error(`ENOENT: ${abs}`));
-      const encoded = encoder.encode(files[key]);
-      return Promise.resolve(encoded.subarray(0, Math.min(encoded.length, Math.max(0, maxBytes))));
-    },
-    readFileRange: (abs, startByte, length) => {
-      const key = findKey(abs);
-      if (key === undefined) return Promise.reject(new Error(`ENOENT: ${abs}`));
-      const encoded = encoder.encode(files[key]);
-      const start = Math.max(0, startByte);
-      return Promise.resolve(encoded.subarray(start, Math.min(encoded.length, start + length)));
-    },
-  };
+  return memFs(MEM_ROOT, files);
 }
 
 function buildScope() {

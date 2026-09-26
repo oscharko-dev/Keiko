@@ -7,7 +7,11 @@ import type {
   GitUnavailableReason,
   GitRepositoryValidation,
 } from "./git-repository.js";
-import { GIT_REPOSITORY_STATES } from "./git-repository.js";
+import {
+  GIT_REPOSITORY_STATES,
+  isBoundedGitMessage,
+  isGitWireUnavailableReason,
+} from "./git-repository.js";
 
 export const GIT_HISTORY_SCHEMA_VERSION = "1" as const;
 
@@ -62,13 +66,63 @@ function validateRefs(input: unknown, reasons: string[], index: number): void {
   }
 }
 
+// `%aI` ("strict ISO 8601", the pretty-format git-history's producer uses for the author date)
+// renders a UTC instant with a literal `Z` and any other offset as numeric `+HH:MM`/`-HH:MM` --
+// confirmed empirically (git commit with GIT_AUTHOR_DATE=...+00:00 logs `%aI` as `...Z`, not
+// `...+00:00`). Calendar validity is checked component-wise via Date.UTC rather than round-tripping
+// toISOString(), because toISOString() always normalizes to a "Z"-suffixed UTC string: comparing it
+// back against a non-UTC-offset input would reject every legitimately-offset date, not just invalid
+// calendar dates like 2023-02-30 (which Date.parse silently rolls over to March 2 instead of
+// rejecting).
+// The offset group captures its sign, hour, and minute separately (rather than matching
+// `[+-]\d{2}:\d{2}` as one opaque unit) so a numeric offset's own range can be checked below --
+// `\d{2}` alone accepts "99", but no real UTC offset reaches even 24 hours.
+const STRICT_ISO_AUTHOR_DATE_PATTERN =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:Z|([+-])(\d{2}):(\d{2}))$/u;
+
+// A numeric offset (offsetSign defined) must itself be a plausible HH:MM duration -- matching what
+// native Date parsing accepts (confirmed empirically: +23:59 parses, +24:00 and +13:60 do not) --
+// so a value like "+99:99" fails here instead of passing with its offset silently ignored by the
+// calendar-component check in isStrictIsoAuthorDate.
+function isPlausibleUtcOffset(match: RegExpExecArray): boolean {
+  const [, , , , , , , offsetSign, offsetHour, offsetMinute] = match;
+  if (offsetSign === undefined) return true; // the "Z" branch matched; no numeric offset to check
+  return Number(offsetHour ?? "") <= 23 && Number(offsetMinute ?? "") <= 59;
+}
+
+function isStrictIsoAuthorDate(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const match = STRICT_ISO_AUTHOR_DATE_PATTERN.exec(value);
+  if (match === null) return false;
+  if (!isPlausibleUtcOffset(match)) return false;
+  const [, y, mo, d, h, mi, s] = match;
+  const year = Number(y);
+  const month = Number(mo);
+  const day = Number(d);
+  const hour = Number(h);
+  const minute = Number(mi);
+  const second = Number(s);
+  const asUtc = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  return (
+    asUtc.getUTCFullYear() === year &&
+    asUtc.getUTCMonth() === month - 1 &&
+    asUtc.getUTCDate() === day &&
+    asUtc.getUTCHours() === hour &&
+    asUtc.getUTCMinutes() === minute &&
+    asUtc.getUTCSeconds() === second
+  );
+}
+
 function validateEntry(input: unknown, reasons: string[], index: number): void {
   if (!isRecord(input)) {
     reasons.push(`entries[${String(index)}] must be an object`);
     return;
   }
-  for (const key of ["sha", "shortSha", "subject", "author", "date"] as const) {
+  for (const key of ["sha", "shortSha", "subject", "author"] as const) {
     if (!isString(input[key])) reasons.push(`entries[${String(index)}].${key} must be a string`);
+  }
+  if (!isStrictIsoAuthorDate(input.date)) {
+    reasons.push(`entries[${String(index)}].date must be a strict ISO 8601 date`);
   }
   for (const key of ["parentCount", "changedFileCount"] as const) {
     if (!isNonNegativeInteger(input[key])) {
@@ -78,26 +132,87 @@ function validateEntry(input: unknown, reasons: string[], index: number): void {
   validateRefs(input.refs, reasons, index);
 }
 
-// History is a paginated wire envelope (entries + limit/skip/truncated); centralizing the
-// validator keeps per-field failure messages predictable for tests and callers.
-// eslint-disable-next-line complexity
-export function validateGitHistoryResponse(input: unknown): GitRepositoryValidation {
-  const reasons: string[] = [];
-  if (!isRecord(input)) return { ok: false, reasons: ["response must be an object"] };
+function validateHistoryIdentity(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): void {
   if (input.schemaVersion !== GIT_HISTORY_SCHEMA_VERSION) reasons.push("schemaVersion invalid");
   if (!isString(input.root)) reasons.push("root must be a string");
   if (!GIT_REPOSITORY_STATES.includes(input.state as GitRepositoryState)) {
     reasons.push("state invalid");
   }
+}
+
+function validateHistoryOptionalEnvelope(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): void {
+  if (input.reason !== undefined && !isGitWireUnavailableReason(input.reason)) {
+    reasons.push("reason invalid");
+  }
+  if (input.message !== undefined && !isBoundedGitMessage(input.message)) {
+    reasons.push("message must be a bounded string when present");
+  }
+  if (input.repositoryRoot !== undefined && !isString(input.repositoryRoot)) {
+    reasons.push("repositoryRoot must be a string when present");
+  }
+}
+
+function validateHistoryFlags(input: Readonly<Record<string, unknown>>, reasons: string[]): void {
   if (!isBoolean(input.available)) reasons.push("available must be a boolean");
   if (!isBoolean(input.truncated)) reasons.push("truncated must be a boolean");
   if (!isNonNegativeInteger(input.limit)) reasons.push("limit must be a non-negative integer");
   if (!isNonNegativeInteger(input.skip)) reasons.push("skip must be a non-negative integer");
-  if (!Array.isArray(input.entries)) reasons.push("entries must be an array");
-  else {
-    input.entries.forEach((entry, index) => {
-      validateEntry(entry, reasons, index);
-    });
+}
+
+function validateHistoryEnvelopeFields(
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): void {
+  validateHistoryIdentity(input, reasons);
+  validateHistoryOptionalEnvelope(input, reasons);
+  validateHistoryFlags(input, reasons);
+}
+
+// The producer (keiko-server gitRepositoryReads.ts handleGitHistory) runs `git log
+// --max-count=<limit>`, so entries.length can never exceed limit, and it always computes
+// `truncated = result.truncated || entries.length === limit` -- hitting the cap ALWAYS marks
+// truncated (a conservative "there might be more" even on the rare exact-count boundary), unlike
+// git-repository.ts's changes/maxChanges where the analogous over-cap comparison can legitimately
+// land on the boundary with truncated: false. Both directions are safe to check here. The route's
+// own query-param parser floors `limit` at 1, so `limit === 0` never reaches the wire in practice;
+// the guard below leaves that theoretical case (0 requested, 0 returned) unchecked rather than
+// asserting a debatable invariant for input the producer cannot emit.
+function validateEntriesBoundedByLimit(
+  entries: readonly unknown[],
+  input: Readonly<Record<string, unknown>>,
+  reasons: string[],
+): void {
+  if (!isNonNegativeInteger(input.limit) || input.limit <= 0) return;
+  if (entries.length > input.limit) {
+    reasons.push("entries.length must not exceed limit");
+  } else if (entries.length === input.limit && input.truncated !== true) {
+    reasons.push("truncated must be true when entries.length equals limit");
   }
+}
+
+function validateHistoryEntries(input: Readonly<Record<string, unknown>>, reasons: string[]): void {
+  if (!Array.isArray(input.entries)) {
+    reasons.push("entries must be an array");
+    return;
+  }
+  input.entries.forEach((entry, index) => {
+    validateEntry(entry, reasons, index);
+  });
+  validateEntriesBoundedByLimit(input.entries, input, reasons);
+}
+
+// History is a paginated wire envelope (entries + limit/skip/truncated); centralizing the
+// validator keeps per-field failure messages predictable for tests and callers.
+export function validateGitHistoryResponse(input: unknown): GitRepositoryValidation {
+  const reasons: string[] = [];
+  if (!isRecord(input)) return { ok: false, reasons: ["response must be an object"] };
+  validateHistoryEnvelopeFields(input, reasons);
+  validateHistoryEntries(input, reasons);
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }

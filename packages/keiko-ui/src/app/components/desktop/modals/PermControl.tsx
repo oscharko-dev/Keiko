@@ -48,7 +48,7 @@ export function PermControl({ cfg, set }: PermControlProps): ReactNode {
         onClick={() => set("keikoMode", !keiko)}
       >
         {/* eslint-disable-next-line @next/next/no-img-element -- raw SVG sized by .perm-orca */}
-        <img className="perm-orca" src="/assets/keiko-logo.svg" alt="" />
+        <img className="perm-orca" src="/keiko-logo.svg" alt="" />
         <span className="perm-tt">
           <span className="perm-name">Keiko-Mode</span>
           <span className="perm-desc">Zero standing rights · Keiko governs</span>

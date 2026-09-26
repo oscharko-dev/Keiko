@@ -15,6 +15,7 @@ import {
   referencesForSymbol,
 } from "./symbolGraphBuild.js";
 import type { SymbolGraph, SymbolGraphRecord } from "./symbolGraphTypes.js";
+import type { StructuralAdapterRequestContext } from "./structuralAdapterRequestContext.js";
 
 export type FollowSymbolTraceRelation = "definition" | "reference" | "call" | "import" | "importer";
 
@@ -38,6 +39,7 @@ export interface FollowSymbolTraceDiagnostics {
   readonly skippedEdges: number;
   readonly depthCapped: boolean;
   readonly budgetExhausted: boolean;
+  readonly sourceGraphTruncated: boolean;
 }
 
 export interface FollowSymbolTrace {
@@ -49,6 +51,10 @@ export interface FollowSymbolTraceRequest {
   readonly symbols: readonly string[];
   readonly maxDepth?: number | undefined;
   readonly maxRecords?: number | undefined;
+}
+
+interface FollowSymbolTraceDeps {
+  readonly requestContext?: StructuralAdapterRequestContext | undefined;
 }
 
 type FrontierItem =
@@ -351,11 +357,51 @@ function runTraceQueue(
   }
 }
 
+async function traceSymbolGraph(
+  scope: SearchScope,
+  limits: SearchLimits,
+  fs: WorkspaceFs,
+  deps: FollowSymbolTraceDeps,
+): Promise<SymbolGraph> {
+  deps.requestContext?.assertGraphBinding(scope, limits, fs);
+  const graph =
+    deps.requestContext === undefined
+      ? await buildSymbolGraph(scope, limits, fs)
+      : await deps.requestContext.symbolGraph();
+  deps.requestContext?.assertGraphBinding(scope, limits, fs);
+  return graph;
+}
+
+async function traceImportGraph(
+  scope: SearchScope,
+  limits: SearchLimits,
+  fs: WorkspaceFs,
+  deps: FollowSymbolTraceDeps,
+): Promise<ImportGraph> {
+  deps.requestContext?.assertGraphBinding(scope, limits, fs);
+  const graph =
+    deps.requestContext === undefined
+      ? await buildImportGraph(scope, limits, fs)
+      : await deps.requestContext.importGraph();
+  deps.requestContext?.assertGraphBinding(scope, limits, fs);
+  return graph;
+}
+
+function sourceGraphTruncated(symbolGraph: SymbolGraph, importGraph: ImportGraph): boolean {
+  return (
+    symbolGraph.diagnostics.truncated ||
+    symbolGraph.diagnostics.filesSkipped > 0 ||
+    importGraph.diagnostics.truncated ||
+    importGraph.diagnostics.filesSkipped > 0
+  );
+}
+
 export async function followSymbolTrace(
   scope: SearchScope,
   limits: SearchLimits,
   fs: WorkspaceFs,
   request: FollowSymbolTraceRequest,
+  deps: FollowSymbolTraceDeps = {},
 ): Promise<FollowSymbolTrace> {
   const seedSymbols = uniqueSymbols(request.symbols);
   const maxDepth = Math.max(1, request.maxDepth ?? DEFAULT_MAX_DEPTH);
@@ -365,13 +411,9 @@ export async function followSymbolTrace(
   );
   const state = createTraceState();
   seedTraceState(state, seedSymbols, maxDepth, maxRecords);
-  runTraceQueue(
-    state,
-    await buildSymbolGraph(scope, limits, fs),
-    await buildImportGraph(scope, limits, fs),
-    maxDepth,
-    maxRecords,
-  );
+  const symbolGraph = await traceSymbolGraph(scope, limits, fs, deps);
+  const importGraph = await traceImportGraph(scope, limits, fs, deps);
+  runTraceQueue(state, symbolGraph, importGraph, maxDepth, maxRecords);
   return {
     records: sortRecords(state.records),
     diagnostics: {
@@ -382,6 +424,7 @@ export async function followSymbolTrace(
       skippedEdges: state.skippedEdges,
       depthCapped: state.depthCapped,
       budgetExhausted: state.budgetExhausted,
+      sourceGraphTruncated: sourceGraphTruncated(symbolGraph, importGraph),
     },
   };
 }

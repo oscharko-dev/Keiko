@@ -114,6 +114,34 @@ describe("csvParser", () => {
     expect(parsed).toEqual([{ tableName: "tsv", rowIndex: 0, span: "a=1 | b=2 | c=3\n" }]);
   });
 
+  // #2906 KEIKO-0832 — selectDelimiter routes both extension "tab" and
+  // mediaType "text/tab-separated-values" to the tab delimiter, but emitRows previously
+  // string-matched only the "tsv" extension when labelling the tableName, so `.tab` files
+  // and media-type-only TSVs were mislabelled as "csv". Derive from the selected delimiter
+  // so both cases label correctly.
+  it("labels tab-delimited '.tab' rows with tableName 'tsv'", () => {
+    const result = csvParser.parse(
+      selectionFromText("a\tb\n1\t2\n", { extension: "tab" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    const parsed = rows(normalizedText(result), result.units);
+    expect(parsed.every((r) => r.tableName === "tsv")).toBe(true);
+    expect(parsed.length).toBeGreaterThan(0);
+  });
+
+  it("labels tab-delimited documents identified only by media type with tableName 'tsv'", () => {
+    const result = csvParser.parse(
+      selectionFromText("a\tb\n1\t2\n", {
+        extension: "",
+        mediaType: "text/tab-separated-values",
+      }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    const parsed = rows(normalizedText(result), result.units);
+    expect(parsed.every((r) => r.tableName === "tsv")).toBe(true);
+    expect(parsed.length).toBeGreaterThan(0);
+  });
+
   it("does not emit a synthetic empty row for a trailing newline", () => {
     const text = "a,b\n1,2\n";
     const result = csvParser.parse(

@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { ConversationDocumentContextWire } from "@oscharko-dev/keiko-contracts";
-import { DISCUSSION_MODES } from "@oscharko-dev/keiko-contracts";
+import { DISCUSSION_MODES } from "@oscharko-dev/keiko-contracts/runtime/discussion-intelligence";
 import {
   CONVERSATION_SYSTEM_PROMPT,
   CONVERSATION_USER_BLOCK_HEADER,

@@ -42,7 +42,7 @@ const EMPTY_FILTERS: RelationshipFilters = {};
 
 export function RelationshipsView(): ReactNode {
   const t = useTranslate();
-  const { activityMap, throughputMap, animate } = useRelationshipActivityStream();
+  const { activityMap, evictedIds, throughputMap, animate } = useRelationshipActivityStream();
   const [highContrast, setHighContrast] = useState(false);
 
   // ─── Component-local view state (no URL; this is a Workspace window) ──────
@@ -222,6 +222,7 @@ export function RelationshipsView(): ReactNode {
               onSelect={handleSelect}
               onFilterChange={applyFilters}
               activityMap={activityMap}
+              evictedIds={evictedIds}
               throughputMap={throughputMap}
               animateBadges={animate}
               highContrast={highContrast}
@@ -243,6 +244,7 @@ export function RelationshipsView(): ReactNode {
                 onClearFocus={handleClearFocus}
                 onViewImpact={handleViewImpact}
                 activityMap={activityMap}
+                evictedIds={evictedIds}
                 throughputMap={throughputMap}
                 animateBadges={animate}
                 highContrast={highContrast}

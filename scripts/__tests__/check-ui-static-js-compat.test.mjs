@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -35,11 +35,12 @@ describe("checkUiStaticJavaScriptCompatibility", () => {
     await writeFile(join(chunkDir, "chunk.js"), source, "utf8");
   }
 
-  async function writeWorker(source) {
+  async function writeWorker(source, filename = "editor.worker.abc123.js") {
     root = await mkdtemp(join(repoRoot, ".keiko-ui-static-compat-"));
     const workerDir = join(root, "_next", "static", "media");
-    await mkdir(workerDir, { recursive: true });
-    await writeFile(join(workerDir, "editor.worker.abc123.js"), source, "utf8");
+    const workerPath = join(workerDir, filename);
+    await mkdir(dirname(workerPath), { recursive: true });
+    await writeFile(workerPath, source, "utf8");
   }
 
   it("allows dynamic import used by PDF.js worker and fallback loading", async () => {
@@ -52,6 +53,29 @@ describe("checkUiStaticJavaScriptCompatibility", () => {
     await writeWorker("import { work } from './chunk.js';\nexport { work };\n");
 
     await expect(checkUiStaticJavaScriptCompatibility(root)).resolves.toBeUndefined();
+  });
+
+  it("allows Monaco 0.56 editor worker assets with top-level import/export", async () => {
+    await writeWorker(
+      "import { bootstrapWebWorker } from './webWorkerBootstrap.js';\nexport { bootstrapWebWorker };\n",
+      "editorWebWorkerMain.abc123.js",
+    );
+
+    await expect(checkUiStaticJavaScriptCompatibility(root)).resolves.toBeUndefined();
+  });
+
+  it.each([
+    "editorWebWorkerMain.js",
+    "editorWebWorkerMain.foo.bar.js",
+    "editorWebWorkerMain.abc\n123.js",
+    join("nested", "editorWebWorkerMain.abc123.js"),
+  ])("rejects lookalike Monaco editor worker module filename %s", async (filename) => {
+    await writeWorker(
+      "import { bootstrapWebWorker } from './webWorkerBootstrap.js';\nexport { bootstrapWebWorker };\n",
+      filename,
+    );
+
+    await expect(checkUiStaticJavaScriptCompatibility(root)).rejects.toThrow("sourceType: module");
   });
 
   it("still blocks optional chaining", async () => {

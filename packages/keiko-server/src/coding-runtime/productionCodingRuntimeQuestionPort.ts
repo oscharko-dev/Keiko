@@ -1,7 +1,5 @@
-import {
-  validateCodingWorkbenchRuntimeQuestionsResponse,
-  type CodingWorkbenchRuntimeQuestionsResponse,
-} from "@oscharko-dev/keiko-contracts";
+import type { CodingWorkbenchRuntimeQuestionsResponse } from "@oscharko-dev/keiko-contracts";
+import { validateCodingWorkbenchRuntimeQuestionsResponse } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 
 import type {
   CodingRuntimeQuestionAnswerOperation,
@@ -64,9 +62,9 @@ async function listRuntimeQuestions(
       return undefined;
     }
     return questions;
-  } catch {
+  } catch (error) {
     reservation.release();
-    return undefined;
+    throw error;
   }
 }
 
@@ -100,8 +98,8 @@ async function mutateRuntimeQuestion(
     const accepted = await mutate(record.questionPort);
     if (!accepted) reservation.release();
     return accepted && reservation.commit();
-  } catch {
+  } catch (error) {
     reservation.release();
-    return false;
+    throw error;
   }
 }

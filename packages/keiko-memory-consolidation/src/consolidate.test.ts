@@ -3,7 +3,12 @@ import { describe, expect, it } from "vitest";
 import { JACCARD_DEFAULT, MAX_AGE_MS_DEFAULT, STALE_CONFIDENCE_DEFAULT } from "./_constants.js";
 import { FIXED_NOW_MS, makeEdgeIdFactory, makeIdFactory, makeRecord, must } from "./_support.js";
 import { runConsolidation } from "./consolidate.js";
+import type { ConsolidationLogEvent, ConsolidationLogSink } from "./log-port.js";
 import type { ConsolidationOptions } from "./types.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 function baseOptions(overrides: Partial<ConsolidationOptions> = {}): ConsolidationOptions {
   return {
@@ -325,6 +330,49 @@ describe("runConsolidation - maxRecordsPerRun bound", () => {
     const result = runConsolidation([makeRecord()], baseOptions({ maxRecordsPerRun: 1_001 }));
     expect(result.state).toBe("failed");
   });
+
+  // The record budget is a CPU bound, not a canonical-member selection, and it used to be taken
+  // with compareRecordsByAge — oldest first. Past the cap the window was therefore a permanently
+  // frozen prefix of the oldest records: because merges become review items awaiting a human, the
+  // prefix never shrank, so nothing newer was ever deduplicated or conflict-checked again.
+  it("inspects the newest records, so a new duplicate of an in-window record is still found", () => {
+    const records = [
+      ...Array.from({ length: 1_000 }, (_, index) =>
+        makeRecord({
+          id: `m-${index.toString().padStart(4, "0")}`,
+          body: `unique memory body ${index.toString()}`,
+          createdAt: index,
+        }),
+      ),
+      makeRecord({
+        id: "m-newest",
+        body: "unique memory body 999",
+        createdAt: 1_000,
+      }),
+    ];
+    const result = runConsolidation(records, baseOptions());
+    expect(result.recordsInspected).toBe(1_000);
+    expect(result.truncated).toBe(true);
+    const related = [...result.reviewItems.flatMap((item) => item.relatedMemoryIds)];
+    const edgeIds = result.edgesProposed.flatMap((edge) => [edge.fromMemoryId, edge.toMemoryId]);
+    expect([...related, ...edgeIds]).toContain("m-newest");
+    expect([...related, ...edgeIds]).toContain("m-0999");
+  });
+
+  it("drops the oldest record rather than the newest when the cap binds", () => {
+    const records = Array.from({ length: 1_001 }, (_, index) =>
+      makeRecord({
+        id: `m-${index.toString().padStart(4, "0")}`,
+        body: `unique memory body ${index.toString()}`,
+        createdAt: index,
+      }),
+    );
+    const result = runConsolidation(records, baseOptions({ staleConfidenceThreshold: 1 }));
+    expect(result.recordsInspected).toBe(1_000);
+    const flagged = result.staleFlags.map((flag) => String(flag.memoryId));
+    expect(flagged).toContain("m-1000");
+    expect(flagged).not.toContain("m-0000");
+  });
 });
 
 describe("runConsolidation - cancellation", () => {
@@ -450,5 +498,137 @@ describe("runConsolidation - reserved summaryGenerator seam", () => {
     );
     expect(result.state).toBe("completed");
     expect(calls).toBe(0);
+  });
+});
+
+// `chooseSummaryBody` (consolidate.ts) has four distinct branches that all fell back to the
+// deterministic union. Before `summaryFallbackReason` existed, every branch was indistinguishable
+// from every other — a caller (or an operator reading the activity log) could not tell "nobody
+// configured a generator" apart from "the generator threw". These five specs go through the
+// public `runConsolidation` entry point only (this package's composition root) plus the
+// caller-supplied `logSink`, exactly the surface a real caller has — `GeneratedSummaryChoice` and
+// `chooseSummaryBody` stay package-private.
+describe("runConsolidation - summaryFallbackReason", () => {
+  function recordingLogSink(): { sink: ConsolidationLogSink; events: ConsolidationLogEvent[] } {
+    const events: ConsolidationLogEvent[] = [];
+    return { sink: { write: (event) => events.push(event) }, events };
+  }
+
+  function threeMemberCluster(): {
+    a: ReturnType<typeof makeRecord>;
+    b: ReturnType<typeof makeRecord>;
+    c: ReturnType<typeof makeRecord>;
+  } {
+    return {
+      a: makeRecord({ id: "m-a", body: "use tabs", createdAt: 100 }),
+      b: makeRecord({ id: "m-b", body: "prefer compact diffs", createdAt: 200 }),
+      c: makeRecord({ id: "m-c", body: "keep PR titles short", createdAt: 300 }),
+    };
+  }
+
+  it("reports 'absent' when no summaryGenerator is configured", () => {
+    const { a, b, c } = threeMemberCluster();
+    const { sink, events } = recordingLogSink();
+    runConsolidation([a, b, c], baseOptions({ jaccardThreshold: 0, logSink: sink }));
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      category: "consolidation",
+      op: "consolidation.summary.fallback",
+      extra: { reason: "absent" },
+    });
+    const persisted = expectActivityLogProof(
+      "consolidation.summary.fallback.reason",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ reason: "absent" });
+  });
+
+  it("reports 'invalid-output' when the summaryGenerator returns null", () => {
+    const { a, b, c } = threeMemberCluster();
+    const { sink, events } = recordingLogSink();
+    runConsolidation(
+      [a, b, c],
+      baseOptions({ jaccardThreshold: 0, summaryGenerator: () => null, logSink: sink }),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      reason: "invalid-output",
+    });
+  });
+
+  it("reports 'invalid-output' when the summaryGenerator returns an empty body", () => {
+    const { a, b, c } = threeMemberCluster();
+    const { sink, events } = recordingLogSink();
+    runConsolidation(
+      [a, b, c],
+      baseOptions({ jaccardThreshold: 0, summaryGenerator: () => "   ", logSink: sink }),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      reason: "invalid-output",
+    });
+  });
+
+  it("reports 'union-not-preserved' when the generated summary drops source content", () => {
+    const { a, b, c } = threeMemberCluster();
+    const { sink, events } = recordingLogSink();
+    runConsolidation(
+      [a, b, c],
+      baseOptions({ jaccardThreshold: 0, summaryGenerator: () => "use tabs", logSink: sink }),
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      reason: "union-not-preserved",
+    });
+  });
+
+  it("reports 'generator-threw' when the summaryGenerator throws, and the sink receives the event", () => {
+    const { a, b, c } = threeMemberCluster();
+    const { sink, events } = recordingLogSink();
+    const result = runConsolidation(
+      [a, b, c],
+      baseOptions({
+        jaccardThreshold: 0,
+        summaryGenerator: () => {
+          throw new Error("summary unavailable");
+        },
+        logSink: sink,
+      }),
+    );
+    // The engine keeps working (deterministic union fallback) regardless of whether a sink is
+    // wired — logging is an observation of the run, never a precondition for it.
+    expect(result.state).toBe("completed");
+    expect(must(result.updatesProposed[0]).bodyPatch).toContain("keep PR titles short");
+    expect(events).toEqual([
+      {
+        category: "consolidation",
+        op: "consolidation.summary.fallback",
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          reason: "generator-threw",
+        },
+      },
+    ]);
+  });
+
+  it("never calls the sink when no fallback occurs", () => {
+    const { a, b, c } = threeMemberCluster();
+    const { sink, events } = recordingLogSink();
+    runConsolidation(
+      [a, b, c],
+      baseOptions({
+        jaccardThreshold: 0,
+        summaryGenerator: ({ sourceBodies }) => sourceBodies.join("; "),
+        logSink: sink,
+      }),
+    );
+    expect(events).toEqual([]);
   });
 });

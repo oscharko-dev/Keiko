@@ -2,15 +2,16 @@
 
 ## Supported Versions
 
-Keiko is currently a pre-1.0 project. Security fixes are prepared on the
+Keiko publishes a stable `1.x` package line. Security fixes are prepared on the
 `dev` branch and, when package publishing is in scope, are released for the
-latest published `0.x` package line only.
+latest published `1.x` package line only.
 
 | Version                        | Supported |
 | ------------------------------ | --------- |
 | Current `dev` branch           | Yes       |
-| Latest published `0.x` release | Yes       |
-| Earlier `0.x` releases         | No        |
+| Latest published `1.x` release | Yes       |
+| Earlier `1.x` releases         | No        |
+| `0.x` releases                 | No        |
 
 ## Reporting a Vulnerability
 
@@ -39,10 +40,17 @@ Expected handling:
 
 The current security and audit boundary model is documented in
 [`docs/security-and-audit-boundaries.md`](docs/security-and-audit-boundaries.md)
-and [ADR-0030](docs/adr/ADR-0030-workspace-security-evidence.md). Those documents
-are the source of truth for the loopback-only UI, Model Gateway-only model access,
-workspace containment, allowlisted command execution, patch/evidence protections,
-and workspace durable-state restrictions.
+and [ADR-0030](docs/adr/ADR-0030-workspace-security-evidence.md). Later trust-boundary-bearing
+subsystems are governed by [ADR-0128](docs/adr/ADR-0128-atlassian-connector-authority-and-security-design.md)
+(Atlassian connector authority and encrypted credential custody),
+[ADR-0141](docs/adr/ADR-0141-authority-envelope-and-coding-task-runtime.md) (coding-task
+Authority Envelope), [ADR-0154](docs/adr/ADR-0154-canonical-twin-voice-pipeline-and-media-only-realtime-authority.md)
+(media-only Realtime WebRTC posture for voice capture), and
+[ADR-0163](docs/adr/ADR-0163-self-contained-release-qualified-coding-runtime.md)
+(self-contained release-qualified coding runtime). Those documents are the source
+of truth for the loopback-only UI, Model Gateway-only model access, workspace
+containment, allowlisted command execution, patch/evidence protections, and
+workspace durable-state restrictions.
 
 ## Secret-Scanning Triage for Maintainers
 
@@ -77,6 +85,13 @@ queue.
 Treat every returned alert as potentially real until its provenance is established privately.
 Record only the alert identifier, path, status, disposition, reviewer, and remediation date; the
 detected value remains hidden. Apply exactly one disposition:
+
+An automated backstop runs this procedure nightly: `npm run check:secret-scanning-queue`
+(`.github/workflows/secret-scanning-queue.yml`) issues both listings, merges them, and fails when an
+open alert has no disposition recorded in
+[`docs/release/2296-dependency-security-closeout.md`](docs/release/2296-dependency-security-closeout.md)
+using exactly the four tokens below. It detects, it never resolves: closing an alert stays a
+maintainer act, and the lane deliberately withholds alert identifiers from its public log.
 
 - `revoked`: a real credential or generated key. Revoke or rotate it through the owning system,
   remove tracked generated output, and retain private rotation evidence before resolving the alert.

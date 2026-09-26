@@ -20,5 +20,8 @@
     "rawModelPromptsIncluded": false,
     "rawModelOutputsIncluded": false,
     "tokensIncluded": false
-  }
+  },
+  "status": "historical",
+  "verified": false,
+  "retirementNote": "Housekeeping 2026-08-27 (PR #3295): the producing suite coding-workbench-1991 was retained as an @smoke authority-cap check but its evidence-writing body was removed in earlier housekeeping, so `KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run test:e2e:coding-workbench-1991` no longer regenerates this manifest, its PNGs, or its proof JSONs. These captures record the verification as it stood when produced and are no longer reproducible by a lane. Live coverage: coding-workbench-2253.spec.ts (extended e2e matrix) plus the governed-assist server-cap @smoke check in this same spec file, which continues to gate that the workbench honors the server-reported authority ceiling rather than a fixture projection."
 }

@@ -2,30 +2,13 @@
   --lazy-widget-scope: 1;
 }
 
-.lazyWidgetScope :global(.nt-row) {
-  display: flex;
-  gap: 9px;
-  padding: 10px;
-  border-radius: 9px;
-}
-
-.lazyWidgetScope :global(.nt-row:hover) {
-  background: var(--card-2);
-}
-
-.lazyWidgetScope :global(.nt-text) {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.lazyWidgetScope :global(.nt-title) {
+/* KEIKO-0158: the panel has no notification source wired behind it, so it renders an
+   explicit empty state instead of a fake, never-changing list. Mirrors TimelinePanel's
+   own .tl-empty treatment. */
+.lazyWidgetScope :global(.nt-empty) {
   font-size: 12.5px;
-  color: var(--fg);
-  line-height: 1.35;
-}
-
-.lazyWidgetScope :global(.nt-time) {
-  font-size: 10.5px;
   color: var(--fg-muted); /* --fg-faint 2.3-3.1:1, AA fail (uiux-fix F012) */
+  text-align: center;
+  padding: 26px 16px;
+  line-height: 1.6;
 }

@@ -9,7 +9,11 @@
 
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { errorBody, type RouteResult } from "../../routes.js";
-import { listLspLifecycleEvents } from "./lspLifecycleLedger.js";
+// KEIKO-0556: the ledger is now partitioned by workspacePartitionKey so two workspace roots
+// running the same language provider can no longer interleave events. The status route projects
+// the union across every partition; the content-free wire shape (managerId + status + counts) is
+// unchanged, so no UI/consumer contract moves.
+import { listAllLspLifecycleEvents } from "./lspLifecycleLedger.js";
 import { listHostLspHealthSnapshots } from "./hostLanguageOperation.js";
 
 export interface LspStatusRouteDeps {
@@ -29,6 +33,6 @@ export function handleEditorLspStatus(_ctx: unknown, deps: LspStatusRouteDeps): 
   }
   return {
     status: 200,
-    body: { events: listLspLifecycleEvents(), health: listHostLspHealthSnapshots() },
+    body: { events: listAllLspLifecycleEvents(), health: listHostLspHealthSnapshots() },
   };
 }

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "scenarioId": "git-chat-negative-effects",
+  "evidenceClass": "playwright-journey",
+  "sourceCommitSha": "3af295760373908725ebc6391de722e100093d3e",
+  "platformTarget": "macos-arm64",
+  "result": "passed",
+  "assertions": [
+    "malformed-effect-requests-rejected:9",
+    "no-mutating-chat-controls-among:18"
+  ],
+  "usage": {
+    "spendObservability": "unknown",
+    "observedToolCallEvents": 0,
+    "observedRunDurationMs": 5312
+  }
+}

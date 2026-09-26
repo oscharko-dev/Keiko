@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildDebugOutputEvent, type DebugEvent } from "@oscharko-dev/keiko-contracts";
+import type { DebugEvent } from "@oscharko-dev/keiko-contracts";
+import { buildDebugOutputEvent } from "@oscharko-dev/keiko-contracts/runtime/dap-debug";
 import {
   createDapEventBridge,
   DEBUG_EVENT_CHANNEL_CAP,

@@ -5,6 +5,26 @@ import { OPENCODE_APPROVED_ENDPOINTS } from "./opencodeProtocol.js";
 export const OPEN_CODE_PROTOCOL_SURFACE_ALGORITHM = "keiko-opencode-protocol-surface-v1" as const;
 export const OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256 =
   "e1db492f2ac661f2b44da6ef3d7e58ed34856621a2c58de4610640e1291266f6";
+export const OPEN_CODE_V2_PROTOCOL_SURFACE_ALGORITHM =
+  "keiko-opencode-protocol-surface-v2" as const;
+export const OPEN_CODE_V2_PINNED_PROTOCOL_SURFACE_SHA256 =
+  "726109518aba483675a0be0a0b162221c7a50a24ef2de4539cb7fd0ea929ff9b";
+
+const OPENCODE_V2_APPROVED_ENDPOINTS = [
+  "GET /api/info",
+  "GET /api/session",
+  "POST /api/session",
+  "GET /api/session/active",
+  "GET /api/session/{sessionID}/message",
+  "POST /api/session/{sessionID}/prompt",
+  "POST /api/session/{sessionID}/interrupt",
+  "GET /api/permission/request",
+  "POST /api/session/{sessionID}/permission/{requestID}/reply",
+  "GET /api/form",
+  "POST /api/session/{sessionID}/form/{formID}/reply",
+  "DELETE /api/session/{sessionID}/form/{formID}",
+  "GET /api/event",
+] as const;
 
 export interface OpenCodeProtocolSurfaceProjection {
   readonly digest: string;
@@ -19,12 +39,13 @@ const DOCUMENTATION_KEYS = new Set([
   "x-codeSamples",
 ]);
 
-/** Projects the v1.17.17 OpenAPI document onto only Keiko's admitted structural surface. */
+/** Projects the v1.18.30 OpenAPI document onto only Keiko's admitted structural surface. */
 export function projectOpenCodeProtocolSurface(
   document: unknown,
+  endpoints: readonly string[] = OPENCODE_APPROVED_ENDPOINTS,
 ): OpenCodeProtocolSurfaceProjection {
   const root = record(document);
-  const paths = projectPaths(root);
+  const paths = projectPaths(root, endpoints);
   const references = collectReferences(paths);
   const components = projectReferencedComponents(root, references);
   const projection = {
@@ -38,12 +59,19 @@ export function projectOpenCodeProtocolSurface(
   };
 }
 
+export function projectOpenCodeV2ProtocolSurface(
+  document: unknown,
+): OpenCodeProtocolSurfaceProjection {
+  return projectOpenCodeProtocolSurface(document, OPENCODE_V2_APPROVED_ENDPOINTS);
+}
+
 function projectPaths(
   document: Readonly<Record<string, unknown>> | undefined,
+  endpoints: readonly string[],
 ): Record<string, Record<string, unknown>> {
   const source = record(document?.paths);
   const paths: Record<string, Record<string, unknown>> = {};
-  for (const route of OPENCODE_APPROVED_ENDPOINTS) {
+  for (const route of endpoints) {
     const separator = route.indexOf(" ");
     const method = route.slice(0, separator).toLowerCase();
     const path = route.slice(separator + 1);

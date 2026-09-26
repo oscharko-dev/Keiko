@@ -2,24 +2,55 @@ import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { disposeEditorModelRegistryRoot } from "@oscharko-dev/keiko-editor";
 import type { WorkspaceManifest } from "@oscharko-dev/keiko-contracts";
+import type { ClientBindingReferenceShape } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 import { updateChat } from "@/lib/api";
+import { correlationIdOf } from "@/lib/client-error-summary";
 import { newClientCorrelationId } from "@/lib/http";
 import { useTranslate } from "@/lib/i18n";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import type { Chat, ChatMessage, ProjectWithAvailability } from "@/lib/types";
 
-import { useChatSessionContext } from "../context/ChatSessionContext";
-import type { ChatSessionApi } from "../hooks/useChatSession";
-import { useWorkspaceManifest, type WorkspaceManifestView } from "../hooks/useWorkspaceManifest";
+import { ChatSessionProvider } from "../context/ChatSessionContext";
+import { ErrorNoticeFromError } from "../ErrorNotice";
+import {
+  routeSelectionHandoffToOpenChat,
+  usePublishChatWindowActivity,
+  usePublishChatWindowRuntime,
+  type ChatWindowRuntimeTarget,
+} from "../windows/chatWindowActivity";
+import {
+  chatListCorrelationId,
+  sharedFetchChatsWithEvidence,
+  useChatSession,
+  type ChatListLoad,
+  type ChatSessionApi,
+} from "../hooks/useChatSession";
+import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
+import {
+  CHAT_ID_FINGERPRINT_CFG_KEY,
+  persistedReferenceEvidence,
+} from "../hooks/workspace-persistence";
+import {
+  type ChatChoiceDecision,
+  type ChatReferenceMissing,
+  type ChatReferenceRestoration,
+  type RedactedChatChoice,
+  chatReferenceFingerprint,
+  useChatChoiceDecision,
+  useChatReferenceFingerprint,
+  useChatReferenceRebind,
+  useRedactedChatChoice,
+} from "./chatReferenceFingerprint";
+import styles from "./ChatChoiceNotice.module.css";
+import { NATIVE_FIELDSET_RESET_STYLE } from "../native-element-styles";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import type { EditorWidgetProps, EditorWidgetWorkspacePatch } from "./cards/EditorWidget";
-import {
-  ManagedTaskWorkspaceUnavailable,
-  type ManagedTaskWorkspaceAccess,
-} from "./cards/ManagedTaskWorkspaceUnavailable";
+import { ManagedTaskWorkspaceUnavailable } from "./cards/ManagedTaskWorkspaceUnavailable";
 import { MultiRootFilesWidget } from "./cards/MultiRootFilesWidget";
 import { gitObjectId } from "./gitObjectId";
+import { managedTaskWorkspaceAccess } from "./ManagedTaskWorkspaceGate";
 import { MultiRootEditorHost } from "./MultiRootEditorHost";
 import { useEditorAgentTranslate, type EditorAgentMessageKey } from "./cards/editor-agent-i18n";
 import {
@@ -28,48 +59,43 @@ import {
   discardEditorSelectionHandoff,
   inspectEditorSelectionHandoff,
   registerEditorSelectionHandoff,
+  type EditorSelectionHandoff,
   type EditorSelectionHandoffMetadata,
 } from "./cards/editorSelectionHandoff";
+import { createWindowChunkFallback } from "./WindowChunkFallback";
+import { StagePlaceholder } from "./StagePlaceholder";
 
-function WindowChunkFallback(): ReactNode {
-  const t = useTranslate();
-  return <div className="lk-loading">{t("common.loading")}</div>;
-}
-
-const windowChunkFallback = WindowChunkFallback;
+// Named for the same reason as the outer window chunk: `ChatWindow` is its own lazy chunk behind
+// the session bind, and an anonymous "Loading…" here would let a journey read "both named
+// placeholders are gone" as "the composer has mounted" while this chunk is still in flight — the
+// original flake, one hop later. Each lazy chunk names its own stage on the diagnostic sink.
+// Exported so the wiring itself is pinned: the test renders exactly the fallback each lazy chunk is
+// given here and asserts the stage it reports.
+export const HOST_CHUNK_FALLBACKS = {
+  chatWindow: createWindowChunkFallback("chat window chunk"), // i18n-exempt: diagnostic stage id, never rendered
+  editorWidget: createWindowChunkFallback("editor widget chunk"), // i18n-exempt: diagnostic stage id, never rendered
+  filesWidget: createWindowChunkFallback("files widget chunk"), // i18n-exempt: diagnostic stage id, never rendered
+} as const;
 const ChatWindow = dynamic(() => import("../ChatWindow").then((mod) => mod.ChatWindow), {
   ssr: false,
-  loading: windowChunkFallback,
+  loading: HOST_CHUNK_FALLBACKS.chatWindow,
 });
 const EditorWidget = dynamic<EditorWidgetProps>(
   () => import("./cards/EditorWidget").then((mod) => mod.EditorWidget),
-  { ssr: false, loading: windowChunkFallback },
+  { ssr: false, loading: HOST_CHUNK_FALLBACKS.editorWidget },
 );
 const FilesWidget = dynamic(() => import("./cards/FilesWidget").then((mod) => mod.FilesWidget), {
   ssr: false,
-  loading: windowChunkFallback,
+  loading: HOST_CHUNK_FALLBACKS.filesWidget,
 });
 function str(cfg: Record<string, unknown>, key: string): string | undefined {
   const value = cfg[key];
   return typeof value === "string" ? value : undefined;
 }
 
-// One predicate for "this window targets the bound managed task-workspace root and the paired
-// read authority is not confirmed" — shared by the editor AND Files hosts (release-audit F-08) so
-// the two surfaces can never disagree about when the managed root is presentable. The managed
-// root lives under the deny-listed state area and is readable only through a launcher-paired app
-// session (ADR-0141); when authority is missing the host renders the paired-session note instead
-// of the raw denials.
-function managedTaskWorkspaceAccess(
-  ctx: WindowRenderContext,
-  targetRoot: string | undefined,
-  workspace: Pick<WorkspaceManifestView, "pathReadAuthority">,
-): ManagedTaskWorkspaceAccess | null {
-  return ctx.activeBinding !== null &&
-    targetRoot === ctx.activeBinding.activeRoot &&
-    workspace.pathReadAuthority !== "available"
-    ? workspace.pathReadAuthority
-    : null;
+function bool(cfg: Record<string, unknown>, key: string): boolean | undefined {
+  const value = cfg[key];
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function num(cfg: Record<string, unknown>, key: string): number | undefined {
@@ -103,7 +129,7 @@ type SelectionHandoffRoute =
   | { readonly kind: "create-chat"; readonly project: ProjectWithAvailability };
 
 interface SelectionRouteAttempt {
-  attempted: boolean;
+  attemptedAction: "open-project" | "open-chat" | "create-chat" | null;
   id: string | null;
   inFlight: boolean;
 }
@@ -125,7 +151,7 @@ function matchingOpenChat(
 }
 
 function selectionHandoffRoute(args: {
-  readonly attempted: boolean;
+  readonly attemptedAction: SelectionRouteAttempt["attemptedAction"];
   readonly chatId: string | undefined;
   readonly metadata: EditorSelectionHandoffMetadata | null;
   readonly routing: boolean;
@@ -145,8 +171,16 @@ function selectionHandoffRoute(args: {
       ? { kind: "fail", noticeKey: "editor.askSelection.chatUnavailable" }
       : { kind: "consume", chat: activeChat, workspaceRoot };
   }
-  if (args.attempted) return { kind: "fail", noticeKey: "editor.askSelection.openFailed" };
-  if (session.activeProject?.path !== workspaceRoot) return { kind: "open-project", project };
+  if (session.activeProject?.path !== workspaceRoot) {
+    return args.attemptedAction === null
+      ? { kind: "open-project", project }
+      : { kind: "fail", noticeKey: "editor.askSelection.openFailed" };
+  }
+  const canRouteInsideProject =
+    args.attemptedAction === null || args.attemptedAction === "open-project";
+  if (!canRouteInsideProject) {
+    return { kind: "fail", noticeKey: "editor.askSelection.openFailed" };
+  }
   const existing = matchingOpenChat(session.chats, workspaceRoot, args.chatId);
   return existing === undefined
     ? { kind: "create-chat", project }
@@ -170,7 +204,7 @@ function currentRouteAttempt(
   ref: { current: SelectionRouteAttempt },
   id: string,
 ): SelectionRouteAttempt {
-  if (ref.current.id !== id) ref.current = { attempted: false, id, inFlight: false };
+  if (ref.current.id !== id) ref.current = { attemptedAction: null, id, inFlight: false };
   return ref.current;
 }
 
@@ -198,20 +232,21 @@ interface ActiveChatCreation {
   readonly correlationId: string;
   desiredTitle: string | undefined;
   isOwnerCurrent: () => boolean;
-  owner: ChatCreationOwner;
   readonly projectPath: string | null;
   readonly promise: Promise<Chat | undefined>;
   reconciliation: Promise<ChatCreationResult> | null;
-  settledChat: Chat | undefined;
   titleRevision: number;
 }
 
-function sameCreationOwner(left: ChatCreationOwner, right: ChatCreationOwner): boolean {
-  return left.kind === right.kind && left.id === right.id;
+function chatCreationOwnerKey(owner: ChatCreationOwner): string {
+  return `${owner.kind}\u0000${owner.id}`;
 }
 
 const CHAT_CREATION_REQUEST_DIAGNOSTIC = "Chat creation request failed.";
 const CHAT_TITLE_UPDATE_DIAGNOSTIC = "Chat title update failed.";
+const CHAT_PROJECT_LOOKUP_DIAGNOSTIC = "Chat project lookup failed.";
+const CHAT_TARGET_MISSING_DIAGNOSTIC = "[keiko] chat window restore target not found";
+const CHAT_BINDING_RESOLVED_DIAGNOSTIC = "[keiko] chat window binding resolved";
 
 class ChatCreationRequestFailure extends Error {
   public constructor(readonly correlationId: string) {
@@ -283,14 +318,11 @@ async function reconcileActiveChatCreation(
 
 function activeCreationResult(
   active: ActiveChatCreation,
-  currentRef: { current: ActiveChatCreation | null },
   replaceChat: ChatSessionApi["replaceChat"],
 ): Promise<ChatCreationResult> {
   if (active.reconciliation !== null) return active.reconciliation;
-  const reconciliation = reconcileActiveChatCreation(
-    active,
-    replaceChat,
-    (): boolean => currentRef.current === active && active.isOwnerCurrent(),
+  const reconciliation = reconcileActiveChatCreation(active, replaceChat, (): boolean =>
+    active.isOwnerCurrent(),
   );
   const tracked = reconciliation.finally((): void => {
     if (active.reconciliation === tracked) active.reconciliation = null;
@@ -299,60 +331,57 @@ function activeCreationResult(
   return tracked;
 }
 
-function useChatCreationCoordinator(
+function releaseSettledCreation(
+  activeByOwner: Map<string, ActiveChatCreation>,
+  ownerKey: string,
+  created: ActiveChatCreation,
+  result: Promise<ChatCreationResult>,
+): void {
+  const releaseIfCurrent = (): void => {
+    if (activeByOwner.get(ownerKey) === created) activeByOwner.delete(ownerKey);
+  };
+  void result.then(releaseIfCurrent, releaseIfCurrent);
+}
+
+export function useChatCreationCoordinator(
   openNewChat: ChatSessionApi["openNewChat"],
   replaceChat: ChatSessionApi["replaceChat"],
 ): ChatCreationCoordinator {
-  const activeByProjectRef = useRef(new Map<string | null, ActiveChatCreation>());
-  const currentRef = useRef<ActiveChatCreation | null>(null);
+  const activeByOwnerRef = useRef(new Map<string, ActiveChatCreation>());
   const request = useCallback<ChatCreationCoordinator["request"]>(
     (owner, project, title, isOwnerCurrent = (): boolean => true): Promise<ChatCreationResult> => {
       const projectPath = project?.path ?? null;
-      let active = activeByProjectRef.current.get(projectPath);
+      const ownerKey = chatCreationOwnerKey(owner);
+      let active = activeByOwnerRef.current.get(ownerKey);
       if (active === undefined) {
         const promise = openNewChat(project, title);
         const created: ActiveChatCreation = {
           correlationId: newClientCorrelationId(),
           desiredTitle: normalizedChatTitle(title),
           isOwnerCurrent,
-          owner,
           projectPath,
           promise,
           reconciliation: null,
-          settledChat: undefined,
           titleRevision: 0,
         };
-        active = created;
-        activeByProjectRef.current.set(projectPath, created);
-        void promise.then(
-          (chat): void => {
-            created.settledChat = chat;
-          },
-          (): void => {
-            created.settledChat = undefined;
-          },
-        );
+        activeByOwnerRef.current.set(ownerKey, created);
+        const result = activeCreationResult(created, replaceChat);
+        releaseSettledCreation(activeByOwnerRef.current, ownerKey, created, result);
+        return result;
       } else {
         active.isOwnerCurrent = isOwnerCurrent;
-        active.owner = owner;
         if (owner.kind === "window" || title !== undefined) {
           active.desiredTitle = normalizedChatTitle(title);
           active.titleRevision += 1;
         }
       }
-      currentRef.current = active;
-      return activeCreationResult(active, currentRef, replaceChat);
+      return activeCreationResult(active, replaceChat);
     },
     [openNewChat, replaceChat],
   );
   const release = useCallback<ChatCreationCoordinator["release"]>((owner): void => {
-    for (const [projectPath, active] of activeByProjectRef.current) {
-      if (!sameCreationOwner(active.owner, owner)) continue;
-      if (active.settledChat !== undefined && !active.isOwnerCurrent()) return;
-      activeByProjectRef.current.delete(projectPath);
-      if (currentRef.current === active) currentRef.current = null;
-      return;
-    }
+    const ownerKey = chatCreationOwnerKey(owner);
+    activeByOwnerRef.current.delete(ownerKey);
   }, []);
   return useMemo((): ChatCreationCoordinator => ({ release, request }), [release, request]);
 }
@@ -386,7 +415,11 @@ function useSelectionHandoffControl(args: {
   const [noticeKey, setNoticeKey] = useState<SelectionHandoffNoticeKey | null>(null);
   const [revision, setRevision] = useState(0);
   const [settledId, setSettledId] = useState<string | null>(null);
-  const attemptRef = useRef<SelectionRouteAttempt>({ attempted: false, id: null, inFlight: false });
+  const attemptRef = useRef<SelectionRouteAttempt>({
+    attemptedAction: null,
+    id: null,
+    inFlight: false,
+  });
   const { id, session } = args;
   useEffect((): (() => void) | undefined => {
     if (id === undefined) return;
@@ -407,7 +440,7 @@ function useSelectionHandoffControl(args: {
     if (id === undefined || settledId === id) return;
     const attempt = currentRouteAttempt(attemptRef, id);
     const route = selectionHandoffRoute({
-      attempted: attempt.attempted,
+      attemptedAction: attempt.attemptedAction,
       chatId: args.chatId,
       metadata: inspectEditorSelectionHandoff(id),
       routing: attempt.inFlight,
@@ -443,8 +476,7 @@ function useSelectionHandoffControl(args: {
         .then(undefined, () => setNoticeKey("editor.askSelection.openFailed"));
       return;
     }
-    attempt.attempted = true;
-    attempt.inFlight = true;
+    Object.assign(attempt, { attemptedAction: route.kind, inFlight: true });
     const finish = (): void => {
       if (attemptRef.current.id === id) attemptRef.current.inFlight = false;
       setRevision((value): number => value + 1);
@@ -557,22 +589,23 @@ function applyChatCreationResult(
   }
   execution.updateCfg({
     chatId: result.chat.id,
+    projectPath: result.chat.projectPath,
     title: result.chat.title,
     newChatRequestId: undefined,
   });
 }
 
-function executeChatCreationRequest(execution: ChatCreationRequestExecution): void {
-  void execution.coordinator
+export function executeChatCreationRequest(execution: ChatCreationRequestExecution): Promise<void> {
+  return execution.coordinator
     .request(execution.owner, execution.activeProject, execution.title, execution.isCurrent)
     .then(
       (result): void => {
         if (execution.isCurrent()) applyChatCreationResult(execution, result);
       },
-      (failure): void => {
+      (error_): void => {
         const correlationId =
-          failure instanceof ChatCreationRequestFailure
-            ? failure.correlationId
+          error_ instanceof ChatCreationRequestFailure
+            ? error_.correlationId
             : newClientCorrelationId();
         window.reportError(correlatedDiagnostic(CHAT_CREATION_REQUEST_DIAGNOSTIC, correlationId));
         if (!execution.isCurrent()) return;
@@ -582,10 +615,7 @@ function executeChatCreationRequest(execution: ChatCreationRequestExecution): vo
           requestId: execution.requestKey,
         });
       },
-    )
-    .finally((): void => {
-      execution.coordinator.release(execution.owner);
-    });
+    );
 }
 
 function visibleChatCreationError(
@@ -634,13 +664,16 @@ function useChatCreationControl(args: ChatCreationControlArgs): ChatCreationCont
     }
     if (loading || attemptStateRef.current.attemptedRequestKey === requestKey) return;
     const attempt = attemptStateRef.current.sequence + 1;
-    const owner = { kind: "window", id: `${requestKey}\u0000${String(attempt)}` } as const;
+    // A request identity and project are the ownership boundary. The attempt only guards a
+    // particular render generation; including it here would make navigating away and back to the
+    // same still-pending request start a duplicate creation.
+    const owner = { kind: "window", id: requestKey } as const;
     attemptStateRef.current.sequence = attempt;
     attemptStateRef.current.latestAttempt = attempt;
     attemptStateRef.current.attemptedRequestKey = requestKey;
     attemptStateRef.current.active = { coordinator, owner };
     setError(null);
-    executeChatCreationRequest({
+    void executeChatCreationRequest({
       activeProject,
       coordinator,
       isCurrent: (): boolean =>
@@ -657,56 +690,434 @@ function useChatCreationControl(args: ChatCreationControlArgs): ChatCreationCont
   return { errorKey: visibleChatCreationError(error, chatId, requestKey), pending };
 }
 
-export function ChatWindowSessionHost({
-  cfg,
-  ctx,
-}: {
-  readonly cfg: Record<string, unknown>;
-  readonly ctx: WindowRenderContext;
-}): ReactNode {
-  const agentT = useEditorAgentTranslate();
-  const session = useChatSessionContext();
-  const chatId = str(cfg, "chatId");
-  const title = str(cfg, "title");
-  const selectionHandoffId = str(cfg, "selectionHandoffId");
-  const newChatRequestId = str(cfg, "newChatRequestId");
-  const { updateCfg } = ctx;
-  const { activeChat, activeProject, chats, loading, openChat, openNewChat, replaceChat } = session;
-  const activeTarget =
-    activeChat !== undefined && activeChat.status !== "closed" ? activeChat : undefined;
-  const creationCoordinator = useChatCreationCoordinator(openNewChat, replaceChat);
-  const handoff = useSelectionHandoffControl({
-    chatId,
-    coordinator: creationCoordinator,
-    ctx,
-    id: selectionHandoffId,
-    session,
-  });
-  const creatingChat = useChatCreationControl({
-    activeProject,
-    chatId,
-    coordinator: creationCoordinator,
-    loading,
-    newChatRequestId,
-    selectionHandoffId,
-    title,
-    updateCfg,
-  });
+interface BoundChatRouting {
+  readonly activeTarget: Chat | undefined;
+  readonly lookupFailed: boolean;
+  readonly resolvingLegacyProject: boolean;
+  readonly switchingProject: boolean;
+  readonly targetMissing: boolean;
+  // The chat list loads a legacy binding's scan read before it judged the chat missing.
+  readonly legacyScanCorrelationIds: readonly string[] | undefined;
+}
 
+// A missing verdict keeps the correlation id of every list the scan read: each of those answers
+// decided it (#3557 review).
+type ChatProjectLookup =
+  | { readonly kind: "found"; readonly path: string }
+  | { readonly kind: "missing"; readonly scanCorrelationIds: readonly string[] }
+  | { readonly kind: "failed" };
+
+// A list that cannot be read is reported under the id its load was sent with, so the failure joins
+// that load's own timeline (#3557 review).
+async function readProjectChats(
+  project: ProjectWithAvailability,
+): Promise<ChatListLoad | undefined> {
+  try {
+    return await sharedFetchChatsWithEvidence(project.path);
+  } catch (error) {
+    window.reportError(
+      correlatedDiagnostic(
+        CHAT_PROJECT_LOOKUP_DIAGNOSTIC,
+        correlationIdOf(error) ?? newClientCorrelationId(),
+      ),
+    );
+    return undefined;
+  }
+}
+
+async function findChatProjectPath(
+  chatId: string,
+  projects: readonly ProjectWithAvailability[],
+): Promise<ChatProjectLookup> {
+  const loads = await Promise.all(projects.map(readProjectChats));
+  const answered = loads.filter((load): load is ChatListLoad => load !== undefined);
+  const found = answered
+    .flatMap((load): readonly Chat[] => load.chats)
+    .find((chat): boolean => chat.id === chatId && chat.status !== "closed");
+  if (found !== undefined) return { kind: "found", path: found.projectPath };
+  if (answered.length < loads.length) return { kind: "failed" };
+  return { kind: "missing", scanCorrelationIds: answered.map((load) => load.correlationId) };
+}
+
+interface LegacyChatProjectPathArgs {
+  readonly chatId: string | undefined;
+  readonly chats: readonly Chat[];
+  readonly configuredProjectPath: string | undefined;
+  readonly error: string | undefined;
+  readonly loading: boolean;
+  readonly persistProjectPath: boolean;
+  readonly projects: readonly ProjectWithAvailability[];
+  readonly updateCfg: WindowRenderContext["updateCfg"];
+}
+
+interface LegacyChatLookupEffectArgs {
+  readonly chatId: string | undefined;
+  readonly configuredProjectPath: string | undefined;
+  readonly error: string | undefined;
+  readonly loading: boolean;
+  readonly local: Chat | undefined;
+  readonly lookup: ChatProjectLookup | undefined;
+  readonly persistProjectPath: boolean;
+  readonly projects: readonly ProjectWithAvailability[];
+  readonly setLookup: (chatId: string, result: ChatProjectLookup) => void;
+  readonly updateCfg: WindowRenderContext["updateCfg"];
+}
+
+function synchronizeLocalChatProjectLookup(args: LegacyChatLookupEffectArgs): boolean {
+  if (args.local === undefined || args.chatId === undefined) return false;
+  if (args.lookup?.kind === "found" && args.lookup.path === args.local.projectPath) return true;
+  args.setLookup(args.chatId, { kind: "found", path: args.local.projectPath });
+  if (args.persistProjectPath) args.updateCfg({ projectPath: args.local.projectPath });
+  return true;
+}
+
+function startRemoteChatProjectLookup(
+  args: LegacyChatLookupEffectArgs & { readonly chatId: string },
+): (() => void) | undefined {
+  if (args.lookup !== undefined) return undefined;
+  if (args.projects.length === 0) {
+    args.setLookup(
+      args.chatId,
+      args.error === undefined ? { kind: "missing", scanCorrelationIds: [] } : { kind: "failed" },
+    );
+    return undefined;
+  }
+  let active = true;
+  void findChatProjectPath(args.chatId, args.projects).then((result): void => {
+    if (!active) return;
+    args.setLookup(args.chatId, result);
+    if (result.kind === "found" && args.persistProjectPath) {
+      args.updateCfg({ projectPath: result.path });
+    }
+  });
+  return (): void => {
+    active = false;
+  };
+}
+
+function startLegacyChatProjectLookup(args: LegacyChatLookupEffectArgs): (() => void) | undefined {
+  if (args.chatId === undefined || args.configuredProjectPath !== undefined || args.loading) return;
+  if (synchronizeLocalChatProjectLookup(args)) return undefined;
+  return startRemoteChatProjectLookup({ ...args, chatId: args.chatId });
+}
+
+interface LegacyChatProjectPath {
+  readonly failed: boolean;
+  readonly path: string | undefined;
+  readonly pending: boolean;
+  readonly scanCorrelationIds: readonly string[] | undefined;
+}
+
+const LEGACY_SCAN_MAX_RETRY_DELAY_MS = 30_000;
+
+// A scan that could not read every project decides nothing, so it runs again after a bounded
+// backoff instead of leaving the window failed until it is remounted (#3557 review).
+function useRetryFailedChatProjectLookup(
+  chatId: string | undefined,
+  lookup: ChatProjectLookup | undefined,
+  forget: (chatId: string) => void,
+): void {
+  const [attempt, setAttempt] = useState(0);
+  const failed = lookup?.kind === "failed";
+  useEffect((): (() => void) | undefined => {
+    if (chatId === undefined || !failed) return undefined;
+    const delayMs = Math.min(LEGACY_SCAN_MAX_RETRY_DELAY_MS, 1_000 * 2 ** attempt);
+    const timer = setTimeout((): void => {
+      setAttempt((previous) => previous + 1);
+      forget(chatId);
+    }, delayMs);
+    return (): void => {
+      clearTimeout(timer);
+    };
+  }, [attempt, chatId, failed, forget]);
+}
+
+function useChatProjectLookups(): {
+  readonly lookups: ReadonlyMap<string, ChatProjectLookup>;
+  readonly setLookup: (id: string, result: ChatProjectLookup) => void;
+  readonly forgetLookup: (id: string) => void;
+} {
+  const [lookups, setLookups] = useState<ReadonlyMap<string, ChatProjectLookup>>(() => new Map());
+  const setLookup = useCallback((id: string, result: ChatProjectLookup): void => {
+    setLookups((current) => new Map(current).set(id, result));
+  }, []);
+  const forgetLookup = useCallback((id: string): void => {
+    setLookups((current) => {
+      const next = new Map(current);
+      next.delete(id);
+      return next;
+    });
+  }, []);
+  return { lookups, setLookup, forgetLookup };
+}
+
+function useLegacyChatProjectPath(args: LegacyChatProjectPathArgs): LegacyChatProjectPath {
+  const { chatId, chats, configuredProjectPath, loading, persistProjectPath, projects, updateCfg } =
+    args;
+  const { lookups, setLookup, forgetLookup } = useChatProjectLookups();
+  const local = chats.find((chat): boolean => chat.id === chatId && chat.status !== "closed");
+  const lookup = chatId === undefined ? undefined : lookups.get(chatId);
+  useRetryFailedChatProjectLookup(chatId, lookup, forgetLookup);
+  useEffect(
+    (): (() => void) | undefined =>
+      startLegacyChatProjectLookup({
+        chatId,
+        configuredProjectPath,
+        error: args.error,
+        loading,
+        local,
+        lookup,
+        persistProjectPath,
+        projects,
+        setLookup,
+        updateCfg,
+      }),
+    [
+      chatId,
+      configuredProjectPath,
+      args.error,
+      loading,
+      local,
+      lookup,
+      persistProjectPath,
+      projects,
+      setLookup,
+      updateCfg,
+    ],
+  );
+  const path =
+    configuredProjectPath ??
+    local?.projectPath ??
+    (lookup?.kind === "found" ? lookup.path : undefined);
+  return {
+    failed: lookup?.kind === "failed",
+    path,
+    pending: chatId !== undefined && path === undefined && lookup === undefined,
+    scanCorrelationIds: legacyScanCorrelationIds(configuredProjectPath, lookup),
+  };
+}
+
+// Only a binding without a persisted project is judged by the scan; a configured project's own
+// list decides every other binding.
+function legacyScanCorrelationIds(
+  configuredProjectPath: string | undefined,
+  lookup: ChatProjectLookup | undefined,
+): readonly string[] | undefined {
+  if (configuredProjectPath !== undefined || lookup?.kind !== "missing") return undefined;
+  return lookup.scanCorrelationIds;
+}
+
+function activeChatTarget(session: ChatSessionApi): Chat | undefined {
+  return session.activeChat?.status === "closed" ? undefined : session.activeChat;
+}
+
+function boundChatTargetMissing(args: {
+  readonly activeTargetId: string | undefined;
+  readonly chatId: string | undefined;
+  readonly legacyProjectPending: boolean;
+  readonly lookupFailed: boolean;
+  readonly liveTargetPresent: boolean;
+  readonly loading: boolean;
+  readonly selectionHandoffId: string | undefined;
+  readonly switchingProject: boolean;
+}): boolean {
+  return (
+    args.selectionHandoffId === undefined &&
+    args.chatId !== undefined &&
+    !args.loading &&
+    !args.legacyProjectPending &&
+    !args.lookupFailed &&
+    args.activeTargetId !== args.chatId &&
+    !args.switchingProject &&
+    !args.liveTargetPresent
+  );
+}
+
+function projectToOpen(
+  projectPath: string | undefined,
+  session: ChatSessionApi,
+): ProjectWithAvailability | undefined {
+  if (projectPath === undefined || session.activeProject?.path === projectPath) return undefined;
+  return session.projects.find((project): boolean => project.path === projectPath);
+}
+
+function useProjectRouting(
+  targetProject: ProjectWithAvailability | undefined,
+  selectionHandoffId: string | undefined,
+  session: ChatSessionApi,
+): boolean {
+  const attemptedPath = useRef<string | undefined>(undefined);
+  const attemptGeneration = useRef(0);
+  const [pendingPath, setPendingPath] = useState<string | undefined>();
+  useEffect(
+    () => (): void => {
+      attemptGeneration.current += 1;
+    },
+    [],
+  );
+  useEffect((): void => {
+    if (
+      session.loading ||
+      session.error !== undefined ||
+      selectionHandoffId !== undefined ||
+      targetProject === undefined
+    )
+      return;
+    if (attemptedPath.current === targetProject.path) return;
+    attemptedPath.current = targetProject.path;
+    const generation = ++attemptGeneration.current;
+    setPendingPath(targetProject.path);
+    const settle = (): void => {
+      if (attemptGeneration.current === generation) setPendingPath(undefined);
+    };
+    void session.openProject(targetProject).then(settle, settle);
+  }, [selectionHandoffId, session, targetProject]);
+  useEffect((): void => {
+    if (pendingPath === undefined && (targetProject === undefined || session.error !== undefined)) {
+      attemptedPath.current = undefined;
+    }
+  }, [pendingPath, session.error, targetProject]);
+  return (targetProject !== undefined && session.error === undefined) || pendingPath !== undefined;
+}
+
+function projectRestoreFailed(
+  session: ChatSessionApi,
+  switchingProject: boolean,
+  liveTargetPresent: boolean,
+): boolean {
+  return !switchingProject && session.error !== undefined && !liveTargetPresent;
+}
+
+function routingResult(
+  activeTarget: Chat | undefined,
+  legacyProject: ReturnType<typeof useLegacyChatProjectPath>,
+  lookupFailed: boolean,
+  switchingProject: boolean,
+  targetMissing: boolean,
+): BoundChatRouting {
+  return {
+    activeTarget,
+    lookupFailed,
+    resolvingLegacyProject: legacyProject.pending,
+    switchingProject,
+    targetMissing,
+    legacyScanCorrelationIds: legacyProject.scanCorrelationIds,
+  };
+}
+
+function useBoundChatRouting(args: {
+  readonly chatId: string | undefined;
+  readonly configuredProjectPath: string | undefined;
+  readonly projectPathPrivacy: "omit" | undefined;
+  readonly selectionHandoffId: string | undefined;
+  readonly session: ChatSessionApi;
+  readonly updateCfg: WindowRenderContext["updateCfg"];
+}): BoundChatRouting {
+  const { chatId, selectionHandoffId, session } = args;
+  const activeTarget = activeChatTarget(session);
+  const legacyProject = useLegacyChatProjectPath({
+    chatId,
+    chats: session.chats,
+    configuredProjectPath: args.configuredProjectPath,
+    error: session.error,
+    loading: session.loading,
+    persistProjectPath: args.projectPathPrivacy !== "omit",
+    projects: session.projects,
+    updateCfg: args.updateCfg,
+  });
+  const targetProject = projectToOpen(legacyProject.path, session);
+  const switchingProject = useProjectRouting(targetProject, selectionHandoffId, session);
+  const liveTargetPresent = session.chats.some(
+    (chat): boolean => chat.id === chatId && chat.status !== "closed",
+  );
+  const lookupFailed =
+    legacyProject.failed || projectRestoreFailed(session, switchingProject, liveTargetPresent);
+  const { chats, loading, openChat } = session;
   useEffect((): void => {
     if (loading || selectionHandoffId !== undefined || chatId === undefined) return;
     if (activeTarget?.id === chatId) return;
     const target = chats.find((chat): boolean => chat.id === chatId && chat.status !== "closed");
     if (target !== undefined) void openChat(target);
-  }, [chatId, activeTarget?.id, chats, loading, openChat, selectionHandoffId]);
+  }, [activeTarget?.id, chatId, chats, loading, openChat, selectionHandoffId]);
+  const targetMissing = boundChatTargetMissing({
+    activeTargetId: activeTarget?.id,
+    chatId,
+    legacyProjectPending: legacyProject.pending,
+    lookupFailed,
+    liveTargetPresent,
+    loading: session.loading,
+    selectionHandoffId,
+    switchingProject,
+  });
+  return routingResult(activeTarget, legacyProject, lookupFailed, switchingProject, targetMissing);
+}
 
-  // `cfg.title` mirrors the chat record. 0.3.0 release audit — this is the ONE place a bound chat
-  // window's title changes after creation, so it also owns the structural "still untitled" marker
-  // the workspace reads instead of comparing the title against display copy. Materialising the
-  // record's title for the first time (the window was created without one) leaves the window
-  // untitled; any LATER change is a real name — an operator rename, or the server's first-turn
-  // auto-title — and clears the marker so the subtitle surfaces it.
-  useEffect(() => {
+interface MemoryPreference {
+  readonly chatId: string | undefined;
+  readonly configured: boolean | undefined;
+  readonly value: boolean | undefined;
+}
+
+function configuredMemoryPreference(
+  chatId: string | undefined,
+  configured: boolean | undefined,
+): MemoryPreference {
+  return { chatId, configured, value: configured };
+}
+
+function useBoundMemorySession(args: {
+  readonly activeTarget: Chat | undefined;
+  readonly chatId: string | undefined;
+  readonly configuredMemoryEnabled: boolean | undefined;
+  readonly session: ChatSessionApi;
+  readonly updateCfg: WindowRenderContext["updateCfg"];
+}): { readonly hydrating: boolean; readonly session: ChatSessionApi } {
+  const { activeTarget, chatId, configuredMemoryEnabled, session, updateCfg } = args;
+  const preferenceRef = useRef(configuredMemoryPreference(chatId, configuredMemoryEnabled));
+  if (
+    preferenceRef.current.chatId !== chatId ||
+    preferenceRef.current.configured !== configuredMemoryEnabled
+  ) {
+    preferenceRef.current = configuredMemoryPreference(chatId, configuredMemoryEnabled);
+  }
+  const setMemoryEnabled = useCallback(
+    (next: boolean): void => {
+      preferenceRef.current = {
+        chatId,
+        configured: preferenceRef.current.configured,
+        value: next,
+      };
+      session.setMemoryEnabled(next);
+      updateCfg({ memoryEnabled: next });
+    },
+    [chatId, session, updateCfg],
+  );
+  const scopedSession = useMemo<ChatSessionApi>(
+    () => ({ ...session, setMemoryEnabled }),
+    [session, setMemoryEnabled],
+  );
+  const preference = preferenceRef.current.value;
+  const hydrating =
+    chatId !== undefined &&
+    activeTarget?.id === chatId &&
+    preference !== undefined &&
+    session.memoryEnabled !== preference;
+  useEffect((): void => {
+    if (!hydrating || preference === undefined) return;
+    session.setMemoryEnabled(preference);
+  }, [hydrating, preference, session]);
+  return { hydrating, session: scopedSession };
+}
+
+function useBoundChatTitle(args: {
+  readonly activeTarget: Chat | undefined;
+  readonly chatId: string | undefined;
+  readonly loading: boolean;
+  readonly title: string | undefined;
+  readonly updateCfg: WindowRenderContext["updateCfg"];
+}): void {
+  useEffect((): void => {
+    const { activeTarget, chatId, loading, title, updateCfg } = args;
     if (loading || chatId === undefined || activeTarget?.id !== chatId) return;
     if (activeTarget.title === title) return;
     const materializesInitialTitle = normalizedChatTitle(title) === undefined;
@@ -715,102 +1126,619 @@ export function ChatWindowSessionHost({
         ? { title: activeTarget.title }
         : { title: activeTarget.title, [CHAT_TITLE_IS_DEFAULT_CFG_KEY]: false },
     );
-  }, [activeTarget?.id, activeTarget?.title, chatId, loading, title, updateCfg]);
+  }, [args]);
+}
 
-  // 0.3.0 release audit — `chats` is the CURRENT project's list, so a window still bound to the
-  // previous project's conversation resolved nothing and was told the conversation "was deleted".
-  // It was not: the singleton chat window simply lagged behind a project switch. The two cases are
-  // distinguishable — a conversation trashed from Chat History stays in the list with status
-  // "closed", while one that belongs to another project is absent entirely — so only the absent
-  // case retargets the window onto the session's active conversation, and the honest deletion
-  // message is left to the case that can actually prove a deletion.
-  const boundChatKnownHere = chatId !== undefined && chats.some((chat) => chat.id === chatId);
-  const retargetChat =
-    chatId !== undefined &&
-    !boundChatKnownHere &&
-    activeTarget !== undefined &&
-    activeTarget.id !== chatId
-      ? activeTarget
-      : undefined;
+type ChatBindingOutcome = "resolved" | "target-missing";
 
+function chatBindingOutcome(
+  routing: BoundChatRouting,
+  chatId: string | undefined,
+): ChatBindingOutcome | undefined {
+  if (chatId === undefined) return undefined;
+  if (routing.targetMissing) return "target-missing";
+  return routing.activeTarget?.id === chatId ? "resolved" : undefined;
+}
+
+// The persisted reference's closed shape. A binding found again after redaction says how and names
+// its chat by fingerprint; a fingerprint that no listed chat has any more says so and names the
+// chat it no longer finds, so it never reads like a marker that named nothing (#3557 review).
+type ChatBindingReferenceEvidence = Omit<
+  ReturnType<typeof persistedReferenceEvidence>,
+  "referenceShape"
+> & { readonly referenceShape: ClientBindingReferenceShape; readonly targetFingerprint?: string };
+
+function chatBindingReferenceEvidence(
+  outcome: ChatBindingOutcome,
+  chatId: string,
+  { restoration, missing }: ChatRebindEvidence,
+): ChatBindingReferenceEvidence {
+  if (outcome === "target-missing" && missing !== undefined) {
+    // Only an id the heuristic flags is ever persisted as a fingerprint.
+    return {
+      referenceShape: "fingerprint",
+      heuristicFlagged: true,
+      targetFingerprint: missing.fingerprint,
+    };
+  }
+  const evidence = persistedReferenceEvidence(chatId);
+  if (restoration === undefined) return evidence;
+  return {
+    ...evidence,
+    referenceShape: restoration.shape,
+    targetFingerprint: chatReferenceFingerprint(chatId),
+  };
+}
+
+function chatBindingMessage(
+  outcome: ChatBindingOutcome,
+  evidence: ChatBindingReferenceEvidence,
+): string {
+  const head =
+    outcome === "resolved" ? CHAT_BINDING_RESOLVED_DIAGNOSTIC : CHAT_TARGET_MISSING_DIAGNOSTIC;
+  const flagged = evidence.heuristicFlagged ? ", heuristic-flagged" : "";
+  return `${head} (reference=${evidence.referenceShape}${flagged})`;
+}
+
+// How a redacted window's lookup ended: the chat it found again, or the fingerprint it found gone.
+interface ChatRebindEvidence {
+  readonly restoration?: ChatReferenceRestoration | undefined;
+  readonly missing?: ChatReferenceMissing | undefined;
+}
+
+function useBoundChatBindingEvidence(
+  configuration: BoundChatConfig,
+  ctx: WindowRenderContext,
+  routing: BoundChatRouting,
+  session: ChatSessionApi,
+  rebound: ChatRebindEvidence,
+): void {
+  const outcome = chatBindingOutcome(routing, configuration.chatId);
+  useChatBindingEvidence({
+    routing,
+    chatId: configuration.chatId,
+    windowId: ctx.windowId,
+    loads: chatBindingDecidingLoads(outcome, routing, session, rebound),
+    rebound,
+  });
+}
+
+// The chat list loads a binding verdict depended on (#3557 review).
+interface ChatBindingDecidingLoads {
+  // The loads whose correlation id is known.
+  readonly correlationIds: readonly string[];
+  // Every load that decided the verdict, known or not.
+  readonly count: number;
+}
+
+// A legacy binding without a persisted project is judged missing only after its scan read every
+// project's list and none held the chat: every one of those loads decided it, and the scan kept
+// their ids. A binding found again after redaction was decided by the lookup's own loads, whose ids
+// it kept, never by whichever load the active project ran since, and so was a fingerprint that the
+// lookup found naming no listed chat (#3557 review). Any other verdict was decided by the active
+// project's list. A failed lookup reports no binding outcome: it records its own correlated
+// diagnostic when a list cannot be read.
+function chatBindingDecidingLoads(
+  outcome: ChatBindingOutcome | undefined,
+  routing: BoundChatRouting,
+  session: ChatSessionApi,
+  { restoration, missing }: ChatRebindEvidence,
+): ChatBindingDecidingLoads {
+  if (outcome === "resolved" && restoration !== undefined) {
+    return { correlationIds: [restoration.correlationId], count: 1 };
+  }
+  if (outcome === "target-missing" && missing !== undefined) {
+    return { correlationIds: missing.correlationIds, count: missing.correlationIds.length };
+  }
+  const scanned = routing.legacyScanCorrelationIds;
+  if (outcome === "target-missing" && scanned !== undefined) {
+    return { correlationIds: scanned, count: scanned.length };
+  }
+  if (session.activeProject === undefined) return { correlationIds: [], count: 0 };
+  const id = chatListCorrelationId(session.activeProject.path);
+  return { correlationIds: id === undefined ? [] : [id], count: 1 };
+}
+
+interface ChatBindingEvidenceArgs {
+  readonly routing: BoundChatRouting;
+  readonly chatId: string | undefined;
+  readonly windowId: string;
+  readonly loads: ChatBindingDecidingLoads;
+  readonly rebound: ChatRebindEvidence;
+}
+
+// A restored chat window whose conversation cannot be resolved renders "Chat not found". Without
+// evidence, a lost binding (a persisted id that no longer names the chat) looked exactly like a
+// deleted conversation, and a binding that resolved only through the reference-field exemption
+// looked like no restore at all (#3557 review). Report each outcome once per bound id as a typed,
+// body-free binding report: the closed shape of the persisted reference and whether the card-number
+// heuristic flags it, never the id; the window's own id (the server logs only its digest), so two
+// windows restored from one list answer stay apart; the correlation ids of the chat list loads whose
+// answer decided it, and how many loads that was, so the server records any it cannot name as loss.
+// A binding found again after redaction also names the chat it bound to, by the fingerprint the
+// window persists and never by its id, so two choices from one list answer stay apart.
+function useChatBindingEvidence({
+  routing,
+  chatId,
+  windowId,
+  loads,
+  rebound,
+}: ChatBindingEvidenceArgs): void {
+  const reportedRef = useRef<ReportedBindings>({ keys: new Set(), restorations: new WeakSet() });
+  const outcome = chatBindingOutcome(routing, chatId);
+  const idsKey = loads.correlationIds.join("\u0000");
+  const { count } = loads;
+  const { restoration, missing } = rebound;
   useEffect((): void => {
-    if (loading || selectionHandoffId !== undefined || retargetChat === undefined) return;
-    updateCfg({ chatId: retargetChat.id, title: retargetChat.title });
-  }, [loading, retargetChat, selectionHandoffId, updateCfg]);
+    if (outcome === undefined || chatId === undefined) return;
+    if (!claimBindingReport(reportedRef.current, outcome, chatId, restoration)) return;
+    const evidence = chatBindingReferenceEvidence(outcome, chatId, { restoration, missing });
+    const [correlationId, ...related] = idsKey === "" ? [] : idsKey.split("\u0000");
+    reportClientDiagnostic(chatBindingMessage(outcome, evidence), {
+      correlationId,
+      bindingReport: {
+        surface: "chat-window",
+        outcome,
+        ...evidence,
+        windowRef: windowId,
+        ...(related.length === 0 ? {} : { relatedCorrelationIds: related }),
+        ...(count === 0 ? {} : { decidingLoadCount: count }),
+      },
+    });
+  }, [chatId, count, idsKey, missing, outcome, restoration, windowId]);
+}
 
-  const targetMissing =
-    selectionHandoffId === undefined &&
-    chatId !== undefined &&
-    !session.loading &&
-    activeTarget?.id !== chatId &&
-    retargetChat === undefined &&
-    !session.chats.some((chat) => chat.id === chatId && chat.status !== "closed");
-  const waitingForTarget =
-    session.loading ||
-    handoff.pending ||
-    creatingChat.pending ||
-    (chatId !== undefined && activeTarget?.id !== chatId);
+interface ReportedBindings {
+  readonly keys: Set<string>;
+  readonly restorations: WeakSet<ChatReferenceRestoration>;
+}
+
+// Each binding outcome is reported once per bound id. A binding found again after redaction is
+// reported once per restoration instead, so a chat the person chooses again after withdrawing it is
+// a new binding on the log (#3557 review).
+function claimBindingReport(
+  reported: ReportedBindings,
+  outcome: ChatBindingOutcome,
+  chatId: string,
+  restoration: ChatReferenceRestoration | undefined,
+): boolean {
+  if (outcome === "resolved" && restoration !== undefined) {
+    if (reported.restorations.has(restoration)) return false;
+    reported.restorations.add(restoration);
+    return true;
+  }
+  const key = `${outcome}\u0000${chatId}`;
+  if (reported.keys.has(key)) return false;
+  reported.keys.add(key);
+  return true;
+}
+
+// A window whose redacted chat id carries no fingerprint offers the chats it may have shown; only
+// the person's choice binds it (#3557 review). The offers are labelled where they are reported, so
+// each reads as the evidence says: when its chat was last active, to the second, and a fingerprint
+// reference where two would still read alike.
+function ChatChoice({ choice }: { readonly choice: RedactedChatChoice }): ReactNode {
+  const agentT = useEditorAgentTranslate();
+  return (
+    <fieldset
+      aria-label={agentT("chat.restoration.chooseLabel")}
+      style={NATIVE_FIELDSET_RESET_STYLE}
+    >
+      <p className="lk-empty-body">{agentT("chat.restoration.chooseBody")}</p>
+      {choice.offers.map(({ chat, label }): ReactNode => (
+        <button
+          key={chat.id}
+          type="button"
+          className="lk-btn lk-btn-ghost"
+          onClick={(): void => {
+            choice.choose(chat);
+          }}
+        >
+          {label}
+        </button>
+      ))}
+    </fieldset>
+  );
+}
+
+// The chat a person chose for a redacted snapshot stays a choice until they keep it: they can check
+// the conversation the window now shows, and withdraw it to choose again (#3557 review).
+// Whether the chosen chat is on screen: only then can the person inspect it, and only then keep it.
+type ChatChoiceNoticeState = "shown" | "pending" | "missing";
+
+function chatChoiceNoticeState(target: {
+  readonly routing: BoundChatRouting;
+  readonly targetLookupFailed: boolean;
+  readonly waitingForTarget: boolean;
+}): ChatChoiceNoticeState {
+  if (target.routing.targetMissing) return "missing";
+  return target.targetLookupFailed || target.waitingForTarget ? "pending" : "shown";
+}
+
+const CHOICE_NOTICE_TEXT: Readonly<Record<ChatChoiceNoticeState, EditorAgentMessageKey>> = {
+  shown: "chat.restoration.choiceNotice",
+  pending: "chat.restoration.choicePendingNotice",
+  missing: "chat.restoration.choiceMissingNotice",
+};
+
+// Keep needs the chosen chat on screen (#3557 review): while it opens, while its lookup failed, and
+// once it is missing, only withdrawal is offered, so no one keeps a conversation they cannot inspect.
+function ChatChoiceNotice({
+  decision,
+  state,
+}: {
+  readonly decision: ChatChoiceDecision | undefined;
+  readonly state: ChatChoiceNoticeState;
+}): ReactNode {
+  const agentT = useEditorAgentTranslate();
+  if (decision === undefined) return null;
+  const keep = state === "shown" ? decision.keep : undefined;
+  return (
+    <output className={styles.cmpNotice}>
+      <p className={styles.cmpNoticeText}>{agentT(CHOICE_NOTICE_TEXT[state])}</p>
+      <div className={styles.cmpNoticeActions}>
+        {keep === undefined ? null : (
+          <button type="button" className="lk-btn lk-btn-ghost" onClick={keep}>
+            {agentT("chat.restoration.choiceKeep")}
+          </button>
+        )}
+        <button type="button" className="lk-btn lk-btn-ghost" onClick={decision.chooseAnother}>
+          {agentT("chat.restoration.choiceAnother")}
+        </button>
+      </div>
+    </output>
+  );
+}
+
+function ChatNotFound({ choice }: { readonly choice: RedactedChatChoice | undefined }): ReactNode {
+  const agentT = useEditorAgentTranslate();
+  return (
+    <div className="lk-empty">
+      <p className="lk-empty-title">{agentT("chat.restoration.notFoundTitle")}</p>
+      <p className="lk-empty-body">{agentT("chat.restoration.notFoundBody")}</p>
+      {choice === undefined ? null : <ChatChoice choice={choice} />}
+    </div>
+  );
+}
+
+// The chat bind is asynchronous: a lazy chunk, then a sequential session bootstrap. Named so an
+// operator, a screen reader and a journey can each tell "still binding" from "bound with an empty
+// transcript" — the two render identically otherwise, which is what made a stalled bind surface as a
+// composer that was simply never found.
+function ChatBindPending(): ReactNode {
+  const agentT = useEditorAgentTranslate();
+  return (
+    <StagePlaceholder
+      stage="chat bind" /* i18n-exempt: diagnostic stage id, never rendered */
+      marker={{ "data-chat-bind": "opening" }} /* i18n-exempt: DOM state marker, never rendered */
+    >
+      {agentT("chat.restoration.opening")}
+    </StagePlaceholder>
+  );
+}
+
+function BoundChatBody({
+  activeProjectPath,
+  choice,
+  ctx,
+  targetLookupFailed,
+  targetMissing,
+  waiting,
+}: {
+  readonly activeProjectPath: string | undefined;
+  readonly choice: RedactedChatChoice | undefined;
+  readonly ctx: WindowRenderContext;
+  readonly targetLookupFailed: boolean;
+  readonly targetMissing: boolean;
+  readonly waiting: boolean;
+}): ReactNode {
   const openRunResult = useCallback(
     (message: ChatMessage): void => {
       if (message.runId === undefined) return;
       const runCfg: Record<string, string | number | boolean> = { runId: message.runId };
       const workflow = message.workflowId ?? message.taskType;
       if (workflow !== undefined) runCfg.workflow = workflow;
-      const runRoot = ctx.activeRoot ?? activeProject?.path;
+      const runRoot = ctx.activeRoot ?? activeProjectPath;
       if (runRoot !== undefined) runCfg.workspaceRoot = runRoot;
       ctx.openWindow("agents", runCfg);
     },
-    [activeProject?.path, ctx],
+    [activeProjectPath, ctx],
   );
+  if (targetLookupFailed) return null;
+  if (targetMissing) return <ChatNotFound choice={choice} />;
+  if (waiting) return <ChatBindPending />;
+  return (
+    <ChatWindow
+      windowId={ctx.windowId}
+      suspended={ctx.suspended === true}
+      mini={ctx.mini === true}
+      minimalChat={ctx.minimalChat === true}
+      compact={ctx.compact === true}
+      controlsNarrow={ctx.controlsNarrow === true}
+      barCompact={ctx.barCompact === true}
+      workflowCompact={ctx.workflowCompact === true}
+      linkedRoot={ctx.activeRoot ?? ctx.linkedRoot}
+      linkedRoots={ctx.linkedRoots}
+      linkedGitChangeComparisons={ctx.linkedGitChangeComparisons}
+      openEditorFile={ctx.openEditorFile}
+      previewWindows={{ add: ctx.openWindow, focus: ctx.focusWindow, update: ctx.updateWindow }}
+      onOpenRunResult={openRunResult}
+    />
+  );
+}
 
-  let body: ReactNode;
-  if (targetMissing) {
-    body = (
-      <div className="lk-empty">
-        <p className="lk-empty-title">{"Chat not found"}</p>
-        <p className="lk-empty-body">
-          {"This conversation was deleted or is no longer available."}
-        </p>
-      </div>
-    );
-  } else if (waitingForTarget) {
-    body = <div className="lk-loading">{"Opening chat..."}</div>;
-  } else {
-    body = (
-      <ChatWindow
-        windowId={ctx.windowId}
-        mini={ctx.mini === true}
-        minimalChat={ctx.minimalChat === true}
-        compact={ctx.compact === true}
-        controlsNarrow={ctx.controlsNarrow === true}
-        barCompact={ctx.barCompact === true}
-        workflowCompact={ctx.workflowCompact === true}
-        linkedRoot={ctx.activeRoot ?? ctx.linkedRoot}
-        linkedRoots={ctx.linkedRoots}
-        openEditorFile={ctx.openEditorFile}
-        previewWindows={{
-          add: ctx.openWindow,
-          focus: ctx.focusWindow,
-          update: ctx.updateWindow,
-        }}
-        onOpenRunResult={openRunResult}
+interface BoundChatConfig {
+  readonly chatId: string | undefined;
+  readonly chatIdFingerprint: string | undefined;
+  readonly memoryEnabled: boolean | undefined;
+  readonly newChatRequestId: string | undefined;
+  readonly projectPath: string | undefined;
+  readonly projectPathPrivacy: "omit" | undefined;
+  readonly selectionHandoffId: string | undefined;
+  readonly title: string | undefined;
+}
+
+function boundChatConfig(cfg: Record<string, unknown>): BoundChatConfig {
+  const projectPathPrivacy = cfg["projectPathPrivacy"] === "omit" ? "omit" : undefined;
+  return {
+    chatId: str(cfg, "chatId"),
+    chatIdFingerprint: str(cfg, CHAT_ID_FINGERPRINT_CFG_KEY),
+    memoryEnabled: bool(cfg, "memoryEnabled"),
+    newChatRequestId: str(cfg, "newChatRequestId"),
+    projectPath: str(cfg, "projectPath"),
+    projectPathPrivacy,
+    selectionHandoffId: str(cfg, "selectionHandoffId"),
+    title: str(cfg, "title"),
+  };
+}
+
+function ChatHostAlert({
+  messageKey,
+}: {
+  readonly messageKey: SelectionHandoffNoticeKey | null;
+}): ReactNode {
+  const agentT = useEditorAgentTranslate();
+  return messageKey === null ? null : (
+    <p className="lk-alert" role="alert">
+      {agentT(messageKey)}
+    </p>
+  );
+}
+
+function useBoundChatControls(
+  configuration: BoundChatConfig,
+  ctx: WindowRenderContext,
+  session: ChatSessionApi,
+): {
+  readonly configuredProjectMissing: boolean;
+  readonly creating: ChatCreationControl;
+  readonly handoff: SelectionHandoffControl;
+} {
+  const coordinator = useChatCreationCoordinator(session.openNewChat, session.replaceChat);
+  const handoff = useSelectionHandoffControl({
+    chatId: configuration.chatId,
+    coordinator,
+    ctx,
+    id: configuration.selectionHandoffId,
+    session,
+  });
+  const configuredProject =
+    configuration.projectPath === undefined
+      ? session.activeProject
+      : session.projects.find((project): boolean => project.path === configuration.projectPath);
+  const configuredProjectMissing =
+    !session.loading && configuration.projectPath !== undefined && configuredProject === undefined;
+  const creating = useChatCreationControl({
+    activeProject: configuredProject,
+    chatId: configuration.chatId,
+    coordinator,
+    loading: session.loading || configuredProjectMissing,
+    newChatRequestId: configuration.newChatRequestId,
+    selectionHandoffId: configuration.selectionHandoffId,
+    title: configuration.title,
+    updateCfg: ctx.updateCfg,
+  });
+  return { configuredProjectMissing, creating, handoff };
+}
+
+function boundChatWaiting(args: {
+  readonly chatId: string | undefined;
+  readonly controls: ReturnType<typeof useBoundChatControls>;
+  readonly memoryHydrating: boolean;
+  readonly routing: BoundChatRouting;
+  readonly sessionLoading: boolean;
+}): boolean {
+  return (
+    args.sessionLoading ||
+    args.controls.handoff.pending ||
+    (!args.controls.configuredProjectMissing && args.controls.creating.pending) ||
+    args.routing.switchingProject ||
+    args.routing.resolvingLegacyProject ||
+    args.memoryHydrating ||
+    (args.chatId !== undefined && args.routing.activeTarget?.id !== args.chatId)
+  );
+}
+
+export function ChatWindowSessionHost({
+  cfg,
+  ctx,
+}: {
+  readonly cfg: Record<string, unknown>;
+  readonly ctx: WindowRenderContext;
+}): ReactNode {
+  const session = useChatSession({ autoCreate: false });
+  const configuration = boundChatConfig(cfg);
+  // A chat id the heuristic flags records its fingerprint in the commit that shows it, so
+  // persistence never stores the redacted id alone.
+  useChatReferenceFingerprint(configuration.chatId, configuration.chatIdFingerprint, ctx.updateCfg);
+  // A chat id persistence redacted is found again before the window binds: through its
+  // fingerprint, or, without one, only through the person's choice.
+  const rebind = useChatReferenceRebind(cfg, session, ctx.updateCfg);
+  const redacted = useRedactedChatChoice(cfg, session, ctx);
+  const restoration = rebind.restored ?? redacted.restored;
+  const decision = useChatChoiceDecision(cfg, { restoration, missing: rebind.missing }, ctx);
+  if (rebind.pending) return <ChatBindPending />;
+  return (
+    <BoundChatWindowSessionHost
+      cfg={cfg}
+      choice={redacted.choice}
+      ctx={ctx}
+      decision={decision}
+      restoration={restoration}
+      missing={rebind.missing}
+      session={session}
+    />
+  );
+}
+
+interface BoundChatWindowSessionHostProps {
+  readonly cfg: Record<string, unknown>;
+  readonly choice?: RedactedChatChoice | undefined;
+  readonly ctx: WindowRenderContext;
+  readonly decision?: ChatChoiceDecision | undefined;
+  readonly restoration?: ChatReferenceRestoration | undefined;
+  readonly missing?: ChatReferenceMissing | undefined;
+  readonly session: ChatSessionApi;
+}
+
+function BoundChatAlerts({
+  controls,
+  lookupFailed,
+  sessionError,
+}: {
+  readonly controls: ReturnType<typeof useBoundChatControls>;
+  readonly lookupFailed: boolean;
+  readonly sessionError: string | undefined;
+}): ReactNode {
+  const agentT = useEditorAgentTranslate();
+  const detailedFailure = lookupFailed && sessionError !== undefined;
+  const lookupMessage =
+    !detailedFailure && controls.creating.errorKey === null && lookupFailed
+      ? "chat.creation.openFailed"
+      : null;
+  if (detailedFailure) {
+    return (
+      <ErrorNoticeFromError
+        error={sessionError}
+        fallback={agentT("chat.creation.openFailed")}
+        className="lk-alert"
+        dismissible={false}
       />
     );
   }
+  if (controls.creating.errorKey !== null) {
+    return <ChatHostAlert messageKey={controls.creating.errorKey} />;
+  }
+  return <ChatHostAlert messageKey={lookupMessage ?? controls.handoff.noticeKey} />;
+}
+
+function useBoundChatWindowRuntime(
+  configuration: BoundChatConfig,
+  ctx: WindowRenderContext,
+  routing: BoundChatRouting,
+  session: ChatSessionApi,
+): void {
+  const { focusWindow, restoreWindow, updateCfg, windowId } = ctx;
+  const { chatId, newChatRequestId, projectPath, selectionHandoffId } = configuration;
+  usePublishChatWindowActivity(windowId, session.sending, session.latestGrounded);
+  const runtimeTarget = useMemo<ChatWindowRuntimeTarget | undefined>(() => {
+    if (newChatRequestId !== undefined || routing.lookupFailed || routing.targetMissing) {
+      return undefined;
+    }
+    const activeTarget = routing.activeTarget;
+    if (activeTarget !== undefined && activeTarget.id === chatId) {
+      return { conversationId: activeTarget.id, projectPath: activeTarget.projectPath };
+    }
+    return chatId === undefined || projectPath === undefined
+      ? undefined
+      : { conversationId: chatId, projectPath };
+  }, [
+    chatId,
+    newChatRequestId,
+    projectPath,
+    routing.activeTarget,
+    routing.lookupFailed,
+    routing.targetMissing,
+  ]);
+  const acceptSelectionHandoff = useCallback(
+    (selectionHandoffId: string): void => {
+      updateCfg({ selectionHandoffId, newChatRequestId: undefined });
+      restoreWindow?.(windowId);
+      focusWindow(windowId);
+    },
+    [focusWindow, restoreWindow, updateCfg, windowId],
+  );
+  usePublishChatWindowRuntime(
+    windowId,
+    runtimeTarget,
+    acceptSelectionHandoff,
+    selectionHandoffId === undefined,
+  );
+}
+
+function useBoundChatTitleSync(
+  configuration: BoundChatConfig,
+  routing: BoundChatRouting,
+  session: ChatSessionApi,
+  ctx: WindowRenderContext,
+): void {
+  useBoundChatTitle({
+    activeTarget: routing.activeTarget,
+    chatId: configuration.chatId,
+    loading: session.loading,
+    title: configuration.title,
+    updateCfg: ctx.updateCfg,
+  });
+}
+
+function BoundChatWindowSessionHost(props: BoundChatWindowSessionHostProps): ReactNode {
+  const { cfg, ctx, session } = props;
+  const configuration = boundChatConfig(cfg);
+  const routing = useBoundChatRouting({
+    chatId: configuration.chatId,
+    configuredProjectPath: configuration.projectPath,
+    projectPathPrivacy: configuration.projectPathPrivacy,
+    selectionHandoffId: configuration.selectionHandoffId,
+    session,
+    updateCfg: ctx.updateCfg,
+  });
+  useBoundChatBindingEvidence(configuration, ctx, routing, session, props);
+  useBoundChatWindowRuntime(configuration, ctx, routing, session);
+  const memory = useBoundMemorySession({
+    activeTarget: routing.activeTarget,
+    chatId: configuration.chatId,
+    configuredMemoryEnabled: configuration.memoryEnabled,
+    session,
+    updateCfg: ctx.updateCfg,
+  });
+  const controls = useBoundChatControls(configuration, ctx, session);
+  const targetLookupFailed = routing.lookupFailed || controls.configuredProjectMissing;
+  useBoundChatTitleSync(configuration, routing, session, ctx);
+  const waitingForTarget = boundChatWaiting({
+    chatId: configuration.chatId,
+    controls,
+    memoryHydrating: memory.hydrating,
+    routing,
+    sessionLoading: session.loading,
+  });
+  const noticeState = chatChoiceNoticeState({ routing, targetLookupFailed, waitingForTarget });
   return (
-    <>
-      {handoff.noticeKey === null ? null : (
-        <p className="lk-alert" role="alert">
-          {agentT(handoff.noticeKey)}
-        </p>
-      )}
-      {creatingChat.errorKey === null ? null : (
-        <p className="lk-alert" role="alert">
-          {agentT(creatingChat.errorKey)}
-        </p>
-      )}
-      {body}
-    </>
+    <ChatSessionProvider value={memory.session}>
+      <BoundChatAlerts
+        controls={controls}
+        lookupFailed={targetLookupFailed}
+        sessionError={session.error}
+      />
+      <ChatChoiceNotice decision={props.decision} state={noticeState} />
+      <BoundChatBody
+        activeProjectPath={session.activeProject?.path}
+        choice={props.choice}
+        ctx={ctx}
+        targetLookupFailed={targetLookupFailed}
+        targetMissing={routing.targetMissing}
+        waiting={waitingForTarget}
+      />
+    </ChatSessionProvider>
   );
 }
 
@@ -836,7 +1764,7 @@ function useRemovedRootDisposal(manifest: WorkspaceManifest | null): void {
     const remaining = new Set(manifest.roots.map((entry) => entry.rootRef));
     for (const removed of before.roots) {
       if (remaining.has(removed.rootRef)) continue;
-      disposeEditorModelRegistryRoot(removed.canonicalRoot, "root-disposed", true);
+      disposeEditorModelRegistryRoot(removed.canonicalRoot, true);
     }
   }, [manifest]);
 }
@@ -1005,6 +1933,42 @@ function revealSessionProps(cfg: Record<string, unknown>): EditorRevealSessionPr
   };
 }
 
+function routeEditorSelectionToChat(
+  targetRoot: string | undefined,
+  handoff: EditorSelectionHandoff,
+  ctx: WindowRenderContext,
+): boolean {
+  if (targetRoot === undefined) return false;
+  const selectionHandoffId = registerEditorSelectionHandoff(targetRoot, handoff);
+  if (selectionHandoffId === null) return false;
+  const openFallback = (): string | null => {
+    return ctx.openWindow("chat", {
+      projectPathPrivacy: "omit",
+      selectionHandoffId,
+    });
+  };
+  const abandonHandoff = (): void => {
+    discardEditorSelectionHandoff(selectionHandoffId);
+    reportClientDiagnostic(
+      "[keiko] queued editor selection handoff could not be restored after chat closure",
+    );
+  };
+  if (
+    routeSelectionHandoffToOpenChat(
+      targetRoot,
+      selectionHandoffId,
+      ctx.currentWindowStack?.() ?? [],
+      openFallback,
+      abandonHandoff,
+    ) !== null
+  ) {
+    return true;
+  }
+  if (openFallback() !== null) return true;
+  abandonHandoff();
+  return false;
+}
+
 function editorSessionBaseProps(
   targetRoot: string | undefined,
   cfg: Record<string, unknown>,
@@ -1041,15 +2005,7 @@ function editorSessionBaseProps(
         });
       }
     },
-    onAskSelection: (handoff) => {
-      if (targetRoot === undefined) return false;
-      const selectionHandoffId = registerEditorSelectionHandoff(targetRoot, handoff);
-      if (selectionHandoffId === null) return false;
-      const chatWindowId = ctx.openWindow("chat", { selectionHandoffId });
-      if (chatWindowId !== null) return true;
-      discardEditorSelectionHandoff(selectionHandoffId);
-      return false;
-    },
+    onAskSelection: (handoff) => routeEditorSelectionToChat(targetRoot, handoff, ctx),
   };
 }
 
@@ -1130,7 +2086,7 @@ export function FilesWindowSessionHost({
       <FilesWidget
         {...(root === undefined ? {} : { root })}
         onActiveFileChange={onActiveFileChange}
-        onRootChange={root === undefined ? onRootChange : undefined}
+        {...(root === undefined ? { onRootChange } : {})}
         onOpenFile={(fileRoot: string, path: string) =>
           ctx.openWindow("editor", { root: fileRoot, file: path, openFiles: [path] })
         }

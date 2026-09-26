@@ -1,10 +1,10 @@
-import {
-  DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
-  type HtmlManualCrawlScope,
-  type HtmlManualSource,
-  type KnowledgeCapsuleId,
-  type KnowledgeSourceId,
+import type {
+  HtmlManualCrawlScope,
+  HtmlManualSource,
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_EMBEDDING, freshStore } from "../_support.js";
 import { createDefaultParserRegistry } from "../parsers/index.js";

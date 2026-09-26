@@ -1,12 +1,12 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  WORKSPACE_TRUST_SCHEMA_VERSION,
-  type WorkspaceManifest,
-  type WorkspaceRootDescriptor,
-  type WorkspaceRootRef,
+import type {
+  WorkspaceManifest,
+  WorkspaceRootDescriptor,
+  WorkspaceRootRef,
 } from "@oscharko-dev/keiko-contracts";
+import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import { I18nProvider } from "@/lib/i18n";
 import { fetchFilesTree, fetchGitStatus, fetchProjects } from "../../../../../lib/api";
 import type { WorkspaceManifestView } from "../../hooks/useWorkspaceManifest";
@@ -51,7 +51,6 @@ const entryBase = {
   sizeBytes: 1,
   modifiedAt: 1,
   extension: null,
-  symlink: false,
   readable: true,
 } as const;
 
@@ -142,7 +141,14 @@ beforeEach(() => {
     entries:
       treeRoot === POPULATED_ROOT && path === ""
         ? [
-            { ...entryBase, name: "src", path: "src", kind: "directory", sizeBytes: 0 },
+            {
+              ...entryBase,
+              name: "src",
+              path: "src",
+              kind: "directory",
+              sizeBytes: undefined,
+              modifiedAt: undefined,
+            },
             { ...entryBase, name: "app.ts", path: "app.ts", kind: "file", extension: "ts" },
           ]
         : [],

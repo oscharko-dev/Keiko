@@ -13,8 +13,10 @@ import {
 import {
   ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS,
   ATLASSIAN_SYNC_RETRY_MAX_DELAY_MS,
+  retryDelayMs,
 } from "./atlassian-sync-lane.js";
 import {
+  ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS,
   executeAtlassianWriteRequest,
   type AtlassianWriteHttpRequest,
 } from "./atlassian-write-http.js";
@@ -207,5 +209,88 @@ describe("executeAtlassianWriteRequest — D3 retry discipline", () => {
     const { port, requests } = scriptedPort([response(204, "")]);
     await executeAtlassianWriteRequest({ http: port }, request());
     expect(requests[0]).toMatchObject({ timeoutMs: 30_000, maxBodyBytes: 262_144, method: "PUT" });
+  });
+
+  // KEIKO-0318: `deps.signal` was accepted and checked between retry attempts, but never
+  // forwarded into the transport call itself, so aborting mid-request never cancelled the
+  // in-flight request — the caller stayed blocked for up to the full per-request timeout. Every
+  // port call (initial attempt and every retry) must carry the EXACT AbortSignal instance passed
+  // in, so the adapter can compose it with its own timeout and tear the request down immediately.
+  it("forwards the write action's AbortSignal into every port call, including retries (KEIKO-0318)", async () => {
+    const controller = new AbortController();
+    const delays: number[] = [];
+    const { port, requests } = scriptedPort([response(503), response(204, "")]);
+    const outcome = await executeAtlassianWriteRequest(
+      { http: port, sleep: recordedSleep(delays), signal: controller.signal },
+      request(),
+    );
+    expect(outcome).toEqual({ ok: true, status: 204, body: undefined });
+    expect(requests).toHaveLength(2);
+    for (const issued of requests) {
+      expect(issued.signal).toBe(controller.signal);
+    }
+  });
+
+  // KEIKO-0318: the retry loop must respect an aggregate deadline across attempts. Without it a
+  // hostile upstream that hangs at the per-request timeout ceiling for every attempt holds the
+  // governed write action for minutes. With an injected clock and injected sleep that advances
+  // it, once the clock crosses the aggregate deadline the executor stops issuing further
+  // requests.
+  it("stops retrying once the aggregate deadline is crossed (KEIKO-0318)", async () => {
+    const START = 1_000_000;
+    let clock = START;
+    const advancingSleep = (ms: number): Promise<void> => {
+      clock += ms;
+      return Promise.resolve();
+    };
+    // Simulate the worst-case hostile server: every request hangs for the full per-request
+    // timeout, then answers with a 429 carrying an 8s Retry-After. The port ADVANCES the clock
+    // by the actual timeoutMs it was given, matching real-world timeout behaviour.
+    const requestCount = { n: 0 };
+    const port: AtlassianHttpBodyPort = (req) => {
+      requestCount.n += 1;
+      clock += req.timeoutMs;
+      return Promise.resolve({
+        kind: "response",
+        status: 429,
+        bodyText: "",
+        bodyBytes: 0,
+        truncated: false,
+        retryAfterMs: 8_000,
+      });
+    };
+    const outcome = await executeAtlassianWriteRequest(
+      { http: port, sleep: advancingSleep, now: () => clock },
+      request(),
+    );
+    expect(outcome).toEqual({ ok: false, reason: "rate-limited", httpStatus: 429 });
+    // The executor must have stopped before the D3 max-attempt count. 5 attempts at 30s + 4×8s
+    // = 182 s, which is EXACTLY the aggregate deadline — so with any hostile behaviour that
+    // pads the per-request time, fewer than 5 attempts must run before the deadline binds.
+    expect(requestCount.n).toBeLessThan(ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS);
+    // Total wall-time consumed must not exceed the aggregate ceiling by more than one in-flight
+    // request's worth (which is the pre-attempt timeout clamp's floor).
+    expect(clock - START).toBeLessThanOrEqual(
+      ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS + ATLASSIAN_SYNC_RETRY_MAX_DELAY_MS,
+    );
+  });
+
+  // KEIKO-0247: the D3 backoff formula lives in ONE canonical helper (retryDelayMs, exported from
+  // atlassian-sync-lane). This lane's observed sleep delays must equal that helper's outputs so a
+  // divergent local copy cannot re-appear silently.
+  it("delegates to the canonical retryDelayMs — no local copy of the D3 formula", async () => {
+    const delays: number[] = [];
+    const { port } = scriptedPort([
+      response(500),
+      response(500),
+      response(500),
+      response(500),
+      response(204, ""),
+    ]);
+    await executeAtlassianWriteRequest({ http: port, sleep: recordedSleep(delays) }, request());
+    const expected = Array.from({ length: ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS - 1 }, (_, index) =>
+      retryDelayMs(index + 1, undefined),
+    );
+    expect(delays).toEqual(expected);
   });
 });

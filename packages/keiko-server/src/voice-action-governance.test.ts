@@ -6,14 +6,14 @@ import { Readable } from "node:stream";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  VOICE_TRANSCRIPT_SCHEMA_VERSION,
-  canonicalizeSpokenActionConfirmation,
-  type CommittedVoiceTranscriptProjection,
-  type SpokenActionConfirmationInput,
-  type VoiceProfile,
-  type VoiceTranscriptSource,
+import type {
+  CommittedVoiceTranscriptProjection,
+  SpokenActionConfirmationInput,
+  VoiceProfile,
+  VoiceTranscriptSource,
 } from "@oscharko-dev/keiko-contracts";
+import { VOICE_TRANSCRIPT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/voice-transcript";
+import { canonicalizeSpokenActionConfirmation } from "@oscharko-dev/keiko-contracts/runtime/voice-action-intent";
 import {
   DEFAULT_PATCH_SCOPE_LIMITS,
   WORKFLOW_HANDOFF_SCHEMA_VERSION,
@@ -402,6 +402,7 @@ const ROUTE_APP_SESSION_COOKIE = `${APP_SESSION_COOKIE_NAME}=${ROUTE_APP_SESSION
 
 function routeCtx(body: string, cookie: string | null = ROUTE_APP_SESSION_COOKIE): RouteContext {
   return {
+    correlationId: undefined,
     req: fakeReq(body, cookie ?? undefined),
     res: fakeRes(),
     params: {},
@@ -469,15 +470,20 @@ const ROUTE_APP_SESSION: AppSession = {
 function pairedRouteAppSessionChannel(): CodingAppSessionChannel {
   return {
     pair: () => ({ paired: false }),
+    ensureLocalSession: (cookieToken) =>
+      cookieToken === ROUTE_APP_SESSION_COOKIE_TOKEN
+        ? { status: "active" }
+        : { status: "issued", cookieToken: ROUTE_APP_SESSION_COOKIE_TOKEN },
     snapshot: () => contentFreeCodingAppSessionChannelSnapshot(),
     rotate: () => ({ rotated: false }),
-    signOut: () => undefined,
+    signOut: () => false,
     sessionCount: () => 1,
     verifySession: (cookieToken) =>
       cookieToken === ROUTE_APP_SESSION_COOKIE_TOKEN ? ROUTE_APP_SESSION : undefined,
     subscribe: () => ({
       snapshot: contentFreeCodingAppSessionChannelSnapshot(),
       live: false,
+      stop: () => undefined,
       detach: () => undefined,
     }),
   };
@@ -578,6 +584,9 @@ describe("handleCreateRun — voiceOrigin wiring (Issue #503)", () => {
     // The deployment has no voice provider configured, so the server-trusted profile is `none`
     // regardless of the client's claimed `speech-to-text` profile and valid-looking digest. AC1 must be
     // enforced against deployment reality, not the untrusted client claim.
+    // This is the client-trust pin for KEIKO-0685: `governedHandoffVoiceOrigin.profile` is
+    // wire-shape-only (run-request.ts) and must never be substituted for `serverTrustedVoiceProfile`
+    // in `applyVoiceGovernance` (run-handlers.ts) — doing so would turn this 403 into a 202.
     const result = await handleCreateRun(
       routeCtx(
         routeHandoffBody({
@@ -602,6 +611,9 @@ describe("handleCreateRun — voiceOrigin wiring (Issue #503)", () => {
   it("denies a voice-capable deployment with KEIKO_VOICE_DISABLED set (AC1)", async () => {
     // Even with a configured voice provider, the policy kill-switch forces the server-trusted profile to
     // `none`, so the spoken action is rejected before any client claim is trusted.
+    // Also a client-trust pin for KEIKO-0685: the client claims "speech-to-text" while the
+    // server-trusted profile is forced to "none" — this 403 would flip to 202 if
+    // `applyVoiceGovernance` ever governed against the client-claimed profile instead.
     const disabledDeps: UiHandlerDeps = {
       ...depsWithConfig(VOICE_CAPABLE_CONFIG),
       env: { KEIKO_VOICE_DISABLED: "1" },

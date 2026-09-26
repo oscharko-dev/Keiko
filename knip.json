@@ -1,32 +1,22 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
   "ignoreDependencies": [
-    "@oscharko-dev/keiko-dev-sandbox",
-    "@stryker-mutator/vitest-runner",
     "axe-core",
-    "@oscharko-dev/keiko-git",
     "@oscharko-dev/keiko-memory-consolidation",
     "@oscharko-dev/keiko-quality-intelligence",
     "@oscharko-dev/keiko-sandbox",
-    "ws"
+    "@oscharko-dev/keiko-tool-catalog",
+    "ws",
+    "@oscharko-dev/keiko-coding-runtime-darwin-arm64",
+    "@oscharko-dev/keiko-coding-runtime-darwin-x64"
   ],
-  "ignoreBinaries": [
-    "pwsh",
-    "mkfifo",
-    "ldd",
-    "sqlite3",
-    "python3",
-    "ps",
-    "lsof",
-    "/usr/bin/codesign"
-  ],
+  "ignoreBinaries": ["pwsh", "mkfifo", "ldd", "sqlite3", "pgrep", "ssh-keygen"],
   "workspaces": {
     ".": {
       "playwright": false,
       "entry": [
         "src/**/*.ts!",
         "scripts/*.mjs!",
-        "dist/cli/index.js!",
         "tests/e2e/**/*.spec.ts!",
         "tests/e2e/**/*.mts!",
         "tests/e2e/config/**/*.ts!",
@@ -39,14 +29,11 @@
         "tests/fixtures/**",
         "tests/e2e/fixtures/**",
         "packages/keiko-ui/public/**",
-        "docs/design-system/evidence/**",
-        "design-system/**",
-        "sandbox/**",
         "native/runtime-supervisor/**"
       ]
     },
     "packages/*": {
-      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
+      "entry": ["src/*.ts!", "src/**/index.ts!"]
     },
     "packages/keiko-server": {
       "entry": [
@@ -55,6 +42,42 @@
         "src/**/index.ts!",
         "src/**/testing/fake-lsp-server.mjs!"
       ]
+    },
+    "packages/keiko-contracts": {
+      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
+    },
+    "packages/keiko-editor": {
+      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
+    },
+    "packages/keiko-evaluations": {
+      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
+    },
+    "packages/keiko-evidence": {
+      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
+    },
+    "packages/keiko-harness": {
+      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
+    },
+    "packages/keiko-local-knowledge": {
+      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
+    },
+    "packages/keiko-model-gateway": {
+      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
+    },
+    "packages/keiko-quality-intelligence": {
+      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
+    },
+    "packages/keiko-security": {
+      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
+    },
+    "packages/keiko-tools": {
+      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
+    },
+    "packages/keiko-ui": {
+      "entry": ["src/*/*.ts!", "src/**/index.ts!"]
+    },
+    "packages/keiko-workflows": {
+      "entry": ["src/*.ts!", "src/*/*.ts!", "src/**/index.ts!"]
     }
   }
 }

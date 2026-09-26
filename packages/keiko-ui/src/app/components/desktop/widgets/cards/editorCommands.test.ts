@@ -1,9 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  EDITOR_VERIFICATION_SCHEMA_VERSION,
-  WORKSPACE_TRUST_SCHEMA_VERSION,
-  type WorkspaceTrustStatus,
-} from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceTrustStatus } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_VERIFICATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
+import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import {
   EDITOR_PALETTE_COMMANDS,
   availablePaletteCommands,

@@ -1,9 +1,9 @@
 .editorSurface :global(.keiko-conflict-region-0) {
-  background: color-mix(in oklch, var(--success) 12%, transparent);
+  background: color-mix(in oklch, var(--ok) 12%, transparent);
 }
 
 .editorSurface :global(.keiko-conflict-region-1) {
-  background: color-mix(in oklch, var(--text-muted) 12%, transparent);
+  background: color-mix(in oklch, var(--text-secondary) 12%, transparent);
 }
 
 .editorSurface :global(.keiko-conflict-region-2) {
@@ -11,11 +11,11 @@
 }
 
 .editorSurface :global(.keiko-conflict-mark-0) {
-  border-left: 3px solid var(--success);
+  border-left: 3px solid var(--ok);
 }
 
 .editorSurface :global(.keiko-conflict-mark-1) {
-  border-left: 3px dotted var(--text-muted);
+  border-left: 3px dotted var(--text-secondary);
 }
 
 .editorSurface :global(.keiko-conflict-mark-2) {

@@ -4,6 +4,7 @@
 
 import { EDITOR_AGENT_TARGET_PATH_MAX_BYTES, isContainedAgentPath } from "./editor-agent-path.js";
 import type { ManagedLspLanguage } from "./managed-lsp-activation.js";
+import { parseSafely } from "./managed-lsp-parse-safely.js";
 
 export const MANAGED_LSP_RUNTIME_SCHEMA_VERSION = "1" as const;
 export const MANAGED_LSP_RUNTIME_ID_MAX_CHARS = 128;
@@ -643,16 +644,7 @@ function parseRuntimeConfigurationUnsafe(value: unknown): ManagedLspRuntimeParse
 }
 
 export function parseManagedLspRuntimeConfiguration(value: unknown): ManagedLspRuntimeParseResult {
-  try {
-    return parseRuntimeConfigurationUnsafe(value);
-  } catch (error: unknown) {
-    return {
-      ok: false,
-      errors: [
-        `payload could not be inspected: ${error instanceof Error ? error.name : "unknown"}`,
-      ],
-    };
-  }
+  return parseSafely(() => parseRuntimeConfigurationUnsafe(value));
 }
 
 export function matchesManagedLspConfigurationPrecondition(

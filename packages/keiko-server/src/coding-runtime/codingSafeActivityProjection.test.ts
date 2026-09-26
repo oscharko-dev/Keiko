@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { validateRegisteredActivityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import { createBufferedServerLogSink } from "../observability/server-log.js";
 import {
   createCodingSafeActivityProjection,
   type CodingSafeActivityContent,
@@ -107,6 +113,264 @@ describe("bounded coding safe-activity projection", () => {
     expect(JSON.stringify(projection.currentContent())).not.toMatch(
       /arguments|result|output|path/u,
     );
+  });
+
+  it("accepts running-to-failed as a monotonic tool transition and settles idempotently on a repeat (#3390)", () => {
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      diagnostics: { record: (): void => undefined },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    projection.ingest(RUN_ID, message("msg_assistant", "assistant", "msg_user"));
+    const running: CodingSafeActivitySignal = {
+      kind: "tool",
+      messageId: "msg_assistant",
+      callId: "call_1",
+      tool: "keiko_workspace_discover",
+      state: "running",
+      occurredAt: "2026-07-18T17:00:00.002Z",
+    };
+    const failed: CodingSafeActivitySignal = {
+      kind: "tool",
+      messageId: "msg_assistant",
+      callId: "call_1",
+      state: "failed",
+      occurredAt: "2026-07-18T17:00:00.003Z",
+    };
+    // Same failed state observed a second time (e.g. the part-level projection and a later
+    // facade settlement both resolving to "failed") is idempotent, never a duplicate tool entry.
+    const repeatedFailed: CodingSafeActivitySignal = {
+      ...failed,
+      occurredAt: "2026-07-18T17:00:00.004Z",
+    };
+
+    expect(projection.ingest(RUN_ID, running)).toBe(true);
+    expect(projection.ingest(RUN_ID, failed)).toBe(true);
+    expect(projection.ingest(RUN_ID, repeatedFailed)).toBe(true);
+
+    const content = projection.currentContent();
+    expect(content).toMatchObject({
+      kind: "safe-activity",
+      feed: {
+        turns: [
+          {
+            tools: [
+              {
+                callId: "call_1",
+                tool: "keiko_workspace_discover",
+                state: "failed",
+                occurredAt: "2026-07-18T17:00:00.004Z",
+              },
+            ],
+          },
+        ],
+      },
+    });
+    const feed =
+      content?.kind === "safe-activity" && content.feed.availability === "available"
+        ? content.feed
+        : undefined;
+    expect(feed?.turns.flatMap((turn) => turn.tools)).toHaveLength(1);
+    // Body-free: no upstream error text ever reaches the projected feed.
+    expect(JSON.stringify(content)).not.toMatch(/typo|url or port/u);
+  });
+
+  // #3612: Keiko settles a refused governed ask with the human's verdict. OpenCode then reports the
+  // refused call as a generic failure; that report keeps the verdict and counts as no omitted update.
+  it.each(["denied", "cancelled"] as const)(
+    "keeps a %s verdict when OpenCode later reports the call failed, without an omitted update",
+    (verdict) => {
+      const projection = createCodingSafeActivityProjection({
+        now: () => 1_721_323_200_000,
+        diagnostics: { record: (): void => undefined },
+      });
+      projection.open({
+        runId: RUN_ID,
+        workspaceId: WORKSPACE_ID,
+        authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+        workspaceIsCurrent: () => true,
+      });
+      projection.ingest(RUN_ID, message("msg_user", "user"));
+      projection.ingest(RUN_ID, message("msg_assistant", "assistant", "msg_user"));
+      const signals: readonly CodingSafeActivitySignal[] = [
+        {
+          kind: "tool",
+          messageId: "msg_assistant",
+          callId: "call_1",
+          tool: "keiko_changeset_edit",
+          state: "running",
+          occurredAt: "2026-07-18T17:00:00.002Z",
+        },
+        // Keiko's own settlement carries no message id; it locates the call by id.
+        { kind: "tool", callId: "call_1", state: verdict, occurredAt: "2026-07-18T17:00:00.003Z" },
+        {
+          kind: "tool",
+          messageId: "msg_assistant",
+          callId: "call_1",
+          state: "failed",
+          occurredAt: "2026-07-18T17:00:00.004Z",
+        },
+      ];
+      for (const signal of signals) expect(projection.ingest(RUN_ID, signal)).toBe(true);
+
+      expect(projection.currentContent()).toMatchObject({
+        feed: {
+          droppedEventCount: 0,
+          turns: [
+            {
+              tools: [
+                {
+                  callId: "call_1",
+                  tool: "keiko_changeset_edit",
+                  state: verdict,
+                  occurredAt: "2026-07-18T17:00:00.003Z",
+                },
+              ],
+            },
+          ],
+        },
+      });
+    },
+  );
+
+  // A lab run of 1.1.8: Keiko settled a 10 ms read before OpenCode's earlier running update arrived
+  // over the event stream, and the late update was refused and counted as an omitted update, with an
+  // error-level diagnostic, after every fast tool call.
+  it.each([
+    ["succeeded", "pending"],
+    ["succeeded", "running"],
+    ["failed", "running"],
+    ["denied", "running"],
+    ["cancelled", "pending"],
+  ] as const)(
+    "keeps a settled %s call when OpenCode's earlier %s update arrives late",
+    (settled, late) => {
+      const activityLog = createBufferedServerLogSink();
+      const projection = createCodingSafeActivityProjection({
+        now: () => 1_721_323_200_000,
+        diagnostics: { record: (): void => undefined },
+        activityLog,
+      });
+      projection.open({
+        runId: RUN_ID,
+        workspaceId: WORKSPACE_ID,
+        authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+        workspaceIsCurrent: () => true,
+      });
+      projection.ingest(RUN_ID, message("msg_user", "user"));
+      projection.ingest(RUN_ID, message("msg_assistant", "assistant", "msg_user"));
+      const signals: readonly CodingSafeActivitySignal[] = [
+        {
+          kind: "tool",
+          messageId: "msg_assistant",
+          callId: "call_fast",
+          tool: "keiko_workspace_read",
+          state: "pending",
+          occurredAt: "2026-07-18T17:00:00.002Z",
+        },
+        {
+          kind: "tool",
+          callId: "call_fast",
+          state: settled,
+          occurredAt: "2026-07-18T17:00:00.003Z",
+        },
+        {
+          kind: "tool",
+          messageId: "msg_assistant",
+          callId: "call_fast",
+          state: late,
+          occurredAt: "2026-07-18T17:00:00.004Z",
+        },
+      ];
+      const [created, settle, lateUpdate] = signals;
+      if (created === undefined || settle === undefined || lateUpdate === undefined)
+        throw new Error("expected three tool signals");
+      expect(projection.ingest(RUN_ID, created)).toBe(true);
+      expect(projection.ingest(RUN_ID, settle)).toBe(true);
+      const beforeLate = projection.currentContent();
+      const notified = vi.fn();
+      projection.subscribeContent(notified);
+      expect(projection.ingest(RUN_ID, lateUpdate)).toBe(true);
+      // PR #3617 review: the late update changes neither the feed nor its timestamp, and notifies
+      // no one.
+      expect(projection.currentContent()).toEqual(beforeLate);
+      expect(notified).not.toHaveBeenCalled();
+      expect(projection.currentContent()).toMatchObject({
+        feed: {
+          droppedEventCount: 0,
+          updatedAt: "2026-07-18T17:00:00.003Z",
+          turns: [{ tools: [{ callId: "call_fast", state: settled }] }],
+        },
+      });
+      // PR #3617 review: the late update is set aside, not silently discarded, and its line names
+      // the call, as a digest, and both states.
+      const superseded = activityLog.events.filter(
+        (event) => event.op === "coding-runtime.safe-activity",
+      );
+      expect(superseded).toEqual([
+        expect.objectContaining({
+          correlationId: RUN_ID,
+          extra: expect.objectContaining({
+            event: "superseded",
+            reason: "late-restatement",
+            occurrenceCount: 1,
+            callIdSha256: expect.stringMatching(/^[a-f0-9]{64}$/u) as unknown,
+            settledState: settled,
+            restatedState: late,
+          }) as unknown,
+        }),
+      ]);
+      const [supersededLine] = superseded;
+      if (supersededLine === undefined) throw new Error("expected one superseded line");
+      expect(supersededLine.level).toBeUndefined();
+      expect(validateRegisteredActivityLogEvent(supersededLine)).toMatchObject({
+        op: "coding-runtime.safe-activity",
+      });
+    },
+  );
+
+  it("still refuses to reopen a failed or succeeded call", () => {
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      diagnostics: { record: (): void => undefined },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    projection.ingest(RUN_ID, message("msg_assistant", "assistant", "msg_user"));
+    projection.ingest(RUN_ID, {
+      kind: "tool",
+      messageId: "msg_assistant",
+      callId: "call_1",
+      tool: "keiko_workspace_read",
+      state: "succeeded",
+      occurredAt: "2026-07-18T17:00:00.002Z",
+    });
+    // Only a Keiko verdict absorbs a later generic failure; a success does not turn into one.
+    expect(
+      projection.ingest(RUN_ID, {
+        kind: "tool",
+        callId: "call_1",
+        state: "failed",
+        occurredAt: "2026-07-18T17:00:00.003Z",
+      }),
+    ).toBe(false);
+    expect(projection.currentContent()).toMatchObject({
+      feed: {
+        droppedEventCount: 1,
+        turns: [{ tools: [{ callId: "call_1", state: "succeeded" }] }],
+      },
+    });
   });
 
   it("marks over-limit text and evicted turns explicitly instead of silently clipping", () => {
@@ -444,11 +708,11 @@ describe("bounded coding safe-activity projection", () => {
     projection.ingest(RUN_ID, message("msg_user", "user"));
     projection.ingest(RUN_ID, message("msg_assistant", "assistant", "msg_user"));
     expect(projection.ingest(RUN_ID, message("msg_extra", "assistant", "msg_user"))).toBe(true);
-    projection.ingest(RUN_ID, text("msg_assistant", "first"));
-    expect(projection.ingest(RUN_ID, text("msg_assistant", "second"))).toBe(true);
+    projection.ingest(RUN_ID, text("msg_extra", "first"));
+    expect(projection.ingest(RUN_ID, text("msg_extra", "second"))).toBe(true);
     projection.ingest(RUN_ID, {
       kind: "tool",
-      messageId: "msg_assistant",
+      messageId: "msg_extra",
       callId: "call_1",
       tool: "keiko_workspace_read",
       state: "pending",
@@ -457,7 +721,7 @@ describe("bounded coding safe-activity projection", () => {
     expect(
       projection.ingest(RUN_ID, {
         kind: "tool",
-        messageId: "msg_assistant",
+        messageId: "msg_extra",
         callId: "call_2",
         tool: "keiko_workspace_read",
         state: "pending",
@@ -470,15 +734,257 @@ describe("bounded coding safe-activity projection", () => {
 
     expect(projection.currentContent()).toMatchObject({
       feed: {
-        droppedEventCount: 1,
+        droppedEventCount: 2,
         turns: [
           {
-            messages: [{}, { segments: [{ text: "first" }], truncated: true }],
+            messages: [
+              {},
+              { messageId: "msg_extra", segments: [{ text: "first" }], truncated: true },
+            ],
             tools: [{ callId: "call_1" }],
             truncated: true,
           },
         ],
       },
+    });
+  });
+
+  it("retains the user anchor and newest assistant while older in-flight tools settle", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const activityLog = createBufferedServerLogSink();
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      limits: { maxMessagesPerTurn: 3 },
+      diagnostics: { record: (record) => void records.push(record) },
+      activityLog,
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    projection.ingest(RUN_ID, message("msg_old", "assistant", "msg_user"));
+    projection.ingest(RUN_ID, text("msg_old", "Old progress."));
+    projection.ingest(RUN_ID, {
+      kind: "tool",
+      messageId: "msg_old",
+      callId: "call_old",
+      tool: "keiko_git_push",
+      state: "running",
+      occurredAt: "2026-07-18T17:00:00.002Z",
+    });
+    projection.ingest(RUN_ID, message("msg_middle", "assistant", "msg_user"));
+
+    expect(projection.ingest(RUN_ID, message("msg_new", "assistant", "msg_user"))).toBe(true);
+    expect(projection.currentContent()?.feed.droppedEventCount).toBe(1);
+    expect(activityLog.events).toContainEqual({
+      category: "process",
+      op: "coding-runtime.safe-activity",
+      correlationId: RUN_ID,
+      extra: {
+        completeness: "complete",
+        event: "dropped",
+        loss: "none",
+        reason: "capacity-rejected",
+        occurrenceCount: 1,
+        lossState: "event-dropped",
+      },
+    });
+    expect(
+      validateRegisteredActivityLogEvent(
+        activityLog.events[0] as unknown as Readonly<Record<PropertyKey, unknown>>,
+      ),
+    ).toMatchObject({ op: "coding-runtime.safe-activity" });
+    const [droppedLine] = activityLog.events;
+    if (droppedLine === undefined) throw new Error("expected safe-activity dropped line");
+    expect(
+      expectActivityLogProof(
+        "coding-runtime.safe-activity.emitted-line",
+        formatActivityLogProofLine(droppedLine),
+      ),
+    ).toMatchObject({ event: "dropped", reason: "capacity-rejected" });
+    // F49: designed truncation is recorded by that line alone, never as an error diagnostic.
+    expect(
+      records.filter((record) => record.code === "CODING_SAFE_ACTIVITY_EVENT_DROPPED"),
+    ).toEqual([]);
+    expect(projection.ingest(RUN_ID, text("msg_new", "Newest progress."))).toBe(true);
+    expect(projection.ingest(RUN_ID, text("msg_old", "Late old text."))).toBe(false);
+    expect(
+      projection.ingest(RUN_ID, {
+        kind: "tool",
+        callId: "call_old",
+        state: "succeeded",
+        occurredAt: "2026-07-18T17:00:00.003Z",
+      }),
+    ).toBe(true);
+    expect(
+      projection.ingest(RUN_ID, {
+        kind: "tool",
+        messageId: "msg_new",
+        callId: "call_new",
+        tool: "keiko_pull_request",
+        state: "running",
+        occurredAt: "2026-07-18T17:00:00.004Z",
+      }),
+    ).toBe(true);
+    expect(
+      projection.ingest(RUN_ID, {
+        kind: "tool",
+        callId: "call_unknown",
+        state: "succeeded",
+        occurredAt: "2026-07-18T17:00:00.005Z",
+      }),
+    ).toBe(false);
+
+    expect(projection.currentContent()).toMatchObject({
+      feed: {
+        droppedEventCount: 3,
+        turns: [
+          {
+            messages: [
+              { messageId: "msg_user", role: "user" },
+              { messageId: "msg_middle", role: "assistant" },
+              {
+                messageId: "msg_new",
+                role: "assistant",
+                segments: [{ text: "Newest progress." }],
+              },
+            ],
+            tools: [
+              { callId: "call_old", state: "succeeded" },
+              { callId: "call_new", state: "running" },
+            ],
+            truncated: true,
+          },
+        ],
+      },
+    });
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        code: "CODING_SAFE_ACTIVITY_EVENT_DROPPED",
+        occurrenceCount: 1,
+        correlationId: RUN_ID,
+      }),
+    );
+    // Only the two late signals are faults, counted on their own: the capacity drop before them
+    // neither delays nor inflates the first one (F49).
+    expect(records.map(({ occurrenceCount }) => occurrenceCount)).toEqual([1, 2]);
+    expect(records[0]).toMatchObject({ message: "safe-activity-dropped-projection-rejected" });
+    expect(JSON.stringify(activityLog.events)).not.toMatch(/Old progress|Newest progress/u);
+  });
+
+  // #3610 (W22): a projection-rejected drop named no cause, so the Workbench's "N update(s) omitted"
+  // could not be traced to the signal the projection refused. Every drop line carries its closed
+  // cause now; the signal's content never reaches the log.
+  it.each([
+    [
+      "parent-message-unknown",
+      (projection: ReturnType<typeof createCodingSafeActivityProjection>): boolean =>
+        projection.ingest(RUN_ID, message("msg_orphan", "assistant", "msg_missing")),
+    ],
+    [
+      "message-unknown",
+      (projection: ReturnType<typeof createCodingSafeActivityProjection>): boolean =>
+        projection.ingest(RUN_ID, text("msg_missing", "Private late text.")),
+    ],
+    [
+      "tool-transition-refused",
+      (projection: ReturnType<typeof createCodingSafeActivityProjection>): boolean =>
+        projection.ingest(RUN_ID, {
+          kind: "tool",
+          callId: "call_done",
+          state: "running",
+          occurredAt: "2026-07-18T17:00:00.004Z",
+        }),
+    ],
+    [
+      "tool-name-missing",
+      (projection: ReturnType<typeof createCodingSafeActivityProjection>): boolean =>
+        projection.ingest(RUN_ID, {
+          kind: "tool",
+          messageId: "msg_answer",
+          callId: "call_nameless",
+          state: "running",
+          occurredAt: "2026-07-18T17:00:00.004Z",
+        }),
+    ],
+  ] as const)("names the %s cause on a projection-rejected drop", (rejection, refuse) => {
+    const activityLog = createBufferedServerLogSink();
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      activityLog,
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    projection.ingest(RUN_ID, message("msg_answer", "assistant", "msg_user"));
+    projection.ingest(RUN_ID, {
+      kind: "tool",
+      messageId: "msg_answer",
+      callId: "call_done",
+      tool: "keiko_workspace_read",
+      state: "succeeded",
+      occurredAt: "2026-07-18T17:00:00.003Z",
+    });
+
+    expect(refuse(projection)).toBe(false);
+
+    const dropped = activityLog.events.filter(
+      (event) => event.op === "coding-runtime.safe-activity" && event.extra?.event === "dropped",
+    );
+    expect(dropped).toEqual([
+      expect.objectContaining({
+        correlationId: RUN_ID,
+        extra: expect.objectContaining({
+          reason: "projection-rejected",
+          rejection,
+          occurrenceCount: 1,
+        }) as unknown,
+      }),
+    ]);
+    const [droppedLine] = dropped;
+    if (droppedLine === undefined) throw new Error("expected one projection-rejected drop line");
+    expect(validateRegisteredActivityLogEvent(droppedLine)).toMatchObject({
+      op: "coding-runtime.safe-activity",
+    });
+    expect(JSON.stringify(activityLog.events)).not.toContain("Private late text");
+  });
+
+  it("reports the first fault drop at once however many capacity drops preceded it", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      limits: { maxMessagesPerTurn: 3 },
+      diagnostics: { record: (record) => void records.push(record) },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    for (let index = 0; index < 8; index += 1) {
+      projection.ingest(RUN_ID, message(`msg_${String(index)}`, "assistant", "msg_user"));
+    }
+    expect(projection.currentContent()?.feed.droppedEventCount).toBe(6);
+    expect(records).toEqual([]);
+
+    expect(projection.ingest(RUN_ID, text("msg_0", "Late text."))).toBe(false);
+
+    expect(projection.currentContent()?.feed.droppedEventCount).toBe(7);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      code: "CODING_SAFE_ACTIVITY_EVENT_DROPPED",
+      message: "safe-activity-dropped-projection-rejected",
+      occurrenceCount: 1,
+      correlationId: RUN_ID,
     });
   });
 
@@ -591,29 +1097,61 @@ describe("bounded coding safe-activity projection", () => {
     expect(priorWorkspaceListener).toHaveBeenCalledOnce();
   });
 
-  it("records a content-free diagnostic for explicit purge reasons", () => {
-    const records: ServerDiagnosticRecord[] = [];
-    const projection = createCodingSafeActivityProjection({
-      now: () => 1_721_323_200_000,
-      diagnostics: { record: (record) => void records.push(record) },
-    });
-    projection.open({
-      runId: RUN_ID,
-      workspaceId: WORKSPACE_ID,
-      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
-      workspaceIsCurrent: () => true,
-    });
+  it.each(["stop", "takeover", "shutdown", "workspace-switch"] as const)(
+    "records a routine %s purge as a purged line, never as a failure diagnostic",
+    (reason) => {
+      // A routine purge clears an in-memory UI projection and loses nothing. Reported as an
+      // error-level server.diagnostic.failure, every server shutdown opened a false support
+      // incident. The one fault reason keeps its content-free diagnostic, pinned in
+      // codingSafeActivityProjection.invariantPurge.test.ts.
+      const records: ServerDiagnosticRecord[] = [];
+      const activityLog = createBufferedServerLogSink();
+      const projection = createCodingSafeActivityProjection({
+        now: () => 1_721_323_200_000,
+        diagnostics: { record: (record) => void records.push(record) },
+        activityLog,
+      });
+      projection.open({
+        runId: RUN_ID,
+        workspaceId: WORKSPACE_ID,
+        authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+        workspaceIsCurrent: () => true,
+      });
 
-    projection.purge(RUN_ID, "takeover");
+      projection.purge(RUN_ID, reason);
 
-    expect(records).toContainEqual(
+      expect(records).toEqual([]);
+      expect(activityLog.events).toEqual([
+        {
+          category: "process",
+          op: "coding-runtime.safe-activity",
+          correlationId: RUN_ID,
+          extra: { completeness: "complete", event: "purged", loss: "none", reason },
+        },
+      ]);
+      expect(
+        validateRegisteredActivityLogEvent(
+          activityLog.events[0] as unknown as Readonly<Record<PropertyKey, unknown>>,
+        ),
+      ).toMatchObject({ op: "coding-runtime.safe-activity" });
+    },
+  );
+
+  it("carries the shutdown's correlation id when no run is left to tie the purge to", () => {
+    const activityLog = createBufferedServerLogSink();
+    const projection = createCodingSafeActivityProjection({ activityLog });
+    // A UI subscription opened while no run was active keeps the purge retained without a run id.
+    projection.subscribeContent(() => undefined);
+
+    projection.purgeAll("shutdown", "shutdown-correlation-0001");
+
+    expect(activityLog.events).toEqual([
       expect.objectContaining({
-        code: "CODING_SAFE_ACTIVITY_PURGED",
-        errorClass: "SafeActivityProjectionPurge",
+        op: "coding-runtime.safe-activity",
+        correlationId: "shutdown-correlation-0001",
+        extra: expect.objectContaining({ event: "purged", reason: "shutdown" }) as unknown,
       }),
-    );
-    expect(JSON.stringify(records)).toContain("takeover");
-    expect(JSON.stringify(records)).not.toContain(RUN_ID);
+    ]);
   });
 
   it("replaces the plan snapshot with monotonic revisions and purges it with the feed", () => {

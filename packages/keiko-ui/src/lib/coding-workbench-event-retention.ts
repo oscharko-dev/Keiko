@@ -10,6 +10,7 @@ import {
   parseCodingWorkbenchRuntimeEvent,
 } from "./coding-workbench-runtime-api";
 import { reserveInteractiveBrowserStreamCapacity } from "./browser-stream-capacity";
+import { reportClientDiagnostic, sseStreamErrorDiagnostic } from "./client-diagnostics";
 
 export const CODING_WORKBENCH_EVENT_RETENTION_LIMIT = 500;
 export const CODING_WORKBENCH_OBSERVATION_BATCH_MS = 100;
@@ -28,7 +29,10 @@ export function isPinnedCodingWorkbenchRuntimeEvent(
 ): boolean {
   if (event.state === "awaiting-approval" || event.state === "recovery-required") return true;
   if (TERMINAL_STATES.has(event.state)) return true;
-  return event.kind === "runtime-event" && event.eventKind === "permission-requested";
+  return (
+    event.kind === "runtime-event" &&
+    (event.eventKind === "permission-requested" || event.eventKind === "failure-redacted")
+  );
 }
 
 function uniqueByCursor(
@@ -124,6 +128,9 @@ class RuntimeEventStreamSession implements CodingWorkbenchRuntimeStreamSession {
     };
     source.onerror = (): void => {
       if (this.source !== source) return;
+      reportClientDiagnostic(
+        sseStreamErrorDiagnostic("coding-workbench-runtime", source.readyState),
+      );
       this.handlers.onError(new Error("The runtime event stream is reconnecting."));
     };
     const receive: EventListener = (event) => {

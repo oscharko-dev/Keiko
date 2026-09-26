@@ -243,7 +243,9 @@ for (const mode of MODES) {
 
   // Compare rendered rows against documented matrix.
   const modeDiffs = [];
+  const renderedNames = new Set();
   for (const { name, bits } of renderedRows) {
+    renderedNames.add(name);
     const docBits = docMap.get(name);
     if (docBits === undefined) {
       modeDiffs.push({
@@ -267,6 +269,20 @@ for (const mode of MODES) {
           });
         }
       }
+    }
+  }
+  // Reverse pass: a component the doc names but the rendered matrix does not is a documented
+  // surface that was dropped from states.html, which the forward loop cannot detect. Emit a diff
+  // for each so the fidelity gate fails instead of silently passing on fewer rows.
+  for (const name of docMap.keys()) {
+    if (!renderedNames.has(name)) {
+      modeDiffs.push({
+        mode: mode.id,
+        component: name,
+        issue: "component in state-matrix.md but not in rendered matrix",
+        rendered: null,
+        documented: docMap.get(name),
+      });
     }
   }
 

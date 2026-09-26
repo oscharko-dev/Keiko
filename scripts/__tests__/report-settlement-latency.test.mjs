@@ -9,12 +9,14 @@ import {
   MERGED_PULL_REQUESTS_QUERY,
   MERGE_ORDER_OVERSAMPLE,
   OUTCOMES,
+  REACTION_SLO_MINUTES,
   collectMergedPullRequests,
   earliestStart,
   executeSettlementCli,
   ghGraphql,
   ghGraphqlWithRetry,
   median,
+  reactionSloStats,
   renderReport,
   requiredChecksFromContributing,
   requiredGreenAt,
@@ -364,7 +366,17 @@ describe("cohort aggregation", () => {
       medianGapMinutes: null,
       medianSettlementMinutes: null,
       maxSettlementMinutes: null,
+      reactionSamples: 0,
+      reactionsWithinSlo: 0,
     });
+  });
+
+  it("counts the 10-minute SLO from the producer, not from a restated formula", () => {
+    const [findingBearing] = summarizeCohorts(reports);
+
+    expect(findingBearing.reactionSamples).toBe(1);
+    expect(findingBearing.reactionsWithinSlo).toBe(0);
+    expect(findingBearing.reactionsBetween10And30).toBe(1);
   });
 
   it("computes a median for both odd and even sample counts", () => {
@@ -380,6 +392,7 @@ describe("cohort aggregation", () => {
     expect(rendered).toContain("| 1 | clean | measured |");
     expect(rendered).toContain("| 2 | finding-bearing | measured |");
     expect(rendered).toContain("median settlement");
+    expect(rendered).toContain("| finding-bearing | 1 | 0/1 |");
   });
 
   it("renders an absent value as a dash in both tables, never as the string null", () => {
@@ -387,6 +400,47 @@ describe("cohort aggregation", () => {
 
     expect(rendered).not.toContain("null");
     expect(rendered).toContain("| finding-bearing | 0 | 0 | - | - | - | - | - |");
+    expect(rendered).toContain("| finding-bearing | 0 | 0/0 | 0 | 0 | 0 | - |");
+  });
+});
+
+describe("reaction SLO buckets", () => {
+  it("treats the SLO bound as inclusive and splits the over-SLO tail by duration", () => {
+    expect(reactionSloStats([])).toEqual({
+      reactionSamples: 0,
+      reactionsWithinSlo: 0,
+      reactionsBetween10And30: 0,
+      reactionsBetween30And60: 0,
+      reactionsOver60: 0,
+    });
+    expect(
+      reactionSloStats([REACTION_SLO_MINUTES, REACTION_SLO_MINUTES + 0.1, 30, 30.1, 60, 60.1]),
+    ).toEqual({
+      reactionSamples: 6,
+      reactionsWithinSlo: 1,
+      reactionsBetween10And30: 2,
+      reactionsBetween30And60: 2,
+      reactionsOver60: 1,
+    });
+    expect(reactionSloStats([Number.NaN, Number.POSITIVE_INFINITY]).reactionSamples).toBe(0);
+    expect(reactionSloStats([REACTION_SLO_MINUTES + 2 / 60]).reactionsWithinSlo).toBe(0);
+  });
+
+  it("renders a 10-minute-and-2-second reaction as over-SLO, not as the integer 10", () => {
+    const minutes = REACTION_SLO_MINUTES + 2 / 60;
+    const report = summarizePullRequest({
+      number: 3362,
+      mergedAt: "2026-08-31T12:20:02Z",
+      heads: [
+        head("2026-08-31T11:50:00Z", "2026-08-31T11:59:00Z"),
+        head("2026-08-31T12:10:02Z", "2026-08-31T12:15:00Z"),
+      ],
+      findings: ["2026-08-31T12:00:00Z"],
+    });
+    expect(report.reactionMinutes).toEqual([minutes]);
+    const rendered = renderReport([report], summarizeCohorts([report]));
+    expect(rendered).toContain("10.03");
+    expect(rendered).not.toMatch(/\| 3362 \|[^|]*\| 10 \|/u);
   });
 });
 
@@ -538,6 +592,41 @@ describe("collection", () => {
     expect(report.outcome).toBe("truncated");
     expect(report.checksGreenToMergedMinutes).toBeNull();
     expect(report.firstGreenToMergedMinutes).toBeNull();
+  });
+
+  it("omits truncated pull requests from cohort reaction SLO aggregates", () => {
+    const truncated = summarizePullRequest({
+      number: 3355,
+      mergedAt: "2026-08-28T12:00:00Z",
+      truncated: true,
+      heads: [
+        head("2026-08-28T10:00:00Z", "2026-08-28T10:10:00Z"),
+        head("2026-08-28T10:20:00Z", "2026-08-28T10:30:00Z"),
+        head("2026-08-28T10:40:00Z", "2026-08-28T10:50:00Z"),
+        head("2026-08-28T11:00:00Z", "2026-08-28T11:10:00Z"),
+        head("2026-08-28T11:20:00Z", "2026-08-28T11:30:00Z"),
+      ],
+      findings: ["2026-08-28T10:05:00Z"],
+    });
+    const measured = summarizePullRequest({
+      number: 1,
+      mergedAt: "2026-08-28T12:00:00Z",
+      heads: [
+        head("2026-08-28T10:00:00Z", "2026-08-28T10:10:00Z"),
+        head("2026-08-28T10:15:00Z", "2026-08-28T11:50:00Z"),
+      ],
+      findings: ["2026-08-28T10:01:00Z"],
+    });
+    expect(truncated.outcome).toBe("truncated");
+    expect(truncated.reactionMinutes.length).toBeGreaterThan(0);
+    const findingBearing = summarizeCohorts([truncated, measured]).find(
+      (cohort) => cohort.cohort === "finding-bearing",
+    );
+    expect(findingBearing?.reactionSamples).toBe(measured.reactionMinutes.length);
+    expect(findingBearing?.reactionSamples).not.toBe(
+      truncated.reactionMinutes.length + measured.reactionMinutes.length,
+    );
+    expect(findingBearing?.medianRepairRounds).toBe(measured.repairRounds);
   });
 
   it("cannot establish greenness from a truncated context list", () => {

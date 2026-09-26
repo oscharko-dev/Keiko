@@ -3,13 +3,16 @@ import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-con
 import { memFs } from "./_memfs.js";
 import {
   buildCodeIntelligenceIndex,
+  buildCodeIntelligenceIndexFromCandidates,
+  controlledBuild,
   lookupCodeIntelligenceAtoms,
   openApiComponentSchemas,
   queryCodeIntelligenceIndex,
   type CodeIntelligenceIndex,
 } from "./codeIntelligence.js";
-import type { WorkspaceFs } from "./fs.js";
+import type { WorkspaceDescriptorUtf8Read, WorkspaceFs, WorkspaceStat } from "./fs.js";
 import { DEFAULT_SEARCH_LIMITS, type SearchScope } from "./repoSearch.js";
+import { gatherCandidates } from "./repoSearchScan.js";
 import type { WorkspaceInfo, WorkspaceLanguage } from "./types.js";
 
 const MEM_ROOT = "/ws";
@@ -29,6 +32,7 @@ function workspace(
 ): WorkspaceInfo {
   return {
     root: MEM_ROOT,
+    selectedRoot: MEM_ROOT,
     name: "code-intelligence-demo",
     version: "1.0.0",
     testFramework: "vitest",
@@ -63,17 +67,37 @@ function sorted<T>(values: readonly T[]): readonly T[] {
 
 // A WorkspaceFs that CAN persist, so a regressed index writer would leave a visible artifact in
 // `files`. The index must stay in process only (issue #2670, AC6).
-function persistentMemFs(files: Record<string, string>): WorkspaceFs {
+interface PersistenceCapableTestFs extends WorkspaceFs {
+  readonly makeDir: () => void;
+  readonly writeFileUtf8: (absolutePath: string, content: string) => void;
+}
+
+function persistentMemFs(files: Record<string, string>): PersistenceCapableTestFs {
   const base = memFs(MEM_ROOT, files);
   const relative = (absolutePath: string): string =>
     absolutePath === MEM_ROOT ? "" : absolutePath.slice(MEM_ROOT.length + 1);
   return {
     ...base,
+    stat: (absolutePath): ReturnType<WorkspaceFs["stat"]> => {
+      const stat = base.stat(absolutePath);
+      return stat.isFile ? { ...stat, hardLinkCount: 1, mtimeMs: 1, ctimeMs: 1 } : stat;
+    },
     makeDir: () => undefined,
     writeFileUtf8: (absolutePath: string, content: string): void => {
       files[relative(absolutePath)] = content;
     },
   };
+}
+
+// A same-descriptor read for fixtures that fabricate a `stat` identity disconnected from the
+// underlying memFs content (e.g. a synthetic fileIdentity/timestamp for cache-key tests). memFs's
+// own readFileUtf8SameDescriptor would reject that mismatch as "changed", so these fixtures build
+// the WorkspaceDescriptorUtf8Read directly from the SAME fabricated stat instead of delegating.
+function fabricatedDescriptorRead(
+  rawText: string,
+  stat: WorkspaceStat,
+): WorkspaceDescriptorUtf8Read {
+  return { rawText, sizeBytes: Buffer.byteLength(rawText, "utf8"), stat };
 }
 
 function hasResolvedApiContract(
@@ -787,6 +811,294 @@ function edgeCaseFixture(): Record<string, string> {
 }
 
 describe("buildCodeIntelligenceIndex", () => {
+  it("does not start candidate discovery when its execution signal is already aborted", () => {
+    const { scope, fs: base } = makeScope({
+      "src/aborted.ts": "export const shouldNotBeDiscovered = true;",
+    });
+    const controller = new AbortController();
+    controller.abort();
+    let directoryReads = 0;
+    const fs: WorkspaceFs = {
+      ...base,
+      readDir: (absolutePath) => {
+        directoryReads += 1;
+        return base.readDir(absolutePath);
+      },
+    };
+
+    const index = buildCodeIntelligenceIndex(scope, DEFAULT_SEARCH_LIMITS, fs, {
+      disableCache: true,
+      signal: controller.signal,
+    });
+
+    expect(directoryReads).toBe(0);
+    expect(index.filesIndexed).toBe(0);
+    expect(index.candidateLimitReached).toBe(true);
+  });
+
+  it("bounds the explicit-scope outer loop at the candidate discovery ceiling", () => {
+    const relativePaths = Array.from(
+      { length: 26 },
+      (_, index) => `src/file-${String(index).padStart(2, "0")}.ts`,
+    );
+    const { scope: baseScope, fs: base } = makeScope(
+      Object.fromEntries(relativePaths.map((scopePath) => [scopePath, "export const value = 1;"])),
+    );
+    const scope = {
+      ...baseScope,
+      relativePaths,
+    };
+    const pathPastDiscoveryCeiling = `${MEM_ROOT}/${relativePaths.at(-1) ?? ""}`;
+    let statCallsPastCeiling = 0;
+    const fs: WorkspaceFs = {
+      ...base,
+      stat: (absolutePath) => {
+        if (absolutePath === pathPastDiscoveryCeiling) statCallsPastCeiling += 1;
+        return base.stat(absolutePath);
+      },
+    };
+
+    const index = buildCodeIntelligenceIndex(
+      scope,
+      { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 },
+      fs,
+      { disableCache: true },
+    );
+
+    expect(statCallsPastCeiling).toBe(0);
+    expect(index.filesIndexed).toBe(1);
+    expect(index.candidateLimitReached).toBe(true);
+  });
+
+  it("reserves resolver metadata inside the structural file ceiling", () => {
+    const files = {
+      "src/consumer.ts": `
+        import { aliasTarget } from "@lib/target";
+        import { packageTarget } from "@demo/lib";
+        export const combined = aliasTarget + packageTarget;
+      `,
+      "src/lib/target.ts": "export const aliasTarget = 1;",
+      "packages/lib/src/index.ts": "export const packageTarget = 2;",
+      "cmd/main.go": `
+        package main
+        import "example.com/root/pkg"
+        func Run() int { return pkg.Target() }
+      `,
+      "pkg/target.go": "package pkg\nfunc Target() int { return 3 }\n",
+      "src/decoy-a.ts": "export const decoyA = true;",
+      "src/decoy-b.ts": "export const decoyB = true;",
+      "src/decoy-c.ts": "export const decoyC = true;",
+      "src/decoy-d.ts": "export const decoyD = true;",
+      "tsconfig.json": JSON.stringify({
+        compilerOptions: { baseUrl: ".", paths: { "@lib/*": ["src/lib/*"] } },
+      }),
+      "package.json": JSON.stringify({
+        name: "@demo/root",
+        dependencies: { "@demo/lib": "1.0.0" },
+      }),
+      "packages/lib/package.json": JSON.stringify({
+        name: "@demo/lib",
+        main: "./src/index.ts",
+      }),
+      "go.mod": "module example.com/root\n",
+    };
+    const { scope, fs } = makeScope(files);
+    const discovered = gatherCandidates(scope, DEFAULT_SEARCH_LIMITS, fs);
+    const sourcePaths = [
+      "src/consumer.ts",
+      "src/lib/target.ts",
+      "packages/lib/src/index.ts",
+      "cmd/main.go",
+      "pkg/target.go",
+      "src/decoy-a.ts",
+      "src/decoy-b.ts",
+      "src/decoy-c.ts",
+      "src/decoy-d.ts",
+    ];
+    const metadataPaths = ["tsconfig.json", "package.json", "packages/lib/package.json", "go.mod"];
+    const candidates = {
+      ...discovered,
+      files: [...sourcePaths, ...metadataPaths].map((scopePath) => {
+        const file = discovered.files.find((candidate) => candidate.relativePath === scopePath);
+        if (file === undefined) throw new TypeError(`missing test candidate: ${scopePath}`);
+        return file;
+      }),
+    };
+    const limits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 9 };
+
+    const index = buildCodeIntelligenceIndexFromCandidates(scope, limits, fs, candidates, {
+      disableCache: true,
+    });
+
+    expect(index.filesIndexed).toBe(5);
+    expect(index.candidateLimitReached).toBe(true);
+    expect(index.imports).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          importerPath: "src/consumer.ts",
+          specifier: "@lib/target",
+          targetPath: "src/lib/target.ts",
+          confidence: "resolved",
+        }),
+        expect.objectContaining({
+          importerPath: "src/consumer.ts",
+          specifier: "@demo/lib",
+          targetPath: "packages/lib/src/index.ts",
+          confidence: "resolved",
+        }),
+        expect.objectContaining({
+          importerPath: "cmd/main.go",
+          specifier: "example.com/root/pkg",
+          targetPath: "pkg/target.go",
+          confidence: "resolved",
+        }),
+      ]),
+    );
+    expect(index.packageDependencies).toContainEqual(
+      expect.objectContaining({
+        sourcePackage: "@demo/root",
+        targetPackage: "@demo/lib",
+        dependencyKind: "dependencies",
+      }),
+    );
+  });
+
+  it("prioritizes selected-source resolver metadata over unrelated manifests", () => {
+    const files = {
+      "apps/api/src/consumer.ts": 'import { target } from "@local/service";',
+      "apps/api/src/target.ts": "export const target = 1;",
+      "decoys/a/package.json": JSON.stringify({ name: "@decoy/a" }),
+      "decoys/b/package.json": JSON.stringify({ name: "@decoy/b" }),
+      "decoys/c/package.json": JSON.stringify({ name: "@decoy/c" }),
+      "apps/api/tsconfig.json": JSON.stringify({
+        compilerOptions: { baseUrl: ".", paths: { "@local/service": ["src/target"] } },
+      }),
+    };
+    const { scope, fs } = makeScope(files);
+    const discovered = gatherCandidates(scope, DEFAULT_SEARCH_LIMITS, fs);
+    const orderedPaths = [
+      "apps/api/src/consumer.ts",
+      "apps/api/src/target.ts",
+      "decoys/a/package.json",
+      "decoys/b/package.json",
+      "decoys/c/package.json",
+      "apps/api/tsconfig.json",
+    ];
+    const candidates = {
+      ...discovered,
+      files: orderedPaths.map((scopePath) => {
+        const file = discovered.files.find((candidate) => candidate.relativePath === scopePath);
+        if (file === undefined) throw new TypeError(`missing test candidate: ${scopePath}`);
+        return file;
+      }),
+    };
+
+    const index = buildCodeIntelligenceIndexFromCandidates(
+      scope,
+      { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 3 },
+      fs,
+      candidates,
+      { disableCache: true },
+    );
+
+    expect(index.filesIndexed).toBe(2);
+    expect(index.candidateLimitReached).toBe(true);
+    expect(index.imports).toContainEqual(
+      expect.objectContaining({
+        importerPath: "apps/api/src/consumer.ts",
+        specifier: "@local/service",
+        targetPath: "apps/api/src/target.ts",
+        confidence: "resolved",
+      }),
+    );
+  });
+
+  it("returns unused metadata capacity to sources on cold and warm builds", () => {
+    const sourcePaths = Array.from({ length: 6 }, (_, index) => `src/source-${String(index)}.ts`);
+    const decoyPaths = Array.from(
+      { length: 8 },
+      (_, index) => `decoys/package-${String(index)}/package.json`,
+    );
+    const files = {
+      ...Object.fromEntries(
+        sourcePaths.map((scopePath, index) => [
+          scopePath,
+          `export const value${String(index)} = ${String(index)};`,
+        ]),
+      ),
+      "tsconfig.json": JSON.stringify({ compilerOptions: { baseUrl: "." } }),
+      ...Object.fromEntries(
+        decoyPaths.map((scopePath, index) => [
+          scopePath,
+          JSON.stringify({ name: `@decoy/package-${String(index)}` }),
+        ]),
+      ),
+    };
+    const { scope, fs: base } = makeScope(files);
+    const discovered = gatherCandidates(scope, DEFAULT_SEARCH_LIMITS, base);
+    const orderedPaths = [...sourcePaths, ...decoyPaths, "tsconfig.json"];
+    const candidates = {
+      ...discovered,
+      files: orderedPaths.map((scopePath) => {
+        const file = discovered.files.find((candidate) => candidate.relativePath === scopePath);
+        if (file === undefined) throw new TypeError(`missing test candidate: ${scopePath}`);
+        return file;
+      }),
+    };
+    let fileReads = 0;
+    const fs: WorkspaceFs = {
+      ...base,
+      // readWorkspaceFile's only read primitive is readFileUtf8SameDescriptor (the unbounded
+      // readFileUtf8 fallback was removed), so the counter below has to wrap it instead.
+      readFileUtf8SameDescriptor: (
+        absolutePath,
+        maxBytes,
+        hardLinkPolicy,
+        expected,
+      ): WorkspaceDescriptorUtf8Read => {
+        fileReads += 1;
+        if (base.readFileUtf8SameDescriptor === undefined) {
+          throw new Error("test fixture requires memFs's readFileUtf8SameDescriptor");
+        }
+        return base.readFileUtf8SameDescriptor(absolutePath, maxBytes, hardLinkPolicy, expected);
+      },
+    };
+    const limits = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 6 };
+
+    const cold = buildCodeIntelligenceIndexFromCandidates(scope, limits, fs, candidates);
+    const readsAfterColdBuild = fileReads;
+    const warm = buildCodeIntelligenceIndexFromCandidates(scope, limits, fs, candidates);
+
+    expect(cold.filesIndexed).toBe(5);
+    expect(cold.symbols).toContainEqual(expect.objectContaining({ name: "value4" }));
+    expect(cold.symbols).not.toContainEqual(expect.objectContaining({ name: "value5" }));
+    expect(readsAfterColdBuild).toBeGreaterThan(0);
+    expect(fileReads).toBe(readsAfterColdBuild);
+    expect(warm).toEqual(cold);
+  });
+
+  it("discards link output completed after the execution deadline and reports truncation", () => {
+    let now = 0;
+    const executionControl = {
+      deadlineAtMs: 1,
+      nowMs: (): number => now,
+    };
+    const state = { truncated: false };
+
+    const linked = controlledBuild(
+      executionControl,
+      state,
+      [] as readonly string[],
+      (): readonly string[] => {
+        now = executionControl.deadlineAtMs;
+        return ["late-api-contract"];
+      },
+    );
+
+    expect(linked).toEqual([]);
+    expect(state.truncated).toBe(true);
+  });
+
   it("indexes polyglot imports, symbols, endpoints, DTOs, packages, and graph atoms", () => {
     const { scope, fs } = makeScope(enterpriseFixture());
 
@@ -977,7 +1289,8 @@ describe("buildCodeIntelligenceIndex", () => {
     });
 
     expect(index.filesIndexed).toBeGreaterThan(40);
-    expect(index.filesSkipped).toBe(0);
+    expect(index.filesSkipped).toBe(2);
+    expect(index.candidateLimitReached).toBe(false);
     expect(index.imports).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -1239,6 +1552,513 @@ describe("buildCodeIntelligenceIndex", () => {
       ".keiko/code-intelligence/stale.json",
     ]);
     expect(files[".keiko/code-intelligence/stale.json"]).toBe(stale);
+  });
+
+  it("invalidates a cache key when only high-resolution timestamps change", () => {
+    const files = { "src/mutable.ts": "export const alpha = 1;" };
+    const scope: SearchScope = {
+      workspace: workspace(),
+      scopeId: "scope-high-resolution-cache",
+      relativePaths: [],
+    };
+    const base = persistentMemFs(files);
+    let timestampNs = "1000000";
+    const statOverride = (absolutePath: string): WorkspaceStat => {
+      const stat = base.stat(absolutePath);
+      return stat.isFile
+        ? {
+            ...stat,
+            fileIdentity: "1:1",
+            mtimeMs: 1,
+            ctimeMs: 1,
+            mtimeNs: timestampNs,
+            ctimeNs: timestampNs,
+          }
+        : stat;
+    };
+    const fs: WorkspaceFs = {
+      ...base,
+      stat: statOverride,
+      // The fabricated fileIdentity above is deliberately disconnected from memFs's own
+      // content-hash identity, which readFileUtf8SameDescriptor's expected-stat check would
+      // otherwise reject as "changed" on every read — build the descriptor from the caller's
+      // already-captured `expected` stat instead of delegating to memFs's real same-descriptor
+      // read (mirrors the removed unbounded fallback, which echoed the same captured stat back).
+      readFileUtf8SameDescriptor: (absolutePath, _maxBytes, _hardLinkPolicy, expected) =>
+        fabricatedDescriptorRead(base.readFileUtf8(absolutePath), expected),
+    };
+    const candidates = gatherCandidates(scope, DEFAULT_SEARCH_LIMITS, fs);
+    const first = buildCodeIntelligenceIndexFromCandidates(
+      scope,
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      candidates,
+    );
+
+    files["src/mutable.ts"] = "export const bravo = 1;";
+    timestampNs = "1000001";
+    const changed = buildCodeIntelligenceIndexFromCandidates(
+      scope,
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      candidates,
+    );
+
+    expect(changed).not.toBe(first);
+    expect(changed.symbols.some((symbol) => symbol.name === "bravo")).toBe(true);
+  });
+
+  it("invalidates a cache key when file identity changes with stable timestamps", () => {
+    const files = { "src/replaced.ts": "export const alpha = 1;" };
+    const scope: SearchScope = {
+      workspace: workspace(),
+      scopeId: "scope-file-identity-cache",
+      relativePaths: [],
+    };
+    const base = persistentMemFs(files);
+    let fileIdentity = "1:1";
+    const statOverride = (absolutePath: string): WorkspaceStat => {
+      const stat = base.stat(absolutePath);
+      return stat.isFile
+        ? {
+            ...stat,
+            fileIdentity,
+            mtimeMs: 1,
+            ctimeMs: 1,
+            mtimeNs: "1000000",
+            ctimeNs: "1000000",
+          }
+        : stat;
+    };
+    const fs: WorkspaceFs = {
+      ...base,
+      stat: statOverride,
+      // The fabricated fileIdentity above is deliberately disconnected from memFs's own
+      // content-hash identity, which readFileUtf8SameDescriptor's expected-stat check would
+      // otherwise reject as "changed" on every read — build the descriptor from the caller's
+      // already-captured `expected` stat instead of delegating to memFs's real same-descriptor
+      // read (mirrors the removed unbounded fallback, which echoed the same captured stat back).
+      readFileUtf8SameDescriptor: (absolutePath, _maxBytes, _hardLinkPolicy, expected) =>
+        fabricatedDescriptorRead(base.readFileUtf8(absolutePath), expected),
+    };
+    const candidates = gatherCandidates(scope, DEFAULT_SEARCH_LIMITS, fs);
+    const first = buildCodeIntelligenceIndexFromCandidates(
+      scope,
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      candidates,
+    );
+
+    files["src/replaced.ts"] = "export const bravo = 1;";
+    fileIdentity = "1:2";
+    const replaced = buildCodeIntelligenceIndexFromCandidates(
+      scope,
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      candidates,
+    );
+
+    expect(replaced).not.toBe(first);
+    expect(replaced.symbols.some((symbol) => symbol.name === "bravo")).toBe(true);
+  });
+
+  it("revalidates a cache hit after its initial fingerprint", () => {
+    const files = { "src/racy.ts": "export const alpha = 1;" };
+    const scope: SearchScope = {
+      workspace: workspace(),
+      scopeId: "scope-cache-hit-race",
+      relativePaths: [],
+    };
+    const base = persistentMemFs(files);
+    let timestamp = 1;
+    let mutateAfterStat = false;
+    const fs: WorkspaceFs = {
+      ...base,
+      stat: (absolutePath) => {
+        const stat = base.stat(absolutePath);
+        const snapshot = stat.isFile
+          ? { ...stat, hardLinkCount: 1, mtimeMs: timestamp, ctimeMs: timestamp }
+          : stat;
+        if (mutateAfterStat && absolutePath.endsWith("/src/racy.ts")) {
+          mutateAfterStat = false;
+          files["src/racy.ts"] = "export const bravo = 1;";
+          timestamp = 2;
+        }
+        return snapshot;
+      },
+    };
+    const candidates = gatherCandidates(scope, DEFAULT_SEARCH_LIMITS, fs);
+    const first = buildCodeIntelligenceIndexFromCandidates(
+      scope,
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      candidates,
+    );
+    mutateAfterStat = true;
+
+    const rebuilt = buildCodeIntelligenceIndexFromCandidates(
+      scope,
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      candidates,
+    );
+
+    expect(rebuilt).not.toBe(first);
+    expect(rebuilt.symbols.some((symbol) => symbol.name === "bravo")).toBe(true);
+  });
+
+  it("does not store an index when the post-build fingerprint changed", () => {
+    const files = { "src/post-build.ts": "export const alpha = 1;" };
+    const scope: SearchScope = {
+      workspace: workspace(),
+      scopeId: "scope-post-build-cache-race",
+      relativePaths: [],
+    };
+    const base = persistentMemFs(files);
+    let timestamp = 1;
+    let sourceStatCalls = 0;
+    let mutationStatCall = 4;
+    const fs: WorkspaceFs = {
+      ...base,
+      stat: (absolutePath) => {
+        if (absolutePath.endsWith("/src/post-build.ts")) {
+          sourceStatCalls += 1;
+          if (sourceStatCalls === mutationStatCall) {
+            files["src/post-build.ts"] = "export const bravo = 1;";
+            timestamp = 2;
+          }
+        }
+        const stat = base.stat(absolutePath);
+        return stat.isFile
+          ? {
+              ...stat,
+              hardLinkCount: 1,
+              fileIdentity: "1:1",
+              mtimeMs: timestamp,
+              ctimeMs: timestamp,
+              mtimeNs: `${String(timestamp)}000000`,
+              ctimeNs: `${String(timestamp)}000000`,
+            }
+          : stat;
+      },
+      // The fabricated fileIdentity above is deliberately disconnected from memFs's own
+      // content-hash identity, which readFileUtf8SameDescriptor's expected-stat check would
+      // otherwise reject as "changed" on every read. Echo the caller's already-captured
+      // `expected` stat back verbatim (mirrors the removed unbounded fallback's `stat:
+      // target.stat`) rather than calling `stat()` again, which would perturb sourceStatCalls'
+      // carefully staged count above.
+      readFileUtf8SameDescriptor: (absolutePath, _maxBytes, _hardLinkPolicy, expected) =>
+        fabricatedDescriptorRead(base.readFileUtf8(absolutePath), expected),
+    };
+    const candidates = gatherCandidates(scope, DEFAULT_SEARCH_LIMITS, fs);
+    sourceStatCalls = 0;
+    const raced = buildCodeIntelligenceIndexFromCandidates(
+      scope,
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      candidates,
+    );
+    expect(raced.symbols.some((symbol) => symbol.name === "alpha")).toBe(true);
+
+    timestamp = 1;
+    sourceStatCalls = 0;
+    mutationStatCall = Number.POSITIVE_INFINITY;
+    const rebuilt = buildCodeIntelligenceIndexFromCandidates(
+      scope,
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      candidates,
+    );
+
+    expect(rebuilt).not.toBe(raced);
+    expect(rebuilt.symbols.some((symbol) => symbol.name === "bravo")).toBe(true);
+  });
+
+  it("does not stat a discovered file after it is swapped to an out-of-root symlink", () => {
+    const scope: SearchScope = {
+      workspace: workspace(),
+      scopeId: "scope-1",
+      relativePaths: [],
+    };
+    const base = memFs(MEM_ROOT, {
+      "src/swappable.ts": "export function Swappable(): string { return 'safe'; }",
+    });
+    const swappablePath = `${MEM_ROOT}/src/swappable.ts`;
+    let escaped = false;
+    let unsafeStatCalls = 0;
+    const fs: WorkspaceFs = {
+      ...base,
+      realPath: (absolutePath: string): string =>
+        escaped && absolutePath === swappablePath
+          ? "/outside/swappable.ts"
+          : base.realPath(absolutePath),
+      stat: (absolutePath: string): ReturnType<WorkspaceFs["stat"]> => {
+        if (
+          escaped &&
+          (absolutePath === swappablePath || absolutePath === "/outside/swappable.ts")
+        ) {
+          unsafeStatCalls += 1;
+        }
+        return base.stat(absolutePath);
+      },
+    };
+    const candidates = gatherCandidates(scope, DEFAULT_SEARCH_LIMITS, fs);
+    const first = buildCodeIntelligenceIndexFromCandidates(
+      scope,
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      candidates,
+    );
+    expect(first.symbols.some((symbol) => symbol.name === "Swappable")).toBe(true);
+
+    const unsafeStatCallsBeforeSwap = unsafeStatCalls;
+    escaped = true;
+    const inaccessible = buildCodeIntelligenceIndexFromCandidates(
+      scope,
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      candidates,
+    );
+
+    expect(inaccessible).not.toBe(first);
+    expect(inaccessible.filesIndexed).toBe(0);
+    expect(inaccessible.symbols.some((symbol) => symbol.name === "Swappable")).toBe(false);
+    expect(unsafeStatCalls).toBe(unsafeStatCallsBeforeSwap);
+
+    const rebuiltInaccessible = buildCodeIntelligenceIndexFromCandidates(
+      scope,
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      candidates,
+    );
+    expect(rebuiltInaccessible).not.toBe(inaccessible);
+    expect(unsafeStatCalls).toBe(unsafeStatCallsBeforeSwap);
+  });
+
+  it("does not reuse a cached index after a candidate becomes a hard-link alias", () => {
+    const searchScope: SearchScope = {
+      workspace: workspace(),
+      scopeId: "scope-hard-link-cache",
+      relativePaths: [],
+    };
+    const base = memFs(MEM_ROOT, {
+      "src/hard.ts": "export const hardLinked = 1;",
+    });
+    let hardLinkCount = 1;
+    const fs: WorkspaceFs = {
+      ...base,
+      stat: (absolutePath): ReturnType<WorkspaceFs["stat"]> => {
+        const stat = base.stat(absolutePath);
+        return stat.isFile ? { ...stat, hardLinkCount, mtimeMs: 1, ctimeMs: 1 } : stat;
+      },
+    };
+    const candidates = gatherCandidates(searchScope, DEFAULT_SEARCH_LIMITS, fs);
+    const first = buildCodeIntelligenceIndexFromCandidates(
+      searchScope,
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      candidates,
+    );
+    expect(first.symbols.some((symbol) => symbol.name === "hardLinked")).toBe(true);
+
+    hardLinkCount = 2;
+    const rejected = buildCodeIntelligenceIndexFromCandidates(
+      searchScope,
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      candidates,
+    );
+    expect(rejected).not.toBe(first);
+    expect(rejected.symbols.some((symbol) => symbol.name === "hardLinked")).toBe(false);
+    expect(rejected.filesSkipped).toBe(1);
+  });
+
+  it("does not reuse a cached index after a symlinked workspace root is retargeted", () => {
+    const files: Record<string, string> = {
+      "src/retargeted.ts": "export const alpha = 1;",
+    };
+    const searchScope: SearchScope = {
+      workspace: workspace(),
+      scopeId: "scope-retargeted-root-cache",
+      relativePaths: [],
+    };
+    const base = memFs(MEM_ROOT, files);
+    let target = "a";
+    const lexicalPath = (absolutePath: string): string =>
+      absolutePath.replace(/^\/real\/[ab](?=\/|$)/u, MEM_ROOT);
+    const fs: WorkspaceFs = {
+      ...base,
+      // The untranslated resolvedPath discovery.ts passes to readFileUtf8SameDescriptor would miss
+      // in `base`'s own MEM_ROOT-keyed file map, since that lane isn't retargeted the way the other
+      // overrides here already are — translate it through the SAME lexicalPath before delegating.
+      readFileUtf8SameDescriptor: (absolutePath, maxBytes, hardLinkPolicy, expected) => {
+        if (base.readFileUtf8SameDescriptor === undefined) {
+          throw new Error("test fixture requires memFs's readFileUtf8SameDescriptor");
+        }
+        return base.readFileUtf8SameDescriptor(
+          lexicalPath(absolutePath),
+          maxBytes,
+          hardLinkPolicy,
+          expected,
+        );
+      },
+      realPath: (absolutePath): string => {
+        if (absolutePath === MEM_ROOT || absolutePath.startsWith(`${MEM_ROOT}/`)) {
+          return absolutePath.replace(MEM_ROOT, `/real/${target}`);
+        }
+        return absolutePath;
+      },
+      stat: (absolutePath): ReturnType<WorkspaceFs["stat"]> => {
+        const stat = base.stat(lexicalPath(absolutePath));
+        return stat.isFile ? { ...stat, hardLinkCount: 1, mtimeMs: 1, ctimeMs: 1 } : stat;
+      },
+      readDir: (absolutePath): ReturnType<WorkspaceFs["readDir"]> =>
+        base.readDir(lexicalPath(absolutePath)),
+      readFileUtf8: (absolutePath): string => base.readFileUtf8(lexicalPath(absolutePath)),
+      readFileUtf8Prefix: (absolutePath, maxBytes, hardLinkPolicy, expected): string =>
+        base.readFileUtf8Prefix?.(lexicalPath(absolutePath), maxBytes, hardLinkPolicy, expected) ??
+        "",
+      exists: (absolutePath): boolean => base.exists(lexicalPath(absolutePath)),
+    };
+    const candidates = gatherCandidates(searchScope, DEFAULT_SEARCH_LIMITS, fs);
+    const first = buildCodeIntelligenceIndexFromCandidates(
+      searchScope,
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      candidates,
+    );
+    expect(first.symbols.some((symbol) => symbol.name === "alpha")).toBe(true);
+
+    target = "b";
+    files["src/retargeted.ts"] = "export const bravo = 1;";
+    const retargeted = buildCodeIntelligenceIndexFromCandidates(
+      searchScope,
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      candidates,
+    );
+
+    expect(retargeted).not.toBe(first);
+    expect(retargeted.symbols.some((symbol) => symbol.name === "bravo")).toBe(true);
+    expect(retargeted.symbols.some((symbol) => symbol.name === "alpha")).toBe(false);
+  });
+
+  it("skips files instead of an unbounded read when the filesystem cannot provide mutation timestamps", () => {
+    // A WorkspaceFs unable to report stable mutation timestamps is, by construction, unable to
+    // supply readFileUtf8SameDescriptor either — a real port in that position would not implement
+    // the same-descriptor lane. The removed unbounded readFileUtf8 fallback used to let such a
+    // port keep reading (while only caching was bypassed); the port boundary now fails closed:
+    // metadata unavailable means read unavailable, so the file is skipped, never silently indexed
+    // through an unbounded read.
+    const files = { "src/mutable.ts": "export const first = 1;" };
+    const searchScope: SearchScope = {
+      workspace: workspace(),
+      scopeId: "scope-no-timestamps",
+      relativePaths: [],
+    };
+    const base = memFs(MEM_ROOT, files);
+    // Omit (never assign undefined to, under exactOptionalPropertyTypes) readFileUtf8SameDescriptor
+    // so this port matches one genuinely unable to supply it.
+    const { readFileUtf8SameDescriptor: removedSameDescriptor, ...baseWithoutSameDescriptor } =
+      base;
+    if (removedSameDescriptor === undefined) {
+      throw new Error("memFs always provides readFileUtf8SameDescriptor");
+    }
+    const fs: WorkspaceFs = {
+      ...baseWithoutSameDescriptor,
+      stat: (absolutePath) => {
+        const stat = base.stat(absolutePath);
+        if (!stat.isFile) return stat;
+        return {
+          ...stat,
+          fileIdentity: undefined,
+          mtimeNs: undefined,
+          ctimeNs: undefined,
+        };
+      },
+    };
+    const candidates = gatherCandidates(searchScope, DEFAULT_SEARCH_LIMITS, fs);
+    const result = buildCodeIntelligenceIndexFromCandidates(
+      searchScope,
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      candidates,
+    );
+
+    expect(result.filesSkipped).toBe(1);
+    expect(result.symbols.some((symbol) => symbol.name === "first")).toBe(false);
+  });
+
+  it("does not cache a partial index after a transient source read failure", () => {
+    const files = { "src/transient.ts": "export const recovered = 1;" };
+    const searchScope: SearchScope = {
+      workspace: workspace(),
+      scopeId: "scope-transient-read",
+      relativePaths: [],
+    };
+    const base = persistentMemFs(files);
+    let failNextRead = true;
+    const fs: WorkspaceFs = {
+      ...base,
+      // readWorkspaceFile's only read primitive is readFileUtf8SameDescriptor (the unbounded
+      // readFileUtf8 fallback was removed), so the transient-failure injection has to live there.
+      readFileUtf8SameDescriptor: (absolutePath, maxBytes, hardLinkPolicy, expected) => {
+        if (failNextRead && absolutePath.endsWith("/src/transient.ts")) {
+          failNextRead = false;
+          throw new Error("EIO");
+        }
+        if (base.readFileUtf8SameDescriptor === undefined) {
+          throw new Error("test fixture requires memFs's readFileUtf8SameDescriptor");
+        }
+        return base.readFileUtf8SameDescriptor(absolutePath, maxBytes, hardLinkPolicy, expected);
+      },
+    };
+    const candidates = gatherCandidates(searchScope, DEFAULT_SEARCH_LIMITS, fs);
+    const partial = buildCodeIntelligenceIndexFromCandidates(
+      searchScope,
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      candidates,
+    );
+    const recovered = buildCodeIntelligenceIndexFromCandidates(
+      searchScope,
+      DEFAULT_SEARCH_LIMITS,
+      fs,
+      candidates,
+    );
+
+    expect(partial.filesSkipped).toBe(1);
+    expect(recovered).not.toBe(partial);
+    expect(recovered.symbols.some((symbol) => symbol.name === "recovered")).toBe(true);
+  });
+
+  it("keeps candidate truncation in the cache identity", () => {
+    const files: Record<string, string> = { "src/a.ts": "export const a = 1;" };
+    const searchScope: SearchScope = {
+      workspace: workspace(),
+      scopeId: "scope-cache-truncation",
+      relativePaths: [],
+    };
+    const fs = persistentMemFs(files);
+    const capped = { ...DEFAULT_SEARCH_LIMITS, maxFilesScanned: 1 };
+    const complete = buildCodeIntelligenceIndexFromCandidates(
+      searchScope,
+      capped,
+      fs,
+      gatherCandidates(searchScope, capped, fs),
+    );
+    expect(complete.candidateLimitReached).toBe(false);
+
+    files["src/z.ts"] = "export const z = 1;";
+    const truncated = buildCodeIntelligenceIndexFromCandidates(
+      searchScope,
+      capped,
+      fs,
+      gatherCandidates(searchScope, capped, fs),
+    );
+
+    expect(truncated).not.toBe(complete);
+    expect(truncated.candidateLimitReached).toBe(true);
   });
 });
 

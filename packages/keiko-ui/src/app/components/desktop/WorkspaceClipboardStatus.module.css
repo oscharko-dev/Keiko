@@ -1,0 +1,37 @@
+/* Issue #2150 follow-up — transient visible outcome for the workspace selection
+   clipboard commands (copy/cut/paste, and the reason a selection captured
+   nothing). Token-only colors per ADR-0123 D4, component-scoped so the global
+   stylesheet's visual-proof gate stays untouched, and canonically cmp-prefixed
+   with locally scoped selectors only, so it adds no styling-exception entry.
+   The hidden state stays in the DOM: the status live region must be able to
+   announce every outcome, including repeated ones. */
+.cmp-clipboard-status {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  z-index: 74;
+  max-width: min(80%, 480px);
+  margin: 0;
+  padding: 6px 14px;
+  border: 1px solid var(--accent-line);
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--accent) 10%, var(--surface-overlay));
+  color: var(--text-primary);
+  font-size: 12.5px;
+  line-height: 1.4;
+  text-align: center;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.cmp-clipboard-status[data-visible="true"] {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cmp-clipboard-status {
+    transition: none;
+  }
+}

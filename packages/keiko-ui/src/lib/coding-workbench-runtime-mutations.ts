@@ -1,10 +1,12 @@
-import {
-  isCodingWorkbenchModeWidening,
-  type CodingWorkbenchMode,
-  type CodingWorkbenchRuntimeApprovalDecision,
-  type CodingWorkbenchRuntimeResearchGrant,
-  type CodingWorkbenchRuntimeSnapshot,
+import type { CodingWorkbenchStartOptions } from "./coding-workbench-runtime-actions";
+import type {
+  CodingWorkbenchMode,
+  CodingWorkbenchRuntimeApprovalDecision,
+  CodingWorkbenchRuntimeResearchGrant,
+  CodingWorkbenchRuntimeSnapshot,
+  CodingWorkbenchRuntimeStartRequest,
 } from "@oscharko-dev/keiko-contracts";
+import { isCodingWorkbenchModeWidening } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   acknowledgeCodingWorkbenchRuntimeRecovery,
   codingWorkbenchRuntimeActionError,
@@ -23,9 +25,46 @@ import type { CodingWorkbenchRuntimeState } from "./coding-workbench-live-state"
 
 export interface CodingWorkbenchMutationCommand {
   readonly requestId: string;
-  readonly expected?: { readonly runId: string; readonly revision: number } | undefined;
+  readonly expected?: { readonly runId: string; readonly revision: number };
   readonly mayInstallNewRun: boolean;
   readonly run: () => Promise<CodingWorkbenchRuntimeSnapshot>;
+}
+
+type RuntimeModelSelection = {
+  readonly modelId?: string;
+  readonly reasoningEffort?: NonNullable<CodingWorkbenchRuntimeState["reasoningEffort"]>;
+};
+
+function managedGatewayModelSelection(current: CodingWorkbenchRuntimeState): RuntimeModelSelection {
+  if (current.runtimePreference !== "managed-gateway") return {};
+  return {
+    ...(current.selectedModelId === null ? {} : { modelId: current.selectedModelId }),
+    ...(current.reasoningEffort === null ? {} : { reasoningEffort: current.reasoningEffort }),
+  };
+}
+
+function startRequest(
+  id: string,
+  taskIntent: string,
+  current: CodingWorkbenchRuntimeState,
+  options: CodingWorkbenchStartOptions,
+): CodingWorkbenchRuntimeStartRequest {
+  const request = {
+    requestId: id,
+    taskIntent,
+    ...(options.conversationId === undefined ? {} : { conversationId: options.conversationId }),
+    requestedMode: current.requestedMode,
+    runtimePreference: current.runtimePreference,
+    projectMemory: { enabled: options.projectMemoryEnabled },
+    ...managedGatewayModelSelection(current),
+  };
+  if (options.issue === undefined) return request;
+  return {
+    ...request,
+    issueRef: options.issue.issueRef,
+    expectedIssueBindingDigest: options.issue.expectedIssueBindingDigest,
+    issuePurpose: "context" as const,
+  };
 }
 
 export function mutationResultMatchesCurrentTruth(
@@ -43,6 +82,7 @@ export function mutationResultMatchesCurrentTruth(
 export function createStartMutation(
   taskIntent: string,
   current: CodingWorkbenchRuntimeState,
+  options: CodingWorkbenchStartOptions,
 ): CodingWorkbenchMutationCommand {
   if (!current.canStart)
     throw codingWorkbenchRuntimeActionError("The runtime is not ready to start.");
@@ -50,13 +90,7 @@ export function createStartMutation(
   return {
     requestId: id,
     mayInstallNewRun: true,
-    run: () =>
-      startCodingWorkbenchRuntime({
-        requestId: id,
-        taskIntent,
-        requestedMode: current.requestedMode,
-        runtimePreference: current.runtimePreference,
-      }),
+    run: () => startCodingWorkbenchRuntime(startRequest(id, taskIntent, current, options)),
   };
 }
 
@@ -182,6 +216,7 @@ export function createRetryMutation(
         taskIntent,
         requestedMode: current.requestedMode,
         runtimePreference: current.runtimePreference,
+        ...managedGatewayModelSelection(current),
       }),
   };
 }

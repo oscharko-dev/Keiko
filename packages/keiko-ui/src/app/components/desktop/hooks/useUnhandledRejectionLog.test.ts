@@ -4,6 +4,12 @@
 
 import { renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resetClientDiagnosticWriter,
+  setClientDiagnosticWriter,
+  takeClientDiagnosticLoss,
+  type ClientDiagnosticMeta,
+} from "@/lib/client-diagnostics";
 import { useUnhandledRejectionLog } from "./useUnhandledRejectionLog";
 
 function dispatchRejection(reason: string): void {
@@ -43,6 +49,28 @@ describe("useUnhandledRejectionLog", () => {
     for (let i = 0; i < 12; i += 1) dispatchRejection(`r${String(i)}`);
     expect(warnSpy).toHaveBeenCalledTimes(5);
     view.unmount();
+  });
+
+  // #3532: the cap bounds the volume without hiding it — every rejection past it is counted as
+  // suppressed loss, and every report carries the closed kind.
+  it("counts each rejection past the cap as suppressed loss and tags the reports", () => {
+    const received: (ClientDiagnosticMeta | undefined)[] = [];
+    // The ledger is page-wide: start from zero instead of inheriting an earlier case's storm.
+    takeClientDiagnosticLoss();
+    setClientDiagnosticWriter((_message, meta) => received.push(meta));
+    try {
+      const view = renderHook(() => {
+        useUnhandledRejectionLog();
+      });
+      for (let i = 0; i < 12; i += 1) dispatchRejection(`r${String(i)}`);
+      view.unmount();
+
+      expect(received).toHaveLength(5);
+      expect(received.every((meta) => meta?.kind === "unhandled-rejection")).toBe(true);
+      expect(takeClientDiagnosticLoss()).toEqual({ rejectionsSuppressed: 7 });
+    } finally {
+      resetClientDiagnosticWriter();
+    }
   });
 
   it("removes the listener on unmount", () => {

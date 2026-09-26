@@ -491,4 +491,28 @@ describe("editor workspace snippets — rejection and diagnostic paths", () => {
     expect(matches).toEqual([]);
     expect(performance.now() - startedAt).toBeLessThan(100);
   });
+
+  // KEIKO-0470 regression pin. The retired regex-compiling matcher turned a leading `?` into a
+  // quantifier applied to `^`, so `globMatches("?a.ts", …)` threw `SyntaxError: Nothing to repeat`
+  // out of a function whose contract is to return an array. The token/NFA matcher that replaced it
+  // (#2921) cannot compile a regex at all; this pins that no validator-accepted pattern can make
+  // the matcher throw again.
+  it.each(["?a.ts", "a?.ts", "src/**/a?b.ts", "+a.ts", "(a).ts", "a{1,2}.ts", "a[b].ts"])(
+    "never throws for the validator-accepted pattern %s",
+    (include) => {
+      const parsed = parseEditorM7WorkspaceSnippetCollection(
+        rawCollection([rawSnippet({ include: [include] })]),
+      );
+      if (!parsed.ok) throw new Error("expected valid collection");
+      expect(() =>
+        matchingEditorM7Snippets({
+          collection: parsed.value,
+          languageId: "typescript",
+          relativePath: "a.ts",
+          prefix: "kte",
+          insertionSafe: true,
+        }),
+      ).not.toThrow();
+    },
+  );
 });

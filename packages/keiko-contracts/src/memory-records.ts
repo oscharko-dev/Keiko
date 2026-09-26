@@ -29,7 +29,7 @@ import type {
   MemoryStatus,
   MemoryType,
   WorkflowRunId,
-} from "./memory.js";
+} from "./memory-contracts.js";
 
 // ─── Model identity (completion model, not embedding model) ───────────────────
 // When a memory was authored or transformed with model assistance (e.g. a consolidation
@@ -128,6 +128,22 @@ export interface MemoryRecord {
   readonly tags: readonly string[];
   readonly createdAt: number;
   readonly updatedAt: number;
+}
+
+// Body-free state captured by a mutation owner before it updates a durable record. Event consumers
+// use it to classify transitions without consulting process-local state that can be stale after a
+// restart or concurrent write.
+export type MemoryUpdatePreImage = Pick<MemoryRecord, "id" | "status" | "pinned">;
+
+// Shared BFF request/response shapes for correction review. These live beside MemoryRecord so the
+// server and browser cannot independently widen or narrow the predecessor-selection contract.
+export interface AcceptMemoryProposalOptions {
+  readonly bodyOverride?: string;
+  readonly predecessorId?: MemoryId;
+}
+
+export interface MemoryCorrectionPredecessorsResponse {
+  readonly candidates: readonly MemoryRecord[];
 }
 
 // ─── Structured payload ───────────────────────────────────────────────────────

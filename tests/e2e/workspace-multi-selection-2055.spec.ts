@@ -192,7 +192,10 @@ async function expectGroupedDragMovesSelected(
 
 async function expectLocalDuplication(page: Page, locators: WorkspaceProofLocators): Promise<void> {
   await locators.workspace.focus();
-  const modifier = process.platform === "darwin" ? "Meta" : "Control";
+  // Product surface (the workspace canvas), not Monaco — see support/editor-chord.ts's header for
+  // why the userAgent-derived helper is wrong here: the product reads navigator.platform, which the
+  // device presets leave as "MacIntel".
+  const modifier = "ControlOrMeta";
   await page.keyboard.down(modifier);
   await page.keyboard.press("KeyC");
   await page.keyboard.press("KeyV");

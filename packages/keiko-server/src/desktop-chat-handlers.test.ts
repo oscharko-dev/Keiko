@@ -1,7 +1,7 @@
 // Desktop canvas chat routes: real UI chat persistence with an injected ModelPort, keeping provider
 // credentials behind the existing gateway seam and avoiding network calls in tests.
 
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "node:http";
@@ -14,8 +14,8 @@ import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { startUiTestServer } from "./ui-test-server/_support.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type {
+  GatewayCallRequest,
   GatewayConfig,
-  GatewayRequest,
   NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
@@ -25,7 +25,10 @@ import type {
   MemoryScope,
   MemoryUserId,
 } from "@oscharko-dev/keiko-contracts";
-import { DEFAULT_CONTEXT_PROFILE, deriveContextProfile } from "@oscharko-dev/keiko-contracts";
+import {
+  DEFAULT_CONTEXT_PROFILE,
+  deriveContextProfile,
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   MAX_DESKTOP_CHAT_INPUT_BYTES,
   type ChatMessage,
@@ -41,7 +44,7 @@ let staticRoot: string;
 let tmp: string;
 let projectDir: string;
 let store: UiStore;
-let seenRequests: GatewayRequest[];
+let seenRequests: GatewayCallRequest[];
 
 function fakeModel(content: string): ModelPort {
   return {
@@ -104,7 +107,7 @@ function scriptedOliverProfileMemoryModel(): ModelPort {
         ? JSON.stringify([
             {
               source: "user",
-              body: "The user's name is Oliver.",
+              body: "Ich heiße Oliver.",
               type: "identity",
               confidence: 0.96,
               scope: "user",
@@ -112,7 +115,7 @@ function scriptedOliverProfileMemoryModel(): ModelPort {
             },
             {
               source: "user",
-              body: "The user is 35 years old.",
+              body: "Ich bin 35 Jahre alt.",
               type: "fact",
               confidence: 0.9,
               scope: "user",
@@ -120,7 +123,7 @@ function scriptedOliverProfileMemoryModel(): ModelPort {
             },
             {
               source: "user",
-              body: "The user is a software developer.",
+              body: "Ich bin Softwareentwickler.",
               type: "fact",
               confidence: 0.9,
               scope: "user",
@@ -273,8 +276,8 @@ async function startServer(handlerDeps: UiHandlerDeps): Promise<void> {
 }
 
 beforeEach(async () => {
-  staticRoot = mkdtempSync(join(tmpdir(), "keiko-ui-desktop-static-"));
-  tmp = mkdtempSync(join(tmpdir(), "keiko-ui-desktop-"));
+  staticRoot = mkdtempSync(join(realpathSync(tmpdir()), "keiko-ui-desktop-static-"));
+  tmp = mkdtempSync(join(realpathSync(tmpdir()), "keiko-ui-desktop-"));
   projectDir = join(tmp, "repo");
   mkdirSync(projectDir);
   store = createInMemoryUiStore();
@@ -676,6 +679,35 @@ describe("desktop chat routes", () => {
     const persistedRoles = store.listMessages(created.chat.id).map((message) => message.role);
     expect(persistedRoles).toHaveLength(2);
     expect(persistedRoles).toEqual(expect.arrayContaining(["user", "assistant"]));
+  });
+
+  // ADR-0173 D5 (BFF -> gateway correlation threading): the client-supplied request correlation id
+  // must reach the Gateway double's GatewayCallRequest.logContext, not just the response header, so
+  // a gateway retry/circuit-breaker line for this call joins the same trail as the HTTP request.
+  it("threads the request correlation id into the model gateway call's logContext", async () => {
+    const createRes = await fetch(`${base()}/api/desktop/chats`, {
+      method: "POST",
+      headers: POST_JSON_HEADERS,
+      body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
+    });
+    const created = (await createRes.json()) as { chat: { id: string } };
+    const correlationId = "test-correlation-id-send-0001";
+
+    const sendRes = await fetch(`${base()}/api/desktop/chat`, {
+      method: "POST",
+      headers: { ...POST_JSON_HEADERS, "X-Keiko-Correlation-Id": correlationId },
+      body: JSON.stringify({
+        chatId: created.chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        content: "Say hello with correlation",
+      }),
+    });
+
+    expect(sendRes.status).toBe(200);
+    expect(sendRes.headers.get("X-Keiko-Correlation-Id")).toBe(correlationId);
+    expect(seenRequests).toHaveLength(1);
+    expect(seenRequests[0]?.logContext?.correlationId).toBe(correlationId);
   });
 
   it("admits a long canonical final atomically and rejects content beyond the UTF-8 hard cap", async () => {
@@ -1229,8 +1261,8 @@ describe("desktop chat routes", () => {
         seenRequests.push(request);
         const system = request.messages[0]?.content ?? "";
         if (system.includes("You extract durable memories from a chat turn")) {
-          return new Promise<NormalizedResponse>((resolve) => {
-            void resolve;
+          return new Promise<NormalizedResponse>((_resolve) => {
+            // never settles: this case asserts the caller's own timeout, not a response
           });
         }
         return Promise.resolve({
@@ -1363,6 +1395,52 @@ describe("desktop chat routes", () => {
       supersedesResponseVersion: 1,
     });
     expect(store.listMessages(chat.id).map((message) => message.id)).toContain(assistant.id);
+  });
+
+  // ADR-0173 D5: the regenerate path builds a fresh model.call site distinct from the send path
+  // (chat-handlers.ts persistRegeneratedChatTurn) — it must thread the request correlation id too.
+  it("threads the request correlation id into the regenerate model gateway call", async () => {
+    await restartWithDeps(deps(fakeModel("regenerated with correlation")));
+    const chat = store.createChat(projectDir, "regen correlation", CHAT_MODEL);
+    store.createMessage({
+      chatId: chat.id,
+      role: "user",
+      content: "original question",
+      timestamp: 1,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const assistant = store.createMessage({
+      chatId: chat.id,
+      role: "assistant",
+      content: "stale answer",
+      timestamp: 2,
+      runId: undefined,
+      workflowId: undefined,
+      workflowStatus: undefined,
+      shortResult: undefined,
+      taskType: undefined,
+    });
+    const correlationId = "test-correlation-id-regen-0001";
+
+    const res = await fetch(`${base()}/api/desktop/chat/regenerate`, {
+      method: "POST",
+      headers: { ...POST_JSON_HEADERS, "X-Keiko-Correlation-Id": correlationId },
+      body: JSON.stringify({
+        chatId: chat.id,
+        projectPath: projectDir,
+        modelId: CHAT_MODEL,
+        assistantMessageId: assistant.id,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-Keiko-Correlation-Id")).toBe(correlationId);
+    expect(seenRequests).toHaveLength(1);
+    expect(seenRequests[0]?.logContext?.correlationId).toBe(correlationId);
   });
 
   it("rejects regeneration of a closed chat without model work or message mutation", async () => {
@@ -1631,14 +1709,28 @@ describe("desktop chat routes", () => {
     memoryVault.close();
   });
 
-  it("persists the canonical user before a fallible buffered-memory retrieval", async () => {
+  // Relocated pin (#3204 follow-up): the persist-BEFORE-retrieval ordering this test always
+  // pinned still holds (no provider request is seen), but the terminal state for a LEGACY
+  // request changed by review decision — a turn rejected after admission and before any
+  // provider output must leave no orphaned user row, because the ledger cannot settle it and
+  // every client retry would duplicate it. Ledger turns keep their row and settle instead
+  // (see the settle pins in chat-stream-handlers.test.ts).
+  it("discards the legacy user row when buffered-memory retrieval fails before the provider", async () => {
     const memoryDir = join(tmp, "failing-buffered-memory-vault");
     mkdirSync(memoryDir);
     const memoryVault = createMemoryVault({ memoryDir, redactString: (value) => value });
+    // Strengthened relocation: the persist-BEFORE-retrieval ordering is asserted inside the
+    // failing callback itself — the user row must already exist when retrieval runs, and the
+    // final assertion proves the rejection then discards it. Both halves red-prove their arm.
+    let userRowsSeenAtRetrieval = -1;
+    let lastCreatedChatId = "";
     const failingMemoryVault = new Proxy(memoryVault, {
       get(target, property, receiver): unknown {
         if (property === "listMemoriesByScope") {
           return (): never => {
+            userRowsSeenAtRetrieval = store
+              .listMessages(lastCreatedChatId)
+              .filter((message) => message.role === "user").length;
             throw new Error("memory retrieval failed");
           };
         }
@@ -1652,6 +1744,7 @@ describe("desktop chat routes", () => {
       body: JSON.stringify({ projectPath: projectDir, modelId: CHAT_MODEL }),
     });
     const created = (await createRes.json()) as { chat: { id: string } };
+    lastCreatedChatId = created.chat.id;
 
     const sendRes = await fetch(`${base()}/api/desktop/chat`, {
       method: "POST",
@@ -1667,9 +1760,8 @@ describe("desktop chat routes", () => {
 
     expect(sendRes.status).toBe(500);
     expect(seenRequests).toEqual([]);
-    expect(store.listMessages(created.chat.id)).toMatchObject([
-      { role: "user", content: "Keep this buffered final transcript" },
-    ]);
+    expect(userRowsSeenAtRetrieval).toBe(1);
+    expect(store.listMessages(created.chat.id)).toEqual([]);
     memoryVault.close();
   });
 
@@ -1925,7 +2017,7 @@ describe("desktop chat routes", () => {
         chatId: created.chat.id,
         projectPath: projectDir,
         modelId: CHAT_MODEL,
-        content: "Ich heiße Oliver, bin 35 Jahre alt und bin Softwareentwickler.",
+        content: "Ich heiße Oliver. Ich bin 35 Jahre alt. Ich bin Softwareentwickler.",
         memory: { enabled: true, context: {} },
       }),
     });
@@ -1944,9 +2036,9 @@ describe("desktop chat routes", () => {
       const records = listAllMemories(memoryVault, { includeExpired: true });
       expect(records.map((record) => record.body)).toEqual(
         expect.arrayContaining([
-          "The user's name is Oliver.",
-          "The user is 35 years old.",
-          "The user is a software developer.",
+          "Ich heiße Oliver.",
+          "Ich bin 35 Jahre alt.",
+          "Ich bin Softwareentwickler.",
         ]),
       );
       expect(records.every((record) => record.status === "proposed")).toBe(true);

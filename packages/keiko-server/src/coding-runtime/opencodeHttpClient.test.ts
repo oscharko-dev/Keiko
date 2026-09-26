@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 import { createOpenCodeHttpClient, parseOpenCodeChildEndpoint } from "./opencodeHttpClient.js";
+import { OPENCODE_HISTORY_RESPONSE_MAX_BYTES } from "./opencodeProtocol.js";
 
 interface OpenCodeEventClient {
   readonly history: (
@@ -167,6 +168,46 @@ describe("OpenCode HTTP client", () => {
       },
       { method: "POST", path: "/session/ses_1/abort" },
       { method: "GET", path: "/session/status" },
+    ]);
+  });
+
+  // #3390: this is the producer contract the coding-sidecar gateway's multipart content-array
+  // parsing (coding-sidecar-gateway.ts `parseMessageContent`) is fixtured against. A prompt with
+  // `initialContext` sends TWO text parts, not one — OpenCode's AI-SDK provider then forwards the
+  // outgoing user message to the model as an OpenAI content-part ARRAY instead of a bare string.
+  // If this pin ever moves, the gateway-side fixture must move with it (AGENTS.md §7).
+  it("pins the two-part prompt shape sent for a prompt with initial context", async () => {
+    const requests: { readonly method: string; readonly path: string; readonly body?: string }[] =
+      [];
+    const client = createOpenCodeHttpClient({
+      endpoint: "http://127.0.0.1:43123",
+      password: "p".repeat(43),
+      fetch: (url, init) => {
+        const path = new URL(requestUrl(url)).pathname;
+        requests.push({
+          method: init?.method ?? "GET",
+          path,
+          ...(typeof init?.body === "string" ? { body: init.body } : {}),
+        });
+        return Promise.resolve(new Response(null, { status: 204 }));
+      },
+    });
+
+    await expect(
+      client.promptAsync("ses_1", "bounded task", { initialContext: "issue context" }),
+    ).resolves.toBeUndefined();
+
+    expect(requests).toEqual([
+      {
+        method: "POST",
+        path: "/session/ses_1/prompt_async",
+        body: JSON.stringify({
+          parts: [
+            { type: "text", text: "bounded task" },
+            { type: "text", text: "issue context", synthetic: true },
+          ],
+        }),
+      },
     ]);
   });
 
@@ -504,6 +545,42 @@ describe("OpenCode HTTP client", () => {
     }) as unknown as OpenCodeEventClient;
 
     await expect(client.history({})).resolves.toEqual([{ id: "evt_1" }]);
+  });
+
+  // The history pull is the one response that carries governed tool arguments -- every durable part
+  // row of a call -- so its budget is derived from the catalog ceilings (2026-09-10), not the
+  // ordinary 1 MiB object cap that still bounds every other JSON response.
+  it("reads a history pull above the ordinary 1 MiB cap up to the derived budget and cancels above it", async () => {
+    const row = { id: "evt_1", filler: "x".repeat(1024 * 1024 + 1024) };
+    const admitted = createOpenCodeHttpClient({
+      endpoint: "http://127.0.0.1:43123",
+      password: "p".repeat(43),
+      fetch: () =>
+        Promise.resolve(
+          new Response(JSON.stringify([row]), {
+            headers: { "content-type": "application/json" },
+          }),
+        ),
+    }) as unknown as OpenCodeEventClient;
+    await expect(admitted.history({})).resolves.toEqual([row]);
+
+    const body = unreadByteStream();
+    const oversized = createOpenCodeHttpClient({
+      endpoint: "http://127.0.0.1:43123",
+      password: "p".repeat(43),
+      fetch: () =>
+        Promise.resolve(
+          new Response(body.stream, {
+            headers: {
+              "content-length": String(OPENCODE_HISTORY_RESPONSE_MAX_BYTES + 1),
+              "content-type": "application/json",
+            },
+          }),
+        ),
+    }) as unknown as OpenCodeEventClient;
+    await expect(oversized.history({})).rejects.toThrow("opencode-history-oversized");
+    expect(body.cancellations).toBe(1);
+    expect(body.pulls).toBe(0);
   });
 
   it("rejects duplicate JSON keys in documents, objects, arrays, and history before parsing", async () => {

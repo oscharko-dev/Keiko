@@ -15,11 +15,16 @@
 // accepted result). Evidence is ids, counts, and bounded reason codes only.
 import {
   CODE_TASK_AUXILIARY_SCHEMA_VERSION,
-  CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
   isCodeTaskChildRunId,
   validateAuxiliaryCapabilityOutcomeV1,
-  validateCodingWorkbenchRuntimeEvent,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
+import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type {
   AuxiliaryCapabilityOutcomeV1,
   AuxiliaryCapabilityRequestV1,
@@ -36,9 +41,159 @@ import {
   deriveReadOnlyChildEnvelope,
 } from "./readOnlyChildEnvelope.js";
 import type { ChildAgentRequestV1, ReadOnlyChildEnvelope } from "./readOnlyChildEnvelope.js";
+import type { ServerLogSink } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 
 /** A governance terminal from the gate or the orchestrator — every non-accepted outcome status. */
 export type ReadOnlyChildTerminal = Exclude<AuxiliaryOutcomeStatus, "accepted">;
+
+const READ_ONLY_CHILD_REASON_CODE_VALUES = [
+  "nested-child-denied",
+  "not-a-child-agent-request",
+  "parent-envelope-invalid",
+  "child-run-id-invalid",
+  "invalid-max-tool-calls",
+  "workspace-read-denied",
+  "workspace-write-denied",
+  "command-execution-denied",
+  "verification-denied",
+  "connector-access-denied",
+  "network-egress-denied",
+  "delivery-denied",
+  "child-max-tool-calls",
+  "parent-budget-exceeded",
+  "parent-paused",
+  "parent-stopped",
+  "parent-question",
+  "awaiting-approval",
+  "authority-revoked",
+  "timeout",
+  "fabricated-tool-denied",
+  "malformed-tool-arguments-denied",
+  "child-runner-error",
+] as const;
+
+type ReadOnlyChildReasonCode = (typeof READ_ONLY_CHILD_REASON_CODE_VALUES)[number];
+
+const READ_ONLY_CHILD_REASON_CODES: ReadonlySet<string> = new Set<ReadOnlyChildReasonCode>(
+  READ_ONLY_CHILD_REASON_CODE_VALUES,
+);
+
+function closedChildReasonCode(reason: string): ReadOnlyChildReasonCode {
+  return READ_ONLY_CHILD_REASON_CODES.has(reason)
+    ? (reason as ReadOnlyChildReasonCode)
+    : "child-runner-error";
+}
+
+const READ_ONLY_CHILD_FAILURE_TERMINALS = [
+  "denied",
+  "limit-reached",
+  "stopped",
+  "unavailable",
+] as const;
+
+const READ_ONLY_CHILD_TERMINALS = ["accepted", ...READ_ONLY_CHILD_FAILURE_TERMINALS] as const;
+
+const READ_ONLY_CHILD_OPERATION_BASE = {
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  owner: "keiko-server",
+  causal: "correlation",
+  releaseImpact: "patch",
+} as const;
+
+const READ_ONLY_CHILD_RUN_ID_FIELD = {
+  type: "string",
+  dataClass: "opaque-id",
+  required: true,
+  maxLength: 128,
+} as const;
+
+const READ_ONLY_CHILD_REASON_FIELD = {
+  type: "string",
+  dataClass: "closed-enum",
+  values: READ_ONLY_CHILD_REASON_CODE_VALUES,
+} as const;
+
+// Optional, like every other diagnostic-trace field pair in this package (e.g.
+// `CODING_RUNTIME_OPTIONAL_DIAGNOSTIC_FIELDS` in codingRuntimeOrchestrator.ts): the shared
+// redaction pipeline (`redactAcceptedField` in observability/log-redaction.ts) drops an empty
+// guarded array outright rather than persisting `[]`, and both fields are routinely empty on a
+// genuine runner fault -- `causeChain` whenever the thrown error carries no `.cause`, `frames`
+// whenever none of its stack frames anchor to a known workspace package. `required: true` would
+// demand a field the production sink itself omits whenever there is nothing to report.
+const READ_ONLY_CHILD_FRAMES_FIELD = {
+  type: "string-array",
+  dataClass: "opaque-id",
+  required: false,
+  maxLength: 512,
+  maxItems: 8,
+} as const;
+
+const READ_ONLY_CHILD_CAUSE_CHAIN_FIELD = {
+  type: "string-array",
+  dataClass: "error-kind",
+  required: false,
+  maxLength: 128,
+  maxItems: 5,
+} as const;
+
+const CODING_RUNTIME_READ_ONLY_CHILD_COMPLETED_OPERATION = defineActivityLogOperation({
+  ...READ_ONLY_CHILD_OPERATION_BASE,
+  op: "coding-runtime.read-only-child.completed",
+  category: "process",
+  emitter: "coding-runtime.readOnlyChildOrchestrator.writeCompletedActivityLog",
+  fields: {
+    childRunId: READ_ONLY_CHILD_RUN_ID_FIELD,
+    terminal: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: READ_ONLY_CHILD_TERMINALS,
+    },
+    reasonCode: {
+      ...READ_ONLY_CHILD_REASON_FIELD,
+      required: false,
+    },
+  },
+  lifecycle: "end",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["read-only-child-run"],
+  proofIds: ["coding-runtime.read-only-child.completed.emitted-line"],
+});
+
+const CODING_RUNTIME_READ_ONLY_CHILD_RUNNER_FAILED_OPERATION = defineActivityLogOperation({
+  ...READ_ONLY_CHILD_OPERATION_BASE,
+  op: "coding-runtime.read-only-child.runner-failed",
+  category: "security",
+  emitter: "coding-runtime.readOnlyChildOrchestrator.emitRunnerFault",
+  fields: {
+    childRunId: READ_ONLY_CHILD_RUN_ID_FIELD,
+    terminal: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: READ_ONLY_CHILD_FAILURE_TERMINALS,
+    },
+    reasonCode: {
+      ...READ_ONLY_CHILD_REASON_FIELD,
+      required: true,
+    },
+    frames: READ_ONLY_CHILD_FRAMES_FIELD,
+    causeChain: READ_ONLY_CHILD_CAUSE_CHAIN_FIELD,
+  },
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["read-only-child-runner"],
+  proofIds: ["coding-runtime.read-only-child.runner-failed.emitted-line"],
+});
+
+function childTerminalErrorKind(terminal: ReadOnlyChildTerminal): ActivityLogErrorKind {
+  if (terminal === "stopped") return "cancelled";
+  if (terminal === "limit-reached") return "rate-limited";
+  if (terminal === "unavailable") return "unavailable";
+  return "authority-denied";
+}
 
 /** The action class a child intends before the orchestrator lets it touch anything. */
 export type ReadOnlyChildToolClass = CodingWorkbenchActionClass | "child-agent";
@@ -84,7 +239,34 @@ export interface ReadOnlyChildRunnerResult {
   readonly resultDigest: CodeTaskFact<string>;
 }
 
-/** The bounded child engine. In production an adapter over keiko-harness `runLoop`. */
+/** Bounded, content-free reasons a runner rejects `run` because the CHILD breached the trust
+ * boundary, not because the runner's infrastructure failed. */
+export type ReadOnlyChildTrustViolationReason =
+  "fabricated-tool-denied" | "malformed-tool-arguments-denied";
+
+/**
+ * A runner throws this instead of resolving `run` when the child itself fabricates a tool call
+ * outside the single tool it was offered, or sends arguments that do not match that tool's
+ * declared shape. Both are anomalies the runner detects internally (e.g. a mandatory tool-catalog
+ * bind failing before any tool executes) that the orchestrator's own gate never sees a
+ * `ReadOnlyChildToolAttempt` for, because the runner correctly never let the call reach it. This is
+ * a closed governance refusal — the workspace was never touched and the run is over — not lost
+ * infrastructure, so the orchestrator classifies it as `denied` with the matching reason code
+ * instead of the generic `unavailable`/`child-runner-error` reserved for a genuine runner fault.
+ */
+export class ReadOnlyChildTrustViolationError extends Error {
+  public constructor(public readonly reasonCode: ReadOnlyChildTrustViolationReason) {
+    super(`read-only child trust boundary violated: ${reasonCode}`);
+    this.name = "ReadOnlyChildTrustViolationError";
+  }
+}
+
+/**
+ * The bounded child engine. In production an adapter over keiko-harness `runLoop`. `run` MUST
+ * reject with a `ReadOnlyChildTrustViolationError` (never a plain `Error`) when the child itself —
+ * not the runner's infrastructure — breached the trust boundary, so the orchestrator can classify
+ * the outcome correctly.
+ */
 export interface ReadOnlyChildRunner {
   readonly run: (input: ReadOnlyChildRunnerInput) => Promise<ReadOnlyChildRunnerResult>;
 }
@@ -104,6 +286,7 @@ export interface ReadOnlyChildOrchestratorDeps {
   readonly charger: ReadOnlyChildBudgetCharger;
   readonly cancellation: ReadOnlyChildCancellationSource;
   readonly emit: (event: CodingWorkbenchRuntimeEvent) => void;
+  readonly activityLog: ServerLogSink;
   readonly clock: { readonly now: () => number };
   /** Produces an evidence-safe unique event id for each emitted lifecycle event. */
   readonly newEventId: () => string;
@@ -259,13 +442,15 @@ async function runChild(
       gate,
     });
     return finalizeOutcome(deps, context, state, result);
-  } catch {
-    // Fail closed on a runner fault: prefer a latched governance terminal, else content-free error.
-    // Either way, a redacted diagnostic ties the opaque outcome to a correlatable event record.
-    emitRunnerFault(deps, context.parentAuthority.runId);
-    return state.latched !== undefined
-      ? rejectedOutcome(state.latched.terminal, state.latched.reasonCode)
-      : rejectedOutcome("unavailable", "child-runner-error");
+  } catch (error) {
+    // Fail closed on a runner fault: prefer a latched governance terminal, then a closed
+    // trust-boundary refusal the runner itself signaled (the child fabricated a tool call or sent
+    // malformed arguments — a governance outcome, not lost infrastructure), else a content-free
+    // `unavailable`. Either way, a redacted diagnostic ties the opaque outcome to a correlatable
+    // event record.
+    const failure = childRunnerFailure(state, error);
+    emitRunnerFault(deps, context.parentAuthority.runId, childRequest.childRunId, failure, error);
+    return rejectedOutcome(failure.terminal, failure.reasonCode);
   } finally {
     cleanup();
   }
@@ -433,6 +618,11 @@ function emitCompleted(
   childRunId: CodeTaskChildRunId,
   outcome: AuxiliaryCapabilityOutcomeV1,
 ): void {
+  // Durable primary-activity-sink write first (§AC7: exactly one durable terminal write per
+  // read-only child run, for EVERY terminal — accepted, denied, limit-reached, stopped and
+  // unavailable alike), so a thrown/invalid runtime event from the auxiliary `emit` sink below can
+  // never suppress it.
+  writeCompletedActivityLog(deps, parentRunId, childRunId, outcome);
   publishRuntimeEvent(deps, {
     schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
     eventId: deps.newEventId(),
@@ -445,8 +635,69 @@ function emitCompleted(
   });
 }
 
+/** Body-free: only the terminal status and, for a non-accepted outcome, its bounded reason code. */
+function writeCompletedActivityLog(
+  deps: ReadOnlyChildOrchestratorDeps,
+  parentRunId: string,
+  childRunId: CodeTaskChildRunId,
+  outcome: AuxiliaryCapabilityOutcomeV1,
+): void {
+  deps.activityLog.write(
+    activityLogEvent(
+      CODING_RUNTIME_READ_ONLY_CHILD_COMPLETED_OPERATION,
+      {
+        correlationId: parentRunId,
+        level: outcome.status === "accepted" ? "info" : "warn",
+        ...(outcome.status === "accepted"
+          ? {}
+          : { errorKind: childTerminalErrorKind(outcome.status) }),
+      },
+      {
+        childRunId,
+        terminal: outcome.status,
+        ...(outcome.status === "accepted"
+          ? {}
+          : { reasonCode: closedChildReasonCode(outcome.reasonCode) }),
+      },
+    ),
+  );
+}
+
+function childRunnerFailure(
+  state: GateState,
+  error: unknown,
+): { readonly terminal: ReadOnlyChildTerminal; readonly reasonCode: string } {
+  if (state.latched !== undefined) return state.latched;
+  return error instanceof ReadOnlyChildTrustViolationError
+    ? { terminal: "denied", reasonCode: error.reasonCode }
+    : { terminal: "unavailable", reasonCode: "child-runner-error" };
+}
+
 /** A content-free, redacted diagnostic tying an opaque runner fault to a correlatable event id. */
-function emitRunnerFault(deps: ReadOnlyChildOrchestratorDeps, parentRunId: string): void {
+function emitRunnerFault(
+  deps: ReadOnlyChildOrchestratorDeps,
+  parentRunId: string,
+  childRunId: CodeTaskChildRunId,
+  failure: { readonly terminal: ReadOnlyChildTerminal; readonly reasonCode: string },
+  error: unknown,
+): void {
+  deps.activityLog.write(
+    activityLogEvent(
+      CODING_RUNTIME_READ_ONLY_CHILD_RUNNER_FAILED_OPERATION,
+      {
+        correlationId: parentRunId,
+        level: "warn",
+        errorKind: childTerminalErrorKind(failure.terminal),
+      },
+      {
+        childRunId,
+        terminal: failure.terminal,
+        reasonCode: closedChildReasonCode(failure.reasonCode),
+        frames: keikoStackFrames(error),
+        causeChain: causeChain(error),
+      },
+    ),
+  );
   publishRuntimeEvent(deps, {
     schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
     eventId: deps.newEventId(),

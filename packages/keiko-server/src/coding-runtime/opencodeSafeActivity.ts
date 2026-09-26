@@ -7,7 +7,7 @@ import type {
   CodingSafeActivityPlanStepInput,
   CodingSafeActivitySignal,
 } from "./codingSafeActivityProjection.js";
-import { parseOpenCodeHistory } from "./opencodeProtocol.js";
+import { isOpenCodeFacadeDispatchedTool, parseOpenCodeHistory } from "./opencodeProtocol.js";
 
 const PLAN_TOOL = "todowrite";
 /** Closed upstream-status vocabulary (#2480); anything else fails the whole plan update closed. */
@@ -29,6 +29,19 @@ export interface NormalizedOpenCodeSafeActivityHistory {
 }
 
 /**
+ * A single explicit result shape shared by every row/signal derivation below: each one always
+ * returns an object literal discriminated on `kind`, instead of mixing an object payload with the
+ * bare `"dropped"` string sentinel and a bare `undefined` "nothing to project" signal.
+ * - `dropped` counts toward the caller's validation-failure counter.
+ * - `skip` is a deliberate no-op (an unrecognized event type, an empty first text frame, a
+ *   facade-owned terminal tool state) -- never counted as a drop (#2473, #3390).
+ */
+type OpenCodeSafeActivityOutcome<T> =
+  | { readonly kind: "value"; readonly value: T }
+  | { readonly kind: "dropped" }
+  | { readonly kind: "skip" };
+
+/**
  * Derives the display-safe mutation beside the existing content-free history projection. Every row
  * first passes the pinned exact OpenCode validator; raw rows, tool arguments, and results are never
  * retained in the returned shape.
@@ -40,27 +53,29 @@ export function normalizeOpenCodeSafeActivityHistory(
   const signals: NormalizedOpenCodeSafeActivitySignal[] = [];
   let dropped = 0;
   for (const row of value) {
-    const normalized = normalizeRow(row);
-    if (normalized === "dropped") dropped += 1;
-    else if (normalized !== undefined) signals.push(normalized);
+    const outcome = normalizeRow(row);
+    if (outcome.kind === "dropped") dropped += 1;
+    else if (outcome.kind === "value") signals.push(outcome.value);
   }
   return { signals, dropped };
 }
 
 function normalizeRow(
   value: unknown,
-): NormalizedOpenCodeSafeActivitySignal | "dropped" | undefined {
+): OpenCodeSafeActivityOutcome<NormalizedOpenCodeSafeActivitySignal> {
   const source = record(value);
   const type = typeof source?.type === "string" ? source.type : undefined;
-  if (!activityEventType(type)) return undefined;
-  if (source === undefined || !parseOpenCodeHistory([value]).ok) return "dropped";
+  if (!activityEventType(type)) return { kind: "skip" };
+  if (source === undefined || !parseOpenCodeHistory([value]).ok) return { kind: "dropped" };
   const admitted = admittedActivitySource(source);
-  if (admitted === undefined) return "dropped";
-  const signal = signalFor(type, admitted.data);
-  if (signal === "dropped") return "dropped";
-  if (signal === undefined) return undefined;
+  if (admitted === undefined) return { kind: "dropped" };
+  const outcome = signalFor(type, admitted.data);
+  if (outcome.kind !== "value") return outcome;
   const identity = `${admitted.aggregateId}\u0000${String(admitted.sequence)}`;
-  return { identity, signal: { ...signal, signalId: admitted.sourceId } };
+  return {
+    kind: "value",
+    value: { identity, signal: { ...outcome.value, signalId: admitted.sourceId } },
+  };
 }
 
 function admittedActivitySource(source: Record<string, unknown>):
@@ -83,7 +98,7 @@ function admittedActivitySource(source: Record<string, unknown>):
     : { aggregateId, sequence, sourceId, data };
 }
 
-type CodingSafeActivitySignalOutcome = CodingSafeActivitySignal | "dropped" | undefined;
+type CodingSafeActivitySignalOutcome = OpenCodeSafeActivityOutcome<CodingSafeActivitySignal>;
 
 function signalFor(
   type: string | undefined,
@@ -92,15 +107,16 @@ function signalFor(
   if (type === "message.updated.1") return messageSignal(data);
   if (type === "message.part.updated.1") return partSignal(data);
   if (type === "session.next.tool.called") return calledToolSignal(data);
-  // Terminal outcomes are deliberately not inferred from upstream output. The Keiko tool facade
-  // supplies succeeded/failed/denied/cancelled after its closed result is known.
-  return undefined;
+  // These top-level terminal event types carry no part to project (see toolPartSignal for the
+  // part-level "error" status, which IS projected): the Keiko tool facade supplies
+  // succeeded/denied/cancelled after its closed result is known.
+  return { kind: "skip" };
 }
 
-function messageSignal(data: Record<string, unknown>): CodingSafeActivitySignal | "dropped" {
+function messageSignal(data: Record<string, unknown>): CodingSafeActivitySignalOutcome {
   const base = messageSignalBase(data);
-  if (base === undefined) return "dropped";
-  if (base.role === "user") return { kind: "message", ...base };
+  if (base === undefined) return { kind: "dropped" };
+  if (base.role === "user") return { kind: "value", value: { kind: "message", ...base } };
   return assistantMessageSignal(data, base);
 }
 
@@ -129,26 +145,29 @@ function assistantMessageSignal(
     readonly role: "user" | "assistant";
     readonly occurredAt: string;
   },
-): CodingSafeActivitySignal | "dropped" {
+): CodingSafeActivitySignalOutcome {
   const parentMessageId = string(record(data.info)?.parentID);
-  if (parentMessageId === undefined) return "dropped";
+  if (parentMessageId === undefined) return { kind: "dropped" };
   return {
-    kind: "message",
-    messageId: base.messageId,
-    role: "assistant",
-    occurredAt: base.occurredAt,
-    parentMessageId,
+    kind: "value",
+    value: {
+      kind: "message",
+      messageId: base.messageId,
+      role: "assistant",
+      occurredAt: base.occurredAt,
+      parentMessageId,
+    },
   };
 }
 
 function partSignal(data: Record<string, unknown>): CodingSafeActivitySignalOutcome {
   const part = record(data.part);
   const occurredAt = instantFrom(data.time);
-  if (part === undefined || occurredAt === undefined) return "dropped";
+  if (part === undefined || occurredAt === undefined) return { kind: "dropped" };
   if (part.type === "text") return textSignal(part, occurredAt);
   if (part.type === "tool" && part.tool === PLAN_TOOL) return planSignal(part, occurredAt);
   if (part.type === "tool") return toolPartSignal(part, occurredAt);
-  return undefined;
+  return { kind: "skip" };
 }
 
 /** The plan tool projects as a plan snapshot, never as productive tool activity (#2480). */
@@ -158,17 +177,17 @@ function planSignal(
 ): CodingSafeActivitySignalOutcome {
   const state = record(part.state);
   // Only the completed part carries the final argument list; earlier states may stream partials.
-  if (state?.status !== "completed") return undefined;
+  if (state?.status !== "completed") return { kind: "skip" };
   const messageId = string(part.messageID);
   const todos = record(state.input)?.todos;
-  if (messageId === undefined || !Array.isArray(todos)) return "dropped";
+  if (messageId === undefined || !Array.isArray(todos)) return { kind: "dropped" };
   const steps: CodingSafeActivityPlanStepInput[] = [];
   for (const todo of todos) {
     const step = planStep(todo);
-    if (step === undefined) return "dropped";
+    if (step === undefined) return { kind: "dropped" };
     steps.push(step);
   }
-  return { kind: "plan", anchorMessageId: messageId, steps, occurredAt };
+  return { kind: "value", value: { kind: "plan", anchorMessageId: messageId, steps, occurredAt } };
 }
 
 function planStep(value: unknown): CodingSafeActivityPlanStepInput | undefined {
@@ -190,14 +209,14 @@ function textSignal(
   part: Record<string, unknown>,
   occurredAt: string,
 ): CodingSafeActivitySignalOutcome {
-  if (part.ignored === true || part.synthetic === true) return undefined;
+  if (part.ignored === true || part.synthetic === true) return { kind: "skip" };
   const messageId = string(part.messageID);
   const text = string(part.text);
-  if (messageId === undefined || text === undefined) return "dropped";
+  if (messageId === undefined || text === undefined) return { kind: "dropped" };
   // The real child appends a text part before any characters stream into it; the empty first
   // frame carries nothing to project and is skipped, never counted as a validation drop (#2473).
-  if (text.length === 0) return undefined;
-  return { kind: "text", messageId, text, occurredAt };
+  if (text.length === 0) return { kind: "skip" };
+  return { kind: "value", value: { kind: "text", messageId, text, occurredAt } };
 }
 
 function toolPartSignal(
@@ -205,23 +224,36 @@ function toolPartSignal(
   occurredAt: string,
 ): CodingSafeActivitySignalOutcome {
   const state = record(part.state)?.status;
-  if (state === "completed") return undefined;
-  const normalizedState = toolPartState(state);
+  const tool = string(part.tool);
+  // A completed part is a silent no-op for a facade-dispatched (keiko_*) tool: the Keiko tool
+  // facade supplies "succeeded" once its closed result is known (opencodeRuntimeComposition.ts
+  // settleTool), so inferring it again here would race a value the facade already owns. The only
+  // native tool that ever reaches this function is "question" ("todowrite" is projected as a plan
+  // by partSignal before reaching here, and never as productive tool activity, #2480); it has no
+  // other terminal source, so for a non-facade tool the completed part IS the terminal signal
+  // (#3390) -- fed through the same idempotent running->succeeded transition the facade path
+  // relies on (codingSafeActivityProjection.ts allowedToolTransition).
+  if (state === "completed" && (tool === undefined || isOpenCodeFacadeDispatchedTool(tool)))
+    return { kind: "skip" };
+  const normalizedState: CodingSafeActivityToolState | undefined =
+    state === "completed" ? "succeeded" : toolPartState(state);
   const messageId = string(part.messageID);
   const callId = string(part.callID);
-  const tool = string(part.tool);
   if (
     normalizedState === undefined ||
     messageId === undefined ||
     callId === undefined ||
     tool === undefined
   ) {
-    return "dropped";
+    return { kind: "dropped" };
   }
-  return { kind: "tool", messageId, callId, tool, state: normalizedState, occurredAt };
+  return {
+    kind: "value",
+    value: { kind: "tool", messageId, callId, tool, state: normalizedState, occurredAt },
+  };
 }
 
-function calledToolSignal(data: Record<string, unknown>): CodingSafeActivitySignal | "dropped" {
+function calledToolSignal(data: Record<string, unknown>): CodingSafeActivitySignalOutcome {
   const occurredAt = instantFrom(data.timestamp);
   const messageId = string(data.assistantMessageID);
   const callId = string(data.callID);
@@ -230,14 +262,23 @@ function calledToolSignal(data: Record<string, unknown>): CodingSafeActivitySign
     messageId === undefined ||
     callId === undefined ||
     tool === undefined
-    ? "dropped"
-    : { kind: "tool", messageId, callId, tool, state: "running", occurredAt };
+    ? { kind: "dropped" }
+    : {
+        kind: "value",
+        value: { kind: "tool", messageId, callId, tool, state: "running", occurredAt },
+      };
 }
 
 function toolPartState(
   value: unknown,
-): Extract<CodingSafeActivityToolState, "pending" | "running"> | undefined {
-  return value === "pending" || value === "running" ? value : undefined;
+): Extract<CodingSafeActivityToolState, "pending" | "running" | "failed"> | undefined {
+  if (value === "pending" || value === "running") return value;
+  // A terminal "error" part must still be projected even for a facade-dispatched tool: the
+  // facade only settles once its HTTP tool-bridge round trip completes, so a fault the OpenCode
+  // child hits before or without reaching the facade (e.g. a network fault dialing the bridge)
+  // never calls settleTool and would otherwise leave the timeline reading "Running" forever
+  // (#3390). The upstream error string is untrusted and deliberately dropped, never read here.
+  return value === "error" ? "failed" : undefined;
 }
 
 function activityEventType(value: string | undefined): boolean {

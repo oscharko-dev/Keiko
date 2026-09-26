@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, realpathSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { Socket, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -32,6 +32,13 @@ import {
 import { createInMemoryUiStore } from "./store/index.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { createUiServer, UI_HOST } from "./server.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
 
 function makeReq(payload: unknown): IncomingMessage {
   const json = JSON.stringify(payload);
@@ -45,6 +52,7 @@ function makeCtx(
 ): RouteContext {
   const socket = new Socket();
   return {
+    correlationId: undefined,
     req: makeReq(payload),
     res: { socket } as unknown as RouteContext["res"],
     params,
@@ -89,7 +97,7 @@ afterEach(() => {
 });
 
 function makeVault(): MemoryVaultStore {
-  const dir = mkdtempSync(join(tmpdir(), "keiko-consolidation-mem-"));
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-consolidation-mem-"));
   tmpDirs.push(dir);
   const vault = createMemoryVault({ memoryDir: dir, redactString: (s) => s });
   activeVaults.push(vault);
@@ -163,6 +171,22 @@ describe("memory consolidation job handlers", () => {
       makeDeps({ memoryVault: undefined }),
     );
     expect(result.status).toBe(503);
+  });
+
+  // #2902 w5-sse-counters: readJsonBody now consolidates onto the shared readBoundedRequestBody,
+  // so an oversized body must still yield the shared reader's own 413 rejection shape.
+  it("rejects an oversized body using the shared bounded-body reader", async () => {
+    const deps = makeDeps({ memoryVault: makeVault() });
+
+    const result = await handleCreateConsolidationJob(
+      makeCtx("/api/memory/consolidation/jobs", {
+        scopes: [{ kind: "user", userId: "u-1" }],
+        settings: { notes: "x".repeat(70_000) },
+      }),
+      deps,
+    );
+
+    expect(result.status).toBe(413);
   });
 
   it("registers a queued job and then skips when no memories match", async () => {
@@ -424,7 +448,7 @@ describe("memory consolidation job handlers", () => {
       throw new Error(rawFailure);
     });
 
-    const staticRoot = mkdtempSync(join(tmpdir(), "keiko-consolidation-static-"));
+    const staticRoot = mkdtempSync(join(realpathSync(tmpdir()), "keiko-consolidation-static-"));
     tmpDirs.push(staticRoot);
     const serverDeps = {
       staticRoot,
@@ -436,8 +460,8 @@ describe("memory consolidation job handlers", () => {
     await new Promise<void>((resolve) => server.listen(0, UI_HOST, resolve));
     const port = (server.address() as AddressInfo).port;
     serverDeps.port = port;
-    let responseText = "";
-    let responseStatus = 0;
+    let responseText: string;
+    let responseStatus: number;
     try {
       const response = await fetch(
         `http://${UI_HOST}:${String(port)}/api/memory/consolidation/jobs/${jobId}/review-items/${item.id}/apply`,
@@ -739,6 +763,50 @@ describe("memory consolidation job handlers", () => {
     expect(fetched.job.result?.truncated).toBe(true);
   });
 
+  // The explicit-job loader does its own oldest-first pre-sort before slicing, so it reproduced
+  // the engine's frozen-window defect independently of the engine's own comparator: the newest
+  // memories were dropped before runConsolidation ever saw them. Both wired call sites have to
+  // window on recency, or fixing one leaves the other silently broken.
+  it("keeps the newest records when a selection exceeds maxRecordsPerRun", async () => {
+    const vault = makeVault();
+    const oldest = insertAcceptedMemory(vault, { id: "m-1", body: "unrelated archived note" });
+    const middle = insertAcceptedMemory(vault, { id: "m-2", body: "user prefers tabs in editor" });
+    const newest = insertAcceptedMemory(vault, { id: "m-3", body: "user prefers tabs in editor" });
+    // Distinct, increasing updatedAt values: the helper stamps Date.now(), so records inserted in
+    // one tick would otherwise be ordered only by the id tiebreak. Each stamp must stay at or
+    // after its own createdAt, which the record validator enforces.
+    vault.updateMemory(oldest.id, { tags: ["archive"] }, oldest.createdAt + 1_000);
+    vault.updateMemory(middle.id, { tags: ["archive"] }, middle.createdAt + 2_000);
+    vault.updateMemory(newest.id, { tags: ["archive"] }, newest.createdAt + 3_000);
+    const deps = makeDeps({ memoryVault: vault });
+    const createResult = await handleCreateConsolidationJob(
+      makeCtx("/api/memory/consolidation/jobs", {
+        scopes: [{ kind: "user", userId: "u-1" }],
+        settings: { maxRecordsPerRun: 2 },
+      }),
+      deps,
+    );
+    expect(createResult.status).toBe(202);
+    const createdJob = asJobEnvelope(createResult).job;
+    await flushImmediate();
+    const fetched = asJobEnvelope(
+      handleGetConsolidationJob(
+        makeCtx(`/api/memory/consolidation/jobs/${createdJob.id}`, {}, { jobId: createdJob.id }),
+        deps,
+      ),
+    );
+    expect(fetched.job.result?.recordsInspected).toBe(2);
+    expect(fetched.job.result?.truncated).toBe(true);
+    // The identical bodies of m-2/m-3 form a duplicate cluster, which surfaces as proposed edges.
+    // Nothing at all is proposed if the window kept m-1 and m-2 instead.
+    const endpoints =
+      fetched.job.result?.edgesProposed.flatMap((edge) => [edge.fromMemoryId, edge.toMemoryId]) ??
+      [];
+    expect(endpoints).toContain("m-3");
+    expect(endpoints).toContain("m-2");
+    expect(endpoints).not.toContain("m-1");
+  });
+
   it("cancels a queued job before execution starts", async () => {
     const vault = makeVault();
     insertAcceptedMemory(vault, { id: "m-1", body: "user prefers tabs in editor" });
@@ -769,6 +837,45 @@ describe("memory consolidation job handlers", () => {
       deps,
     );
     expect(asJobEnvelope(fetched).job.state).toBe("canceled");
+  });
+
+  // Distinct from the previous test: handleCancelConsolidationJob itself transitions a
+  // still-queued job to canceled synchronously, so runScheduledJob's own `queued` guard
+  // (`if (queued?.job.state !== "queued") return;`) short-circuits before completeIfCanceled
+  // ever runs. Setting cancelRequested directly on the registry — bypassing that handler —
+  // reproduces the race the scheduled run's own pre-load checkpoint exists to close: a cancel
+  // request lands after the job is registered but before its setImmediate-scheduled run starts.
+  it("completes a still-queued job as canceled via the scheduled run's own pre-load checkpoint", async () => {
+    const vault = makeVault();
+    insertAcceptedMemory(vault, { id: "m-1", body: "user prefers tabs in editor" });
+    const registry = createConsolidationJobRegistry();
+    const deps = makeDeps({ memoryVault: vault, consolidationJobs: registry });
+
+    const createResult = await handleCreateConsolidationJob(
+      makeCtx("/api/memory/consolidation/jobs", { scopes: [{ kind: "user", userId: "u-1" }] }),
+      deps,
+    );
+    const jobId = asJobEnvelope(createResult).job.id;
+    registry.requestCancel(jobId);
+    const beforeRun = registry.get(jobId);
+    expect(beforeRun?.job.state).toBe("queued");
+    expect(beforeRun?.cancelRequested).toBe(true);
+
+    await flushImmediate();
+
+    const fetched = handleGetConsolidationJob(
+      makeCtx(`/api/memory/consolidation/jobs/${jobId}`, {}, { jobId }),
+      deps,
+    );
+    const envelope = asJobEnvelope(fetched);
+    expect(envelope.job.state).toBe("canceled");
+    expect(envelope.cancelRequested).toBe(true);
+    // The checkpoint fires before loadSelectedMemories ever runs, so the job carries no
+    // consolidation result and the record's memoryCount stays at the 0 the checkpoint was
+    // called with — proving runScheduledJob returned immediately afterward rather than
+    // proceeding to load memories or run the engine.
+    expect(envelope.job.result).toBeUndefined();
+    expect(envelope.memoryCount).toBe(0);
   });
 
   it("folds a cancel request that arrives during the advisory phase into a canceled job (Issue #2130 / ADR-0120 D8)", async () => {
@@ -926,6 +1033,86 @@ describe("memory consolidation job handlers", () => {
     const serialized = JSON.stringify(getResult.body);
     expect(serialized).not.toContain(secret);
     expect(serialized).not.toContain("/srv/vault");
+  });
+
+  it("logs a content-free diagnostic when the scheduled run throws (#2902 w4b)", async () => {
+    // FAILS BEFORE: prior to this fix the catch{} around the scheduled run's engine call
+    // discarded the thrown error entirely — no diagnostic was ever emitted, so `records` below
+    // stayed empty and this assertion failed. PASSES AFTER: a structured, content-free diagnostic
+    // now records that the job failed and why (error CLASS only), before the job is marked failed.
+    const secret = "sk-" + "test0ABC123DEF456GHI789";
+    const rawMessage = `embedding read /srv/vault/embeddings.db failed: token ${secret}`;
+    const vault = makeVault();
+    insertAcceptedMemory(vault, { id: "m-1", body: "user prefers tabs in editor" });
+    insertAcceptedMemory(vault, { id: "m-2", body: "user prefers tabs in the editor" });
+    const faulty: MemoryVaultStore = {
+      ...vault,
+      getEmbeddings: () => {
+        throw new Error(rawMessage);
+      },
+    };
+    const records: ServerDiagnosticRecord[] = [];
+    const deps = makeDeps({
+      memoryVault: faulty,
+      diagnostics: { record: (record) => records.push(record) },
+    });
+    const createResult = await handleCreateConsolidationJob(
+      makeCtx("/api/memory/consolidation/jobs", { scopes: [{ kind: "user", userId: "u-1" }] }),
+      deps,
+    );
+    expect(createResult.status).toBe(202);
+    await flushImmediate();
+    expect(records).toHaveLength(1);
+    const [record] = records;
+    if (record === undefined) throw new Error("expected a diagnostic record");
+    expect(record.source).toBe("memory-consolidation.scheduled-job");
+    expect(record.operation).toBe("memory.consolidation.job.run");
+    expect(record.errorClass).toBe("Error");
+    expect(record.correlationId.length).toBeGreaterThan(0);
+    const serialized = JSON.stringify(record);
+    expect(serialized).not.toContain(secret);
+    expect(serialized).not.toContain("/srv/vault");
+  });
+
+  describe("consolidation.summary.fallback activity-log wiring (#2902 w6)", () => {
+    afterEach(() => {
+      resetServerLogger();
+    });
+
+    // FAILS BEFORE: buildRunOptions never set `logSink`, so `emitConsolidationLogEvent` no-op'd on
+    // every fallback and `consolidation.summary.fallback` never reached `server.log` no matter who
+    // was listening. PASSES AFTER: the job's own id is wired through as the composition-root sink's
+    // correlationId, so an operator can join the fallback reason back to the specific job that
+    // produced it.
+    it("emits a durable, job-correlated line when the summary generator is absent", async () => {
+      const vault = makeVault();
+      insertAcceptedMemory(vault, { id: "m-a", body: "use tabs" });
+      insertAcceptedMemory(vault, { id: "m-b", body: "prefer compact diffs" });
+      insertAcceptedMemory(vault, { id: "m-c", body: "keep PR titles short" });
+      const deps = makeDeps({ memoryVault: vault });
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+
+      const createResult = await handleCreateConsolidationJob(
+        makeCtx("/api/memory/consolidation/jobs", {
+          scopes: [{ kind: "user", userId: "u-1" }],
+          settings: { jaccardThreshold: 0 },
+        }),
+        deps,
+      );
+      expect(createResult.status).toBe(202);
+      const createdJob = asJobEnvelope(createResult).job;
+      await flushImmediate();
+
+      expect(sink.events).toContainEqual(
+        expect.objectContaining({
+          category: "consolidation",
+          op: "consolidation.summary.fallback",
+          correlationId: createdJob.id,
+          extra: { completeness: "complete", loss: "none", reason: "absent" },
+        }),
+      );
+    });
   });
 
   describe("settings range validation", () => {

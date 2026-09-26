@@ -32,16 +32,17 @@ import {
   type AtlassianHttpBodyPort,
   type AtlassianHttpBodyResult,
 } from "./atlassian-http-port.js";
-import {
-  ATLASSIAN_SYNC_RETRY_BASE_DELAY_MS,
-  ATLASSIAN_SYNC_RETRY_FACTOR,
-  ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS,
-  ATLASSIAN_SYNC_RETRY_MAX_DELAY_MS,
-} from "./atlassian-sync-lane.js";
+import { ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS, retryDelayMs } from "./atlassian-sync-lane.js";
 import { parseJsonRecord } from "./atlassian-sync-classify.js";
 
 // ADR-0128 D3: interactive write/read actions (issue and page CRUD, transitions, comments).
 export const ATLASSIAN_WRITE_ACTION_TIMEOUT_MS = 30_000;
+// KEIKO-0318: aggregate deadline across the entire retry loop for one write action. Sized to
+// bound the loop below the 3-minute worst case (5 × 30s per-request + 4 × 8s backoff = 182s)
+// that a hostile upstream could otherwise sustain by hanging every request at the per-request
+// ceiling. 90 s allows a legitimate slow request plus two full retries with 8 s backoff; a
+// pathological upstream is cut off well before the "minutes" symptom the finding named.
+export const ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS = 90_000;
 // Write responses are minimal (created ids/keys, version numbers, transition lists); the cap is
 // generous for those payloads and small enough that a hostile upstream cannot flood the lane.
 export const ATLASSIAN_WRITE_RESPONSE_MAX_BYTES = 262_144;
@@ -62,6 +63,11 @@ export interface AtlassianWriteHttpDeps {
   readonly http: AtlassianHttpBodyPort;
   // Injected backoff sleep (real timer in production, recorded no-op in tests).
   readonly sleep?: ((ms: number) => Promise<void>) | undefined;
+  // Injected clock for the aggregate-deadline check. Defaults to Date.now; tests inject.
+  readonly now?: (() => number) | undefined;
+  // Optional cancellation for the whole write action (KEIKO-0318). Not required — the aggregate
+  // deadline is the load-bearing bound.
+  readonly signal?: AbortSignal | undefined;
 }
 
 export type AtlassianWriteHttpOutcome =
@@ -91,15 +97,6 @@ function failureReasonForWriteStatus(status: number): AtlassianConnectorWriteFai
   if (status === 409) return "conflict";
   if (status === 429) return "rate-limited";
   return "unavailable";
-}
-
-function retryDelayMs(attempt: number, retryAfterMs: number | undefined): number {
-  if (retryAfterMs !== undefined && Number.isFinite(retryAfterMs) && retryAfterMs >= 0) {
-    return Math.min(Math.trunc(retryAfterMs), ATLASSIAN_SYNC_RETRY_MAX_DELAY_MS);
-  }
-  const exponential =
-    ATLASSIAN_SYNC_RETRY_BASE_DELAY_MS * ATLASSIAN_SYNC_RETRY_FACTOR ** (attempt - 1);
-  return Math.min(exponential, ATLASSIAN_SYNC_RETRY_MAX_DELAY_MS);
 }
 
 // Method-aware retry eligibility (see the header): idempotent methods follow D3's 429/5xx rule;
@@ -145,14 +142,75 @@ function classifyResponse(
 async function issueOnce(
   deps: AtlassianWriteHttpDeps,
   request: AtlassianWriteHttpRequest,
+  timeoutMs: number,
 ): Promise<AtlassianHttpBodyResult> {
   return deps.http({
     method: request.method,
     url: request.url,
-    timeoutMs: ATLASSIAN_WRITE_ACTION_TIMEOUT_MS,
+    timeoutMs,
     maxBodyBytes: ATLASSIAN_WRITE_RESPONSE_MAX_BYTES,
     ...(request.bodyJson === undefined ? {} : { bodyJson: request.bodyJson }),
+    // KEIKO-0318: thread the caller's cancellation into the transport call itself so an abort
+    // tears down the in-flight request (AtlassianHttpBodyRequest.signal) instead of only being
+    // observed between attempts — the between-attempt checks alone only stopped a LATER retry.
+    ...(deps.signal === undefined ? {} : { signal: deps.signal }),
   });
+}
+
+// KEIKO-0318: clamp the per-request timeout to whatever budget the aggregate deadline still
+// permits, but never below a small floor that guarantees the request has time to arrive.
+const PER_REQUEST_TIMEOUT_FLOOR_MS = 1_000;
+function clampedPerRequestTimeoutMs(deadlineAt: number, now: () => number): number {
+  const remaining = deadlineAt - now();
+  return Math.max(
+    PER_REQUEST_TIMEOUT_FLOOR_MS,
+    Math.min(ATLASSIAN_WRITE_ACTION_TIMEOUT_MS, remaining),
+  );
+}
+
+// KEIKO-0318: refuse to sleep past the aggregate deadline OR while a caller-requested abort is
+// pending. Returns the reason the retry loop must stop, or undefined when a next attempt is safe.
+function reasonToStopRetrying(
+  now: () => number,
+  isAborted: () => boolean,
+  deadlineAt: number,
+  delay: number,
+  phase: "before-sleep" | "after-sleep",
+): "deadline" | "aborted" | undefined {
+  if (phase === "before-sleep") {
+    if (now() + delay > deadlineAt) return "deadline";
+    if (isAborted()) return "aborted";
+    return undefined;
+  }
+  if (isAborted()) return "aborted";
+  if (now() >= deadlineAt) return "deadline";
+  return undefined;
+}
+
+async function driveRetryLoop(
+  deps: AtlassianWriteHttpDeps,
+  request: AtlassianWriteHttpRequest,
+  initial: AtlassianHttpBodyResult,
+  deadlineAt: number,
+  now: () => number,
+  isAborted: () => boolean,
+  sleep: (ms: number) => Promise<void>,
+): Promise<AtlassianHttpBodyResult> {
+  let result = initial;
+  for (let attempt = 1; attempt < ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS; attempt += 1) {
+    if (!isRetryable(request.method, result)) break;
+    const retryAfterMs = result.kind === "response" ? result.retryAfterMs : undefined;
+    const delay = retryDelayMs(attempt, retryAfterMs);
+    if (reasonToStopRetrying(now, isAborted, deadlineAt, delay, "before-sleep") !== undefined) {
+      break;
+    }
+    await sleep(delay);
+    if (reasonToStopRetrying(now, isAborted, deadlineAt, delay, "after-sleep") !== undefined) {
+      break;
+    }
+    result = await issueOnce(deps, request, clampedPerRequestTimeoutMs(deadlineAt, now));
+  }
+  return result;
 }
 
 // Execute one bounded write-lane request with the method-aware D3 retry discipline. Returns a
@@ -168,13 +226,12 @@ export async function executeAtlassianWriteRequest(
     return { ok: false, reason: "bounds-exceeded" };
   }
   const sleep = deps.sleep ?? defaultSleep;
-  let result = await issueOnce(deps, request);
-  for (let attempt = 1; attempt < ATLASSIAN_SYNC_RETRY_MAX_ATTEMPTS; attempt += 1) {
-    if (!isRetryable(request.method, result)) break;
-    const retryAfterMs = result.kind === "response" ? result.retryAfterMs : undefined;
-    await sleep(retryDelayMs(attempt, retryAfterMs));
-    result = await issueOnce(deps, request);
-  }
+  const now = deps.now ?? ((): number => Date.now());
+  const deadlineAt = now() + ATLASSIAN_WRITE_ACTION_TOTAL_TIMEOUT_MS;
+  const isAborted = (): boolean => deps.signal?.aborted === true;
+  if (isAborted()) return { ok: false, reason: "timeout" };
+  const initial = await issueOnce(deps, request, clampedPerRequestTimeoutMs(deadlineAt, now));
+  const result = await driveRetryLoop(deps, request, initial, deadlineAt, now, isAborted, sleep);
   if (result.kind !== "response") return classifyTransport(result);
   return classifyResponse(result, request.expect);
 }

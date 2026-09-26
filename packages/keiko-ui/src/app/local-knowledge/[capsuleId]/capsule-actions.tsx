@@ -21,10 +21,11 @@ import {
   type SetStateAction,
 } from "react";
 import { createPortal } from "react-dom";
-import { LOCAL_KNOWLEDGE_FILE_FILTERS } from "@oscharko-dev/keiko-contracts";
+import { LOCAL_KNOWLEDGE_FILE_FILTERS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-file-selection";
 import type {
   KnowledgeCapsuleId,
   CapsuleLifecycleState,
+  IndexingJobRecord,
   LocalKnowledgeFileFilterId,
   NativeFileDialogFilter,
 } from "@oscharko-dev/keiko-contracts";
@@ -51,6 +52,10 @@ import {
 } from "@/lib/local-knowledge-limits";
 import { useModalInteractionLock } from "@/app/components/desktop/hooks/useModalInteractionLock";
 import { useNativeFileDialogCapability } from "@/app/components/desktop/hooks/useNativeFileDialogCapability";
+import {
+  NATIVE_DIALOG_STYLE,
+  NATIVE_FIELDSET_RESET_STYLE,
+} from "@/app/components/desktop/native-element-styles";
 import { nativePathsToRootAndFiles, pickWithNativeDialog } from "@/lib/native-file-dialog";
 import { useLocale } from "@/lib/i18n";
 import {
@@ -79,6 +84,18 @@ interface ProgressState {
   readonly startedAt: number;
   readonly now: number;
   readonly pollError: string | null;
+  /** Job id the 202 admission named; null while unknown (pre-202, reattach, repository pods). */
+  readonly watchedJobId: string | null;
+  /** True once this watch has SEEN its run as a running row — the fallback settle gate. */
+  readonly observedRunning: boolean;
+  /** True when this watch attached to an already-running capsule instead of starting one. */
+  readonly reattached: boolean;
+  /**
+   * Newest job id the DETAIL page knew before the click. A click watch without a pinned 202 id
+   * (repository pods) settles on identity difference: a terminal row with ANOTHER id is the new
+   * run — even one that finished between two polls without ever being observed running.
+   */
+  readonly precedingJobId: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -154,8 +171,21 @@ function progressStyle(value: number): { readonly width: string } {
   return { width: formatPercent(value) };
 }
 
-function initialProgressState(now = Date.now()): ProgressState {
-  return { detail: null, startedAt: now, now, pollError: null };
+function initialProgressState(
+  now = Date.now(),
+  reattached = false,
+  precedingJobId: string | null = null,
+): ProgressState {
+  return {
+    detail: null,
+    startedAt: now,
+    now,
+    pollError: null,
+    watchedJobId: null,
+    observedRunning: false,
+    reattached,
+    precedingJobId,
+  };
 }
 
 // progressAfter* — pure state transitions for the polling effect below. Kept as small,
@@ -166,9 +196,26 @@ function progressAfterTick(current: ProgressState | null): ProgressState | null 
 }
 
 function progressAfterFetch(current: ProgressState | null, detail: CapsuleDetail): ProgressState {
+  const running = detail.indexingJobs[0]?.status === "running";
   return current === null
-    ? { detail, startedAt: Date.now(), now: Date.now(), pollError: null }
-    : { ...current, detail, now: Date.now(), pollError: null };
+    ? { ...initialProgressState(), detail, observedRunning: running }
+    : {
+        ...current,
+        detail,
+        now: Date.now(),
+        pollError: null,
+        observedRunning: current.observedRunning || running,
+      };
+}
+
+// Threads the job id the 202 admission named into an already-started watch. The click starts
+// the watch BEFORE the fetch resolves (the spinner must not wait on the network), so the id
+// arrives one state update later.
+function progressWithWatchedJob(
+  current: ProgressState | null,
+  watchedJobId: string | null,
+): ProgressState | null {
+  return current === null ? current : { ...current, watchedJobId };
 }
 
 function progressAfterPollError(
@@ -206,6 +253,48 @@ function isProgressActive(
   if (progress === null) return false;
   if (indexBusy) return true;
   return busy && confirm !== null && confirm.kind !== "delete";
+}
+
+// The start route answers 202 the moment the job is admitted (2026-08 field review: awaiting
+// the whole multi-hour run in one fetch decoupled the UI from a still-running job on any
+// transport blip). The 2s polling therefore SETTLES the busy state — on IDENTITY, never on a
+// wall-clock window (review finding on #3221: browser and server clocks may skew, and a run
+// that finished just before the click landed inside the old 5 s grace):
+//   1. The id the 202 named settles only the row carrying that id.
+//   2. Without an id (repository pods mint theirs inside the refresh flow), the watch must
+//      first SEE its run as a running row — a pre-existing terminal row can never settle a
+//      freshly admitted job.
+//   3. A reattached watch (page load onto lifecycleState "indexing") settles once the polled
+//      detail says the capsule is no longer indexing — covering the stale-lifecycle page
+//      that would otherwise spin forever over an old terminal row.
+function terminalJobOf(progress: ProgressState | null): IndexingJobRecord | undefined {
+  const job = progress?.detail?.indexingJobs[0];
+  return job === undefined || job.status === "running" ? undefined : job;
+}
+
+// Fallback settlement for a watch WITHOUT a pinned job id. A reattached watch settles once the
+// capsule stops reporting an in-flight run; a click watch settles on a terminal row whose id
+// DIFFERS from the newest row that predated the click (identity, never wall clocks) — covering
+// a repository-pod run so fast that no poll ever observed it running.
+function fallbackSettledJob(
+  progress: ProgressState,
+  job: IndexingJobRecord,
+): IndexingJobRecord | undefined {
+  if (progress.observedRunning) return job;
+  if (progress.reattached) {
+    const capsuleStillIndexing = progress.detail?.capsule.lifecycleState === "indexing";
+    return capsuleStillIndexing ? undefined : job;
+  }
+  return job.id !== progress.precedingJobId ? job : undefined;
+}
+
+function settledJobFor(progress: ProgressState | null): IndexingJobRecord | undefined {
+  const job = terminalJobOf(progress);
+  if (progress === null || job === undefined) return undefined;
+  if (progress.watchedJobId !== null) {
+    return job.id === progress.watchedJobId ? job : undefined;
+  }
+  return fallbackSettledJob(progress, job);
 }
 
 // Delete can return affected Knowledge Pod Sets (AUDIT-E1821-001); routes the completion to
@@ -395,7 +484,17 @@ function applyNativeDialogOutcome(
 ): void {
   if (outcome.kind === "picked") {
     onPicked(outcome.paths);
-    setConnectError(null);
+    // #2906 review (comment 3863185762): a mixed pick used to shrink silently -- the picker
+    // returned N items, the response carried fewer, and nothing told the user why. Surface it
+    // instead of clearing the notice, without blocking the valid subset that WAS picked.
+    const rejectedCount = outcome.rejectedCount ?? 0;
+    // #2906 round 3: real singular/plural variants -- "1 selected item(s) ... were skipped" was
+    // grammatically wrong for the count === 1 case in both English and German.
+    const partialSelectionKey =
+      rejectedCount === 1
+        ? "localKnowledge.nativeDialog.partialSelection.singular"
+        : "localKnowledge.nativeDialog.partialSelection.plural";
+    setConnectError(rejectedCount > 0 ? t(partialSelectionKey, { count: rejectedCount }) : null);
     return;
   }
   if (outcome.kind === "busy") setConnectError(t("localKnowledge.nativeDialog.busy"));
@@ -794,7 +893,7 @@ function ConnectSourceForm({
 // ---------------------------------------------------------------------------
 
 function useFocusTrap(
-  dialogRef: React.RefObject<HTMLDivElement | null>,
+  dialogRef: React.RefObject<HTMLElement | null>,
   active: boolean,
   onEscape: () => void,
 ): void {
@@ -822,9 +921,9 @@ function useFocusTrap(
 
     // Capture the narrowed non-null reference so the inner handler can use it
     // without TypeScript losing the narrowing across the closure boundary.
-    const narrowedDialog: HTMLDivElement = dialog;
+    const narrowedDialog: HTMLElement = dialog;
 
-    function focusablesIn(root: HTMLDivElement): readonly HTMLElement[] {
+    function focusablesIn(root: HTMLElement): readonly HTMLElement[] {
       return Array.from(
         root.querySelectorAll<HTMLElement>(
           "button:not([disabled]),input:not([disabled]),[tabindex]:not([tabindex='-1'])",
@@ -1054,10 +1153,10 @@ function MaintenanceActionsGroup({
   t,
 }: MaintenanceActionsGroupProps): ReactNode {
   return (
-    <div
-      role="group"
+    <fieldset
       aria-label={t("localKnowledge.detail.actions.group", { name: capsuleDisplayName })}
       className="lkd-actions-group"
+      style={NATIVE_FIELDSET_RESET_STYLE}
     >
       {showReembedButton ? (
         <button
@@ -1124,7 +1223,7 @@ function MaintenanceActionsGroup({
       >
         {t("common.delete")}
       </button>
-    </div>
+    </fieldset>
   );
 }
 
@@ -1140,7 +1239,7 @@ function ConfirmModal({
   onCancel,
 }: ConfirmModalProps): ReactNode {
   const t = useTranslate();
-  const dialogRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const confirmInputRef = useRef<HTMLInputElement>(null);
   useModalInteractionLock();
   useFocusTrap(dialogRef, true, onCancel);
@@ -1178,86 +1277,90 @@ function ConfirmModal({
   const descId = "lkd-confirm-desc";
 
   return createPortal(
-    <div
-      className="dlg-overlay in"
-      role="presentation"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onCancel();
-      }}
-    >
+    <>
+      {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions -- pointer-only backdrop dismissal is additive; Escape and explicit Cancel provide keyboard dismissal. */}
       <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        aria-describedby={descId}
-        className="dlg"
-        tabIndex={-1}
+        className="dlg-overlay in"
+        onClick={(e) => {
+          if (e.target === e.currentTarget) onCancel();
+        }}
       >
-        <div className="dlg-head">
-          <div className="dlg-htext">
-            <div id={titleId} className="dlg-title">
-              {actionTitle(kind, t)}
-            </div>
-            <div id={descId} className="dlg-sub">
-              {actionDescription(kind, capsuleDisplayName, t)}
-            </div>
-          </div>
-        </div>
-
-        {requiresTypedName ? (
-          <div className="dlg-body">
-            <div className="dlg-field">
-              <label htmlFor="lkd-confirm-name-input" className="dlg-label">
-                {t("localKnowledge.detail.actions.delete.confirmName")}
-              </label>
-              <input
-                id="lkd-confirm-name-input"
-                type="text"
-                className="dlg-input"
-                value={nameInput}
-                autoComplete="off"
-                ref={confirmInputRef}
-                disabled={busy}
-                placeholder={capsuleDisplayName}
-                onChange={(e: ChangeEvent<HTMLInputElement>) => onNameChange(e.target.value)}
-              />
-            </div>
-            {error !== null ? (
-              <div role="alert" className="lk-alert" style={{ marginTop: 4 }}>
-                {error}
+        {/* eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- native dialog owns the modal semantics and receives the established focus trap. */}
+        <dialog
+          ref={dialogRef}
+          open
+          aria-modal="true"
+          aria-labelledby={titleId}
+          aria-describedby={descId}
+          className="dlg"
+          tabIndex={-1}
+          style={NATIVE_DIALOG_STYLE}
+        >
+          <div className="dlg-head">
+            <div className="dlg-htext">
+              <div id={titleId} className="dlg-title">
+                {actionTitle(kind, t)}
               </div>
-            ) : null}
-          </div>
-        ) : (
-          <div className="dlg-body">
-            {busy && progress !== null ? (
-              <ActionProgress kind={kind} progress={progress} t={t} />
-            ) : null}
-            {error !== null ? (
-              <div role="alert" className="lk-alert">
-                {error}
+              <div id={descId} className="dlg-sub">
+                {actionDescription(kind, capsuleDisplayName, t)}
               </div>
-            ) : null}
+            </div>
           </div>
-        )}
 
-        <div className="dlg-foot">
-          <button type="button" className="dlg-btn" disabled={busy} onClick={onCancel}>
-            {t("common.cancel")}
-          </button>
-          <button
-            type="button"
-            className="dlg-btn lkd-btn-destructive"
-            disabled={!confirmEnabled}
-            aria-disabled={!confirmEnabled}
-            onClick={onConfirm}
-          >
-            {confirmButtonLabel(kind, busy, t)}
-          </button>
-        </div>
+          {requiresTypedName ? (
+            <div className="dlg-body">
+              <div className="dlg-field">
+                <label htmlFor="lkd-confirm-name-input" className="dlg-label">
+                  {t("localKnowledge.detail.actions.delete.confirmName")}
+                </label>
+                <input
+                  id="lkd-confirm-name-input"
+                  type="text"
+                  className="dlg-input"
+                  value={nameInput}
+                  autoComplete="off"
+                  ref={confirmInputRef}
+                  disabled={busy}
+                  placeholder={capsuleDisplayName}
+                  onChange={(e: ChangeEvent<HTMLInputElement>) => onNameChange(e.target.value)}
+                />
+              </div>
+              {error !== null ? (
+                <div role="alert" className="lk-alert" style={{ marginTop: 4 }}>
+                  {error}
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <div className="dlg-body">
+              {busy && progress !== null ? (
+                <ActionProgress kind={kind} progress={progress} t={t} />
+              ) : null}
+              {error !== null ? (
+                <div role="alert" className="lk-alert">
+                  {error}
+                </div>
+              ) : null}
+            </div>
+          )}
+
+          <div className="dlg-foot">
+            <button type="button" className="dlg-btn" disabled={busy} onClick={onCancel}>
+              {t("common.cancel")}
+            </button>
+            <button
+              type="button"
+              className="dlg-btn lkd-btn-destructive"
+              disabled={!confirmEnabled}
+              aria-disabled={!confirmEnabled}
+              onClick={onConfirm}
+            >
+              {confirmButtonLabel(kind, busy, t)}
+            </button>
+          </div>
+        </dialog>
       </div>
-    </div>,
+    </>,
     document.body,
   );
 }
@@ -1285,9 +1388,7 @@ function AffectedSetsNotice({
   const descId = "lkd-affected-sets-desc";
 
   return createPortal(
-    // No role="presentation" here, unlike the confirm dialog's overlay above: this scrim
-    // carries no interaction, and a <div> has no implicit role for the attribute to suppress
-    // (#2721). The sibling keeps it because its outside-click handler needs it.
+    // This scrim carries no interaction, so the ordinary non-semantic <div> is sufficient.
     <div className="dlg-overlay in">
       <div
         ref={dialogRef}
@@ -1346,6 +1447,10 @@ export interface CapsuleActionsProps {
   readonly rebuildCapsuleImpl?: typeof rebuildCapsuleIndex;
   readonly startIndexingImpl?: typeof startIndexing;
   readonly fetchCapsuleDetailImpl?: typeof fetchCapsuleDetail;
+  /** Poll cadence for in-flight runs; injectable so tests drive the loop without real 2s waits. */
+  readonly pollIntervalMs?: number;
+  /** Newest indexing-job id the detail page currently shows; anchors id-difference settlement. */
+  readonly latestJobId?: string;
 }
 
 export function CapsuleActions({
@@ -1365,6 +1470,8 @@ export function CapsuleActions({
   rebuildCapsuleImpl = rebuildCapsuleIndex,
   startIndexingImpl = startIndexing,
   fetchCapsuleDetailImpl = fetchCapsuleDetail,
+  pollIntervalMs = 2_000,
+  latestJobId,
 }: CapsuleActionsProps): ReactNode {
   const t = useTranslate();
   const locale = useLocale();
@@ -1395,25 +1502,56 @@ export function CapsuleActions({
     void pollCapsuleProgress(capsuleId, fetchCapsuleDetailImpl, t, () => cancelled, setProgress);
     const timer = window.setInterval(() => {
       void pollCapsuleProgress(capsuleId, fetchCapsuleDetailImpl, t, () => cancelled, setProgress);
-    }, 2_000);
+    }, pollIntervalMs);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [capsuleId, fetchCapsuleDetailImpl, progressActive, t]);
+  }, [capsuleId, fetchCapsuleDetailImpl, pollIntervalMs, progressActive, t]);
+
+  // Settle the detached run: the persisted job row is the source of truth, so the polling —
+  // not the start fetch — decides when indexing is over, surfaces a failed run, and refreshes.
+  useEffect(() => {
+    if (!indexBusy) return;
+    const job = settledJobFor(progress);
+    if (job === undefined) return;
+    setIndexBusy(false);
+    setProgress(null);
+    if (job.status === "failed") {
+      setIndexError(
+        t("localKnowledge.detail.index.runFailed", {
+          message: job.lastError?.message ?? job.status,
+        }),
+      );
+    }
+    onActionComplete();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onActionComplete is a stable page callback; re-running on its identity would re-settle the same terminal job.
+  }, [indexBusy, progress, t]);
+
+  // Re-attach after a page reload: a capsule mid-indexing (the run survives any transport
+  // blip server-side) shows its live progress again instead of a dead Index button that only
+  // answers "already running".
+  useEffect(() => {
+    if (lifecycleState !== "indexing" || indexBusy) return;
+    setProgress((current) => current ?? initialProgressState(Date.now(), true));
+    setIndexBusy(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- attach exactly when the capsule reports an in-flight run; indexBusy is read for idempotence, not as a trigger.
+  }, [lifecycleState]);
 
   async function handleIndex(): Promise<void> {
     if (indexBusy) return;
-    setProgress(initialProgressState());
+    setProgress(initialProgressState(Date.now(), false, latestJobId ?? null));
     setIndexBusy(true);
     setIndexError(null);
     try {
-      await startIndexingImpl(capsuleId);
-      setProgress(null);
-      onActionComplete();
+      // 202: the job is admitted and runs server-side; the 2s polling drives the panel and
+      // settles the busy state when the persisted job reaches a terminal status. Clearing
+      // busy here would re-enable the button against a still-running job.
+      const response = await startIndexingImpl(capsuleId);
+      setProgress((current) => progressWithWatchedJob(current, response.jobId ?? null));
     } catch (error) {
       setIndexError(formatError(error, t));
-    } finally {
+      setProgress(null);
       setIndexBusy(false);
     }
   }

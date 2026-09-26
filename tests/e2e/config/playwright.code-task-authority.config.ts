@@ -65,7 +65,10 @@ export default defineConfig({
       "node node_modules/@typescript/native/bin/tsc -p tests/e2e/servers/tsconfig.json && " +
       `node ${serverEntry}`,
     url: `http://127.0.0.1:${String(publicPort)}`,
-    reuseExistingServer: process.env.KEIKO_E2E_REUSE_SERVER === "1",
+    // Never reused (PR #3452 review): a reused server skips `prepareState`, and a proof file an
+    // earlier run left in the state directory would satisfy this journey's assertions without the
+    // current run writing it. The real-binary journey has always started its own.
+    reuseExistingServer: false,
     timeout: 600_000,
     env: {
       KEIKO_E2E_STATE_DIR: stateDir,

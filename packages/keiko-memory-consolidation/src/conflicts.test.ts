@@ -205,6 +205,79 @@ describe("findConflictPairs - value replacement conflicts", () => {
     expect(must(items[0]).evidence?.[0]?.detail).toContain("is -> postgres");
   });
 
+  // KEY_VALUE_KEYWORD_RE matches bare generic English words ("tool", "model", "database",
+  // "runner"). execKeyValueValue used to let connectorLength fall back to 0 when no connector
+  // matched and then grab the very next lowercase word as the "value", so a keyword mentioned in
+  // passing produced a fact with no semantic link at all. Two such facts sharing a keyword are
+  // then reported as a value replacement — and value-replacement evidence is the one signal that
+  // bypasses the Jaccard textual-similarity floor entirely, so nothing else stops the pairing.
+  it("does not invent a value fact from a bare keyword mention with no connector", () => {
+    const older = makeRecord({
+      id: "m-old",
+      body: "I use my phone as a tool sometimes.",
+      createdAt: 100,
+    });
+    const newer = makeRecord({
+      id: "m-new",
+      body: "The support tool is broken again.",
+      createdAt: 200,
+    });
+    const items = findConflictPairs([older, newer], [], CONFLICT_OVERLAP_THRESHOLD, options());
+    expect(items).toEqual([]);
+  });
+
+  it("does not pair two unrelated bodies that merely share the keyword 'model'", () => {
+    const older = makeRecord({ id: "m-old", body: "The model railway club meets on Fridays." });
+    const newer = makeRecord({ id: "m-new", body: "Her model portfolio was updated." });
+    const items = findConflictPairs([older, newer], [], CONFLICT_OVERLAP_THRESHOLD, options());
+    expect(items).toEqual([]);
+  });
+
+  // Requiring a connector is only a guard if the connector has to be a whole token. The alphabetic
+  // alternatives carried no trailing boundary, so "to" matched the prefix of "token"/"topic" and
+  // "is" the prefix of "issues" — the engine then took the REMAINDER of the same word as the
+  // value ("tool token" -> tool=ken, "tool issues" -> tool=sues), fabricating exactly the
+  // unconnected facts this finding is about. Each body below pairs a keyword with an ordinary word
+  // that merely starts with a connector.
+  it.each([
+    ["to", "The support tool token was rotated.", "The support tool topic was closed."],
+    ["is", "The tool issues are known.", "The tool is broken."],
+    ["auf", "Die database auftrag lautet.", "Die database aufgabe lautet."],
+  ])(
+    "does not treat %s as a connector when it only prefixes a word",
+    (_label, olderBody, newerBody) => {
+      const older = makeRecord({ id: "m-old", body: olderBody, createdAt: 100 });
+      const newer = makeRecord({ id: "m-new", body: newerBody, createdAt: 200 });
+      const items = findConflictPairs([older, newer], [], CONFLICT_OVERLAP_THRESHOLD, options());
+      expect(items).toEqual([]);
+    },
+  );
+
+  // The other branch of the guard: a keyword with no connector at all, and a connector with
+  // nothing after it. Neither may invent a fact, and a keyword-only body must not pair with one
+  // whose connector is left dangling.
+  it.each([
+    ["keyword alone", "database", "The database formatter runner tool model"],
+    ["connector with no value", "database=", "database:"],
+    ["keyword alone vs dangling connector", "database", "database="],
+    ["trailing whitespace only", "database   ", "database\t\n"],
+  ])("emits no value-replacement conflict for %s", (_label, olderBody, newerBody) => {
+    const older = makeRecord({ id: "m-old", body: olderBody, createdAt: 100 });
+    const newer = makeRecord({ id: "m-new", body: newerBody, createdAt: 200 });
+    const items = findConflictPairs([older, newer], [], CONFLICT_OVERLAP_THRESHOLD, options());
+    const kinds = items.flatMap((item) => item.evidence?.map((e) => e.kind) ?? []);
+    expect(kinds).not.toContain("value-replacement");
+  });
+
+  // The boundary must not cost the punctuation connectors their no-space form.
+  it("still extracts a value from a punctuation connector without surrounding space", () => {
+    const older = makeRecord({ id: "m-old", body: "database=postgres", createdAt: 100 });
+    const newer = makeRecord({ id: "m-new", body: "database=mysql", createdAt: 200 });
+    const items = findConflictPairs([older, newer], [], CONFLICT_OVERLAP_THRESHOLD, options());
+    expect(items).toHaveLength(1);
+    expect(must(items[0]).evidence?.[0]?.detail).toContain("postgres -> mysql");
+  });
+
   // REGION_PATTERN and KEY_VALUE_PATTERN used to sandwich their optional connector token between
   // two independent `\s*`s (`\s*(?:connector)?\s*`). Once the trailing capture never matches — the
   // common case for a keyword mention with no real fact attached — the engine re-tries every split

@@ -6,6 +6,7 @@
 // never leaks the config path even on a load failure (handled upstream in deps.ts, which yields
 // `config: undefined` rather than throwing).
 
+import { resolve } from "node:path";
 import {
   findConfiguredCapability,
   toSafeObject,
@@ -33,16 +34,21 @@ import {
   buildWorkspaceSummary,
   DEFAULT_CONTEXT_REQUEST,
   detectWorkspace,
-  discoverWithStats,
+  discoverWithStatsAsync,
   WORKSPACE_CODES,
   WorkspaceError,
+  WorkspaceNotFoundError,
   type WorkspaceCode,
+  type DiscoveryResult,
   type WorkspaceSummary,
 } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { resolveRecordedWorkspaceRoot } from "./workspace-root-denial-log.js";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
 import type { UiHandlerDeps } from "./deps.js";
 import {
+  currentConversationReadinessObservation,
   currentGatewayConfig,
   currentGatewayConfigPresent,
   currentGroundingLimits,
@@ -65,10 +71,23 @@ export function handleConfig(_ctx: RouteContext, deps: UiHandlerDeps): RouteResu
 }
 
 // Route 3 — models published by the resolved UI gateway config. If no config is resolved, no
-// model-backed run can start, so the endpoint returns an empty list.
+// model-backed run can start, so the endpoint returns an empty list. `conversationReady` is
+// TRI-STATE on the wire (see currentConversationReadinessObservation): the observation store is
+// process-local, so a hard `false` for never-probed models told the UI after every restart that
+// nothing was usable until a manual probe plus reload (customer field incident, 0.3.11). Absent
+// means "unknown — the on-demand probe at the conversation entry points decides honestly".
 export function handleModels(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const config = currentGatewayConfig(deps);
-  const models = config === undefined ? [] : listSafeConfiguredCapabilities(config);
+  const models =
+    config === undefined
+      ? []
+      : listSafeConfiguredCapabilities(config).map((model) => {
+          const conversationReady = currentConversationReadinessObservation(deps, model.id);
+          return {
+            ...model,
+            ...(conversationReady === undefined ? {} : { conversationReady }),
+          };
+        });
   return { status: 200, body: { models } };
 }
 
@@ -287,17 +306,129 @@ function resolveRegisteredWorkspace(
   return { normalized };
 }
 
-function workspaceSummaryResult(
+// KEIKO-0136: the workspace layer now yields during a full-tree walk. This cache preserves that
+// responsiveness on cold reads too: concurrent callers share the same in-flight walk rather than
+// starting duplicate scans. Completed results retain the short TTL used by gitRepositoryReads.
+// Exported (not just an internal literal) so hermetic tests assert the TTL-expiry and
+// max-entries-eviction behaviour against the value the production module actually owns, instead of
+// restating the numbers as a second, driftable copy.
+export const WORKSPACE_WALK_CACHE_TTL_MS = 2_000;
+export const WORKSPACE_WALK_CACHE_MAX_ENTRIES = 32;
+
+interface WorkspaceWalkCacheEntry {
+  readonly expiresAt?: number | undefined;
+  readonly value?: DiscoveryResult | undefined;
+  readonly pending?: Promise<DiscoveryResult> | undefined;
+}
+
+const workspaceWalkCache = new Map<string, WorkspaceWalkCacheEntry>();
+
+function cachedWorkspaceWalk(root: string, now: number): DiscoveryResult | undefined {
+  const cached = workspaceWalkCache.get(root);
+  if (cached?.value !== undefined && (cached.expiresAt ?? 0) > now) return cached.value;
+  if (cached?.pending !== undefined) return undefined;
+  workspaceWalkCache.delete(root);
+  return undefined;
+}
+
+function storeWorkspaceWalk(root: string, value: DiscoveryResult, now: number): void {
+  // Opportunistic sweep of expired entries and bounded-size eviction so a long-running server
+  // with many roots never grows the cache without bound.
+  for (const [key, entry] of workspaceWalkCache) {
+    if (entry.pending === undefined && (entry.expiresAt ?? 0) <= now)
+      workspaceWalkCache.delete(key);
+  }
+  if (workspaceWalkCache.size >= WORKSPACE_WALK_CACHE_MAX_ENTRIES) {
+    const oldest = [...workspaceWalkCache.entries()].find(
+      ([, entry]) => entry.pending === undefined,
+    )?.[0];
+    if (oldest !== undefined) workspaceWalkCache.delete(oldest);
+  }
+  workspaceWalkCache.set(root, { expiresAt: now + WORKSPACE_WALK_CACHE_TTL_MS, value });
+}
+
+function workspaceWalkFor(
+  workspace: ReturnType<typeof detectWorkspace>,
+  now: () => number,
+): Promise<DiscoveryResult> {
+  const root = workspace.root;
+  const cached = cachedWorkspaceWalk(root, now());
+  if (cached !== undefined) return Promise.resolve(cached);
+  const existing = workspaceWalkCache.get(root)?.pending;
+  if (existing !== undefined) return existing;
+  const pending = discoverWithStatsAsync(workspace, DEFAULT_CONTEXT_REQUEST.discovery);
+  workspaceWalkCache.set(root, { pending });
+  return pending.then(
+    (value) => {
+      storeWorkspaceWalk(root, value, now());
+      return value;
+    },
+    (error: unknown) => {
+      if (workspaceWalkCache.get(root)?.pending === pending) workspaceWalkCache.delete(root);
+      throw error;
+    },
+  );
+}
+
+// Exported test-only helpers so hermetic unit tests never see cross-suite bleed and can observe
+// cache population. Product code never calls these — the TTL sweep handles staleness by itself.
+export function __resetWorkspaceWalkCacheForTests(): void {
+  workspaceWalkCache.clear();
+}
+export function __workspaceWalkCacheSizeForTests(): number {
+  return workspaceWalkCache.size;
+}
+export function __workspaceWalkCacheEntryForTests(root: string): DiscoveryResult | undefined {
+  return workspaceWalkCache.get(root)?.value;
+}
+
+// A detected workspace carries two identities (see WorkspaceInfo): `root` is the realpath-admitted
+// canonical directory every filesystem effect binds to, and `selectedRoot` is the lexical path the
+// caller named. The authorization decision below stays canonical-to-canonical on purpose — it is
+// the identity that holds even when no lexical alias could be verified — so the registered project
+// path is canonicalized through the SAME admission before it is compared. Comparing the canonical
+// walk result against the lexical registration denied every project reached through a symlinked
+// ancestor: on macOS the platform aliases resolve `/tmp/...` and `/var/...` to `/private/...`, so
+// an ordinary user-selected root answered 403 on every workspace read. The response body is the
+// other half of that pair and reports `selectedRoot` (via buildWorkspaceSummary), so a client that
+// hands the reported root back as `dir` still names a registered project. Root admission is
+// unchanged and still runs first — a denied root raises PathDeniedError (recorded on the activity
+// log by the shared helper) and an unresolvable one surfaces as WORKSPACE_NOT_FOUND, mirroring the
+// detection layer's own taxonomy rather than escaping as an opaque 500.
+function canonicalRegisteredWorkspaceRoot(
+  registeredRoot: string,
+  correlationId: string | undefined,
+): string {
+  try {
+    return resolveRecordedWorkspaceRoot(nodeWorkspaceFs, resolve(registeredRoot), {
+      correlationId,
+    });
+  } catch (error) {
+    if (error instanceof WorkspaceError) {
+      throw error;
+    }
+    throw new WorkspaceNotFoundError("workspace root is unavailable", registeredRoot);
+  }
+}
+
+async function workspaceSummaryResult(
   request: WorkspaceRequest,
   registeredRoot: string,
   deps: UiHandlerDeps,
-): RouteResult {
+  correlationId: string | undefined,
+  now: () => number = Date.now,
+): Promise<RouteResult> {
   try {
+    const canonicalRoot = canonicalRegisteredWorkspaceRoot(registeredRoot, correlationId);
     const workspace = detectWorkspace(registeredRoot);
-    if (workspace.root !== registeredRoot) {
+    // The walk-up must land on the registered directory itself and never on a parent workspace,
+    // whose wider tree would otherwise be summarized for a project the user never registered.
+    // That invariant is unchanged; it is now decided canonical-to-canonical.
+    if (workspace.root !== canonicalRoot) {
       return workspaceNotRegisteredResult();
     }
-    const { files, stats } = discoverWithStats(workspace, DEFAULT_CONTEXT_REQUEST.discovery);
+    const walk = await workspaceWalkFor(workspace, now);
+    const { files, stats } = walk;
     const wantsContext = request.task !== undefined || request.budget !== undefined;
     const pack = wantsContext
       ? buildContextPackFromFiles(
@@ -322,8 +453,14 @@ function workspaceSummaryResult(
   }
 }
 
-// Route 12 — workspace summary and optional context pack, built by the safe workspace layer.
-export function handleWorkspace(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+// Route 12 — workspace summary and optional context pack, built by the safe workspace layer. `now`
+// is an injectable clock for the walk-cache TTL (KEIKO-0253); it defaults to Date.now so the route
+// table's two-argument call is unchanged and only hermetic tests ever pass an override.
+export async function handleWorkspace(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  now: () => number = Date.now,
+): Promise<RouteResult> {
   const request = readWorkspaceRequest(ctx.url.searchParams);
   if ("status" in request) {
     return request;
@@ -332,7 +469,7 @@ export function handleWorkspace(ctx: RouteContext, deps: UiHandlerDeps): RouteRe
   if ("status" in registered) {
     return registered;
   }
-  return workspaceSummaryResult(request, registered.normalized, deps);
+  return workspaceSummaryResult(request, registered.normalized, deps, ctx.correlationId, now);
 }
 
 interface EvidenceFilters {
@@ -382,15 +519,36 @@ function matchesFilters(entry: EvidenceListEntry, filters: EvidenceFilters): boo
 // Route 10 — evidence list header projection, filtered server-side.
 export function handleEvidenceList(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const filters = readFilters(ctx.url);
-  const entries = listEvidence(deps.evidenceStore).filter((entry) =>
-    matchesFilters(entry, filters),
-  );
-  return { status: 200, body: { entries } };
+  try {
+    const entries = listEvidence(deps.evidenceStore).filter((entry) =>
+      matchesFilters(entry, filters),
+    );
+    return { status: 200, body: { entries } };
+  } catch (error) {
+    // listEvidence skips a single bad manifest, so reaching here means a store-level fault. Map it
+    // the way the detail sibling does instead of surfacing an opaque 500 for a diagnosable,
+    // pre-redacted condition; anything unrecognised still propagates to the top-level handler.
+    if (error instanceof EvidenceSchemaError) {
+      return { status: 422, body: errorBody("EVIDENCE_SCHEMA", error.message) };
+    }
+    if (error instanceof EvidenceReadError) {
+      return { status: 422, body: errorBody("EVIDENCE_READ", EVIDENCE_READ_CLIENT_MESSAGE) };
+    }
+    throw error;
+  }
 }
 
+// EvidenceReadError wraps whatever the underlying fs call's own error carried (constructed across
+// keiko-evidence, e.g. store.ts's getManifest: `cannot read evidence manifest: ${error.message}`),
+// and a raw Node fs error message can embed the evidence directory's absolute path (an EACCES/ENOENT
+// message quotes the path it failed on). EvidenceSchemaError's message never does — every
+// constructor call embeds only a bounded, already-client-known runId — so only EVIDENCE_READ needs
+// this static substitute.
+const EVIDENCE_READ_CLIENT_MESSAGE = "The evidence record could not be read.";
+
 // Route 11 — a single evidence manifest, served as-is (already redacted on disk). Invalid runId →
-// 400; absent → 404; an EvidenceSchemaError → 422; an EvidenceReadError → 422 (safe, pre-redacted
-// `.message`).
+// 400; absent → 404; an EvidenceSchemaError → 422 (safe, runId-only `.message`); an
+// EvidenceReadError → 422 with a static client message (see EVIDENCE_READ_CLIENT_MESSAGE).
 export function handleEvidenceDetail(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const runId = ctx.params.runId ?? "";
   try {
@@ -414,7 +572,7 @@ export function handleEvidenceDetail(ctx: RouteContext, deps: UiHandlerDeps): Ro
       return { status: 422, body: errorBody("EVIDENCE_SCHEMA", error.message) };
     }
     if (error instanceof EvidenceReadError) {
-      return { status: 422, body: errorBody("EVIDENCE_READ", error.message) };
+      return { status: 422, body: errorBody("EVIDENCE_READ", EVIDENCE_READ_CLIENT_MESSAGE) };
     }
     throw error;
   }

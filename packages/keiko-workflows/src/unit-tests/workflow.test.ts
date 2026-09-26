@@ -244,6 +244,10 @@ describe("generateUnitTests — apply mode verification", () => {
       fs: unknownFs,
       writer,
       spawn: autoClosingSpawn,
+      // This case pins the npm-test FALLBACK resolution, not the egress boundary, and a fake spawn
+      // cannot be sandboxed — so the degrade mode is requested by name rather than inferred from
+      // the injected spawn, which also matched governed production runs (KEIKO-0096).
+      verificationNetworkEnforcement: "enforce-or-degrade",
       now: () => 1000,
       idSource: () => "run-1",
     });

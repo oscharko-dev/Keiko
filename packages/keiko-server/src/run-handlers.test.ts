@@ -5,12 +5,14 @@
 // default, SSE replay+ready+live framing+terminal close, cancel, GET projection, the apply gate
 // (409 when not appliable), and that NO secret-shaped string appears in ANY response body.
 
+import { EventEmitter } from "node:events";
 import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Server } from "node:http";
+import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
@@ -23,6 +25,15 @@ import {
   type UiHandlerDeps,
 } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
+import { handleAllRunEvents, handleRunEvents } from "./run-handlers.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+  type BufferedServerLogSink,
+  type ServerLogEvent,
+} from "./observability/index.js";
 import {
   createInMemoryEvidenceStore,
   listEvidence,
@@ -33,17 +44,16 @@ import {
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import { CancelledError } from "@oscharko-dev/keiko-model-gateway";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
-import {
-  CONNECTED_CONTEXT_SCHEMA_VERSION,
-  type ConnectedContextPack,
-  type WorkspaceInstance,
-} from "@oscharko-dev/keiko-contracts";
+import type { ConnectedContextPack, WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
+import { CONNECTED_CONTEXT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
 import {
   deriveManagedWorktreePath,
   deriveRepositoryId,
   deriveTaskBranchName,
   deriveWorkspaceId,
 } from "./task-workspace/naming.js";
+import { assertManagedRootOwned } from "./task-workspace/managed-root.js";
+import { inspectManagedGitdirIdentity } from "./task-workspace/gitdir-identity.js";
 import { closeUiTestServer, startUiTestServer } from "./ui-test-server/_support.js";
 import type { AppSession } from "./coding-app-session/sessionRegistry.js";
 import type { CodingAppSessionChannel } from "./coding-app-session/sessionChannel.js";
@@ -153,14 +163,16 @@ const TEST_APP_SESSION: AppSession = {
 function testAppSessionChannel(paired: boolean): CodingAppSessionChannel {
   return {
     pair: () => ({ paired: false }),
+    ensureLocalSession: () => (paired ? { status: "active" } : { status: "unavailable" }),
     snapshot: () => contentFreeCodingAppSessionChannelSnapshot(),
     rotate: () => ({ rotated: false }),
-    signOut: () => undefined,
+    signOut: () => false,
     sessionCount: () => (paired ? 1 : 0),
     verifySession: () => (paired ? TEST_APP_SESSION : undefined),
     subscribe: () => ({
       snapshot: contentFreeCodingAppSessionChannelSnapshot(),
       live: false,
+      stop: () => undefined,
       detach: () => undefined,
     }),
   };
@@ -364,6 +376,89 @@ describe("GET /api/runs/:runId", () => {
   });
 });
 
+async function readSseUntil(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  marker: string,
+  timeoutMs = 2_000,
+): Promise<string> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      void reader.cancel().catch(() => undefined);
+      reject(new Error(`SSE marker was not received within ${String(timeoutMs)} ms: ${marker}`));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([consumeSseUntil(reader, marker), deadline]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
+async function consumeSseUntil(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  marker: string,
+): Promise<string> {
+  const decoder = new TextDecoder();
+  let text = "";
+  while (!text.includes(marker)) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    text += decoder.decode(chunk.value, { stream: true });
+  }
+  return text + decoder.decode();
+}
+
+function sseReader(chunks: readonly Uint8Array[]): ReadableStreamDefaultReader<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller): void {
+      for (const chunk of chunks) controller.enqueue(chunk);
+      controller.close();
+    },
+  }).getReader();
+}
+
+describe("readSseUntil", () => {
+  const encoder = new TextEncoder();
+
+  it("finds a marker split beyond five transport chunks", async () => {
+    const chunks = ["ev", "en", "t", ":", " ", "rea", "dy", "\n\n"].map((value) =>
+      encoder.encode(value),
+    );
+    await expect(readSseUntil(sseReader(chunks), "event: ready")).resolves.toContain(
+      "event: ready",
+    );
+  });
+
+  it("returns cleanly at EOF after empty chunks without inventing a marker", async () => {
+    const chunks = [new Uint8Array(), encoder.encode("event: partial")];
+    await expect(readSseUntil(sseReader(chunks), "event: ready")).resolves.toBe("event: partial");
+  });
+
+  it("preserves malformed bytes while continuing to a valid marker", async () => {
+    const chunks = [Uint8Array.of(0xff), new Uint8Array(), encoder.encode("event: ready\n\n")];
+    const text = await readSseUntil(sseReader(chunks), "event: ready");
+    expect(text.codePointAt(0)).toBe(0xfffd);
+    expect(text).toContain("event: ready");
+  });
+
+  it("cancels a stream that never yields the marker", async () => {
+    let cancelled = false;
+    const reader = new ReadableStream<Uint8Array>({
+      pull(): Promise<void> {
+        return new Promise<void>(() => {
+          // Remain pending until the deadline cancels this deliberately stalled transport.
+        });
+      },
+      cancel(): void {
+        cancelled = true;
+      },
+    }).getReader();
+    await expect(readSseUntil(reader, "event: ready", 25)).rejects.toThrow("within 25 ms");
+    expect(cancelled).toBe(true);
+  });
+});
+
 describe("GET /api/runs/:runId/events (SSE)", () => {
   it("frames events as SSE, sends ready, and replays the buffer on connect", async () => {
     await start(fakeModel(["```diff", TEST_DIFF.trimEnd(), "```"].join("\n")));
@@ -394,18 +489,40 @@ describe("GET /api/runs/:runId/events (SSE)", () => {
       throw new Error("expected an SSE reader");
     }
 
-    let text = "";
-    for (let i = 0; i < 5 && !text.includes("event: ready"); i += 1) {
-      const chunk = await reader.read();
-      if (chunk.done) break;
-      text += new TextDecoder().decode(chunk.value);
-    }
+    const text = await readSseUntil(reader, "event: ready");
     controller.abort();
     await reader.cancel().catch(() => undefined);
 
     expect(text).toContain("event: ready");
     expect(text).toContain('"type":"workflow:started"');
     expect(text).toContain(`"runId":"${body.runId}"`);
+  });
+
+  // User finding #2456 — the wake-up replay burst: a reconnecting desktop passes per-run resume
+  // cursors so the aggregate stream stops re-replaying every run's entire ring buffer. Driven
+  // through the real HTTP server so the query string provably reaches the handler via ctx.url.
+  it("skips replay for a run whose resume cursor is already past its buffer", async () => {
+    await start(fakeModel(["```diff", TEST_DIFF.trimEnd(), "```"].join("\n")));
+    const { body } = await createRun();
+    await awaitTerminal(body.runId);
+
+    const controller = new AbortController();
+    const res = await fetch(
+      `${base()}/api/runs/events?resume=${encodeURIComponent(body.runId)}:999999`,
+      { signal: controller.signal },
+    );
+    const reader = res.body?.getReader();
+    expect(reader).toBeDefined();
+    if (reader === undefined) {
+      throw new Error("expected an SSE reader");
+    }
+
+    const text = await readSseUntil(reader, "event: ready");
+    controller.abort();
+    await reader.cancel().catch(() => undefined);
+
+    expect(text).toContain("event: ready");
+    expect(text).not.toContain('"type":"workflow:started"');
   });
 
   it("returns 404 for an unknown run", async () => {
@@ -778,6 +895,7 @@ describe("FIX 4 — apply rebuilds the ModelPort from the run's modelId, not the
       res: {} as never,
       params: { runId: "fix4-run" },
       url: new URL("http://127.0.0.1/api/runs/fix4-run/apply"),
+      correlationId: undefined,
     };
     await handleApplyRun(ctx, deps);
     expect(seen).toEqual(["example-chat-model"]);
@@ -836,6 +954,7 @@ describe("FIX B — apply snapshot retains the original limits from the dry-run"
       res: {} as never,
       params: { runId: "fixb-run" },
       url: new URL("http://127.0.0.1/api/runs/fixb-run/apply"),
+      correlationId: undefined,
     };
     const result = await handleApplyRun(ctx, deps);
     // 200 = applyRun was invoked (workflow failure yields a report, not an HTTP error).
@@ -943,24 +1062,45 @@ describe("Security #1 — workflow workspaceRoot project-allowlist check", () =>
 
   it("returns 202 for verify with a persisted managed task workspace root", async () => {
     const managedRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-run-managed-")));
-    const repositoryId = deriveRepositoryId(workspace);
+    // #3347: resolveRegisteredOrManagedWorkspaceRoot now composes resolveManagedWorkspaceRootAccess,
+    // which re-proves ownership and a real Git linked-worktree pointer instead of trusting path
+    // shape alone -- a plain mkdir no longer admits, so this fixture builds a genuine `git worktree
+    // add` linkage off a dedicated repository root (never the shared `workspace` fixture, which is
+    // not a Git repository).
+    assertManagedRootOwned(managedRoot);
+    const repositoryRoot = mkdtempSync(join(tmpdir(), "keiko-run-managed-source-"));
+    execFileSync("git", ["init", "-q"], { cwd: repositoryRoot });
+    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: repositoryRoot });
+    execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: repositoryRoot });
+    execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "fixture"], {
+      cwd: repositoryRoot,
+    });
+    const repositoryId = deriveRepositoryId(repositoryRoot);
     const workspaceId = deriveWorkspaceId({ repositoryId, taskId: "task-443" });
     const managedWorktreePath = deriveManagedWorktreePath({
       managedRoot,
       repositoryId,
       workspaceId,
     });
-    mkdirSync(managedWorktreePath, { recursive: true });
+    const taskBranch = deriveTaskBranchName({ taskId: "task-443" });
+    mkdirSync(dirname(managedWorktreePath), { recursive: true });
+    execFileSync("git", ["worktree", "add", "-q", "-b", taskBranch, managedWorktreePath, "HEAD"], {
+      cwd: repositoryRoot,
+    });
+    const gitdirInspection = inspectManagedGitdirIdentity(managedWorktreePath, repositoryRoot);
+    if (gitdirInspection === undefined) {
+      throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
+    }
     const instance: WorkspaceInstance = {
       schemaVersion: "1",
       workspaceId,
       taskId: "task-443",
       repositoryId,
-      repositoryRoot: workspace,
+      repositoryRoot,
       baseBranch: "main",
-      taskBranch: deriveTaskBranchName({ taskId: "task-443" }),
+      taskBranch,
       managedWorktreePath,
-      gitdirIdentity: "gitdir-hash",
+      gitdirIdentity: gitdirInspection.identity,
       lifecycleState: "active",
       health: "healthy",
       lock: null,
@@ -988,6 +1128,7 @@ describe("Security #1 — workflow workspaceRoot project-allowlist check", () =>
       expect(res.status).toBe(202);
     } finally {
       rmSync(managedRoot, { recursive: true, force: true });
+      rmSync(repositoryRoot, { recursive: true, force: true });
     }
   });
 
@@ -1112,6 +1253,7 @@ describe("issue #638 — overlapping apply requests cannot reuse the same snapsh
       res: {} as never,
       params: { runId: "race-run" },
       url: new URL("http://127.0.0.1/api/runs/race-run/apply"),
+      correlationId: undefined,
     };
 
     const first = handleApplyRun(ctx, deps);
@@ -1261,6 +1403,7 @@ describe("apply re-proves workspace authorization at the write boundary", () => 
 
   function applyContext(runId: string): Parameters<typeof handleApplyRun>[0] {
     return {
+      correlationId: undefined,
       req: {} as never,
       res: {} as never,
       params: { runId },
@@ -1328,5 +1471,224 @@ describe("apply re-proves workspace authorization at the write boundary", () => 
 
     expect(result.status).toBe(403);
     expect(modelCalls).toEqual([]);
+  });
+});
+
+describe("apply threads the run's own id into its verification egress probe", () => {
+  afterEach(() => {
+    vi.doUnmock("./editor/verificationExecution.js");
+    vi.resetModules();
+  });
+
+  it("passes record.runId through to the network-isolation probe failure diagnostic, not a disconnected mint", async () => {
+    // ADR-0173 D5 / g12: run-handlers.ts's gated apply path always has RunRecord.runId in scope;
+    // a network-isolation probe failure reached through the replayed verify stage must carry it.
+    vi.resetModules();
+    const actualVerification = await vi.importActual<
+      typeof import("./editor/verificationExecution.js")
+    >("./editor/verificationExecution.js");
+    vi.doMock("./editor/verificationExecution.js", () => ({
+      ...actualVerification,
+      probeNetworkIsolation: (): never => {
+        throw new Error("probe backend detection failed");
+      },
+    }));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const { handleApplyRun: freshHandleApplyRun } = await import("./index.js");
+      const registry = createRunRegistry();
+      const workspace = authorizedApplyWorkspace();
+      registry.register({
+        runId: "probe-thread-run",
+        fingerprint: "fp-probe-thread-run",
+        modelId: "example-chat-model",
+        sink: new QueueEventSink(),
+        cancel: (): void => undefined,
+      });
+      registry.complete(
+        "probe-thread-run",
+        "completed",
+        { status: "dry-run" },
+        {
+          kind: "unit-tests",
+          payload: { workspaceRoot: workspace.root, target: { kind: "file", filePath: "x.ts" } },
+          limits: undefined,
+        },
+      );
+      const deps: UiHandlerDeps = {
+        config: undefined,
+        configPresent: false,
+        evidenceStore: createInMemoryEvidenceStore(),
+        env: {},
+        redactor: buildRedactor({}),
+        registry,
+        store: workspace.store,
+        modelPortFactory: (): ModelPort => ({
+          call: (): Promise<NormalizedResponse> => Promise.reject(new Error("test-stop")),
+        }),
+      };
+
+      const result = await freshHandleApplyRun(
+        {
+          correlationId: undefined,
+          req: {} as never,
+          res: {} as never,
+          params: { runId: "probe-thread-run" },
+          url: new URL("http://127.0.0.1/api/runs/probe-thread-run/apply"),
+        },
+        deps,
+      );
+
+      expect(result.status).toBe(200);
+      expect(consoleError).toHaveBeenCalled();
+      const diagnosticCall = consoleError.mock.calls.find((call) =>
+        String(call[0]).includes("workflow.network-isolation-probe"),
+      );
+      expect(diagnosticCall).toBeDefined();
+      const line = String(diagnosticCall?.[0]);
+      const record = JSON.parse(line.slice(line.indexOf("{"))) as { correlationId?: unknown };
+      expect(record.correlationId).toBe("probe-thread-run");
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+});
+
+// #3452 audit finding sse.ts:108: `handleAllRunEvents` and `handleRunEvents` (via `openSseStream`)
+// are two of the five openers that wrote the ready frame bare before this fix. Each now threads the
+// request's own `ctx.correlationId` into `writeReadyMessage`, so a stream that closes right after
+// its ready frame — never reaching a real event or a heartbeat tick — still produces the terminal
+// `sse.stream.closed` line the customer log needs to reconstruct it (AGENTS.md §8 Rule 1). Mirrors
+// how editor/agentRoutes.test.ts's "editor-agent bridge stream evidence" captures server log lines.
+describe("run-event SSE openers evidence a ready-then-close stream (#3452 audit finding sse.ts:108)", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  // A minimal fake SSE connection: an EventEmitter-backed res/req pair. `closeRes` fires the one
+  // event every real ServerResponse reaches exactly once, whether the client disconnected, the
+  // server ended it, or (as here) the test closes it deliberately right after the ready frame.
+  function fakeSseConnection(): {
+    req: IncomingMessage;
+    res: ServerResponse;
+    closeRes: () => void;
+  } {
+    const resEvents = new EventEmitter();
+    const res = {
+      writeHead(): ServerResponse {
+        return res as unknown as ServerResponse;
+      },
+      write(): boolean {
+        return true;
+      },
+      end(): ServerResponse {
+        return res as unknown as ServerResponse;
+      },
+      destroy(): void {
+        // Not inspected by these tests: nothing here reaches the backpressure-kill path.
+      },
+      on(event: string, listener: (...args: unknown[]) => void): ServerResponse {
+        resEvents.on(event, listener);
+        return res as unknown as ServerResponse;
+      },
+    };
+    const reqEvents = new EventEmitter();
+    const req = {
+      headers: {},
+      on(event: string, listener: (...args: unknown[]) => void): IncomingMessage {
+        reqEvents.on(event, listener);
+        return req as unknown as IncomingMessage;
+      },
+    };
+    return {
+      req: req as unknown as IncomingMessage,
+      res: res as unknown as ServerResponse,
+      closeRes: (): void => {
+        resEvents.emit("close");
+      },
+    };
+  }
+
+  function closedLines(sink: BufferedServerLogSink): readonly ServerLogEvent[] {
+    return sink.events.filter((event) => event.op === "sse.stream.closed");
+  }
+
+  function minimalDeps(registry: ReturnType<typeof createRunRegistry>): UiHandlerDeps {
+    return {
+      config: undefined,
+      configPresent: false,
+      evidenceStore: createInMemoryEvidenceStore(),
+      env: {},
+      redactor: buildRedactor({}),
+      registry,
+      store: createInMemoryUiStore(),
+      modelPortFactory: (): ModelPort => ({
+        call: (): Promise<NormalizedResponse> => Promise.reject(new Error("unused in this test")),
+      }),
+    };
+  }
+
+  it("handleAllRunEvents: closing right after the ready frame writes one sse.stream.closed line under the request's correlation id", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const { req, res, closeRes } = fakeSseConnection();
+
+    handleAllRunEvents(
+      {
+        req,
+        res,
+        params: {},
+        url: new URL("http://127.0.0.1/api/runs/events"),
+        correlationId: "corr-all-run-events-1",
+      },
+      minimalDeps(createRunRegistry()),
+    );
+    closeRes();
+
+    const closed = closedLines(sink);
+    expect(closed).toHaveLength(1);
+    expect(closed[0]).toMatchObject({
+      category: "http",
+      op: "sse.stream.closed",
+      correlationId: "corr-all-run-events-1",
+    });
+    const frameCount = (closed[0]?.extra as { frameCount?: number } | undefined)?.frameCount ?? 0;
+    expect(frameCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("handleRunEvents: closing right after the ready frame writes one sse.stream.closed line under the request's correlation id", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const { req, res, closeRes } = fakeSseConnection();
+    const registry = createRunRegistry();
+    registry.register({
+      runId: "run-ready-close-1",
+      fingerprint: "fp-run-ready-close-1",
+      modelId: "example-chat-model",
+      sink: new QueueEventSink(),
+      cancel: (): void => undefined,
+    });
+
+    handleRunEvents(
+      {
+        req,
+        res,
+        params: { runId: "run-ready-close-1" },
+        url: new URL("http://127.0.0.1/api/runs/run-ready-close-1/events"),
+        correlationId: "corr-run-events-1",
+      },
+      minimalDeps(registry),
+    );
+    closeRes();
+
+    const closed = closedLines(sink);
+    expect(closed).toHaveLength(1);
+    expect(closed[0]).toMatchObject({
+      category: "http",
+      op: "sse.stream.closed",
+      correlationId: "corr-run-events-1",
+    });
+    const frameCount = (closed[0]?.extra as { frameCount?: number } | undefined)?.frameCount ?? 0;
+    expect(frameCount).toBeGreaterThanOrEqual(1);
   });
 });

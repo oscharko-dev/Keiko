@@ -34,6 +34,7 @@ import {
   type SyntheticEvent,
 } from "react";
 import type { VoiceSessionChatContext } from "@oscharko-dev/keiko-contracts";
+import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import {
   useChatSessionCatalog,
   useChatSessionComposer,
@@ -45,6 +46,7 @@ import { GroundedAnswer } from "./GroundedAnswer";
 import { ContextStatusPanel } from "./ContextStatusPanel";
 import { Icons } from "./Icons";
 import KeikoSelect from "./KeikoSelect";
+import { requestGatewayModelCatalogRefresh } from "./widgets/shared/gatewaySetupBus";
 import {
   NATIVE_BLOCK_STYLE,
   NATIVE_LIST_KEEP_PADDING_STYLE,
@@ -101,7 +103,14 @@ import { VoiceDictationButton, VoiceDictationPreviewFromController } from "./Voi
 import { useAssistantSpeech } from "./hooks/useAssistantSpeech";
 import { VoicePlaybackMuteButton } from "./VoicePlayback";
 import { useVoiceDialogMode } from "./hooks/useVoiceDialogMode";
-import { useRealtimeVoice, type RealtimeVoiceController } from "./hooks/useRealtimeVoice";
+import {
+  useRealtimeVoice,
+  type RealtimeVoiceController,
+  type RealtimeVoicePhase,
+} from "./hooks/useRealtimeVoice";
+import { useBatchVoiceDialogue, type BatchVoiceDialogue } from "./hooks/useBatchVoiceDialogue";
+import type { VoiceTurnState } from "./hooks/voice-turn-manager";
+import type { VoiceDialogueCapture } from "./hooks/voice-dialogue-session";
 import { VoiceRealtimeStatusFromController } from "./VoiceRealtime";
 import {
   usePdfCitationPreviewController,
@@ -118,13 +127,22 @@ import {
   type VoiceAuraState,
   type VoiceAuraStateSnapshot,
 } from "./hooks/voice-dialog-state";
-import { VoiceDialogModeSwitch } from "./VoiceDialogMode";
+import { VoiceDialogInterruptButton, VoiceDialogModeSwitch } from "./VoiceDialogMode";
 import styles from "./ChatWindow.module.css";
-import type { OpenEditorFileRequest, OpenEditorFileResult } from "./hooks/useWorkspace.types";
+import type {
+  OpenEditorFileRequest,
+  OpenEditorFileResult,
+  WorkspaceLinkedGitChangeComparison,
+} from "./hooks/useWorkspace.types";
 import { fetchFilesSearch, updateChat } from "@/lib/api";
+import { GitChangeScopePill } from "./GitChangeScopePill";
+import { ConnectedScopePill } from "./ConnectedScopePill";
+import { ConnectorScopePill } from "./ConnectorScopePill";
 import type { ChatEditorApplyOutcome } from "@/lib/chat-editor-apply";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { useFollowNewest } from "@/lib/useFollowNewest";
+import { ComposerShell, composerEnterSubmits, useComposerAutoGrow } from "./composer/ComposerShell";
 import { presentChatSessionError, useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
 import { formatUserError } from "./format-error";
 import {
@@ -163,6 +181,7 @@ type CurrentRef<T> = { current: T };
 
 interface ChatWindowProps {
   readonly windowId?: string;
+  readonly suspended?: boolean;
   readonly mini?: boolean;
   readonly minimalChat?: boolean;
   readonly compact?: boolean;
@@ -171,9 +190,10 @@ interface ChatWindowProps {
   readonly workflowCompact?: boolean;
   readonly linkedRoot?: string | null;
   readonly linkedRoots?: readonly string[];
-  readonly openEditorFile?: ((request: OpenEditorFileRequest) => OpenEditorFileResult) | undefined;
-  readonly previewWindows?: PdfCitationPreviewWindowApi | undefined;
-  readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
+  readonly linkedGitChangeComparisons?: readonly WorkspaceLinkedGitChangeComparison[] | undefined;
+  readonly openEditorFile?: (request: OpenEditorFileRequest) => OpenEditorFileResult;
+  readonly previewWindows?: PdfCitationPreviewWindowApi;
+  readonly onOpenRunResult?: (message: ChatMessage) => void;
 }
 
 // Stable id for the no-model alert so aria-describedby chains can reference it.
@@ -208,6 +228,12 @@ interface PendingVoiceAnswer {
   readonly dialogGeneration: number;
 }
 
+interface CanonicalVoiceTurnInput {
+  readonly turnId: string;
+  readonly text: string;
+  readonly correlationId?: string;
+}
+
 interface CanonicalVoiceTurnOutcomeContext {
   readonly activeChatId: string | undefined;
   readonly admittedTurnIds: Set<string>;
@@ -223,8 +249,14 @@ async function deliverCanonicalVoiceTurn(
   sendMessage: ChatSessionApi["sendMessage"],
   text: string,
   clientTurnId: string,
+  correlationId?: string,
 ): Promise<SendMessageOutcome> {
-  return sendMessage({ text, clientTurnId, reportOutcome: true });
+  return sendMessage({
+    text,
+    clientTurnId,
+    reportOutcome: true,
+    ...(correlationId === undefined ? {} : { correlationId }),
+  });
 }
 
 function rememberAdmittedCanonicalVoiceTurn(ids: Set<string>, deliveryKey: string): void {
@@ -234,6 +266,21 @@ function rememberAdmittedCanonicalVoiceTurn(ids: Set<string>, deliveryKey: strin
     if (oldest !== undefined) ids.delete(oldest);
   }
   ids.add(deliveryKey);
+}
+
+function canonicalVoiceTurnAlreadyAdmitted(
+  ids: ReadonlySet<string>,
+  deliveries: ReadonlyMap<string, Promise<SendMessageOutcome>>,
+  deliveryKey: string,
+): boolean {
+  return ids.has(deliveryKey) || deliveries.has(deliveryKey);
+}
+
+function queuedVoiceCaptureMustPause(
+  queued: unknown,
+  mustPause: (() => boolean) | undefined,
+): boolean {
+  return queued !== undefined && mustPause?.() === true;
 }
 
 function applyCanonicalVoiceTurnOutcome(
@@ -371,20 +418,6 @@ function conversationTurnSpacerStyle(hiddenTurns: number): CSSProperties {
 // configured the caller renders a noEligibleModels error instead (AC #4).
 function modelList(models: readonly ModelCapability[]): readonly ModelCapability[] {
   return models.filter((model) => model.kind === "chat");
-}
-
-function onComposerKeyDown(
-  send: () => Promise<void>,
-): (event: KeyboardEvent<HTMLTextAreaElement>) => void {
-  return (event) => {
-    // uiux-fix F041 (C206) — Enter during IME composition (Japanese, Chinese,
-    // Korean, …) confirms the composition; it must never submit the message.
-    if (event.nativeEvent.isComposing) return;
-    if (event.key === "Enter" && !event.shiftKey) {
-      event.preventDefault();
-      void send();
-    }
-  };
 }
 
 // uiux-fix F042 (C208) — citation markers in grounded answers (ASCII [n], CJK
@@ -580,8 +613,10 @@ function useRegisterPdfCitationPreviewTarget(
   ]);
 }
 
-// Extracted from ChatBubbleImpl (SonarCloud S3776) — the message body: plain text while
-// streaming/for the user, otherwise safe markdown, plus the streaming caret.
+// Extracted from ChatBubbleImpl (SonarCloud S3776) — the message body: plain text
+// for the user, otherwise safe markdown, plus the streaming caret. A streaming
+// assistant turn takes the SAME safe-markdown path as a settled one (#2404,
+// #2783); only code-fence highlighting is deferred while tokens arrive.
 function ChatBubbleContentArea({
   message,
   isUser,
@@ -623,6 +658,7 @@ function ChatBubbleContentArea({
         // degrades this one bubble to plain text instead of crashing the view.
         <SafeMarkdownBoundary
           source={message.content}
+          diagnosticCorrelationId={message.id}
           applyScopeId={`${message.chatId}:${message.id}`}
           repositoryRoots={repositoryRoots}
           openRepositoryReference={openRepositoryReference}
@@ -819,16 +855,16 @@ function ChatBubbleImpl({
   layout = "stack",
 }: {
   readonly message: ChatMessage;
-  readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
-  readonly onRegenerate?: ((assistantMessageId: string) => Promise<void>) | undefined;
-  readonly onCancelRegenerate?: (() => void) | undefined;
+  readonly onOpenRunResult: ((message: ChatMessage) => void) | undefined;
+  readonly onRegenerate?: (assistantMessageId: string) => Promise<void>;
+  readonly onCancelRegenerate?: () => void;
   readonly showRegenerate?: boolean;
   readonly regenerating?: boolean;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
   readonly onApplyCodeBlock?: AssistantCodeBlockApply | undefined;
   readonly previewWindows: PdfCitationPreviewWindowApi | undefined;
-  readonly windowId?: string | undefined;
+  readonly windowId: string | undefined;
   // Issue #1296 — true only for the live assistant turn while tokens are arriving,
   // so the DS 0.4.0 streaming caret blinks at the growing edge of the text.
   readonly streaming?: boolean;
@@ -979,7 +1015,7 @@ function KeikoMessageMark({ pulsing = false }: { readonly pulsing?: boolean }): 
       role="img"
       aria-label={t("chat.keikoLogo")}
     >
-      <Image src="/assets/keiko-logo.svg" width={22} height={22} alt="" aria-hidden="true" />
+      <Image src="/keiko-logo.svg" width={22} height={22} alt="" aria-hidden="true" />
     </div>
   );
 }
@@ -1005,13 +1041,13 @@ function TypingBubble(): ReactNode {
 
 interface ConversationThreadProps {
   readonly messages: readonly ChatMessage[];
-  readonly streamingAssistantMessage?: ChatMessage | undefined;
-  readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined;
+  readonly streamingAssistantMessage: ChatMessage | undefined;
+  readonly onOpenRunResult: ((message: ChatMessage) => void) | undefined;
   readonly repositoryRoots: readonly RepositoryReferenceRoot[];
   readonly openRepositoryReference: OpenRepositoryReference | undefined;
   readonly onApplyCodeBlock: AssistantCodeBlockApply | undefined;
   readonly previewWindows: PdfCitationPreviewWindowApi | undefined;
-  readonly windowId?: string | undefined;
+  readonly windowId: string | undefined;
   readonly sending: boolean;
   readonly sendStatus: SendStatus;
   readonly regeneratingMessageId: string | undefined;
@@ -1964,21 +2000,29 @@ interface VoiceDialogComposerControlsProps {
   readonly voiceDialogActive: boolean;
   readonly onToggleVoiceDialog: () => void;
   readonly voiceDialogButtonRef: Ref<HTMLButtonElement>;
-  readonly compact?: boolean | undefined;
+  // Issue #2894 (KEIKO-0217) — the barge-in affordance. `onInterrupt` is defined only once a
+  // dialogue session is actually connected (mirrors VoiceDialogControls's own presence gate:
+  // the button mounts when the caller has something to interrupt); `canInterrupt` then governs
+  // whether the mounted button is actionable, exactly as VoiceDialogInterruptButton expects.
+  readonly canInterrupt: boolean;
+  readonly onInterrupt: (() => void) | undefined;
+  readonly compact: boolean | undefined;
+  readonly micMuteAvailable?: boolean | undefined;
+  readonly onFinishSpeaking?: (() => void) | undefined;
 }
 
 interface ComposerContextControlsProps {
   readonly session: ChatSessionApi;
   readonly selectedModelCapability: ModelCapability | undefined;
   readonly onAttachFiles: (files: readonly File[]) => void;
-  readonly controlsNarrow?: boolean | undefined;
+  readonly controlsNarrow: boolean | undefined;
 }
 
 interface VoiceDialogMicMuteButtonProps {
   readonly muted: boolean;
   readonly onToggle: () => void;
-  readonly buttonRef?: Ref<HTMLButtonElement> | undefined;
-  readonly compact?: boolean | undefined;
+  readonly buttonRef: Ref<HTMLButtonElement> | undefined;
+  readonly compact: boolean | undefined;
 }
 
 function VoiceDialogMicMuteButton({
@@ -2088,6 +2132,9 @@ function ComposerContextControls({
           menuClassName="cmp-model-menu"
           menuMinWidth={controlsNarrow ? 118 : 280}
           mono
+          onOpen={() => {
+            requestGatewayModelCatalogRefresh();
+          }}
           sections={[
             {
               options: composerModelOptions(loading, noEligibleModels, models, t),
@@ -2103,6 +2150,21 @@ function ComposerContextControls({
   );
 }
 
+function VoiceFinishSpeakingButton({ onClick }: { readonly onClick: () => void }): ReactNode {
+  const t = useTranslate();
+  return (
+    <button
+      type="button"
+      className="cmp-icon ui-tip"
+      aria-label={t("chat.voice.batchFinish")}
+      data-tip={t("chat.voice.batchFinish")}
+      onClick={onClick}
+    >
+      <ArrowUpIcon size={18} />
+    </button>
+  );
+}
+
 function VoiceDialogComposerControls({
   voiceMuted,
   onToggleVoiceMute,
@@ -2110,7 +2172,11 @@ function VoiceDialogComposerControls({
   voiceDialogActive,
   onToggleVoiceDialog,
   voiceDialogButtonRef,
+  canInterrupt,
+  onInterrupt,
   compact = false,
+  micMuteAvailable = true,
+  onFinishSpeaking,
 }: VoiceDialogComposerControlsProps): ReactNode {
   return (
     <div className="cmp-bar cmp-bar-voice-dialog">
@@ -2121,12 +2187,24 @@ function VoiceDialogComposerControls({
           buttonRef={voiceDialogButtonRef}
           compact={compact}
         />
-        <VoiceDialogMicMuteButton
-          muted={voiceMuted}
-          onToggle={onToggleVoiceMute}
-          buttonRef={playbackButtonRef}
-          compact={compact}
-        />
+        {micMuteAvailable ? (
+          <VoiceDialogMicMuteButton
+            muted={voiceMuted}
+            onToggle={onToggleVoiceMute}
+            buttonRef={playbackButtonRef}
+            compact={compact}
+          />
+        ) : null}
+        {onFinishSpeaking !== undefined ? (
+          <VoiceFinishSpeakingButton onClick={onFinishSpeaking} />
+        ) : null}
+        {onInterrupt !== undefined ? (
+          <VoiceDialogInterruptButton
+            iconOnly
+            canInterrupt={canInterrupt}
+            onInterrupt={onInterrupt}
+          />
+        ) : null}
       </div>
     </div>
   );
@@ -2401,6 +2479,7 @@ function SendLifecycleStatus({ status }: { readonly status: SendStatus }): React
 interface ComposerCoreProps {
   readonly ready: boolean;
   readonly placeholder: string;
+  readonly suspended?: boolean;
   readonly minimal?: boolean;
   readonly compact?: boolean;
   readonly controlsNarrow?: boolean;
@@ -2657,6 +2736,165 @@ function VoiceDialogAttachments({
   );
 }
 
+// KEIKO-0217: the Interrupt control mounts once a dialogue session is actually connected (there
+// is nothing to barge in on before that); `canInterrupt` then governs whether the mounted button
+// is actionable. Gating presence on `phase === "connected"` (rather than on `voiceDialogActive`
+// alone) keeps it out of the DOM through requesting/negotiating/error, the same way
+// VoiceRealtimeStatusFromController is gated on the error phase specifically. Extracted so
+// ComposerVoiceOverlay's cyclomatic complexity stays under the eslint bar.
+function isVoiceInterruptReachable(
+  voiceDialogActive: boolean,
+  controller: RealtimeVoiceController,
+): boolean {
+  return voiceDialogActive && controller.phase === "connected";
+}
+
+function composerVoiceInterruptAction(
+  batchDialogue: BatchVoiceDialogue | undefined,
+  voiceDialogActive: boolean,
+  controller: RealtimeVoiceController,
+): (() => void) | undefined {
+  if (batchDialogue !== undefined) {
+    return batchDialogue.canInterrupt ? batchDialogue.interrupt : undefined;
+  }
+  if (!isVoiceInterruptReachable(voiceDialogActive, controller)) return undefined;
+  return controller.interrupt;
+}
+
+function composerFinishSpeakingAction(
+  dialogue: BatchVoiceDialogue,
+  active: boolean,
+): (() => void) | undefined {
+  if (!active || dialogue.waitingForAnswer || dialogue.canInterrupt) return undefined;
+  return dialogue.dictation.phase === "recording" ? dialogue.dictation.stop : undefined;
+}
+
+function batchVoicePhase(dialogue: BatchVoiceDialogue, active: boolean): RealtimeVoicePhase {
+  if (dialogue.error !== undefined || dialogue.dictation.phase === "error") return "error";
+  if (dialogue.preparing || dialogue.dictation.phase === "requesting") return "requesting";
+  return active ? "connected" : "idle";
+}
+
+function batchVoiceTurnState(
+  dialogue: BatchVoiceDialogue,
+  playbackTurnState: VoiceTurnState,
+): VoiceTurnState {
+  if (playbackTurnState !== "idle") return playbackTurnState;
+  if (
+    dialogue.waitingForAnswer ||
+    dialogue.dictation.phase === "transcribing" ||
+    dialogue.dictation.phase === "finalizing"
+  )
+    return "thinking";
+  return dialogue.dictation.phase === "recording" ? "listening" : "idle";
+}
+
+function composerVoiceTurnState(
+  batchActive: boolean,
+  batchTurnState: VoiceTurnState,
+  playbackTurnState: VoiceTurnState,
+  realtimeTurnState: VoiceTurnState,
+): VoiceTurnState {
+  if (batchActive) return batchTurnState;
+  return playbackTurnState === "idle" ? realtimeTurnState : playbackTurnState;
+}
+
+interface ComposerVoiceAuraInputs {
+  readonly active: boolean;
+  readonly available: boolean;
+  readonly batchActive: boolean;
+  readonly batchDialogue: BatchVoiceDialogue;
+  readonly chatHasError: boolean;
+  readonly playback: ReturnType<typeof useAssistantSpeech>;
+  readonly realtimeVoice: ReturnType<typeof useRealtimeVoice>;
+  readonly retrieving: boolean;
+  readonly sending: boolean;
+  readonly sendStatus: string;
+  readonly state: Parameters<typeof deriveVoiceAuraState>[0]["voiceDialogState"];
+}
+
+function composerVoiceAura(inputs: ComposerVoiceAuraInputs): VoiceAuraStateSnapshot {
+  const batchError =
+    inputs.batchDialogue.error !== undefined || inputs.batchDialogue.dictation.error !== undefined;
+  const listening = inputs.batchActive
+    ? inputs.batchDialogue.dictation.phase === "recording" &&
+      inputs.batchDialogue.dictation.micReady
+    : inputs.realtimeVoice.listening && !inputs.playback.snapshot.active;
+  return deriveVoiceAuraState({
+    voiceDialogActive: inputs.active,
+    voiceDialogAvailable: inputs.available,
+    voiceDialogState: inputs.state,
+    listening,
+    speaking: inputs.playback.snapshot.speaking,
+    sending: inputs.sending,
+    sendStatus: inputs.sendStatus,
+    hasSessionError:
+      inputs.chatHasError ||
+      (inputs.batchActive ? batchError : inputs.realtimeVoice.error !== undefined),
+    reconnecting: !inputs.batchActive && inputs.realtimeVoice.turnSnapshot.recovering,
+    retrieving: inputs.batchActive ? inputs.retrieving : inputs.realtimeVoice.retrieving,
+  });
+}
+
+function BatchVoiceStatus({
+  dialogue,
+  onUseFailedTranscript,
+}: {
+  readonly dialogue: BatchVoiceDialogue;
+  readonly onUseFailedTranscript: () => void;
+}): ReactNode {
+  const t = useTranslate();
+  const error = dialogue.error ?? dialogue.dictation.error?.message;
+  return (
+    <>
+      <span className="sr-only">{t("chat.voice.batchMode")}</span>
+      {error !== undefined ? (
+        <div role="alert" className="cmp-voice-memory-error">
+          {error}
+          <button type="button" onClick={dialogue.retry}>
+            {t("chat.voice.batchRetry")}
+          </button>
+          {dialogue.failedTranscript !== undefined ? (
+            <>
+              <p className={styles.cmpBatchFailedTranscript}>{dialogue.failedTranscript}</p>
+              <button type="button" onClick={onUseFailedTranscript}>
+                {t("chat.voice.batchUseText")}
+              </button>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function VoiceTranscriptStatus({
+  active,
+  transcript,
+  controller,
+  batchActive,
+  onDismiss,
+}: {
+  readonly active: boolean;
+  readonly transcript: string | undefined;
+  readonly controller: RealtimeVoiceController;
+  readonly batchActive: boolean;
+  readonly onDismiss: () => void;
+}): ReactNode {
+  return (
+    <>
+      {active && transcript !== undefined ? (
+        <p className={styles["cmp-partial-transcript"]} aria-live="off">
+          {transcript}
+        </p>
+      ) : null}
+      {!batchActive && active && controller.phase === "error" ? (
+        <VoiceRealtimeStatusFromController controller={controller} onAfterDismiss={onDismiss} />
+      ) : null}
+    </>
+  );
+}
+
 function ComposerVoiceOverlay({
   voiceAuraActive,
   announcedVoiceHeadline,
@@ -2666,6 +2904,9 @@ function ComposerVoiceOverlay({
   partialUserTranscript,
   realtimeVoiceMuted,
   realtimeVoiceController,
+  batchDialogue,
+  batchActive,
+  onUseFailedTranscript,
   onToggleVoiceMute,
   playbackButtonRef,
   onToggleVoiceDialog,
@@ -2683,6 +2924,9 @@ function ComposerVoiceOverlay({
   readonly partialUserTranscript: string | undefined;
   readonly realtimeVoiceMuted: boolean;
   readonly realtimeVoiceController: RealtimeVoiceController;
+  readonly batchDialogue: BatchVoiceDialogue;
+  readonly batchActive: boolean;
+  readonly onUseFailedTranscript: () => void;
   readonly onToggleVoiceMute: () => void;
   readonly playbackButtonRef: Ref<HTMLButtonElement>;
   readonly onToggleVoiceDialog: () => void;
@@ -2707,17 +2951,22 @@ function ComposerVoiceOverlay({
           aria-hidden={voiceDialogActive ? undefined : true}
         >
           <div className={styles["cmp-voice-content"]}>
-            {voiceDialogActive && partialUserTranscript !== undefined ? (
-              <p className={styles["cmp-partial-transcript"]} aria-live="off">
-                {partialUserTranscript}
-              </p>
+            {batchActive ? (
+              <p className={styles.cmpBatchModeLabel}>{announcedVoiceHeadline}</p>
             ) : null}
-            {voiceDialogActive && realtimeVoiceController.phase === "error" ? (
-              <VoiceRealtimeStatusFromController
-                controller={realtimeVoiceController}
-                onAfterDismiss={onDismissVoiceError}
+            {batchActive ? (
+              <BatchVoiceStatus
+                dialogue={batchDialogue}
+                onUseFailedTranscript={onUseFailedTranscript}
               />
             ) : null}
+            <VoiceTranscriptStatus
+              active={voiceDialogActive}
+              transcript={partialUserTranscript}
+              controller={realtimeVoiceController}
+              batchActive={batchActive}
+              onDismiss={onDismissVoiceError}
+            />
             {voiceDialogActive ? (
               <VoiceDialogAttachments
                 attachments={pendingAttachments}
@@ -2730,6 +2979,16 @@ function ComposerVoiceOverlay({
               playbackButtonRef={playbackButtonRef}
               voiceDialogActive={voiceDialogActive}
               onToggleVoiceDialog={onToggleVoiceDialog}
+              canInterrupt={
+                batchActive ? batchDialogue.canInterrupt : realtimeVoiceController.canInterrupt
+              }
+              onFinishSpeaking={composerFinishSpeakingAction(batchDialogue, batchActive)}
+              onInterrupt={composerVoiceInterruptAction(
+                batchActive ? batchDialogue : undefined,
+                voiceDialogActive,
+                realtimeVoiceController,
+              )}
+              micMuteAvailable={!batchActive}
               voiceDialogButtonRef={voiceDialogButtonRef}
               compact={compact}
             />
@@ -2743,6 +3002,7 @@ function ComposerVoiceOverlay({
 function ComposerCoreImpl({
   ready,
   placeholder,
+  suspended = false,
   minimal = false,
   compact = false,
   controlsNarrow = false,
@@ -2775,17 +3035,11 @@ function ComposerCoreImpl({
     activeProject,
     replaceChat,
   } = session;
-  // uiux-fix F009 C089 — auto-grow the composer with its content up to 220px
-  // (~8-9 lines at 15px/1.5), then scroll. Clearing the draft after a send
-  // collapses the textarea back to its rows={2} minimum. The mini composer
+  // uiux-fix F009 C089 — auto-grow with the content (shared ComposerShell behaviour). Clearing
+  // the draft after a send collapses the textarea back to its rows={2} minimum. The mini composer
   // (MiniChat) has its own textarea without this effect and stays height:100%.
   const taRef = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => {
-    const ta = taRef.current;
-    if (ta === null) return;
-    ta.style.height = "auto";
-    ta.style.height = `${String(Math.min(ta.scrollHeight, 220))}px`;
-  }, [draft]);
+  useComposerAutoGrow(taRef, draft);
 
   // Rejection state for the inline alert (AC #2 / Part 2).
   const [rejectionReason, setRejectionReason] = useState<AttachmentRejectionReason | undefined>();
@@ -2796,6 +3050,9 @@ function ComposerCoreImpl({
     selectedModelCapability?.kind === "chat"
       ? selectedModelCapability.id
       : activeChat?.selectedModel;
+  const canonicalVoiceModelReady = models.some(
+    (model) => model.id === canonicalVoiceTargetModelId && model.kind === "chat",
+  );
 
   // Derive whether any attachment kinds are supported by the selected model.
   const attachEnabled = composerAttachEnabled(selectedModelCapability);
@@ -2824,6 +3081,7 @@ function ComposerCoreImpl({
   const playbackButtonRef = useRef<HTMLButtonElement>(null);
   const voiceDialogButtonRef = useRef<HTMLButtonElement>(null);
   const normalVoiceDialogButtonRef = useRef<HTMLButtonElement>(null);
+  const voiceCaptureOwner = useId();
   // Insert appends the reviewed transcript into the existing draft (separated by a space) and returns
   // focus to the composer so the keyboard-first text workflow is preserved; it never auto-sends.
   const insertTranscript = useCallback(
@@ -2838,12 +3096,22 @@ function ComposerCoreImpl({
   );
   const dictation = useDictation({
     onInsert: insertTranscript,
+    captureOwner: voiceCaptureOwner,
     realtime: { enabled: liveDictationEnabled },
   });
-  // Issue #1559/#1560 — dialog-mode availability + persona selection. Voice Dialogue combines
-  // WebRTC input/transcription with canonical chat and independent TTS; Realtime never answers.
-  // Batch STT dictation remains a separate "speech to draft" feature.
-  const voiceDialog = useVoiceDialogMode({ capability: voiceCapability });
+  // Voice Dialogue selects native Realtime when available and otherwise uses STT, canonical chat,
+  // and TTS. Both paths keep the same conversation and persona controls.
+  const voiceDialog = useVoiceDialogMode({
+    capability: voiceCapability,
+    captureOwner: voiceCaptureOwner,
+  });
+  const { cancel: cancelDictation } = dictation;
+  const { leave: leaveVoiceMode } = voiceDialog;
+  useEffect(() => {
+    if (!suspended) return;
+    cancelDictation();
+    leaveVoiceMode();
+  }, [cancelDictation, leaveVoiceMode, suspended]);
   // The canonical send result identifies the assistant row created for this exact spoken turn. TTS
   // remains disabled until that row is visible in the active chat; no latest-message or timestamp
   // heuristic may associate an unrelated concurrent answer with the voice turn.
@@ -2851,6 +3119,10 @@ function ComposerCoreImpl({
   const activeChatIdRef = useRef(activeChat?.id);
   activeChatIdRef.current = activeChat?.id;
   const voiceDialogSessionChatIdRef = useRef<string | undefined>(undefined);
+  const voiceDialogSessionCaptureRef = useRef<VoiceDialogueCapture>("none");
+  const batchSpeechSettledRef = useRef<((assistantMessageId: string) => void) | undefined>(
+    undefined,
+  );
   // Issue #2727 — ONE snapshot of the session binding per render. The toggle handler advances this
   // ref, and a ref write schedules no render, so every consumer must read it exactly once here and
   // then judge that snapshot. A consumer that re-reads `.current` later (the teardown effect below
@@ -2901,37 +3173,34 @@ function ComposerCoreImpl({
     text: voiceAnswer?.content,
     messageId: voiceAnswer?.id,
     persona: voiceDialog.persona,
+    onSettled: (assistantMessageId) => batchSpeechSettledRef.current?.(assistantMessageId),
   });
   const primeAudioOutput = playback.primeAudioOutput;
   const commitCanonicalVoiceTurn = useCallback(
-    ({
-      turnId,
-      text,
-    }: {
-      readonly turnId: string;
-      readonly text: string;
-    }): boolean | "accepted-stop" => {
-      const chatId = activeChat?.id;
-      if (
-        chatId === undefined ||
-        activeChat === undefined ||
-        canonicalVoiceTargetModelId === undefined
-      )
-        return false;
+    ({ turnId, text, correlationId }: CanonicalVoiceTurnInput): boolean | "accepted-stop" => {
+      if (activeChat === undefined || canonicalVoiceTargetModelId === undefined) return false;
+      const chatId = activeChat.id;
       const dialogGeneration = voiceDialogGenerationRef.current;
       const deliveryKey = `${chatId}:${turnId}`;
-      if (admittedCanonicalVoiceTurnIdsRef.current.has(deliveryKey)) return true;
-      const existing = canonicalVoiceTurnDeliveriesRef.current.get(deliveryKey);
-      if (existing !== undefined) return true;
+      if (
+        canonicalVoiceTurnAlreadyAdmitted(
+          admittedCanonicalVoiceTurnIdsRef.current,
+          canonicalVoiceTurnDeliveriesRef.current,
+          deliveryKey,
+        )
+      )
+        return true;
       const queued = enqueueCanonicalVoiceTurn?.({
         text,
         clientTurnId: turnId,
+        ...(correlationId === undefined ? {} : { correlationId }),
         target: { chat: activeChat, modelId: canonicalVoiceTargetModelId },
         allowReservedCapacity: true,
       });
       if (enqueueCanonicalVoiceTurn !== undefined && queued === undefined) return false;
-      const pauseCapture = queued !== undefined && canonicalVoiceCaptureMustPause?.() === true;
-      const delivery = (queued ?? deliverCanonicalVoiceTurn(sendMessage, text, turnId))
+      const delivery = (
+        queued ?? deliverCanonicalVoiceTurn(sendMessage, text, turnId, correlationId)
+      )
         .then((outcome): SendMessageOutcome =>
           applyCanonicalVoiceTurnOutcome(outcome, {
             activeChatId: activeChatIdRef.current,
@@ -2948,7 +3217,9 @@ function ComposerCoreImpl({
           canonicalVoiceTurnDeliveriesRef.current.delete(deliveryKey);
         });
       canonicalVoiceTurnDeliveriesRef.current.set(deliveryKey, delivery);
-      return pauseCapture ? "accepted-stop" : true;
+      return queuedVoiceCaptureMustPause(queued, canonicalVoiceCaptureMustPause)
+        ? "accepted-stop"
+        : true;
     },
     [
       activeChat,
@@ -2958,6 +3229,24 @@ function ComposerCoreImpl({
       sendMessage,
     ],
   );
+  const submitBatchVoiceTurn = useCallback(
+    (text: string, correlationId: string): Promise<SendMessageOutcome> | undefined => {
+      const chatId = activeChat?.id;
+      if (chatId === undefined) return undefined;
+      const turnId = crypto.randomUUID();
+      if (commitCanonicalVoiceTurn({ turnId, text, correlationId }) === false) return undefined;
+      return canonicalVoiceTurnDeliveriesRef.current.get(`${chatId}:${turnId}`);
+    },
+    [activeChat?.id, commitCanonicalVoiceTurn],
+  );
+  const batchDialogue = useBatchVoiceDialogue({
+    captureOwner: voiceCaptureOwner,
+    captureLease: voiceDialog.captureLease,
+    submit: submitBatchVoiceTurn,
+    playback: { active: playback.snapshot.active, interrupt: playback.interrupt },
+  });
+  const { start: startBatchDialogue, stop: stopBatchDialogue } = batchDialogue;
+  batchSpeechSettledRef.current = batchDialogue.onSpeechSettled;
   // ADR-0154 D4 — barge-in stops local playback and returns the floor to capture. It must NOT reach
   // for the blanket cancelSend: that aborted whatever happened to be in flight, including a typed
   // composer send Voice does not own, and left the interrupted turn to be re-sent by the Chat-owned
@@ -2973,32 +3262,49 @@ function ComposerCoreImpl({
     (): boolean => canonicalVoiceCaptureMustPause?.() !== true,
     [canonicalVoiceCaptureMustPause],
   );
+  // Issue #2894 (KEIKO-0364) — ADR-0154 D1/D5: grounded retrieval runs in the canonical chat
+  // pipeline AFTER the spoken final is handed off, never inside Realtime itself, so this reads
+  // the canonical send state useChatSession already owns instead of standing up a second store.
+  // While voice dialogue is active the typed composer layer is inert (#2843), so a grounded send
+  // in flight can only be the pending canonical voice turn.
+  const canonicalVoiceRetrieving = voiceDialogActive && sending && hasGroundingScope(activeChat);
   const realtimeVoice = useRealtimeVoice({
     chatContext: composerRealtimeVoiceChatContext(activeChat),
     canStartCapture: canStartCanonicalVoiceCapture,
     onCanonicalUserTurn: commitCanonicalVoiceTurn,
     onUserSpeechStart: interruptCanonicalVoiceTurn,
+    assistantSpeaking: playback.snapshot.speaking,
+    retrieving: canonicalVoiceRetrieving,
   });
-  const voiceDialogAvailable = voiceDialog.available && activeChat !== undefined;
+  const batchActive = voiceDialogActive && voiceDialog.capture === "batch";
+  const voiceDialogAvailable =
+    voiceDialog.available && activeChat !== undefined && canonicalVoiceModelReady;
   const playbackTurnState = playbackPhaseToTurnState(playback.snapshot.phase);
+  const effectiveVoicePhase = batchActive
+    ? batchVoicePhase(batchDialogue, batchActive)
+    : realtimeVoice.phase;
   const voiceDialogState = deriveVoiceDialogState({
-    realtimePhase: realtimeVoice.phase,
-    turnState: playbackTurnState === "idle" ? realtimeVoice.turnSnapshot.state : playbackTurnState,
-    muted: realtimeVoice.muted,
+    realtimePhase: effectiveVoicePhase,
+    turnState: composerVoiceTurnState(
+      batchActive,
+      batchVoiceTurnState(batchDialogue, playbackTurnState),
+      playbackTurnState,
+      realtimeVoice.turnSnapshot.state,
+    ),
+    muted: !batchActive && realtimeVoice.muted,
   });
-  const voiceAura = deriveVoiceAuraState({
-    voiceDialogActive,
-    voiceDialogAvailable,
-    voiceDialogState,
-    listening: realtimeVoice.listening && !playback.snapshot.active,
-    speaking: playback.snapshot.speaking,
+  const voiceAura = composerVoiceAura({
+    active: voiceDialogActive,
+    available: voiceDialogAvailable,
+    state: voiceDialogState,
+    batchActive,
+    batchDialogue,
+    playback,
+    realtimeVoice,
+    chatHasError: error !== undefined,
     sending,
     sendStatus,
-    hasSessionError: error !== undefined || realtimeVoice.error !== undefined,
-    // A recovering transport (turn manager) → 'reconnecting'; an in-flight grounded retrieval →
-    // 'checking-sources'. Both give the user a specific reason for the wait instead of dead air.
-    reconnecting: realtimeVoice.turnSnapshot.recovering,
-    retrieving: realtimeVoice.retrieving,
+    retrieving: canonicalVoiceRetrieving,
   });
   // Throttle the spoken-dialogue live region: a fast turn exchange can flip listening→thinking→speaking
   // within a second, and an unthrottled aria-live would read every transition aloud. Debouncing to the
@@ -3022,23 +3328,42 @@ function ComposerCoreImpl({
     }
     primeAudioOutput();
     setPendingVoiceAnswer(null);
+    voiceDialogSessionChatIdRef.current = undefined;
+    if (!voiceDialog.enter()) return;
     voiceDialogSessionChatIdRef.current = activeChat?.id;
-    voiceDialog.enter();
-    realtimeVoice.start();
-  }, [activeChat?.id, primeAudioOutput, voiceDialog, voiceDialogAvailable, realtimeVoice]);
+    voiceDialogSessionCaptureRef.current = voiceDialog.capture;
+    if (voiceDialog.capture === "batch") startBatchDialogue();
+    else realtimeVoice.start();
+  }, [
+    activeChat?.id,
+    startBatchDialogue,
+    primeAudioOutput,
+    voiceDialog,
+    voiceDialogAvailable,
+    realtimeVoice,
+  ]);
   const leaveVoiceDialog = useCallback(() => {
     // The live ref read here is the one-shot teardown latch, not a rendering decision: a second
     // leave for the same session finds it already cleared and skips the transport teardown.
     const hadActiveSession = voiceDialogSessionChatIdRef.current !== undefined;
+    const capture = voiceDialogSessionCaptureRef.current;
     voiceDialogSessionChatIdRef.current = undefined;
+    voiceDialogSessionCaptureRef.current = "none";
     if (hadActiveSession) {
       voiceDialogGenerationRef.current += 1;
-      realtimeVoice.stop();
+      if (capture === "batch") stopBatchDialogue();
+      else realtimeVoice.stop();
       playback.stop();
       setPendingVoiceAnswer(null);
     }
     voiceDialog.leave();
-  }, [playback, realtimeVoice, voiceDialog]);
+  }, [stopBatchDialogue, playback, realtimeVoice, voiceDialog]);
+  const useFailedTranscriptAsText = useCallback((): void => {
+    if (!batchActive || batchDialogue.failedTranscript === undefined) return;
+    const transcript = batchDialogue.failedTranscript;
+    leaveVoiceDialog();
+    insertTranscript(transcript);
+  }, [batchActive, batchDialogue.failedTranscript, leaveVoiceDialog, insertTranscript]);
   // Tear a live session down as soon as a render stops showing it as active — the chat was switched
   // away or the deployment stopped offering dialogue. Every input is a snapshot of the render this
   // effect belongs to, so a passive effect flushed after a later toggle can no longer act on a
@@ -3062,7 +3387,7 @@ function ComposerCoreImpl({
   }, [voiceDialogActive, enterVoiceDialog, leaveVoiceDialog]);
   const previousVoiceDialogActiveRef = useRef(voiceDialogActive);
   useEffect(() => {
-    if (voiceDialogActive && realtimeVoice.phase === "error") {
+    if (voiceDialogActive && effectiveVoicePhase === "error") {
       restoreVoiceDialogFocusRef.current = false;
       return;
     }
@@ -3075,7 +3400,7 @@ function ComposerCoreImpl({
       voiceDialogButton: voiceDialogButtonRef.current,
       normalVoiceDialogButton: normalVoiceDialogButtonRef.current,
     });
-  }, [realtimeVoice.phase, voiceDialogActive]);
+  }, [effectiveVoicePhase, voiceDialogActive]);
 
   const repositoryRoots = useMemo(
     () => connectedRepositoryRoots(activeChat, activeProject?.path),
@@ -3219,7 +3544,7 @@ function ComposerCoreImpl({
         });
         if (handled) return;
       }
-      onComposerKeyDown(sendMessage)(event);
+      if (composerEnterSubmits(event)) void sendMessage();
     },
     [
       insertRepositoryFileReference,
@@ -3231,9 +3556,13 @@ function ComposerCoreImpl({
   );
 
   const composerBoxClassName = composerBoxClassNameFor(compact, voiceDialogActive);
-  // React 18 treats `inert` as an unknown non-boolean attribute. Toggle the native attribute in
-  // the commit ref so each fading layer becomes non-interactive synchronously, without rendering
-  // duplicate accessibility targets or emitting a runtime warning.
+  // Both composer layers stay mounted so the mode change can cross-fade, and each renders its own
+  // copy of the controls. Toggle the native attribute in the commit ref so `inert` follows
+  // `voiceDialogActive` rather than the transition: the outgoing layer leaves the focus order,
+  // hit-testing, and the accessibility tree the instant the mode flips, leaving exactly one
+  // reachable copy. Focus handoff reads the attribute itself (`closest("[inert]")` in
+  // useModalInteractionLock), so exact presence on one layer and absence on the other is the
+  // contract.
   const normalLayerRef = useCallback(
     (node: HTMLDivElement | null): void => {
       node?.toggleAttribute("inert", voiceDialogActive);
@@ -3266,98 +3595,94 @@ function ComposerCoreImpl({
         data-composer-layer="normal"
         aria-hidden={voiceDialogActive ? true : undefined}
       >
-        <div className="cmp-input-stack">
-          {/* Drop zone above the textarea (Part 2 — shown when attachment is supported) */}
-          <AttachDropZone enabled={attachEnabled} onFiles={handleFiles} />
-          {/* The textarea remains a native textbox. When repository suggestions exist,
-            aria-controls points to their visible semantic list; the adjacent polite status
-            announces result-count changes. Arrow keys update the visible highlight and Enter
-            activates it without claiming a listbox/combobox relationship that is not present. */}
-          <div className="cmp-input-combobox">
-            <textarea
-              className="cmp-input"
-              ref={taRef}
-              rows={2}
-              value={draft}
-              aria-label={t("chat.messageLabel")}
-              placeholder={placeholder}
-              // The composer opts into shell chord dispatch (SHELL_CHORD_BYPASS_ATTRIBUTE in
-              // hooks/useKeyboardShortcuts.ts). Without it the substrate's editable-target guard
-              // left Cmd/Ctrl+P, Cmd/Ctrl+Shift+P and Cmd/Ctrl+Shift+F dead in the product's
-              // primary input. The rule the substrate then applies keeps the field's own
-              // text-editing chords (Cmd/Ctrl+Z undoes typing, not a workspace panel toggle).
-              data-shell-chord-bypass=""
-              aria-controls={repositoryResultsId}
-              onChange={handleDraftChange}
-              onSelect={handleDraftSelect}
-              onKeyDown={handleDraftKeyDown}
-              // uiux-fix F041 (C205, supersedes F009 C077 readOnly) — the textarea stays
-              // fully editable while a send is in flight so the next message can be
-              // pre-typed during streaming. Re-submit stays blocked by the isInFlight
-              // guard in useChatSession, and the primary button is "Cancel" meanwhile.
+        <ComposerShell
+          value={draft}
+          placeholder={placeholder}
+          textareaRef={taRef}
+          ariaLabel={t("chat.messageLabel")}
+          // KEIKO-0608: client-side parity with the voice admission path's size guard (enforced
+          // authoritatively by the server either way — see resolveSendMessageAdmission in
+          // useChatSession.ts and chat-handlers.ts). maxLength is a character count, consistent
+          // with MAX_DESKTOP_CHAT_INPUT_CHARS.
+          maxLength={MAX_DESKTOP_CHAT_INPUT_CHARS}
+          // The textarea remains a native textbox. When repository suggestions exist,
+          // aria-controls points to their visible semantic list; the adjacent polite status
+          // announces result-count changes. Arrow keys update the visible highlight and Enter
+          // activates it without claiming a listbox/combobox relationship that is not present.
+          ariaControls={repositoryResultsId}
+          onChange={handleDraftChange}
+          onSelect={handleDraftSelect}
+          onKeyDown={handleDraftKeyDown}
+          // uiux-fix F041 (C205, supersedes F009 C077 readOnly) — the textarea stays fully
+          // editable while a send is in flight so the next message can be pre-typed during
+          // streaming. Re-submit stays blocked by the isInFlight guard in useChatSession, and the
+          // primary button is "Cancel" meanwhile.
+          aboveInput={<AttachDropZone enabled={attachEnabled} onFiles={handleFiles} />}
+          belowInput={
+            <>
+              {repositoryPickerOpen ? (
+                <ComposerRepositoryPickerInline
+                  roots={repositoryRoots}
+                  selectedRoot={selectedRepositoryRoot}
+                  onRootChange={(next) => {
+                    setSelectedRepositoryRoot(next);
+                    setRepositoryHighlightedIndex(0);
+                  }}
+                  search={repositorySearch}
+                  pickingPath={repositoryPickingPath}
+                  highlightedIndex={repositoryHighlightedIndex}
+                  pickError={repositoryPickError}
+                  onPick={(result) => {
+                    void insertRepositoryFileReference(result);
+                  }}
+                  onClose={() => setRepositoryMention(null)}
+                />
+              ) : null}
+              <RepositoryReferenceStrip
+                references={repositoryReferences}
+                onRemove={removeRepositoryReference}
+              />
+              {/* Chip strip below the textarea, above the composer bar (AC #3) */}
+              <AttachmentStrip
+                attachments={pendingAttachments}
+                onRemove={removePendingAttachment}
+              />
+              {/* Inline rejection alert — role="alert" announces immediately (AC #2) */}
+              <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
+              {/* Issue #152 / AC#1 + AC#4 — lifecycle status announcement next to the textarea so
+                SR users hear the state without losing composer focus. Issue #495 — dictation
+                transcript review / transcribing status / error. */}
+              <ComposerStatusRow
+                voiceDialogActive={voiceDialogActive}
+                sendStatus={sendStatus}
+                voiceDictationVisible={voiceDictationVisible}
+                dictation={dictation}
+                onAfterDictationDiscard={() => micButtonRef.current?.focus()}
+              />
+            </>
+          }
+          footer={
+            <ComposerBar
+              session={session}
+              ready={ready}
+              selectedModelCapability={selectedModelCapability}
+              onAttachFiles={handleFiles}
+              controlsNarrow={controlsNarrow}
+              barCompact={barCompact}
+              voiceDictationVisible={voiceDictationVisible}
+              dictation={dictation}
+              micButtonRef={micButtonRef}
+              voiceSpeechOutputVisible={voiceSpeechOutputVisible}
+              voiceMuted={playback.snapshot.muted}
+              onToggleVoiceMute={playback.toggleMute}
+              playbackButtonRef={playbackButtonRef}
+              voiceDialogAvailable={voiceDialogAvailable}
+              voiceDialogActive={false}
+              onToggleVoiceDialog={toggleVoiceDialog}
+              voiceDialogButtonRef={normalVoiceDialogButtonRef}
             />
-          </div>
-          {repositoryPickerOpen ? (
-            <ComposerRepositoryPickerInline
-              roots={repositoryRoots}
-              selectedRoot={selectedRepositoryRoot}
-              onRootChange={(next) => {
-                setSelectedRepositoryRoot(next);
-                setRepositoryHighlightedIndex(0);
-              }}
-              search={repositorySearch}
-              pickingPath={repositoryPickingPath}
-              highlightedIndex={repositoryHighlightedIndex}
-              pickError={repositoryPickError}
-              onPick={(result) => {
-                void insertRepositoryFileReference(result);
-              }}
-              onClose={() => setRepositoryMention(null)}
-            />
-          ) : null}
-          <RepositoryReferenceStrip
-            references={repositoryReferences}
-            onRemove={removeRepositoryReference}
-          />
-          {/* Chip strip below the textarea, above the composer bar (AC #3) */}
-          <AttachmentStrip attachments={pendingAttachments} onRemove={removePendingAttachment} />
-          {/* Inline rejection alert — role="alert" announces immediately (AC #2) */}
-          <AttachRejectionAlert reason={rejectionReason} mimeType={rejectionMime} />
-          {/* Issue #152 / AC#1 + AC#4 — lifecycle status announcement. Renders
-            adjacent to the textarea so SR users hear the state without losing
-            composer focus. Hidden when there is nothing to announce.
-            Issue #495 — dictation transcript review / transcribing status / error. Lives in the
-            input stack so it is contextually adjacent to the textarea and announced to assistive
-            tech. It renders live capture feedback while recording and stays hidden only when idle. */}
-          <ComposerStatusRow
-            voiceDialogActive={voiceDialogActive}
-            sendStatus={sendStatus}
-            voiceDictationVisible={voiceDictationVisible}
-            dictation={dictation}
-            onAfterDictationDiscard={() => micButtonRef.current?.focus()}
-          />
-        </div>
-        <div className="cmp-footer-row">
-          <ComposerBar
-            session={session}
-            ready={ready}
-            selectedModelCapability={selectedModelCapability}
-            onAttachFiles={handleFiles}
-            controlsNarrow={controlsNarrow}
-            barCompact={barCompact}
-            voiceDictationVisible={voiceDictationVisible}
-            dictation={dictation}
-            micButtonRef={micButtonRef}
-            voiceSpeechOutputVisible={voiceSpeechOutputVisible}
-            voiceMuted={playback.snapshot.muted}
-            onToggleVoiceMute={playback.toggleMute}
-            playbackButtonRef={playbackButtonRef}
-            voiceDialogAvailable={voiceDialogAvailable}
-            voiceDialogActive={false}
-            onToggleVoiceDialog={toggleVoiceDialog}
-            voiceDialogButtonRef={normalVoiceDialogButtonRef}
-          />
-        </div>
+          }
+        />
       </div>
       <ComposerVoiceOverlay
         voiceAuraActive={voiceAura.active}
@@ -3368,6 +3693,9 @@ function ComposerCoreImpl({
         partialUserTranscript={realtimeVoice.partialUserTranscript}
         realtimeVoiceMuted={realtimeVoice.muted}
         realtimeVoiceController={realtimeVoice}
+        batchDialogue={batchDialogue}
+        batchActive={batchActive}
+        onUseFailedTranscript={useFailedTranscriptAsText}
         onToggleVoiceMute={realtimeVoice.toggleMute}
         playbackButtonRef={playbackButtonRef}
         onToggleVoiceDialog={toggleVoiceDialog}
@@ -3490,8 +3818,16 @@ function hasConnectorGroundingScope(chat: Chat | undefined): boolean {
   );
 }
 
+function hasGitChangeGroundingScope(chat: Chat | undefined): boolean {
+  return chat !== undefined && (chat.gitChangeScopes ?? []).length > 0;
+}
+
 function hasGroundingScope(chat: Chat | undefined): boolean {
-  return hasFolderGroundingScope(chat) || hasConnectorGroundingScope(chat);
+  return (
+    hasFolderGroundingScope(chat) ||
+    hasConnectorGroundingScope(chat) ||
+    hasGitChangeGroundingScope(chat)
+  );
 }
 
 function formatScopeUpdateError(error: unknown, t: I18nTranslate): string {
@@ -3504,6 +3840,7 @@ interface ScopeOption {
   readonly label: string;
   readonly badge?: string;
   readonly description?: string;
+  readonly disabled?: boolean;
 }
 
 const UNAVAILABLE_CAPSULE_LABEL = "Knowledge Pod";
@@ -3540,6 +3877,7 @@ function capsuleOptions(
       label: t("chat.grounding.unavailable", {
         label: UNAVAILABLE_CAPSULE_LABEL,
       }),
+      disabled: true,
     },
   ];
 }
@@ -3573,6 +3911,7 @@ function capsuleSetOptions(
       label: t("chat.grounding.unavailable", {
         label: UNAVAILABLE_CAPSULE_SET_LABEL,
       }),
+      disabled: true,
     },
   ];
 }
@@ -3582,7 +3921,9 @@ function capsuleSetOptions(
 interface KnowledgeCatalog {
   readonly capsules: readonly CapsuleListEntry[];
   readonly capsuleSets: readonly CapsuleSetListEntry[];
+  readonly loading: boolean;
   readonly loadError: string | null;
+  readonly refresh: () => void;
 }
 
 interface KnowledgeCatalogSnapshot {
@@ -3656,6 +3997,14 @@ async function loadKnowledgeCatalogSnapshot(): Promise<KnowledgeCatalogSnapshot>
   return knowledgeCatalogPending;
 }
 
+// A grounding-picker reopen is a deliberate catalog lifecycle event, distinct from gateway
+// configuration changes. It bypasses only this read-only catalog's TTL; simultaneous chat windows
+// still share the in-flight request above.
+function refreshKnowledgeCatalogSnapshot(): Promise<KnowledgeCatalogSnapshot> {
+  knowledgeCatalogCache = undefined;
+  return loadKnowledgeCatalogSnapshot();
+}
+
 export function clearKnowledgeCatalogCacheForTests(): void {
   knowledgeCatalogCache = undefined;
   knowledgeCatalogPending = undefined;
@@ -3663,25 +4012,67 @@ export function clearKnowledgeCatalogCacheForTests(): void {
 
 function useKnowledgeCatalog(): KnowledgeCatalog {
   const t = useTranslate();
+  const initialSnapshotRef = useRef<KnowledgeCatalogSnapshot | undefined>(
+    cachedKnowledgeCatalogSnapshot(Date.now()),
+  );
+  const mountedRef = useRef(true);
+  const requestGenerationRef = useRef(0);
   const [snapshot, setSnapshot] = useState<KnowledgeCatalogSnapshot>(
-    cachedKnowledgeCatalogSnapshot(Date.now()) ?? EMPTY_KNOWLEDGE_CATALOG,
+    initialSnapshotRef.current ?? EMPTY_KNOWLEDGE_CATALOG,
+  );
+  const [loading, setLoading] = useState(initialSnapshotRef.current === undefined);
+
+  const applyCatalogSnapshot = useCallback(
+    (load: () => Promise<KnowledgeCatalogSnapshot>): void => {
+      const requestGeneration = requestGenerationRef.current + 1;
+      requestGenerationRef.current = requestGeneration;
+      setLoading(true);
+      // Do not present a cached catalog as current while a deliberate reopen is resolving. Any
+      // active scope is retained by capsuleOptions/capsuleSetOptions as a disabled unavailable row.
+      setSnapshot(EMPTY_KNOWLEDGE_CATALOG);
+      void load().then((next) => {
+        if (!mountedRef.current || requestGeneration !== requestGenerationRef.current) return;
+        setSnapshot(next);
+        setLoading(false);
+      });
+    },
+    [],
   );
 
   useEffect(() => {
-    let cancelled = false;
-    void loadKnowledgeCatalogSnapshot().then((next) => {
-      if (!cancelled) setSnapshot(next);
-    });
+    if (initialSnapshotRef.current !== undefined) return;
+    applyCatalogSnapshot(loadKnowledgeCatalogSnapshot);
+  }, [applyCatalogSnapshot]);
+
+  useEffect(() => {
+    mountedRef.current = true;
     return () => {
-      cancelled = true;
+      mountedRef.current = false;
+      requestGenerationRef.current += 1;
     };
   }, []);
+
+  const refresh = useCallback((): void => {
+    applyCatalogSnapshot(refreshKnowledgeCatalogSnapshot);
+  }, [applyCatalogSnapshot]);
 
   return {
     capsules: snapshot.capsules,
     capsuleSets: snapshot.capsuleSets,
+    loading,
     loadError: snapshot.loadError === null ? null : formatScopeUpdateError(snapshot.loadError, t),
+    refresh,
   };
+}
+
+const SELECTABLE_CAPSULE_SET_READINESS: ReadonlySet<string> = new Set(["ready", "degraded"]);
+
+function isSelectableGroundingCapsuleSet(capsuleSet: CapsuleSetListEntry): boolean {
+  const readiness = capsuleSet.knowledgePod?.readiness;
+  return (
+    capsuleSet.capsuleCount > 0 &&
+    (readiness === undefined || SELECTABLE_CAPSULE_SET_READINESS.has(readiness))
+  );
 }
 
 // Extracted from LocalKnowledgeScopeControl's handleChange (SonarCloud S3776) — the "Model only"
@@ -3788,6 +4179,115 @@ async function applyLocalKnowledgeScopeChange(
   }
 }
 
+function staticGroundingOptions(
+  value: string,
+  loading: boolean,
+  liveFilesAvailable: boolean,
+  t: I18nTranslate,
+): ScopeOption[] {
+  const options: ScopeOption[] = [
+    { value: "none", label: t("chat.grounding.modelOnly"), disabled: loading },
+    {
+      value: "files",
+      label: t("chat.grounding.liveFiles"),
+      disabled: loading || !liveFilesAvailable,
+      ...(liveFilesAvailable ? {} : { description: t("chat.grounding.liveFilesUnavailableHint") }),
+    },
+  ];
+  if (value === "multi") {
+    options.push({
+      value: "multi",
+      label: t("chat.grounding.multiple"),
+      disabled: true,
+    });
+  }
+  return options;
+}
+
+function catalogGroundingOption(option: ScopeOption, loading: boolean): ScopeOption {
+  return loading ? { ...option, disabled: true } : option;
+}
+
+function catalogGroundingOptions(
+  capsuleChoices: readonly ScopeOption[],
+  capsuleSetChoices: readonly ScopeOption[],
+  loading: boolean,
+): ScopeOption[] {
+  return [
+    ...capsuleChoices.map((capsule) => catalogGroundingOption(capsule, loading)),
+    ...capsuleSetChoices.map((capsuleSet) => catalogGroundingOption(capsuleSet, loading)),
+  ];
+}
+
+function GroundingModeSelect({
+  value,
+  loading,
+  disabled,
+  liveFilesAvailable,
+  capsuleChoices,
+  capsuleSetChoices,
+  t,
+  onOpen,
+  onValueChange,
+}: {
+  readonly value: string;
+  readonly loading: boolean;
+  readonly disabled: boolean;
+  readonly liveFilesAvailable: boolean;
+  readonly capsuleChoices: readonly ScopeOption[];
+  readonly capsuleSetChoices: readonly ScopeOption[];
+  readonly t: I18nTranslate;
+  readonly onOpen: () => void;
+  readonly onValueChange: (next: string) => void;
+}): ReactNode {
+  const options = [
+    ...staticGroundingOptions(value, loading, liveFilesAvailable, t),
+    ...catalogGroundingOptions(capsuleChoices, capsuleSetChoices, loading),
+  ];
+  return (
+    <KeikoSelect
+      triggerClassName="scope-grounding-select"
+      value={value}
+      disabled={disabled}
+      ariaLabel={t("chat.grounding.mode")}
+      menuTitle={t("chat.grounding.strategy")}
+      onOpen={onOpen}
+      sections={[{ options }]}
+      onValueChange={onValueChange}
+    />
+  );
+}
+
+function GroundingCatalogStatus({
+  loading,
+  empty,
+  error,
+  t,
+}: {
+  readonly loading: boolean;
+  readonly empty: boolean;
+  readonly error: string | null;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  return (
+    <>
+      {loading ? (
+        <span className="scope-connect-hint" role="status" aria-live="polite">
+          {t("chat.grounding.catalogLoading")}
+        </span>
+      ) : null}
+      {empty ? (
+        <span className="scope-connect-hint">{t("chat.grounding.catalogEmpty")}</span>
+      ) : null}
+      {error !== null ? (
+        <span role="alert" className="scope-connect-error">
+          {error}
+        </span>
+      ) : null}
+    </>
+  );
+}
+
 function LocalKnowledgeScopeControl({
   chat,
   onChatChanged,
@@ -3800,9 +4300,10 @@ function LocalKnowledgeScopeControl({
   readonly connected: boolean;
 }): ReactNode {
   const t = useTranslate();
-  const { capsules, capsuleSets, loadError } = catalog;
+  const { capsules, capsuleSets, loading, loadError, refresh } = catalog;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const hasOpenedRef = useRef(false);
 
   async function handleChange(value: string): Promise<void> {
     setBusy(true);
@@ -3818,83 +4319,75 @@ function LocalKnowledgeScopeControl({
 
   const value = groundedModeValue(chat);
   const capsuleChoices = capsuleOptions(chat, capsules, t);
-  const capsuleSetChoices = capsuleSetOptions(chat, capsuleSets, t);
+  const capsuleSetChoices = capsuleSetOptions(
+    chat,
+    capsuleSets.filter(isSelectableGroundingCapsuleSet),
+    t,
+  );
   // Audit F-12 — a disabled option must say why: without a connected Files source the reason
   // for the greyed-out "Live Files context" entry is otherwise undiscoverable.
   const liveFilesAvailable = hasFolderGroundingScope(chat);
   // C172 — a catalog load failure surfaces here too; an update error wins.
   const displayedError = error ?? loadError;
+  const catalogEmpty = !loading && capsules.length === 0 && capsuleSetChoices.length === 0;
+  const controlsDisabled = busy || loading;
+  const handlePickerOpen = (): void => {
+    if (hasOpenedRef.current) refresh();
+    hasOpenedRef.current = true;
+  };
   // uiux-fix F041 (C178) — classed instead of inline-styled (theme/hover/focus
   // layer lives in globals.css; the select was the shell's only raw UA widget).
   return (
     <div className="scope-grounding" data-connected={connected ? "true" : "false"}>
       <span className="scope-grounding-label mono">{t("chat.grounding.label")}</span>
-      <KeikoSelect
-        triggerClassName="scope-grounding-select"
+      <GroundingModeSelect
         value={value}
-        disabled={busy}
-        ariaLabel={t("chat.grounding.mode")}
-        menuTitle={t("chat.grounding.strategy")}
-        sections={[
-          {
-            options: [
-              { value: "none", label: t("chat.grounding.modelOnly") },
-              {
-                value: "files",
-                label: t("chat.grounding.liveFiles"),
-                disabled: !liveFilesAvailable,
-                ...(liveFilesAvailable
-                  ? {}
-                  : { description: t("chat.grounding.liveFilesUnavailableHint") }),
-              },
-              ...(value === "multi"
-                ? [{ value: "multi", label: t("chat.grounding.multiple"), disabled: true }]
-                : []),
-              ...capsuleChoices.map((capsule) => ({
-                value: capsule.value,
-                label: capsule.label,
-                ...(capsule.badge !== undefined ? { badge: capsule.badge } : {}),
-                ...(capsule.description !== undefined ? { description: capsule.description } : {}),
-              })),
-              ...capsuleSetChoices.map((capsuleSet) => ({
-                value: capsuleSet.value,
-                label: capsuleSet.label,
-                ...(capsuleSet.badge !== undefined ? { badge: capsuleSet.badge } : {}),
-                ...(capsuleSet.description !== undefined
-                  ? { description: capsuleSet.description }
-                  : {}),
-              })),
-            ],
-          },
-        ]}
+        loading={loading}
+        disabled={controlsDisabled}
+        liveFilesAvailable={liveFilesAvailable}
+        capsuleChoices={capsuleChoices}
+        capsuleSetChoices={capsuleSetChoices}
+        t={t}
+        onOpen={handlePickerOpen}
         onValueChange={(next) => {
           void handleChange(next);
         }}
       />
-      {displayedError !== null ? (
-        <span role="alert" className="scope-connect-error">
-          {displayedError}
-        </span>
-      ) : null}
+      <GroundingCatalogStatus loading={loading} empty={catalogEmpty} error={displayedError} t={t} />
     </div>
   );
+}
+
+// uiux-fix F041 (C172) — the same catalog load that feeds the grounding select's option lists
+// also names the connector pills, so a connected capsule/capsule-set shows its display name
+// instead of a raw id (ConnectorScopePill falls back to the id when a key is absent).
+function connectorScopeLabels(catalog: KnowledgeCatalog): ReadonlyMap<string, string> {
+  const labels = new Map<string, string>();
+  for (const capsule of catalog.capsules) labels.set(`capsule:${capsule.id}`, capsule.displayName);
+  for (const capsuleSet of catalog.capsuleSets) {
+    labels.set(`set:${capsuleSet.id}`, capsuleSet.displayName);
+  }
+  return labels;
 }
 
 function ChatScopeHeaderImpl({
   chat,
   onChatChanged,
   memoryControl,
+  pendingGitChangeComparisons,
 }: {
   readonly chat: Chat;
   readonly onChatChanged: (chat: Chat) => void;
   readonly memoryControl?: ReactNode;
+  readonly pendingGitChangeComparisons?: readonly WorkspaceLinkedGitChangeComparison[];
 }): ReactNode {
   // uiux-fix F041 (C172) — one catalog load feeds both the connector-pill display
   // names and the grounding select's option lists.
   const catalog = useKnowledgeCatalog();
   // uiux-fix F041 (C178/C179) — layout moved from inline styles to the
   // .chat-scope-header rule in globals.css (16px inset, themeable).
-  const connected = hasGroundingScope(chat);
+  const pendingGitChanges = pendingGitChangeComparisons ?? [];
+  const connected = hasGroundingScope(chat) || pendingGitChanges.length > 0;
   return (
     <div className="chat-scope-header" data-grounded={connected ? "true" : "false"}>
       <LocalKnowledgeScopeControl
@@ -3902,6 +4395,22 @@ function ChatScopeHeaderImpl({
         onChatChanged={onChatChanged}
         catalog={catalog}
         connected={connected}
+      />
+      <ConnectedScopePill chat={chat} onDisconnect={onChatChanged} />
+      <ConnectorScopePill
+        chat={chat}
+        onDisconnect={onChatChanged}
+        labels={connectorScopeLabels(catalog)}
+      />
+      {/* Issue #3400 — the git-change comparison connected via the Git window's "Connect to
+          Chat" action renders here, alongside the grounding scope control, so its current /
+          stale / blocked status and refresh/disconnect actions are visible where a turn is
+          actually sent. Renders nothing when the chat has no connected git-change scope. */}
+      <GitChangeScopePill
+        chat={chat}
+        pendingComparisons={pendingGitChanges}
+        onDisconnect={onChatChanged}
+        onRefreshed={onChatChanged}
       />
       {memoryControl !== undefined ? (
         <div className="chat-scope-header-actions">{memoryControl}</div>
@@ -4407,13 +4916,81 @@ function MemoryDisclosureButton({
       data-tip={disclosure.memoryDisclosureLabel}
       onClick={disclosure.toggleDisclosure}
     >
-      <BrainIcon size={16} />
+      <ChevronIcon size={16} />
       {disclosure.memoryCount > 0 ? (
         <span className="chat-memory-count" aria-hidden="true">
           {disclosure.memoryCountLabel}
         </span>
       ) : null}
     </button>
+  );
+}
+
+function MemoryActivationButton({
+  enabled,
+  onChange,
+}: {
+  readonly enabled: boolean;
+  readonly onChange: (next: boolean) => void;
+}): ReactNode {
+  const t = useTranslate();
+  const label = enabled ? t("chat.memory.disableForChat") : t("chat.memory.enableForChat");
+  return (
+    <button
+      type="button"
+      className={`chat-memory-activation-toggle ui-tip cmp-tip-end ${styles.memoryActivationButton}`}
+      aria-label={label}
+      aria-pressed={enabled}
+      data-enabled={enabled ? "true" : "false"}
+      data-tip={label}
+      onClick={() => {
+        onChange(!enabled);
+      }}
+    >
+      <BrainIcon size={16} />
+    </button>
+  );
+}
+
+export function normalizeMemoryBudgetInput(value: string): number {
+  const next = Number(value);
+  return Number.isFinite(next) && next > 0 ? Math.floor(next) : 0;
+}
+
+function MemoryBudgetSetting({
+  budgetTokens,
+  setBudgetTokens,
+}: {
+  readonly budgetTokens: number;
+  readonly setBudgetTokens: (next: number) => void;
+}): ReactNode {
+  const t = useTranslate();
+  const generatedId = useId();
+  const inputId = `${generatedId}-chat-memory-budget`;
+  const helpId = `${generatedId}-chat-memory-budget-help`;
+  const change = useCallback(
+    (event: ChangeEvent<HTMLInputElement>): void => {
+      setBudgetTokens(normalizeMemoryBudgetInput(event.target.value));
+    },
+    [setBudgetTokens],
+  );
+  return (
+    <div className={styles.memoryBudgetSetting}>
+      <label htmlFor={inputId}>{t("memoria.settings.budget")}</label>
+      <div className={styles.memoryBudgetControl}>
+        <input
+          id={inputId}
+          type="number"
+          min={0}
+          step={100}
+          value={budgetTokens}
+          aria-describedby={helpId}
+          onChange={change}
+        />
+        <span>{t("memoria.settings.budgetUnit")}</span>
+      </div>
+      <p id={helpId}>{t("memoria.settings.budgetHelp")}</p>
+    </div>
   );
 }
 
@@ -4442,12 +5019,16 @@ function memoryActionKey(action: ConversationMemoryActionWire): string {
 
 function MemoryPanelImpl({
   latestMemory,
+  memoryBudgetTokens,
+  setMemoryBudgetTokens,
   acceptCandidate,
   rejectCandidate,
   forgetMemoryAction,
   disclosure,
 }: {
   readonly latestMemory: ConversationMemoryResultWire | undefined;
+  readonly memoryBudgetTokens: number;
+  readonly setMemoryBudgetTokens: (next: number) => void;
   readonly acceptCandidate: (proposalId: string) => Promise<void>;
   readonly rejectCandidate: (proposalId: string) => Promise<void>;
   readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
@@ -4460,6 +5041,10 @@ function MemoryPanelImpl({
     <section className="chat-memory-panel" aria-label={t("chat.memory.panel")}>
       <div id={disclosure.disclosureId} className="chat-memory-disclosure">
         <p className="chat-memory-summary">{memorySummaryLabel(latestMemory, t)}</p>
+        <MemoryBudgetSetting
+          budgetTokens={memoryBudgetTokens}
+          setBudgetTokens={setMemoryBudgetTokens}
+        />
         {latestMemory?.context.memories.map((memory) => (
           <article key={memory.memoryId} className="chat-memory-item">
             <div className="chat-memory-item-head">
@@ -4592,15 +5177,14 @@ function composerFooterEffectiveFlags(
 // track whether the reader is near the bottom, and drop a stale pending question-jump once they
 // scroll back near it themselves.
 function handleChatWindowLogScroll(
-  el: HTMLDivElement,
+  onLogScroll: () => void,
   stickRef: CurrentRef<boolean>,
   pendingQuestionScrollRef: CurrentRef<string | null>,
   focusedQuestionId: string | null,
   setFocusedQuestionId: (id: string | null) => void,
 ): void {
-  const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 64;
-  stickRef.current = nearBottom;
-  if (nearBottom && focusedQuestionId !== null) {
+  onLogScroll();
+  if (stickRef.current && focusedQuestionId !== null) {
     pendingQuestionScrollRef.current = null;
     setFocusedQuestionId(null);
   }
@@ -4618,7 +5202,10 @@ function ChatWindowStatusHeader({
   activeChat,
   replaceChat,
   memoryControl,
+  pendingGitChangeComparisons,
   latestMemory,
+  memoryBudgetTokens,
+  setMemoryBudgetTokens,
   acceptMemoryCandidate,
   rejectMemoryCandidate,
   forgetMemoryAction,
@@ -4629,7 +5216,10 @@ function ChatWindowStatusHeader({
   readonly activeChat: Chat | undefined;
   readonly replaceChat: (chat: Chat) => void;
   readonly memoryControl: ReactNode;
+  readonly pendingGitChangeComparisons: readonly WorkspaceLinkedGitChangeComparison[];
   readonly latestMemory: ConversationMemoryResultWire | undefined;
+  readonly memoryBudgetTokens: number;
+  readonly setMemoryBudgetTokens: (next: number) => void;
   readonly acceptMemoryCandidate: (proposalId: string) => Promise<void>;
   readonly rejectMemoryCandidate: (proposalId: string) => Promise<void>;
   readonly forgetMemoryAction: (memoryId: string) => Promise<void>;
@@ -4644,11 +5234,14 @@ function ChatWindowStatusHeader({
           chat={activeChat}
           onChatChanged={replaceChat}
           memoryControl={memoryControl}
+          pendingGitChangeComparisons={pendingGitChangeComparisons}
         />
       ) : null}
       {activeChat !== undefined ? (
         <MemoryPanel
           latestMemory={latestMemory}
+          memoryBudgetTokens={memoryBudgetTokens}
+          setMemoryBudgetTokens={setMemoryBudgetTokens}
           acceptCandidate={acceptMemoryCandidate}
           rejectCandidate={rejectMemoryCandidate}
           forgetMemoryAction={forgetMemoryAction}
@@ -4689,6 +5282,7 @@ function EmptyOrNoChatState({
 function ChatWindowLog({
   scrollRef,
   stickRef,
+  onLogScroll,
   pendingQuestionScrollRef,
   focusedQuestionId,
   setFocusedQuestionId,
@@ -4718,6 +5312,7 @@ function ChatWindowLog({
 }: {
   readonly scrollRef: RefObject<HTMLDivElement | null>;
   readonly stickRef: CurrentRef<boolean>;
+  readonly onLogScroll: () => void;
   readonly pendingQuestionScrollRef: CurrentRef<string | null>;
   readonly focusedQuestionId: string | null;
   readonly setFocusedQuestionId: (id: string | null) => void;
@@ -4754,9 +5349,9 @@ function ChatWindowLog({
       aria-label={t("chat.conversation")}
       // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- scrollable log region must be keyboard-focusable (axe scrollable-region-focusable)
       tabIndex={0}
-      onScroll={(event) => {
+      onScroll={() => {
         handleChatWindowLogScroll(
-          event.currentTarget,
+          onLogScroll,
           stickRef,
           pendingQuestionScrollRef,
           focusedQuestionId,
@@ -4898,6 +5493,7 @@ function ComposerSendNotice({
 function ChatWindowComposerFooter({
   visible,
   activeChat,
+  suspended,
   effectiveCompact,
   effectiveMinimal,
   effectiveControlsNarrow,
@@ -4915,6 +5511,7 @@ function ChatWindowComposerFooter({
 }: {
   readonly visible: readonly ChatMessage[];
   readonly activeChat: Chat | undefined;
+  readonly suspended: boolean;
   readonly effectiveCompact: boolean;
   readonly effectiveMinimal: boolean;
   readonly effectiveControlsNarrow: boolean;
@@ -4945,6 +5542,7 @@ function ChatWindowComposerFooter({
             <ComposerCore
               ready={ready}
               placeholder={composerPlaceholder(visible.length, loading, t)}
+              suspended={suspended}
               minimal={effectiveMinimal}
               compact={effectiveCompact}
               controlsNarrow={effectiveControlsNarrow}
@@ -4981,6 +5579,7 @@ function ChatWindowComposerFooter({
 
 export function ChatWindow({
   windowId,
+  suspended = false,
   mini = false,
   minimalChat = false,
   compact = false,
@@ -4989,6 +5588,7 @@ export function ChatWindow({
   workflowCompact = false,
   linkedRoot = null,
   linkedRoots = [],
+  linkedGitChangeComparisons = [],
   openEditorFile,
   previewWindows,
   onOpenRunResult,
@@ -5016,6 +5616,10 @@ export function ChatWindow({
     retryPendingCanonicalVoiceTurn,
     discardPendingCanonicalVoiceTurn,
     replaceChat,
+    memoryEnabled,
+    setMemoryEnabled,
+    memoryBudgetTokens,
+    setMemoryBudgetTokens,
     latestMemory,
     lastSentDocuments,
     lastSentImages = [],
@@ -5070,8 +5674,9 @@ export function ChatWindow({
   // uiux-fix F009 C090 — stick-to-bottom autoscroll: follow new messages AND
   // streaming content growth (lastContent dependency), but only while the
   // reader is near the bottom; never yank someone who scrolled up into the
-  // history. Starting an own send (sending false→true) always jumps down.
-  const stickRef = useRef(true);
+  // history. Starting an own send (sending false→true) always jumps down. The
+  // behaviour lives in the shared useFollowNewest hook (also the Coding
+  // Workbench session stream) — one implementation, AGENTS.md §5.
   const prevSendingRef = useRef(false);
   const lastVisible = lastVisibleChatMessage(
     hasLiveStreamingAssistant,
@@ -5079,6 +5684,21 @@ export function ChatWindow({
     visible,
   );
   const lastContent = lastVisible === undefined ? "" : lastVisible.content;
+  // GEN-PERF-CHAT-013 — the growth key changes on every coalesced stream flush
+  // (lastContent per chunk commit); the hook keeps at most ONE pending frame,
+  // and a scheduled frame reads the live refs, so it covers newer chunks too.
+  const {
+    stickRef,
+    onScroll: onLogScroll,
+    resume: followNewest,
+  } = useFollowNewest(
+    scrollRef,
+    `${String(visible.length)}:${sending ? "1" : "0"}:${String(lastContent.length)}`,
+  );
+  useEffect(() => {
+    if (sending && !prevSendingRef.current) followNewest();
+    prevSendingRef.current = sending;
+  }, [followNewest, sending]);
   const effectiveMinimal = minimalChat;
   const { effectiveCompact, effectiveControlsNarrow, effectiveBarCompact } =
     composerFooterEffectiveFlags(
@@ -5093,8 +5713,13 @@ export function ChatWindow({
   // GEN-PERF-CHAT-014 — a JSX literal in the header prop would hand ChatScopeHeader a
   // fresh element identity every render and defeat its memo.
   const memoryControl = useMemo(
-    () => <MemoryDisclosureButton disclosure={memoryDisclosure} />,
-    [memoryDisclosure],
+    () => (
+      <div className={styles.memoryControls}>
+        <MemoryActivationButton enabled={memoryEnabled} onChange={setMemoryEnabled} />
+        <MemoryDisclosureButton disclosure={memoryDisclosure} />
+      </div>
+    ),
+    [memoryDisclosure, memoryEnabled, setMemoryEnabled],
   );
   const questionAnchorsRef = useRef(new Map<string, HTMLDivElement>());
   const [focusedQuestionId, setFocusedQuestionId] = useState<string | null>(null);
@@ -5120,16 +5745,19 @@ export function ChatWindow({
     },
     [],
   );
-  const scrollToQuestion = useCallback((messageId: string): void => {
-    setFocusedQuestionId(messageId);
-    const node = questionAnchorsRef.current.get(messageId);
-    if (node === undefined) {
-      pendingQuestionScrollRef.current = messageId;
-      return;
-    }
-    stickRef.current = false;
-    node.scrollIntoView({ block: "start", behavior: "smooth" });
-  }, []);
+  const scrollToQuestion = useCallback(
+    (messageId: string): void => {
+      setFocusedQuestionId(messageId);
+      const node = questionAnchorsRef.current.get(messageId);
+      if (node === undefined) {
+        pendingQuestionScrollRef.current = messageId;
+        return;
+      }
+      stickRef.current = false;
+      node.scrollIntoView({ block: "start", behavior: "smooth" });
+    },
+    [stickRef],
+  );
   useEffect(() => {
     const pending = pendingQuestionScrollRef.current;
     if (pending === null) return;
@@ -5138,7 +5766,7 @@ export function ChatWindow({
     pendingQuestionScrollRef.current = null;
     stickRef.current = false;
     node.scrollIntoView({ block: "start", behavior: "smooth" });
-  }, [focusedQuestionId, visible.length]);
+  }, [focusedQuestionId, stickRef, visible.length]);
   useEffect(() => {
     if (!sending) return;
     pendingQuestionScrollRef.current = null;
@@ -5148,29 +5776,6 @@ export function ChatWindow({
     pendingQuestionScrollRef.current = null;
     setFocusedQuestionId(null);
   }, [activeChat?.id]);
-  // GEN-PERF-CHAT-013 — this effect re-runs on every coalesced stream flush
-  // (lastContent changes per chunk commit); the old cleanup cancelled and
-  // rescheduled a fresh animation frame each time, doubling the per-chunk rAF
-  // churn on top of the content-flush rAF. Keep at most ONE pending frame: an
-  // already-scheduled frame reads the live refs, so it covers newer chunks too.
-  const stickFrameRef = useRef<number | null>(null);
-  useEffect(() => {
-    if (sending && !prevSendingRef.current) stickRef.current = true;
-    prevSendingRef.current = sending;
-    if (!stickRef.current) return;
-    if (stickFrameRef.current !== null) return;
-    stickFrameRef.current = window.requestAnimationFrame(() => {
-      stickFrameRef.current = null;
-      const el = scrollRef.current;
-      if (el !== null && stickRef.current) el.scrollTop = el.scrollHeight;
-    });
-  }, [visible.length, sending, lastContent]);
-  useEffect(
-    () => () => {
-      if (stickFrameRef.current !== null) window.cancelAnimationFrame(stickFrameRef.current);
-    },
-    [],
-  );
 
   return (
     <div
@@ -5180,7 +5785,10 @@ export function ChatWindow({
         activeChat={activeChat}
         replaceChat={replaceChat}
         memoryControl={memoryControl}
+        pendingGitChangeComparisons={linkedGitChangeComparisons}
         latestMemory={latestMemory}
+        memoryBudgetTokens={memoryBudgetTokens}
+        setMemoryBudgetTokens={setMemoryBudgetTokens}
         acceptMemoryCandidate={acceptMemoryCandidate}
         rejectMemoryCandidate={rejectMemoryCandidate}
         forgetMemoryAction={forgetMemoryAction}
@@ -5196,6 +5804,7 @@ export function ChatWindow({
       <ChatWindowLog
         scrollRef={scrollRef}
         stickRef={stickRef}
+        onLogScroll={onLogScroll}
         pendingQuestionScrollRef={pendingQuestionScrollRef}
         focusedQuestionId={focusedQuestionId}
         setFocusedQuestionId={setFocusedQuestionId}
@@ -5237,6 +5846,7 @@ export function ChatWindow({
       <ChatWindowComposerFooter
         visible={visible}
         activeChat={activeChat}
+        suspended={suspended}
         effectiveCompact={effectiveCompact}
         effectiveMinimal={effectiveMinimal}
         effectiveControlsNarrow={effectiveControlsNarrow}

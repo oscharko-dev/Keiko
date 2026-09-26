@@ -11,7 +11,7 @@ import type { IncomingMessage } from "node:http";
 import {
   validateHtmlManualPodCreateRequest,
   validateHtmlManualPodRefreshRequest,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/html-manual-job";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {

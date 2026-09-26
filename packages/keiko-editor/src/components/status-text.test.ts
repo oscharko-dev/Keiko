@@ -12,6 +12,7 @@ describe("deriveStatusViewModel", () => {
       saveStatus: "idle",
       dirty: false,
       truncated: false,
+      overLimit: false,
     });
     expect(vm.role).toBe("status");
     expect(vm.ariaLive).toBe("polite");
@@ -24,6 +25,7 @@ describe("deriveStatusViewModel", () => {
       saveStatus: "idle",
       dirty: false,
       truncated: false,
+      overLimit: false,
     });
     expect(vm.role).toBe("alert");
     expect(vm.ariaLive).toBe("assertive");
@@ -36,6 +38,7 @@ describe("deriveStatusViewModel", () => {
       saveStatus: "idle",
       dirty: true,
       truncated: false,
+      overLimit: false,
     });
     expect(vm.role).toBe("status");
     expect(vm.message).toBe("Unsaved changes");
@@ -47,6 +50,7 @@ describe("deriveStatusViewModel", () => {
       saveStatus: "saving",
       dirty: true,
       truncated: false,
+      overLimit: false,
     });
     expect(vm.role).toBe("status");
     expect(vm.message).toBe("Saving…");
@@ -59,6 +63,7 @@ describe("deriveStatusViewModel", () => {
       saveStatus: "saved",
       dirty: false,
       truncated: false,
+      overLimit: false,
       modifiedAt: at,
     });
     expect(vm.message).toContain(new Date(at).toISOString());
@@ -71,6 +76,7 @@ describe("deriveStatusViewModel", () => {
       saveError: "disk full",
       dirty: true,
       truncated: false,
+      overLimit: false,
     });
     expect(vm.role).toBe("alert");
     expect(vm.message).toContain("disk full");
@@ -82,6 +88,7 @@ describe("deriveStatusViewModel", () => {
       saveStatus: "conflict",
       dirty: true,
       truncated: false,
+      overLimit: false,
     });
     expect(vm.role).toBe("alert");
     expect(vm.message).toContain("conflict");
@@ -93,7 +100,105 @@ describe("deriveStatusViewModel", () => {
       saveStatus: "idle",
       dirty: false,
       truncated: true,
+      overLimit: false,
     });
     expect(vm.message).toContain("truncated");
+  });
+
+  it("appends a size-limit notice when overLimit is true (KEIKO-0259)", () => {
+    const vm = deriveStatusViewModel({
+      loadState: ready,
+      saveStatus: "idle",
+      dirty: false,
+      truncated: false,
+      overLimit: true,
+    });
+    expect(vm.role).toBe("status");
+    expect(vm.ariaLive).toBe("polite");
+    expect(vm.message).toContain("size limit");
+    expect(vm.message).toContain("read-only");
+  });
+
+  it("composes both notices when the file is truncated and over the size limit (#2898)", () => {
+    const vm = deriveStatusViewModel({
+      loadState: ready,
+      saveStatus: "idle",
+      dirty: false,
+      truncated: true,
+      overLimit: true,
+    });
+    expect(vm.message).toContain("size limit");
+    expect(vm.message).toContain("display limit");
+    expect(vm.message).toBe(
+      "Ready File exceeds the size limit and is read-only." +
+        " File is truncated (read-only): it exceeds the display limit.",
+    );
+  });
+
+  // KEIKO-0721: `Date.prototype.toISOString()` throws `RangeError: Invalid time value` for NaN,
+  // +/-Infinity, or any value that produces an out-of-range Date. The undefined-only guard the
+  // function shipped with therefore let a non-finite `modifiedAt` throw out of the render path.
+  it("returns the absent-timestamp fallback for a non-finite modifiedAt (KEIKO-0721)", () => {
+    for (const modifiedAt of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const vm = deriveStatusViewModel({
+        loadState: ready,
+        saveStatus: "saved",
+        dirty: false,
+        truncated: false,
+        overLimit: false,
+        modifiedAt,
+      });
+      expect(vm.role).toBe("status");
+      expect(vm.message).toBe("Saved");
+    }
+  });
+
+  // PR #3289 review (comment 3865167748): `Number.isFinite` alone is not enough -- ECMAScript
+  // Date only represents +/-8_640_000_000_000_000 ms from the epoch. A finite value one past that
+  // limit (or any other finite-but-out-of-range value, e.g. Number.MAX_VALUE) still makes
+  // `new Date(value).toISOString()` throw `RangeError: Invalid time value`, so the finiteness-only
+  // guard let this exact class of value crash the render path.
+  it("returns the absent-timestamp fallback for a finite but out-of-ECMA-range modifiedAt", () => {
+    for (const modifiedAt of [
+      8_640_000_000_000_001,
+      -8_640_000_000_000_001,
+      Number.MAX_VALUE,
+      -Number.MAX_VALUE,
+    ]) {
+      expect(() =>
+        deriveStatusViewModel({
+          loadState: ready,
+          saveStatus: "saved",
+          dirty: false,
+          truncated: false,
+          overLimit: false,
+          modifiedAt,
+        }),
+      ).not.toThrow();
+      const vm = deriveStatusViewModel({
+        loadState: ready,
+        saveStatus: "saved",
+        dirty: false,
+        truncated: false,
+        overLimit: false,
+        modifiedAt,
+      });
+      expect(vm.role).toBe("status");
+      expect(vm.message).toBe("Saved");
+    }
+  });
+
+  // The boundary itself is a VALID Date and must keep formatting normally -- only values strictly
+  // beyond the ECMA range fall back.
+  it("formats a modifiedAt exactly at the ECMA Date range boundary", () => {
+    const vm = deriveStatusViewModel({
+      loadState: ready,
+      saveStatus: "saved",
+      dirty: false,
+      truncated: false,
+      overLimit: false,
+      modifiedAt: 8_640_000_000_000_000,
+    });
+    expect(vm.message).toBe(`Saved at ${new Date(8_640_000_000_000_000).toISOString()}`);
   });
 });

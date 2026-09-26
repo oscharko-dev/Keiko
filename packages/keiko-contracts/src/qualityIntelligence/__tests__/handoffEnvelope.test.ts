@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { asQualityIntelligenceRunId, asQualityIntelligenceSourceEnvelopeId } from "../ids.js";
-import { QUALITY_INTELLIGENCE_HANDOFF_PROMPTED_ACTIONS } from "../handoffEnvelope.js";
+import {
+  asQualityIntelligenceHandoffId,
+  asQualityIntelligenceRunId,
+  asQualityIntelligenceSourceEnvelopeId,
+} from "../ids.js";
+import {
+  assertQualityIntelligenceConversationCenterHandoffInvariant,
+  QUALITY_INTELLIGENCE_HANDOFF_MAX_SOURCE_ENVELOPE_IDS,
+  QUALITY_INTELLIGENCE_HANDOFF_PROMPTED_ACTIONS,
+} from "../handoffEnvelope.js";
 import type {
   QualityIntelligenceConversationCenterHandoff,
   QualityIntelligenceHandoffPromptedAction,
@@ -9,7 +17,7 @@ import type {
 const makeHandoff = (
   promptedAction: QualityIntelligenceHandoffPromptedAction,
 ): QualityIntelligenceConversationCenterHandoff => ({
-  id: "handoff-1",
+  id: asQualityIntelligenceHandoffId("handoff-1"),
   requestedByChatMessageId: "msg-001",
   runId: asQualityIntelligenceRunId("run-001"),
   promptedAction,
@@ -37,7 +45,7 @@ describe("QualityIntelligenceConversationCenterHandoff", () => {
 
   it("permits omission of runId for not-yet-allocated handoffs", () => {
     const h: QualityIntelligenceConversationCenterHandoff = {
-      id: "handoff-2",
+      id: asQualityIntelligenceHandoffId("handoff-2"),
       requestedByChatMessageId: "msg-002",
       promptedAction: "design-tests",
       payloadRef: { sourceEnvelopeIds: [] },
@@ -49,5 +57,48 @@ describe("QualityIntelligenceConversationCenterHandoff", () => {
     const h = makeHandoff("request-export");
     const round = JSON.parse(JSON.stringify(h)) as QualityIntelligenceConversationCenterHandoff;
     expect(round).toEqual(h);
+  });
+});
+
+// KEIKO-0593: payloadRef.sourceEnvelopeIds previously declared no upper bound. Mirrors the 16-
+// source run-start cap (bffWire.ts / MAX_QI_SOURCES in keiko-server's runIngestion.ts).
+describe("assertQualityIntelligenceConversationCenterHandoffInvariant (KEIKO-0593)", () => {
+  const withSourceCount = (count: number): QualityIntelligenceConversationCenterHandoff => ({
+    id: asQualityIntelligenceHandoffId("handoff-bound"),
+    requestedByChatMessageId: "msg-001",
+    promptedAction: "design-tests",
+    payloadRef: {
+      sourceEnvelopeIds: Array.from({ length: count }, (_unused, i) =>
+        asQualityIntelligenceSourceEnvelopeId(`env-${String(i)}`),
+      ),
+    },
+  });
+
+  it("pins the documented maximum at 16", () => {
+    expect(QUALITY_INTELLIGENCE_HANDOFF_MAX_SOURCE_ENVELOPE_IDS).toBe(16);
+  });
+
+  it("accepts a handoff at exactly the maximum", () => {
+    expect(() => {
+      assertQualityIntelligenceConversationCenterHandoffInvariant(
+        withSourceCount(QUALITY_INTELLIGENCE_HANDOFF_MAX_SOURCE_ENVELOPE_IDS),
+      );
+    }).not.toThrow();
+  });
+
+  it("throws RangeError one past the maximum", () => {
+    // Before KEIKO-0593 no such bound existed anywhere in this contract, so this call could not
+    // throw at all -- payloadRef.sourceEnvelopeIds accepted any length.
+    expect(() => {
+      assertQualityIntelligenceConversationCenterHandoffInvariant(
+        withSourceCount(QUALITY_INTELLIGENCE_HANDOFF_MAX_SOURCE_ENVELOPE_IDS + 1),
+      );
+    }).toThrow(RangeError);
+  });
+
+  it("accepts an empty sourceEnvelopeIds array", () => {
+    expect(() => {
+      assertQualityIntelligenceConversationCenterHandoffInvariant(withSourceCount(0));
+    }).not.toThrow();
   });
 });

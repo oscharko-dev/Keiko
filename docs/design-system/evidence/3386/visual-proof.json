@@ -1,0 +1,137 @@
+{
+  "schemaVersion": 1,
+  "issue": 3386,
+  "evidenceClass": "production-composed-deterministic-browser",
+  "modelQualification": false,
+  "checkedAt": "2026-09-06T20:37:59.517Z",
+  "sourceHashes": {
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchCommitReview.tsx": "7637ef4458a27293aebb4cc4ae0e65a4529428c3be22238359a001980fe73c12",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchCommitResult.tsx": "a9e4313995c80d68a1cb4312a977def53cabb5dd69eef973b908e24c13b68006",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.tsx": "b20a6909e2a8dac9f8f34343999c50d474298c678b2cc53fefa0e96fc957de4c",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchWindow.module.css": "c86f5f97860ae3c3dea96a6c58f85ff9a5fa9d7cdd11b528db8b2053e752352c",
+    "packages/keiko-ui/src/lib/useCodingWorkbenchApprovalReview.ts": "ded2c478d9c722d1ce8a445df06dc312be95960e943b3f9934842824dca38299",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchDeliveryReview.tsx": "febb6abd735000de821a8154d982dffb5a513796353bb7eb088311bac05a1550",
+    "packages/keiko-ui/src/app/components/desktop/widgets/coding-workbench/CodingWorkbenchDraftDelivery.tsx": "3f528a6ad658582bdc11f65954f88045852e7ac5b003899189b1d8f45b24637c",
+    "packages/keiko-ui/src/app/components/desktop/widgets/cards/shared/diffView.tsx": "2cb80f67f8a018eebec7dec6fb394b345112e2b851b296255d343751f8ae0314"
+  },
+  "captures": [
+    {
+      "name": "01-dark",
+      "theme": "dark",
+      "screenshot": "docs/design-system/evidence/3386/01-dark.png",
+      "screenshotSha256": "6bd18a1b74cb1980d7f88819c63a852db3ba60bd74450ed322aaddd920c5bd6d",
+      "seriousOrCriticalViolations": 0,
+      "violations": [],
+      "horizontalOverflow": false,
+      "trustLayout": {
+        "noticeHeight": 43,
+        "bodyTop": 223,
+        "approvalTop": 548.09375
+      }
+    },
+    {
+      "name": "02-light",
+      "theme": "light",
+      "screenshot": "docs/design-system/evidence/3386/02-light.png",
+      "screenshotSha256": "1e7b1142283249fc5db03b093ff779e11f600c1312900d289ed1407c3ed26524",
+      "seriousOrCriticalViolations": 0,
+      "violations": [],
+      "horizontalOverflow": false,
+      "trustLayout": {
+        "noticeHeight": 43,
+        "bodyTop": 223,
+        "approvalTop": 548.09375
+      }
+    },
+    {
+      "name": "03-dark-high-contrast",
+      "theme": "dark",
+      "highContrast": true,
+      "screenshot": "docs/design-system/evidence/3386/03-dark-high-contrast.png",
+      "screenshotSha256": "e0722684d61e9407d9a35dcbc09d97f218df1f6cd536a91461a242ffef335f59",
+      "seriousOrCriticalViolations": 0,
+      "violations": [],
+      "horizontalOverflow": false,
+      "trustLayout": {
+        "noticeHeight": 43,
+        "bodyTop": 223,
+        "approvalTop": 548.09375
+      }
+    },
+    {
+      "name": "04-light-high-contrast",
+      "theme": "light",
+      "highContrast": true,
+      "screenshot": "docs/design-system/evidence/3386/04-light-high-contrast.png",
+      "screenshotSha256": "d71fde85191f26870e1599b376feb1f4f48623c84d3b5bdf48c5f59027668f02",
+      "seriousOrCriticalViolations": 0,
+      "violations": [],
+      "horizontalOverflow": false,
+      "trustLayout": {
+        "noticeHeight": 43,
+        "bodyTop": 223,
+        "approvalTop": 548.09375
+      }
+    },
+    {
+      "name": "05-prefers-contrast",
+      "theme": "dark",
+      "contrast": "more",
+      "screenshot": "docs/design-system/evidence/3386/05-prefers-contrast.png",
+      "screenshotSha256": "f09de6b4639c5133fe9acd4f3b61951c777ac1be8ff0953c5b84a2ab6b9863b1",
+      "seriousOrCriticalViolations": 0,
+      "violations": [],
+      "horizontalOverflow": false,
+      "trustLayout": {
+        "noticeHeight": 43,
+        "bodyTop": 223,
+        "approvalTop": 548.09375
+      }
+    },
+    {
+      "name": "06-forced-colors",
+      "theme": "dark",
+      "forcedColors": "active",
+      "screenshot": "docs/design-system/evidence/3386/06-forced-colors.png",
+      "screenshotSha256": "96dcc9a2a4710f4875549aa9821589448ea11538d0b86c3329aeed18556a194a",
+      "seriousOrCriticalViolations": 0,
+      "violations": [],
+      "horizontalOverflow": false,
+      "trustLayout": {
+        "noticeHeight": 43,
+        "bodyTop": 223,
+        "approvalTop": 548.09375
+      }
+    },
+    {
+      "name": "07-reduced-motion",
+      "theme": "dark",
+      "reducedMotion": "reduce",
+      "screenshot": "docs/design-system/evidence/3386/07-reduced-motion.png",
+      "screenshotSha256": "f2e64fb4847c7dc8b7b454ffe5d7a749acec507e96168af70af777f4bd800377",
+      "seriousOrCriticalViolations": 0,
+      "violations": [],
+      "horizontalOverflow": false,
+      "trustLayout": {
+        "noticeHeight": 43,
+        "bodyTop": 223,
+        "approvalTop": 548.09375
+      }
+    },
+    {
+      "name": "08-compact",
+      "theme": "dark",
+      "width": 360,
+      "screenshot": "docs/design-system/evidence/3386/08-compact.png",
+      "screenshotSha256": "9fdbfcaf2ceb9d859ee76fd0b9b7abac101eaa31bc4fa2815b9bf33797fc19c2",
+      "seriousOrCriticalViolations": 0,
+      "violations": [],
+      "horizontalOverflow": false,
+      "trustLayout": {
+        "noticeHeight": 73,
+        "bodyTop": 294,
+        "approvalTop": 829.09375
+      }
+    }
+  ]
+}

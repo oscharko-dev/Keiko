@@ -12,12 +12,19 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { ToolError } from "@oscharko-dev/keiko-tools";
 import { WorkspaceError } from "@oscharko-dev/keiko-workspace";
-import type { ContextToolObservation, ToolCallResult } from "@oscharko-dev/keiko-contracts";
+import type {
+  ContextToolObservation,
+  ToolCallResult,
+  ToolShapingDegradedReason,
+} from "@oscharko-dev/keiko-contracts";
 import { contextBytes, type RunContext, type StateStep } from "./context.js";
 import { HARNESS_CODES, toFailure } from "./errors.js";
-import type { ToolCallMetadata } from "./ports.js";
-
-const RUN_COMMAND_TOOL = "run_command";
+import {
+  executeCatalogCall,
+  catalogAdvertisement,
+  captureModelToolCalls,
+} from "./catalog-runtime.js";
+import { HarnessCatalogError } from "./catalog-errors.js";
 
 function toolFailureCode(error: unknown): string {
   if (error instanceof ToolError || error instanceof WorkspaceError) {
@@ -27,10 +34,12 @@ function toolFailureCode(error: unknown): string {
 }
 
 function buildRequest(ctx: RunContext): GatewayRequest {
-  const tools = ctx.plan.allowsTools ? ctx.tools.listTools() : undefined;
-  return tools === undefined
-    ? { modelId: ctx.modelId, messages: ctx.messages }
-    : { modelId: ctx.modelId, messages: ctx.messages, tools };
+  const toolCatalog = ctx.plan.allowsTools ? catalogAdvertisement(ctx) : undefined;
+  return {
+    modelId: ctx.modelId,
+    messages: ctx.messages,
+    ...(toolCatalog === undefined ? {} : { toolCatalog }),
+  };
 }
 
 function routeAfterModel(ctx: RunContext, response: NormalizedResponse): StateStep {
@@ -50,16 +59,36 @@ function routeAfterModel(ctx: RunContext, response: NormalizedResponse): StateSt
   return { to: "reporting", reason: "model produced final content; read-only task" };
 }
 
+// A HarnessCatalogError raised before the model call completes (captureModelToolCalls rejects a
+// tool_calls response when no catalog is bound, or when the provider's bound invocation fails
+// cross-validation) carries its own closed category -- classify by that category, exactly as
+// runOneTool's catch already does for a tool-execution failure, instead of collapsing every such
+// failure into the generic non-retryable HARNESS_MODEL_ERROR.
+function onCatalogDispatchError(ctx: RunContext, error: HarnessCatalogError): StateStep {
+  ctx.failure = toFailure(error.category, error.message);
+  return {
+    to: error.category.startsWith("HARNESS_LIMIT_") ? "limit-exceeded" : "failed",
+    reason: "catalog dispatch failed before the model call completed",
+  };
+}
+
+function onModelCallAborted(ctx: RunContext): StateStep {
+  if (ctx.failure?.category === HARNESS_CODES.LIMIT_WALL_TIME) {
+    return { to: "limit-exceeded", reason: "maxWallTimeMs exceeded during model call" };
+  }
+  return { to: "cancelled", reason: "abort detected during model call" };
+}
+
 function onModelError(ctx: RunContext, error: unknown): StateStep {
   if (ctx.signal.aborted || error instanceof CancelledError) {
-    if (ctx.failure?.category === HARNESS_CODES.LIMIT_WALL_TIME) {
-      return { to: "limit-exceeded", reason: "maxWallTimeMs exceeded during model call" };
-    }
-    return { to: "cancelled", reason: "abort detected during model call" };
+    return onModelCallAborted(ctx);
   }
   const code = error instanceof GatewayError ? error.code : "UNKNOWN";
   const message = error instanceof Error ? error.message : "model call failed";
   ctx.emitter.emit({ type: "model:call:failed", modelId: ctx.modelId, errorCode: code, message });
+  if (error instanceof HarnessCatalogError) {
+    return onCatalogDispatchError(ctx, error);
+  }
   const retryable = error instanceof GatewayError && error.retryable;
   if (!retryable) {
     ctx.failure = toFailure(HARNESS_CODES.MODEL_ERROR, message);
@@ -83,7 +112,7 @@ export async function handleModelCall(ctx: RunContext): Promise<StateStep> {
   });
   let response: NormalizedResponse;
   try {
-    response = await ctx.model.call(buildRequest(ctx), ctx.signal);
+    response = captureModelToolCalls(ctx, await ctx.model.call(buildRequest(ctx), ctx.signal));
   } catch (error) {
     return onModelError(ctx, error);
   }
@@ -119,46 +148,12 @@ function assistantMessage(response: NormalizedResponse): ChatMessage {
 // S-M1: emits the redacted audit event matching a tool's metadata, in addition to
 // tool:call:completed, so the issue #10 ledger sees THAT a command ran / a patch applied — never
 // the args, stdout, or file paths. No-op when the tool returned no metadata (read-only tools).
-function emitToolMetadata(
-  ctx: RunContext,
-  metadata: ToolCallMetadata | undefined,
-  durationMs: number,
-): void {
-  if (metadata === undefined) {
-    return;
-  }
-  if (metadata.kind === "command") {
-    ctx.emitter.emit({
-      type: "sandbox:configured",
-      envAllowlist: metadata.sandbox.envAllowlist,
-      network: metadata.sandbox.network,
-      maxOutputBytes: metadata.sandbox.maxOutputBytes,
-      timeoutMs: metadata.sandbox.timeoutMs,
-      terminationGraceMs: metadata.sandbox.terminationGraceMs,
-      cwdRequested: metadata.sandbox.cwdRequested,
-    });
-    ctx.emitter.emit({
-      type: "command:executed",
-      executable: metadata.executable,
-      argCount: metadata.argCount,
-      exitCode: metadata.exitCode,
-      timedOut: metadata.timedOut,
-      durationMs,
-    });
-    return;
-  }
-  ctx.emitter.emit({
-    type: "patch:applied",
-    changedFiles: metadata.changedFiles,
-    created: metadata.created,
-    deleted: metadata.deleted,
-  });
-}
-
 // ADR-0055 D4 (PR4-W3): additively attach a shaped observation to the completed ToolCallResult via
-// the optional injected port, accumulating it on ctx.shapedObservations. The port is pure/total; a
-// returned undefined means "no shape for this tool type" and leaves `result` untouched. No-op when
-// no port is injected (every existing caller), preserving byte-identical behavior.
+// the optional injected port. The port is pure/total; a returned undefined means "no shape for this
+// tool type" and leaves `result` untouched. No-op when no port is injected (every existing caller),
+// preserving byte-identical behavior. Accumulating onto ctx.shapedObservations is deliberately NOT
+// done here: the caller commits it only once the rest of the shaping step has succeeded, so a
+// failure cannot leave a half-applied observation behind.
 function enrichWithObservation(
   ctx: RunContext,
   call: NormalizedToolCall,
@@ -176,7 +171,6 @@ function enrichWithObservation(
   if (observation === undefined) {
     return result;
   }
-  ctx.shapedObservations.push(observation);
   return { ...result, shapedObservation: observation };
 }
 
@@ -290,7 +284,7 @@ function selectIfFits(
   return { messages: state.messages, results: state.results, message };
 }
 
-function selectToolMessage(
+export function selectToolMessage(
   ctx: RunContext,
   results: readonly ChatMessage[],
   candidate: ToolMessageCandidate,
@@ -322,45 +316,6 @@ function abortStep(ctx: RunContext, reason: string): StateStep {
   return { to: "cancelled", reason };
 }
 
-function commandBudgetExceeded(ctx: RunContext): StateStep {
-  ctx.failure = toFailure(HARNESS_CODES.LIMIT_COMMAND_EXEC, "command-execution budget exhausted");
-  return { to: "limit-exceeded", reason: "maxCommandExecutions exceeded" };
-}
-
-// Issue #2638 hardening: the pre-execution budget check in handleToolCall is name-scoped to
-// `run_command`; the counter itself increments on any tool result that claims a command ran.
-// Reject the mismatch here so a rogue or misconfigured tool cannot bypass maxCommandExecutions
-// by claiming a command under a different name — this is a tool-contract violation, not a budget
-// breach, so it fails with HARNESS_INTERNAL and stops the run rather than continuing. The
-// tool:call:failed emit closes the tool:call:started event so per-call observability stays
-// consistent with the success and exception paths in runOneTool.
-function accountForCommandExecution(
-  ctx: RunContext,
-  call: NormalizedToolCall,
-  result: ToolCallResult,
-): StateStep | null {
-  if (result.commandExecuted !== true) {
-    return null;
-  }
-  ctx.counters.commandExecutions += 1;
-  if (call.name === RUN_COMMAND_TOOL) {
-    return null;
-  }
-  const message = `tool ${call.name} claimed commandExecuted:true; only ${RUN_COMMAND_TOOL} may execute commands`;
-  ctx.failure = toFailure(HARNESS_CODES.INTERNAL, message);
-  ctx.emitter.emit({
-    type: "tool:call:failed",
-    toolName: call.name,
-    toolCallId: call.id,
-    errorCode: HARNESS_CODES.INTERNAL,
-    message,
-  });
-  return {
-    to: "failed",
-    reason: "tool contract violation: commandExecuted claimed by non-run_command tool",
-  };
-}
-
 function toolOutputBudgetExceeded(ctx: RunContext, bytes: number): StateStep {
   ctx.failure = toFailure(
     HARNESS_CODES.LIMIT_CONTEXT_SIZE,
@@ -379,36 +334,81 @@ function isSelectedToolMessage(
   return "message" in value;
 }
 
-async function runOneTool(
+// Shaping and compaction are additive (ADR-0055 D4) and run AFTER the tool has succeeded and
+// tool:call:completed has already been emitted. A shaper port that throws in violation of its own
+// totality contract, or an observation that cannot be serialized, must therefore degrade to the
+// raw ToolCallResult: it may not re-enter the tool-failure path, may not emit a second,
+// contradictory terminal event for this toolCallId, and may not end the run. Both side effects are
+// committed only once every step that can still throw has succeeded. A degraded fallback still
+// emits a redacted, non-terminal diagnostic (tool:shaping:degraded) so a broken shaper port or a
+// non-serialisable observation is operator-visible instead of silently discarded — the two steps
+// that can throw are tried separately so the reason names which one actually failed.
+function shapeOrFallBackToRaw(
   ctx: RunContext,
   call: NormalizedToolCall,
-): Promise<ToolMessageCandidate | StateStep> {
-  ctx.counters.toolCalls += 1;
-  ctx.emitter.emit({ type: "tool:call:started", toolName: call.name, toolCallId: call.id });
+  result: ToolCallResult,
+): ToolMessageCandidate {
+  let enriched: ToolCallResult;
   try {
-    const result = await ctx.tools.execute({
-      toolCallId: call.id,
-      toolName: call.name,
-      arguments: call.arguments,
-      signal: ctx.signal,
-    });
-    const contractViolation = accountForCommandExecution(ctx, call, result);
-    if (contractViolation !== null) {
-      return contractViolation;
-    }
-    ctx.emitter.emit({
-      type: "tool:call:completed",
-      toolName: call.name,
-      toolCallId: call.id,
-      durationMs: result.durationMs,
-    });
-    emitToolMetadata(ctx, result.metadata, result.durationMs);
-    const enriched = enrichWithObservation(ctx, call, result);
+    enriched = enrichWithObservation(ctx, call, result);
+  } catch {
+    emitShapingDegraded(ctx, call, "shaper-threw");
+    return toolMessageCandidate(result);
+  }
+  try {
     const candidate = toolMessageCandidate(enriched);
+    if (enriched.shapedObservation !== undefined) {
+      ctx.shapedObservations.push(enriched.shapedObservation);
+    }
     if (candidate.compact !== undefined) {
       ctx.compactedToolMessages.set(call.id, candidate.compact);
     }
     return candidate;
+  } catch {
+    emitShapingDegraded(ctx, call, "unserializable-observation");
+    // Intentionally terminal: the enrichment is optional, the tool call already succeeded, and the
+    // raw output is the same model-facing message the harness produces with no port injected.
+    return toolMessageCandidate(result);
+  }
+}
+
+function emitShapingDegraded(
+  ctx: RunContext,
+  call: NormalizedToolCall,
+  reason: ToolShapingDegradedReason,
+): void {
+  ctx.emitter.emit({
+    type: "tool:shaping:degraded",
+    toolCallId: call.id,
+    toolName: call.name,
+    reason,
+  });
+}
+
+// The completed-result shaping owner is independently testable, including legacy raw-size pins.
+// Canonical dispatch validates its bounded envelope before entering this post-tool owner.
+export function completeToolCall(
+  ctx: RunContext,
+  call: NormalizedToolCall,
+  result: ToolCallResult,
+): ToolMessageCandidate {
+  ctx.emitter.emit({
+    type: "tool:call:completed",
+    toolName: call.name,
+    toolCallId: call.id,
+    durationMs: result.durationMs,
+  });
+  return shapeOrFallBackToRaw(ctx, call, result);
+}
+
+async function runOneTool(
+  ctx: RunContext,
+  call: NormalizedToolCall,
+): Promise<ToolMessageCandidate | StateStep> {
+  ctx.emitter.emit({ type: "tool:call:started", toolName: call.name, toolCallId: call.id });
+  try {
+    const result = await executeCatalogCall(ctx, call);
+    return completeToolCall(ctx, call, result);
   } catch (error) {
     const message = error instanceof Error ? error.message : "tool execution failed";
     ctx.emitter.emit({
@@ -421,8 +421,12 @@ async function runOneTool(
     if (ctx.signal.aborted || error instanceof CancelledError) {
       return abortStep(ctx, "abort detected during tool call");
     }
-    ctx.failure = toFailure(HARNESS_CODES.TOOL_ERROR, message);
-    return { to: "failed", reason: "tool execution failed" };
+    const code = error instanceof HarnessCatalogError ? error.category : HARNESS_CODES.TOOL_ERROR;
+    ctx.failure = toFailure(code, message);
+    return {
+      to: code.startsWith("HARNESS_LIMIT_") ? "limit-exceeded" : "failed",
+      reason: "tool execution failed",
+    };
   }
 }
 
@@ -432,12 +436,6 @@ export async function handleToolCall(ctx: RunContext): Promise<StateStep> {
   for (const call of calls) {
     if (ctx.signal.aborted) {
       return abortStep(ctx, "abort detected before tool call");
-    }
-    if (
-      call.name === RUN_COMMAND_TOOL &&
-      ctx.counters.commandExecutions >= ctx.limits.maxCommandExecutions
-    ) {
-      return commandBudgetExceeded(ctx);
     }
     const result = await runOneTool(ctx, call);
     if (isStateStep(result)) {

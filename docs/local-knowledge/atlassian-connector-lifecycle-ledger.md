@@ -233,7 +233,7 @@ the shipped code and Epic-level integration:
   - This ledger — the post-merge status is now recorded, the reviewer-walkthrough evidence and
     `markdown-link-check` gate are named explicitly in the gate table, and the intentional
     comment-fetch 401 trade-off is documented above.
-- **Deferred to human-approved closure actions** (per human-control invariant / AGENTS.md §12):
+- **Deferred to human-approved closure actions** (per human-control invariant / AGENTS.md §13):
   - Formal per-child issue closure (checking acceptance-criteria and expected-verification boxes
     on `#2239`–`#2248` after human confirmation).
   - Epic

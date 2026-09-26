@@ -12,7 +12,7 @@ import {
   loadQualityIntelligenceRun,
 } from "@oscharko-dev/keiko-evidence";
 import { normaliseCandidateText } from "@oscharko-dev/keiko-quality-intelligence";
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import type { RouteContext, RouteResult, RouteDefinition } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import {

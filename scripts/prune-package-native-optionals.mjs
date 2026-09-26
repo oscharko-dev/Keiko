@@ -1,6 +1,6 @@
-// Remove platform-specific optional native packages that would otherwise be captured by
-// bundleDependencies from the publisher's machine. Keiko must start from one npm artifact on
-// macOS, Windows, and Linux; optional PDF native helpers are loaded lazily and must not be bundled.
+// Remove platform-specific optional native packages before packaging gates. The staged npm artifact
+// copies only private workspace dist trees and declares PDF canvas support as optional, but a direct
+// source pack or future staging drift must never capture a publisher-machine native binary.
 
 import { existsSync, readdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";

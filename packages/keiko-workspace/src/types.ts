@@ -27,4 +27,4 @@ export {
   SELECTION_REASON_PRIORITY,
   DEFAULT_CONTEXT_REQUEST,
   WORKSPACE_LANGUAGES,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/workspace";

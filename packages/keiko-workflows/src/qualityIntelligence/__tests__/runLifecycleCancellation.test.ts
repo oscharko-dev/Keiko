@@ -8,7 +8,8 @@
 // guard flips a run to "failed" and fails here).
 
 import { describe, expect, it } from "vitest";
-import { QualityIntelligence, type QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import {
   createInMemoryQualityIntelligenceLocalStore,
   type QualityIntelligenceEvidenceManifest,

@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { GIT_MUTATION_COMMAND_RULES } from "./git-mutation-adapter.js";
+import { GIT_PUBLISH_COMMAND_RULES } from "./git-publish-gateway.js";
+import { GIT_WORKTREE_COMMAND_RULES } from "./git-worktree-adapter.js";
 import {
   buildChildEnv,
   buildSandboxEnv,
   collectCredentialEnvValues,
+  collectCredentialLikeEnvValues,
   collectSensitiveEnvValues,
+  isCredentialEnvName,
   isCommandAllowed,
 } from "./sandbox.js";
 import {
@@ -56,6 +61,90 @@ describe("collectSensitiveEnvValues", () => {
   it("skips short values to avoid over-redaction", () => {
     const values = collectSensitiveEnvValues({ TINY: "ab" }, []);
     expect(values).not.toContain("ab");
+  });
+});
+
+// The scrub set for `outputScrub: "credentials-only"`. The default collector treats every
+// non-allowlisted value as a secret, which is right for diagnostic output and wrong for the one read
+// whose stdout IS the value the caller needs: a configured remote URL carries an owner/repository
+// name that a CI runner also exports as GITHUB_REPOSITORY, so under the default mode the URL came
+// back as `[REDACTED]` and every consumer addressed a repository that does not exist.
+describe("collectCredentialLikeEnvValues — credentials-only scrub set", () => {
+  it("scrubs governed credential names and credential-shaped names, never context names", () => {
+    const values = collectCredentialLikeEnvValues(
+      {
+        GH_TOKEN: "ghp_governed-token-value",
+        MY_DEPLOY_TOKEN: "custom-token-value",
+        AWS_SECRET_ACCESS_KEY: "aws-secret-value",
+        DB_PASSWORD: "database-password",
+        GITHUB_REPOSITORY: "alicedev-team/App",
+        GITHUB_REPOSITORY_OWNER: "alicedev-team",
+        USER: "alicedev",
+        GIT_AUTHOR_NAME: "Alice Developer",
+      },
+      [],
+    );
+
+    expect(values).toEqual(
+      expect.arrayContaining([
+        "ghp_governed-token-value",
+        "custom-token-value",
+        "aws-secret-value",
+        "database-password",
+      ]),
+    );
+    expect(values).not.toContain("alicedev-team/App");
+    expect(values).not.toContain("alicedev-team");
+    expect(values).not.toContain("alicedev");
+    expect(values).not.toContain("Alice Developer");
+  });
+
+  it("includes the policy's own credential list even under an unrelated name", () => {
+    const values = collectCredentialLikeEnvValues({ CUSTOM_CRED: "policy-listed-value" }, [
+      "CUSTOM_CRED",
+    ]);
+
+    expect(values).toEqual(["policy-listed-value"]);
+  });
+
+  it("keeps the short-value floor so a tiny token does not over-redact", () => {
+    expect(collectCredentialLikeEnvValues({ GH_TOKEN: "abc" }, [])).toEqual([]);
+  });
+
+  // `AUTH` is deliberately absent from the name pattern: GIT_AUTHOR_NAME carries a person's name,
+  // and a name is exactly the kind of value this mode exists to let through.
+  it("classifies names by credential-bearing words only", () => {
+    for (const name of [
+      "GH_TOKEN",
+      "NPM_TOKEN",
+      "X_SECRET",
+      "DB_PASSWORD",
+      "A_PASSWD",
+      "SVC_CREDENTIALS",
+      "KEIKO_API_KEY",
+      "SSH_PRIVATE_KEY",
+      "S3_ACCESS_KEY",
+      "SIGNING_KEY",
+      "GPG_KEY",
+      "ENCRYPTION_KEY",
+      "SSH_KEY",
+      "deploy_key",
+    ]) {
+      expect(isCredentialEnvName(name), name).toBe(true);
+    }
+    for (const name of [
+      "GITHUB_REPOSITORY",
+      "USER",
+      "HOME",
+      "GIT_AUTHOR_NAME",
+      "SSH_AUTH_SOCK",
+      "PATH",
+      "KEYBOARD_LAYOUT",
+      "HOTKEY_MODE",
+      "GPG_KEY_ID",
+    ]) {
+      expect(isCredentialEnvName(name), name).toBe(false);
+    }
   });
 });
 
@@ -234,13 +323,15 @@ describe("isCommandAllowed — S-H2 value-flag bypass + transitive shell", () =>
     );
   });
 
+  // `-C sub status` was pinned as allowed while `-C` counted as inert "location only" data. It is
+  // not: `-C` makes git operate as if launched in that directory, overriding the resolved-in-
+  // workspace cwd the spawn boundary relies on, so the pin moves to the escape below and the
+  // masking invariant it guarded (a value flag must never admit a denied subcommand) is kept above.
+
   it("positive controls still pass: npm audit, npm view, git status", () => {
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["audit"]).allowed).toBe(true);
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["view", "keiko"]).allowed).toBe(true);
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["status"]).allowed).toBe(true);
-    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["-C", "sub", "status"]).allowed).toBe(
-      true,
-    );
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npx", ["eslint", "."]).allowed).toBe(false);
   });
 });
@@ -273,12 +364,13 @@ describe("isCommandAllowed — git external-command injection (diff.external RCE
     });
   }
 
-  it("still allows read-only git (status, diff HEAD~1, and -C dir status)", () => {
+  it("still allows read-only git (status, diff HEAD~1, log -n 1)", () => {
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["status"]).allowed).toBe(true);
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["diff", "HEAD~1"]).allowed).toBe(true);
-    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["-C", "sub", "status"]).allowed).toBe(
-      true,
-    );
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["log", "-n", "1"]).allowed).toBe(true);
+    expect(
+      isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["--no-pager", "show", "HEAD"]).allowed,
+    ).toBe(true);
   });
 });
 
@@ -370,5 +462,51 @@ describe("collectCredentialEnvValues — the fail-closed scrub set", () => {
 
   it("returns nothing for a lane that declares no credentials", () => {
     expect(collectCredentialEnvValues(GOVERNED_PARENT_ENV, [])).toEqual([]);
+  });
+});
+
+// `-C DIR` / `--git-dir DIR` / `--work-tree DIR` / `--namespace NS` make git operate as if it had
+// been launched elsewhere, so they override the resolved-in-workspace cwd that exec.ts's spawn
+// boundary relies on: `git -C /etc log` reads a repository outside the workspace even though the
+// child's cwd is the workspace. AGENTS.md §1 lists workspace escape as a hard, mode-independent
+// denial, and the sibling git rule sets (worktree, mutation, publish) plus terminal-policy.ts's
+// Layer 2 already denied the same flags outright — only the agent-facing default rule set skipped
+// them as value flags.
+describe("isCommandAllowed — git workspace escape via location flags", () => {
+  const escapes: readonly { readonly label: string; readonly args: readonly string[] }[] = [
+    { label: "-C /etc log", args: ["-C", "/etc", "log"] },
+    { label: "--git-dir /etc/.git log", args: ["--git-dir", "/etc/.git", "log"] },
+    { label: "--git-dir=/etc/.git log", args: ["--git-dir=/etc/.git", "log"] },
+    { label: "--work-tree /etc status", args: ["--work-tree", "/etc", "status"] },
+    { label: "--work-tree=/etc status", args: ["--work-tree=/etc", "status"] },
+    { label: "--namespace ns log", args: ["--namespace", "ns", "log"] },
+    { label: "-C /etc show HEAD:/etc/shadow", args: ["-C", "/etc", "show", "HEAD:secrets"] },
+    { label: "-C /etc cat-file -p HEAD", args: ["-C", "/etc", "cat-file", "-p", "HEAD"] },
+    { label: "log -C /etc (flag after the subcommand)", args: ["log", "-C", "/etc"] },
+  ];
+
+  for (const { label, args } of escapes) {
+    it(`denies git ${label}`, () => {
+      expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", args).allowed).toBe(false);
+    });
+  }
+
+  // One flag closed on one surface and left open on another is how this gap survived: the same
+  // location flags must be denied by every git rule set that reaches a spawn.
+  it("denies the same location flags on every git rule set", () => {
+    const ruleSets = {
+      default: DEFAULT_COMMAND_RULES,
+      worktree: GIT_WORKTREE_COMMAND_RULES,
+      mutation: GIT_MUTATION_COMMAND_RULES,
+      publish: GIT_PUBLISH_COMMAND_RULES,
+    };
+    for (const flag of ["-C", "--git-dir", "--work-tree", "--namespace", "--exec-path"]) {
+      for (const [name, rules] of Object.entries(ruleSets)) {
+        expect(
+          isCommandAllowed(rules, "git", [flag, "/etc", "status"]).allowed,
+          `${name}: ${flag}`,
+        ).toBe(false);
+      }
+    }
   });
 });

@@ -19,18 +19,53 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { spawn, type SpawnOptions, type ChildProcess } from "node:child_process";
-import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-contracts";
-import type { UiHandlerDeps } from "@oscharko-dev/keiko-server";
+import { monitorEventLoopDelay } from "node:perf_hooks";
+import type { UpdateInstallModeKind } from "@oscharko-dev/keiko-contracts";
+import type { ActivityLogReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import {
+  activityLogEvent,
+  classifyErrorKind,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
+import type {
+  BuildHandlerDepsOptions,
+  ImportLegacyUpdateAuditSnapshotOptions,
+  LegacyUpdateAuditImportOutcome,
+  PortableHandoffShutdownRequest,
+  ServerLogThreshold,
+  ServerLogSink,
+  UiHandlerDeps,
+  UpdateStartupRecoveryCurrent,
+  UpdateStartupRecoveryPort,
+} from "@oscharko-dev/keiko-server";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import { resolvePreferredInstallLayout } from "./install-layout.js";
+import {
+  resolvePreferredInstallLayout,
+  writeInstallLayoutOverrideEvidence,
+  writeInstallLayoutOverrideEvidenceWithFactory,
+} from "./install-layout.js";
 // GEN-PERF-CLI-001 — the server module graph (routes, local-knowledge/sqlite wiring,
 // ws, …) loads on FIRST USE, not when this module is parsed. The CLI barrel evaluates
 // ui.ts on every `keiko` invocation, and this one eager import accounted for most of
 // the measured ~410ms per-command module-loading tax (`keiko --version` included).
 // Only type imports may reference the package at module scope here.
 import { loadServer as loadServerModule } from "./lazy-modules.js";
+import {
+  processExitingActivityLogEvent,
+  processFatalActivityLogEvent,
+  type ProcessExitReason,
+} from "./process-activity-log.js";
 import type { CliIo } from "./runner.js";
-import { defaultUiDataDir } from "./state-paths.js";
+import type { CliSecurityLogSinkFactory } from "./security-log.js";
+import {
+  defaultUiDataDir,
+  isKeikoUiLaunchId,
+  KEIKO_UI_LAUNCH_ID_ENV,
+  peekShutdownRequest,
+  writeShutdownRequest,
+} from "./state-paths.js";
 
 const ALLOWED_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
 const KEIKO_PROCESS_TITLE = "Keiko";
@@ -42,8 +77,154 @@ const SQLITE_FLAG = "--experimental-sqlite";
 const LOCAL_DOTENV_ENV_NAME_ALLOWLIST: ReadonlySet<string> = new Set(["FIGMA_ACCESS_TOKEN"]);
 const DEFAULT_STATE_DIR = ".keiko";
 
+export type { ProcessExitReason } from "./process-activity-log.js";
+
+const PROCESS_HEARTBEAT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "process.heartbeat",
+  category: "process",
+  owner: "keiko-cli",
+  emitter: "ui.writeHeartbeat",
+  fields: {
+    rssBytes: { type: "integer", dataClass: "count", required: true },
+    heapUsedBytes: { type: "integer", dataClass: "count", required: true },
+    heapTotalBytes: { type: "integer", dataClass: "count", required: true },
+    externalBytes: { type: "integer", dataClass: "count", required: true },
+    eventLoopDelayP99Ms: { type: "number", dataClass: "duration", required: true },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["process-stall", "memory-pressure"],
+  proofIds: ["process.heartbeat.resources", "process.heartbeat.event-loop"],
+  releaseImpact: "patch",
+});
+
+const PROCESS_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "process.started",
+  category: "process",
+  owner: "keiko-cli",
+  emitter: "ui.reportProcessStarted",
+  fields: {
+    nodeVersion: { type: "string", dataClass: "safe-version", required: true, maxLength: 64 },
+    platform: {
+      type: "string",
+      dataClass: "safe-platform-class",
+      required: true,
+      values: [
+        "aix",
+        "android",
+        "cygwin",
+        "darwin",
+        "freebsd",
+        "haiku",
+        "linux",
+        "netbsd",
+        "openbsd",
+        "sunos",
+        "win32",
+      ],
+    },
+    arch: {
+      type: "string",
+      dataClass: "safe-platform-class",
+      required: true,
+      values: [
+        "arm",
+        "arm64",
+        "ia32",
+        "loong64",
+        "mips",
+        "mipsel",
+        "ppc",
+        "ppc64",
+        "riscv64",
+        "s390",
+        "s390x",
+        "x64",
+      ],
+    },
+    host: { type: "string", dataClass: "closed-enum", required: true, values: ["127.0.0.1"] },
+    port: { type: "integer", dataClass: "count", required: true },
+    stateDirSource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["default", "env-override", "cli-flag"],
+    },
+    logLevel: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["debug", "info", "warn", "error", "silent"],
+    },
+    installMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "package-manager",
+        "portable-managed",
+        "portable-bootstrap",
+        "portable-setup-failed",
+        "portable-it-managed",
+      ],
+    },
+    installModeErrorKind: {
+      type: "string",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 64,
+    },
+    gatewayProviderCount: { type: "integer", dataClass: "count", required: false },
+  },
+  causal: "none",
+  lifecycle: "start",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["process-startup", "install-mode-probe-failed"],
+  proofIds: ["process.started.runtime", "process.started.configuration"],
+  releaseImpact: "patch",
+});
+
+const LEGACY_UPDATE_IMPORT_DEFERRED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "update.runtime.legacy-import-deferred",
+  category: "diagnostic",
+  owner: "keiko-cli",
+  emitter: "ui.importLegacyAuditAfterRecovery",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "source-unsafe",
+        "source-too-large",
+        "source-invalid",
+        "source-mutated",
+        "destination-unsafe",
+        "destination-too-large",
+        "destination-invalid",
+        "destination-mutated",
+        "append-failed",
+        "durability-uncertain",
+      ],
+    },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["legacy-update-audit-import"],
+  proofIds: ["update.runtime.legacy-import-deferred.reason"],
+  releaseImpact: "patch",
+});
+
 const USAGE = `Usage:
-  keiko ui [--port PORT] [--host 127.0.0.1|localhost] [--evidence-dir PATH] [--config PATH] [--ui-db PATH]
+  keiko ui [--port PORT] [--host 127.0.0.1|localhost] [--evidence-dir PATH] [--config PATH] [--ui-db PATH] [--launch-id ID]
 
 Launches the local Keiko UI on the loopback interface and prints its URL. The server
 binds 127.0.0.1 only and serves the packaged UI assets (built with \`npm run build:ui\`).
@@ -57,7 +238,7 @@ export interface UiCliArgs {
 }
 
 type UiParseResult = UiCliArgs | "help" | null;
-type UiFlag = "--port" | "--host" | "--evidence-dir" | "--config" | "--ui-db";
+type UiFlag = "--port" | "--host" | "--evidence-dir" | "--config" | "--ui-db" | "--launch-id";
 
 interface RawUiOptions {
   portRaw?: string | undefined;
@@ -65,16 +246,27 @@ interface RawUiOptions {
   evidenceRaw?: string | undefined;
   configRaw?: string | undefined;
   uiDbRaw?: string | undefined;
+  launchIdRaw?: string | undefined;
 }
 
 // Test seam: inject a server factory and the resolved asset paths so unit tests never bind a real
 // socket or require a built dist/. Defaults resolve the packaged assets relative to this module.
 export interface UiCliDeps {
+  // Process-local harness seam. Production callers leave this undefined and retain the default
+  // buildUiHandlerDeps composition; E2E callers may replace dependency construction without
+  // replacing the real listener, readiness gate, CSP/static serving, or shutdown lifecycle.
+  readonly buildHandlerDeps?: ((options: BuildHandlerDepsOptions) => UiHandlerDeps) | undefined;
   readonly createServer?: (deps: {
     staticRoot: string;
     csp: string;
+    // KEIKO-0439: the live CSP source the CLI builds via `createLiveCspSource`. Forwarding the
+    // ACCESSOR (not `.csp()` evaluated once at startup) lets the server survive a rebuild/restart
+    // race — server.ts uses `(await deps.cspProvider?.()) ?? deps.csp` to pick the freshest header,
+    // so `csp` stays as the compatibility snapshot and `cspProvider` supplies the live reads.
+    cspProvider?: (() => string | Promise<string>) | undefined;
     port: number;
     handlerDeps: UiHandlerDeps;
+    readiness?: (() => boolean) | undefined;
   }) => Server | Promise<Server>;
   readonly staticRoot?: string;
   readonly hashesFile?: string;
@@ -88,6 +280,33 @@ export interface UiCliDeps {
   readonly currentExecArgv?: () => readonly string[];
   // Test seam for local .env discovery. Defaults to process.cwd().
   readonly cwd?: string | undefined;
+  /** Test-harness seam scoped to governed local Git mutation subprocesses. */
+  readonly localGitMutationEnv?: EnvSource | undefined;
+  // Test seam for the process-lifecycle log lines (`process.started`/`process.exiting`/
+  // `process.heartbeat`). The real path builds a file sink via `createFileServerLogSink`, which
+  // the injected-server tests must not do (see `startUiServer`'s comment). Injecting a fake sink
+  // here lets a test assert on the lifecycle events without loading the real server module graph
+  // or writing outside its own fixture.
+  readonly activityLog?: ServerLogSink | undefined;
+  readonly activityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
+  // Test seam for `process.started`'s install-mode probe (ADR-0173). On the real CLI launch path
+  // this defaults to the real filesystem-based detector; injecting an override here — including
+  // one that throws — drives `probeInstallModeKind`'s try/catch contract through `runUiCli` itself
+  // without needing a real launch (which the injected-server path otherwise never probes at all).
+  readonly installModeProbe?: () => Promise<UpdateInstallModeKind | undefined>;
+  readonly updateStartupRecovery?: UpdateStartupRecoveryPort | undefined;
+  // Test-only opt-in for startup-order assertions. Production loads the canonical importer from
+  // keiko-server after the real listener and recovery proof are ready. An injected listener with
+  // no explicit importer keeps the long-standing no-filesystem unit-test behavior.
+  readonly importLegacyUpdateAuditSnapshot?:
+    | ((
+        options: ImportLegacyUpdateAuditSnapshotOptions,
+      ) => LegacyUpdateAuditImportOutcome | Promise<LegacyUpdateAuditImportOutcome>)
+    | undefined;
+  // Test seam for the diagnostic-readiness self-check (#3532). The real launch runs keiko-server's
+  // `checkActivityLogReadiness` before listening; the injected-server path runs this one instead,
+  // or nothing when it is absent.
+  readonly activityLogReadiness?: (() => ActivityLogReadinessSnapshot) | undefined;
 }
 
 interface LiveCspSource {
@@ -167,7 +386,8 @@ function isUiFlag(arg: string): arg is UiFlag {
     arg === "--host" ||
     arg === "--evidence-dir" ||
     arg === "--config" ||
-    arg === "--ui-db"
+    arg === "--ui-db" ||
+    arg === "--launch-id"
   );
 }
 
@@ -187,6 +407,9 @@ function setRawUiOption(raw: RawUiOptions, flag: UiFlag, value: string): void {
       return;
     case "--ui-db":
       raw.uiDbRaw = value;
+      return;
+    case "--launch-id":
+      raw.launchIdRaw = value;
       return;
   }
 }
@@ -211,8 +434,11 @@ function collectUiOptions(args: readonly string[]): RawUiOptions | "help" | null
 export function parseUiArgs(args: readonly string[]): UiParseResult {
   const raw = collectUiOptions(args);
   if (raw === "help" || raw === null) return raw;
-  const { portRaw, hostRaw, evidenceRaw, configRaw, uiDbRaw } = raw;
+  const { portRaw, hostRaw, evidenceRaw, configRaw, uiDbRaw, launchIdRaw } = raw;
   if (hostRaw !== undefined && !ALLOWED_HOSTS.has(hostRaw)) {
+    return null;
+  }
+  if (launchIdRaw !== undefined && !isKeikoUiLaunchId(launchIdRaw)) {
     return null;
   }
   const port = portRaw === undefined ? DEFAULT_UI_PORT : parsePort(portRaw);
@@ -282,12 +508,25 @@ function resolveRuntimeStateDir(cwd: string, env: EnvSource): string {
   return resolve(cwd, DEFAULT_STATE_DIR);
 }
 
+// `process.started`'s label for how the state directory was resolved. `keiko ui` has no
+// `--state-dir` flag today (unlike `keiko start`'s `lifecycle.ts`), so `cli-flag` is not yet
+// reachable — it stays in the union so a future flag does not need a wire-format change, and so
+// this stays the single source an agent reconstructing a run reads the label from.
+export type StateDirSource = "default" | "env-override" | "cli-flag";
+
+function resolveStateDirSource(env: EnvSource): StateDirSource {
+  return hasEnvValue(env.KEIKO_STATE_DIR) ? "env-override" : "default";
+}
+
+// Takes the ALREADY-RESOLVED state directory rather than resolving its own: the activity-log sink
+// opens `<stateDir>/logs` and must land in the same place the runtime env points the child at, so
+// `resolveRuntimeStateDir` runs once per launch and both consumers read that one value.
 function withDefaultLocalRuntimeStateEnv(
-  cwd: string,
+  stateDir: string,
   parsed: UiCliArgs,
   env: EnvSource,
+  cwd: string,
 ): EnvSource {
-  const stateDir = resolveRuntimeStateDir(cwd, env);
   const next: Record<string, string | undefined> = {
     ...env,
     KEIKO_STATE_DIR: stateDir,
@@ -299,6 +538,21 @@ function withDefaultLocalRuntimeStateEnv(
   }
   if (!hasEnvValue(next.KEIKO_MEMORY_DIR)) {
     next.KEIKO_MEMORY_DIR = join(stateDir, "memory");
+  }
+  // Guarded on `parsed.evidenceDir`, unlike `KEIKO_MEMORY_DIR` above (which has no CLI flag
+  // counterpart): an explicit `--evidence-dir` must win in the child's env too, the same way
+  // `KEIKO_UI_DATA_DIR`'s default above is guarded on `parsed.uiDbPath`. Unlike the omit-when-
+  // explicit shape that guard used to have, the resolved absolute flag value is now PROPAGATED
+  // (resolved against `cwd` the same way `resolveRuntimeStateDir` resolves a relative
+  // `--state-dir`): a child process that reads `KEIKO_EVIDENCE_DIR` directly, rather than
+  // re-deriving `EvidenceStore`'s own precedence, must see the same directory the CLI itself
+  // resolved `--evidence-dir` against, not its own default.
+  if (parsed.evidenceDir !== undefined) {
+    next.KEIKO_EVIDENCE_DIR = isAbsolute(parsed.evidenceDir)
+      ? parsed.evidenceDir
+      : resolve(cwd, parsed.evidenceDir);
+  } else if (!hasEnvValue(next.KEIKO_EVIDENCE_DIR)) {
+    next.KEIKO_EVIDENCE_DIR = join(stateDir, "evidence");
   }
   return next;
 }
@@ -316,8 +570,189 @@ function applyServerTimeouts(server: Server): void {
 
 async function listen(server: Server, port: number): Promise<void> {
   await new Promise<void>((res, rej) => {
-    server.once("error", rej);
-    server.listen(port, UI_HOST, res);
+    // KEIKO-0858: the one-shot rejection listener must be removed once listen succeeds,
+    // otherwise it stays wired as the server's ONLY 'error' listener — a settled
+    // Promise's reject is a no-op, so a post-listen 'error' event was silently swallowed.
+    // Guard removeListener: some test fakes stub Server with only `listen`/`once`.
+    const onError = (error: Error): void => {
+      rej(error);
+    };
+    server.once("error", onError);
+    server.listen(port, UI_HOST, () => {
+      if (typeof server.removeListener === "function") {
+        server.removeListener("error", onError);
+      }
+      res();
+    });
+  });
+}
+
+// #2906 round 3 (comment 3865273692): the content-free class only, never the writable/attacker-
+// controlled `Error.name` own-property this handler used to read directly — the SAME
+// classification (`describeError`) `process-guards.ts`'s fatal path and every other diagnostics
+// producer in this repository already goes through. Loaded lazily, exactly like every other
+// keiko-server access from this file, so a healthy run never pays for it.
+interface DurableServerErrorClassification {
+  readonly errorClass: string;
+  readonly code?: string | undefined;
+  readonly frames?: readonly string[] | undefined;
+  readonly causeChain?: readonly string[] | undefined;
+}
+
+type StartupRecoveryResult = Awaited<ReturnType<UpdateStartupRecoveryPort["reconcile"]>>;
+type StartupRecoveryReason = NonNullable<StartupRecoveryResult["reason"]> | "unspecified";
+
+const STARTUP_RECOVERY_ERROR_KINDS: Readonly<Record<StartupRecoveryReason, string>> = {
+  interrupted: "PORTABLE_UPDATE_RECOVERY_INTERRUPTED",
+  corrupt: "PORTABLE_UPDATE_RECOVERY_CORRUPT",
+  incompatible: "PORTABLE_UPDATE_RECOVERY_INCOMPATIBLE",
+  "persistence-failed": "PORTABLE_UPDATE_RECOVERY_PERSISTENCE_FAILED",
+  unspecified: "PORTABLE_UPDATE_RECOVERY_REQUIRED",
+};
+
+class PortableStartupRecoveryRequiredError extends Error {
+  public readonly code: string;
+
+  public constructor(
+    message: string,
+    public readonly recoveryReason: StartupRecoveryReason,
+    public readonly sessionId: string | undefined,
+  ) {
+    super(message);
+    this.name = "PortableStartupRecoveryRequiredError";
+    this.code = STARTUP_RECOVERY_ERROR_KINDS[recoveryReason];
+  }
+}
+
+function startupRecoveryRequiredError(
+  result: StartupRecoveryResult,
+  message: string,
+): PortableStartupRecoveryRequiredError {
+  return new PortableStartupRecoveryRequiredError(
+    message,
+    result.reason ?? "unspecified",
+    result.sessionId,
+  );
+}
+
+async function classifyServerError(error: Error): Promise<DurableServerErrorClassification> {
+  try {
+    const { describeError } = await loadServerModule();
+    return describeError(error);
+  } catch {
+    // The classifier itself failing to load must not prevent the fatal path below from running.
+    return { errorClass: "Error" };
+  }
+}
+
+function safeCliErrorKind(error: unknown): string {
+  try {
+    const candidate = error instanceof Error ? error.name : typeof error;
+    return classifyErrorKind(candidate) ?? "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+function writeDurableServerErrorLog(
+  activityLog: ServerLogSink | undefined,
+  described: DurableServerErrorClassification,
+  recovery?: PortableStartupRecoveryRequiredError,
+): void {
+  if (activityLog === undefined) return;
+  activityLog.write(
+    processFatalActivityLogEvent({
+      kind: "server-error",
+      failureKind: described.code ?? described.errorClass,
+      ...(recovery === undefined
+        ? {}
+        : {
+            recoveryReason: recovery.recoveryReason,
+            ...(recovery.sessionId === undefined ? {} : { sessionId: recovery.sessionId }),
+          }),
+      ...(described.frames === undefined ? {} : { frames: described.frames }),
+      ...(described.causeChain === undefined ? {} : { causeChain: described.causeChain }),
+    }),
+  );
+}
+
+// Bounded close, mirroring `waitForShutdown`'s SIGINT/SIGTERM grace-then-force sequence: idle
+// connections drop immediately, any still-active connection is force-terminated once the grace
+// window passes, and `onDone` fires exactly once either way. Guarded per-method so the ui.test.ts
+// stub Server (`.listen`/`.once` only) degrades to calling `onDone` immediately instead of
+// throwing on a missing `.close`.
+function closeServerBounded(server: Server, onDone: () => void, graceMs: number): void {
+  if (typeof server.close !== "function") {
+    onDone();
+    return;
+  }
+  let settled = false;
+  const finish = (): void => {
+    if (settled) return;
+    settled = true;
+    onDone();
+  };
+  const timer = setTimeout(() => {
+    if (typeof server.closeAllConnections === "function") server.closeAllConnections();
+    finish();
+  }, graceMs);
+  timer.unref();
+  if (typeof server.closeIdleConnections === "function") server.closeIdleConnections();
+  server.close(() => {
+    finish();
+  });
+}
+
+interface DurableServerErrorContext {
+  readonly server: Server;
+  readonly io: CliIo;
+  readonly activityLog: ServerLogSink | undefined;
+  readonly exit: (code: number) => void;
+  readonly graceMs: number;
+  readonly onFatalExit: (() => void) | undefined;
+}
+
+async function handleDurableServerError(
+  context: DurableServerErrorContext,
+  error: Error,
+): Promise<void> {
+  const described = await classifyServerError(error);
+  context.io.err(`keiko ui: server error (${described.errorClass}).\n`);
+  writeDurableServerErrorLog(context.activityLog, described);
+  // The fatal branch ends the process too: it records `process.exiting` with reason
+  // `fatal-exception` before the bounded close, so the server's own `close` event can no longer
+  // relabel this crash as an ordinary `server-close`.
+  context.onFatalExit?.();
+  closeServerBounded(
+    context.server,
+    () => {
+      context.exit(1);
+    },
+    context.graceMs,
+  );
+}
+
+// KEIKO-0858 / #2906 round 3 (comment 3865273692): after listen() resolves, attach a DURABLE
+// server-lifetime error listener. A post-listen `Server` 'error' event (descriptor exhaustion, an
+// accept()-loop fault — distinct from a per-connection socket 'error', which this never sees)
+// means the process can no longer be trusted to accept new work, so this no longer logs and
+// leaves a falsely healthy process running: it writes the sanitized class through the existing
+// activity/process log (when one is in scope) and drives the SAME bounded close-then-exit
+// sequence `waitForShutdown`'s SIGINT/SIGTERM path already uses, tagged as a fatal, non-zero
+// process end rather than a graceful one. Guarded so a stub Server (from tests) without `.on`
+// does not throw; `exit` defaults to the real `process.exit` and is a test seam otherwise.
+export function attachDurableServerErrorListener(
+  server: Server,
+  io: CliIo,
+  activityLog?: ServerLogSink,
+  exit: (code: number) => void = (code): void => process.exit(code),
+  graceMs: number = SHUTDOWN_FORCE_CLOSE_GRACE_MS,
+  onFatalExit?: () => void,
+): void {
+  if (typeof server.on !== "function") return;
+  const context = { server, io, activityLog, exit, graceMs, onFatalExit };
+  server.on("error", (error: Error) => {
+    void handleDurableServerError(context, error);
   });
 }
 
@@ -329,45 +764,221 @@ async function listen(server: Server, port: number): Promise<void> {
 // force-terminated once a bounded grace window has passed, so shutdown always
 // completes; their `close` handlers still run, releasing subscriptions.
 const SHUTDOWN_FORCE_CLOSE_GRACE_MS = 3_000;
+const SHUTDOWN_REQUEST_POLL_MS = 250;
 
-// Keeps the real-CLI process alive until a shutdown signal or server close. Resolves cleanly so
-// the caller can return 0. Registered listeners are removed on resolve to prevent leaks.
+function watchShutdownRequest(
+  peek: () => boolean,
+  beginDrain: () => void,
+): ReturnType<typeof setInterval> | null {
+  if (peek()) {
+    beginDrain();
+    return null;
+  }
+  const pollTimer = setInterval(() => {
+    if (peek()) beginDrain();
+  }, SHUTDOWN_REQUEST_POLL_MS);
+  pollTimer.unref();
+  return pollTimer;
+}
+
+class ShutdownSession {
+  private begun = false;
+  private forceTimer: ReturnType<typeof setTimeout> | null = null;
+  private pollTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly handleSigint = (): void => {
+    this.beginDrain("sigint");
+  };
+  private readonly handleSigterm = (): void => {
+    this.beginDrain("sigterm");
+  };
+  // A closed terminal (SIGHUP) is a shutdown like any other: without this listener Node's default
+  // action killed the process with no `process.exiting` line and no loss summary.
+  private readonly handleSighup = (): void => {
+    this.beginDrain("sighup");
+  };
+  private readonly onClose = (): void => {
+    if (this.begun) return;
+    this.begun = true;
+    writeProcessExiting(this.activity, "server-close");
+    this.detachSignals();
+    this.settle();
+  };
+
+  public constructor(
+    private readonly server: Server,
+    private readonly activity: WaitForShutdownActivity,
+    private readonly forceCloseGraceMs: number,
+    private readonly resolvePromise: () => void,
+  ) {}
+
+  public arm(): void {
+    this.server.once("close", this.onClose);
+    process.once("SIGINT", this.handleSigint);
+    process.once("SIGTERM", this.handleSigterm);
+    process.once("SIGHUP", this.handleSighup);
+  }
+
+  public watchRequest(peek: () => boolean): void {
+    this.pollTimer = watchShutdownRequest(peek, () => {
+      this.beginDrain("shutdown-request");
+    });
+  }
+
+  public beginDrain(reason: ProcessExitReason): void {
+    if (this.begun) return;
+    this.begun = true;
+    writeProcessExiting(this.activity, reason);
+    this.detachSignals();
+    this.server.removeListener("close", this.onClose);
+    this.server.closeIdleConnections();
+    this.forceTimer = setTimeout(() => {
+      this.server.closeAllConnections();
+    }, this.forceCloseGraceMs);
+    this.forceTimer.unref();
+    this.server.close(() => {
+      this.settle();
+    });
+  }
+
+  private detachSignals(): void {
+    process.removeListener("SIGINT", this.handleSigint);
+    process.removeListener("SIGTERM", this.handleSigterm);
+    process.removeListener("SIGHUP", this.handleSighup);
+  }
+
+  private settle(): void {
+    if (this.forceTimer !== null) clearTimeout(this.forceTimer);
+    if (this.pollTimer !== null) clearInterval(this.pollTimer);
+    this.forceTimer = null;
+    this.pollTimer = null;
+    this.resolvePromise();
+  }
+}
+
+// Keeps the real-CLI process alive until a shutdown signal, shutdown-request sentinel, or server
+// close. Resolves cleanly so the caller can return 0. Registered listeners are removed on resolve
+// to prevent leaks.
 export function waitForShutdown(
   server: Server,
   forceCloseGraceMs = SHUTDOWN_FORCE_CLOSE_GRACE_MS,
+  activity: WaitForShutdownActivity = {},
 ): Promise<void> {
   return new Promise<void>((resolve) => {
-    let forceTimer: ReturnType<typeof setTimeout> | null = null;
-    const settle = (): void => {
-      if (forceTimer !== null) {
-        clearTimeout(forceTimer);
-        forceTimer = null;
-      }
-      resolve();
-    };
-    const onClose = (): void => {
-      process.removeListener("SIGINT", onSignal);
-      process.removeListener("SIGTERM", onSignal);
-      settle();
-    };
-    const onSignal = (): void => {
-      process.removeListener("SIGINT", onSignal);
-      process.removeListener("SIGTERM", onSignal);
-      server.removeListener("close", onClose);
-      server.closeIdleConnections();
-      forceTimer = setTimeout(() => {
-        server.closeAllConnections();
-      }, forceCloseGraceMs);
-      // The grace timer must never be what keeps the process alive.
-      forceTimer.unref();
-      server.close(() => {
-        settle();
-      });
-    };
-    server.once("close", onClose);
-    process.once("SIGINT", onSignal);
-    process.once("SIGTERM", onSignal);
+    const session = new ShutdownSession(server, activity, forceCloseGraceMs, resolve);
+    session.arm();
+    const peek = activity.peekShutdownRequest;
+    if (peek !== undefined) session.watchRequest(peek);
   });
+}
+
+// The reason label `process.exiting` carries (`ProcessExitReason`, process-activity-log.ts).
+// `waitForShutdown`'s own handlers produce sigint/sigterm/sighup (in-process signals),
+// shutdown-request (the pid-bound `<stateDir>/ui.shutdown` sentinel `keiko stop` writes — the
+// Windows-safe channel, issue #3351), and server-close. The durable server-error listener produces
+// `fatal-exception`, and the process `exit` fallback produces `process-exit` for an exit no other
+// branch observed. Whichever branch runs first claims the one exit line through `ProcessExitLatch`.
+export class ProcessExitLatch {
+  private claimed = false;
+
+  /** True exactly once: the caller that receives it writes the process's only exit line. */
+  public claim(): boolean {
+    if (this.claimed) return false;
+    this.claimed = true;
+    return true;
+  }
+}
+
+// What `waitForShutdown` needs to report the process-lifecycle exit line and release the
+// heartbeat resources `startUiServer` scheduled. All optional: the injected-server test path
+// (and any direct unit test of `waitForShutdown` itself) may supply none of it.
+export interface WaitForShutdownActivity {
+  readonly activityLog?: ServerLogSink | undefined;
+  readonly startedAt?: number | undefined;
+  // Stops the heartbeat interval and disables its event-loop-delay histogram. Called on every
+  // shutdown branch, before the log line — a stop that itself threw must not suppress the line.
+  readonly onShutdown?: (() => void) | undefined;
+  // The loaded server module's `closeFileServerLogSinks` (ADR-0173 export), threaded in by
+  // `startUiServer` on the real launch path, where the module is already loaded. Closes every
+  // registered file sink by resolved log directory — the same descriptor `activityLog.close?.()`
+  // would close (`keiko ui` only ever opens one) — without needing a second reference to the
+  // module here. Left `undefined` on the injected-server test path (and any direct unit test of
+  // `waitForShutdown`), which never loads the real server module; `writeProcessExiting` falls back
+  // to `activityLog.close?.()` in that case, since both close the same resource.
+  readonly closeActivityLog?: (() => void) | undefined;
+  // Issue #3351: `keiko stop` cannot deliver POSIX SIGTERM to another process on Windows
+  // (`process.kill` is TerminateProcess). The parent writes `<stateDir>/ui.shutdown` bound to
+  // this pid; this peek is how the child observes that request. Optional so injected-server
+  // tests of `waitForShutdown` keep the signal-only contract.
+  readonly peekShutdownRequest?: (() => boolean) | undefined;
+  // Shared with the durable server-error listener and the process `exit` fallback so the process
+  // writes exactly one `process.exiting` line, whichever branch runs first.
+  readonly exitLatch?: ProcessExitLatch | undefined;
+  // Runs once, immediately before the exit line: the real launch flushes the BFF's trailing
+  // suppressed counts and persists the exit loss summary here (#3532). A throw is recorded as
+  // `onShutdownErrorKind`, exactly like a failing `onShutdown`.
+  readonly beforeExitEvidence?: (() => void) | undefined;
+}
+
+// The independent-channel idiom `knowledge-log.ts`'s `warnFailedKnowledgeLogSink` uses: when the
+// line that would normally carry a failure kind cannot be written at all (no activity log in
+// scope here), the report goes out on the one channel that does not depend on the log — a single,
+// body-free `process.emitWarning`. Only the error's CLASS travels in `detail`, never a message.
+function warnShutdownHookFailed(errorKind: string): void {
+  try {
+    process.emitWarning("Keiko UI shutdown hook failed; teardown may be incomplete.", {
+      type: "KeikoUiShutdown",
+      code: "KEIKO_SHUTDOWN_HOOK_FAILED",
+      detail: `errorKind=${errorKind}`,
+    });
+  } catch {
+    // The process warning channel is the last one there is; a report beyond it does not exist.
+  }
+}
+
+// Runs one shutdown hook and returns the content-free class of what it threw, if anything.
+function runShutdownHook(hook: (() => void) | undefined): string | undefined {
+  try {
+    hook?.();
+    return undefined;
+  } catch (error) {
+    return safeCliErrorKind(error);
+  }
+}
+
+function writeProcessExiting(activity: WaitForShutdownActivity, reason: ProcessExitReason): void {
+  if (activity.exitLatch?.claim() === false) return;
+  // A throwing onShutdown must not suppress this line (see WaitForShutdownActivity's doc
+  // comment) — caught here rather than left to propagate into the SIGINT/SIGTERM/server-close
+  // listener that calls this function, which would turn a heartbeat-teardown failure into an
+  // uncaught exception on the shutdown path itself. The failure is not swallowed silently: it is
+  // recorded on the very line it must not suppress, so an agent reconstructing this shutdown from
+  // the log still sees it — and when there is no line to carry it (no activity log in scope),
+  // `warnShutdownHookFailed` reports it on the independent process-warning channel instead, so a
+  // heartbeat-teardown failure never vanishes with the shutdown path that produced it.
+  // Only the error's CLASS is recorded, never its message: a message is foreign free text, and
+  // the producer side never reads one — the same rule every other instrumentation site follows.
+  // Both hooks always run: a failing heartbeat stop must never skip the exit evidence (the BFF's
+  // trailing suppressed counts and the exit loss summary). The first failure's class is recorded.
+  const onShutdownError = runShutdownHook(activity.onShutdown);
+  const beforeExitError = runShutdownHook(activity.beforeExitEvidence);
+  const onShutdownErrorKind = onShutdownError ?? beforeExitError;
+  const { activityLog, startedAt, closeActivityLog } = activity;
+  if (activityLog === undefined || startedAt === undefined) {
+    if (onShutdownErrorKind !== undefined) warnShutdownHookFailed(onShutdownErrorKind);
+    return;
+  }
+  activityLog.write(
+    processExitingActivityLogEvent({
+      reason,
+      uptimeMs: Date.now() - startedAt,
+      onShutdownErrorKind,
+    }),
+  );
+  if (closeActivityLog !== undefined) {
+    closeActivityLog();
+  } else {
+    activityLog.close?.();
+  }
 }
 
 // Default probe: try to require node:sqlite. Any failure (ERR_UNKNOWN_BUILTIN_MODULE on early
@@ -459,23 +1070,62 @@ async function buildHandlerDepsOrReport(
   cwd: string,
   effectiveEnv: EnvSource,
   io: CliIo,
+  localGitMutationEnv: EnvSource | undefined,
+  updateStartupRecovery: UpdateStartupRecoveryPort | undefined,
+  buildHandlerDeps: UiCliDeps["buildHandlerDeps"],
 ): Promise<UiHandlerDeps | number> {
   const { buildUiHandlerDeps, UiStoreError } = await loadServerModule();
   try {
-    return buildUiHandlerDeps({
+    return (buildHandlerDeps ?? buildUiHandlerDeps)({
       configPath: resolveUiConfigPath(parsed, effectiveEnv),
       evidenceDir: parsed.evidenceDir,
       uiDbPath: parsed.uiDbPath,
       initialProjectPath: cwd,
       env: effectiveEnv,
+      // `keiko ui` owns its Activity Log for the whole process, so its dispose seals it last.
+      closeActivityLogOnDispose: true,
+      ...(localGitMutationEnv === undefined ? {} : { localGitMutationEnv }),
+      updateStartupRecovery,
+      portableHandoffShutdown: createPortableHandoffShutdownTrigger({
+        stateDir: resolveRuntimeStateDir(cwd, effectiveEnv),
+        pid: process.pid,
+        launchId: effectiveEnv[KEIKO_UI_LAUNCH_ID_ENV],
+      }),
     });
   } catch (error) {
     if (error instanceof UiStoreError) {
-      io.err(`keiko ui: ${error.message}\n`);
+      io.err(uiStoreRefusal(error));
       return 2;
     }
     throw error;
   }
+}
+
+// A store refusal names its closed code. Its message is part of the store's own code-authored
+// vocabulary (fixed sentences over code-owned labels such as "UI database path"), never foreign
+// error text or a path, so it stays as the operator's actionable explanation (#3532).
+function uiStoreRefusal(error: InstanceType<LoadedServerModule["UiStoreError"]>): string {
+  return `keiko ui: ${error.message} (${error.code})\n`;
+}
+
+export function createPortableHandoffShutdownTrigger(input: {
+  readonly stateDir: string;
+  readonly pid: number;
+  readonly launchId: string | undefined;
+}): (request: PortableHandoffShutdownRequest) => Promise<void> {
+  return (request): Promise<void> => {
+    if (
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(request.sessionId) ||
+      !/^[a-f0-9]{32}$/u.test(request.activationId) ||
+      !isKeikoUiLaunchId(input.launchId ?? "") ||
+      request.pid !== input.pid ||
+      request.launchId !== input.launchId
+    ) {
+      return Promise.reject(new Error("Portable handoff shutdown identity is invalid."));
+    }
+    writeShutdownRequest(input.stateDir, input.pid, input.launchId);
+    return Promise.resolve();
+  };
 }
 
 async function registerLaunchProjectOrReport(
@@ -489,7 +1139,7 @@ async function registerLaunchProjectOrReport(
     return null;
   } catch (error) {
     if (error instanceof UiStoreError) {
-      io.err(`keiko ui: ${error.message}\n`);
+      io.err(uiStoreRefusal(error));
       return 2;
     }
     throw error;
@@ -517,30 +1167,592 @@ function parseUiArgsOrExit(args: readonly string[], io: CliIo): UiCliArgs | numb
   return parsed;
 }
 
-async function maybeWaitForShutdown(server: Server, deps: UiCliDeps): Promise<void> {
+async function maybeWaitForShutdown(
+  server: Server,
+  deps: UiCliDeps,
+  activity: WaitForShutdownActivity,
+): Promise<void> {
   if (deps.createServer !== undefined) {
     return;
   }
-  await waitForShutdown(server);
+  await waitForShutdown(server, SHUTDOWN_FORCE_CLOSE_GRACE_MS, activity);
 }
 
-async function startUiServer(
-  staticRoot: string,
-  csp: string,
-  parsed: UiCliArgs,
-  handlerDeps: UiHandlerDeps,
-  io: CliIo,
-  deps: UiCliDeps,
+// `process.heartbeat` fires roughly once a minute — frequent enough that an agent reconstructing a
+// stuck run always finds one within a minute of the wedge, cheap enough to run for the life of the
+// process without its own volume control.
+const HEARTBEAT_INTERVAL_MS = 60_000;
+
+// Narrowed to the four members this module actually calls, rather than the full Node
+// `RecordableHistogram` shape `monitorEventLoopDelay()` returns (which structurally satisfies
+// this interface with room to spare). The narrow shape is the injection seam
+// `startProcessHeartbeat`'s `createHistogram` parameter uses: a test double only needs to
+// implement these four methods to stand in for a real histogram.
+interface EventLoopHistogram {
+  enable(): void;
+  disable(): void;
+  reset(): void;
+  percentile(percentile: number): number;
+}
+// `percentile()` reports nanoseconds; the log field is documented in milliseconds.
+const NANOSECONDS_PER_MILLISECOND = 1_000_000;
+
+// `monitorEventLoopDelay()` accumulates samples cumulatively until `reset()` is called (Node docs);
+// left unreset, every later heartbeat's p99 would include every earlier interval's delay instead
+// of describing only the interval since the previous tick. Reading the percentile BEFORE
+// resetting, and resetting BEFORE the write, keeps each heartbeat interval-scoped: the value on
+// the line reflects only the window since the last heartbeat, and a slow interval's delay never
+// leaks into the next one (#2902 PR review).
+function writeHeartbeat(activityLog: ServerLogSink, histogram: EventLoopHistogram): void {
+  const memory = process.memoryUsage();
+  const measuredDelayMs = histogram.percentile(99) / NANOSECONDS_PER_MILLISECOND;
+  const eventLoopDelayP99Ms =
+    Number.isFinite(measuredDelayMs) && measuredDelayMs >= 0 ? measuredDelayMs : 0;
+  histogram.reset();
+  activityLog.write(
+    activityLogEvent(
+      PROCESS_HEARTBEAT_OPERATION,
+      { level: "info" },
+      {
+        rssBytes: memory.rss,
+        heapUsedBytes: memory.heapUsed,
+        heapTotalBytes: memory.heapTotal,
+        externalBytes: memory.external,
+        eventLoopDelayP99Ms,
+      },
+    ),
+  );
+}
+
+// Started once, right after `process.started` is written; stopped from the SAME callback that
+// `waitForShutdown` invokes on every shutdown branch. `unref()`'d so it can never by itself keep a
+// one-shot command alive, and only ever scheduled here — never at CLI module scope — preserving
+// GEN-PERF-CLI-001's per-command budget. Exported so the interval/histogram lifecycle (started,
+// produces a line, fully released on stop) can be unit-tested directly without booting a server.
+// `createHistogram` defaults to the real `monitorEventLoopDelay`; tests inject a deterministic
+// double through it to pin interval-scoping without depending on real event-loop timing.
+export function startProcessHeartbeat(
+  activityLog: ServerLogSink,
+  intervalMs: number = HEARTBEAT_INTERVAL_MS,
+  createHistogram: () => EventLoopHistogram = monitorEventLoopDelay,
+  onTick?: () => void,
+): () => void {
+  const histogram = createHistogram();
+  histogram.enable();
+  const interval = setInterval(() => {
+    writeHeartbeat(activityLog, histogram);
+    // The heartbeat cadence also re-evaluates readiness and persists a changed loss summary
+    // (#3532). A throwing hook must not stop the heartbeat itself; its class is reported on the
+    // independent process-warning channel.
+    const tickErrorKind = runShutdownHook(onTick);
+    if (tickErrorKind !== undefined) warnShutdownHookFailed(tickErrorKind);
+  }, intervalMs);
+  interval.unref();
+  return (): void => {
+    clearInterval(interval);
+    histogram.disable();
+  };
+}
+
+// `detectUpdateInstallMode`/`productionUpdateFacts` (ADR-0173 exports) are called directly rather
+// than going through `createUpdateSessionManager({}).getStatus()`: both are the exact pair
+// `UpdateSessionManagerImpl.getStatus()` already calls under the hood (`defaultDetectorFor` in
+// `update-session-support.ts`), so this is the same synchronous, lock-free filesystem probe with
+// no behavioural difference — just without constructing a full update-session manager (redactor,
+// run-history slots, command-execution wiring, an optional lock) that `process.started` has no use
+// for. `detectPortableUpdateInstallMode` alone (also exported) is deliberately NOT used here: it
+// answers only the portable branch and returns `undefined` for every non-portable install — the
+// common case — so on its own it cannot answer "which install mode is this process running in".
+// Only ever called on the real CLI path (never the injected-server test path): the detector walks
+// the filesystem from `process.argv[1]` looking for this package's own `package.json`, which is
+// environment-dependent and would make every injected-server test's `process.started` line
+// non-deterministic.
+//
+// `reportProcessStarted` runs this AFTER `listen()` has already succeeded and the CLI has already
+// printed the listening URL, so a probe failure here (a permission error, an unreadable parent
+// directory) must never end a launch whose server is already up. Contained in its own try/catch
+// rather than left to propagate: the failure is reported via `installModeErrorKind` (content-free
+// class only), not swallowed, and `installMode` is then correctly absent rather than fabricated.
+interface InstallModeProbeResult {
+  readonly installMode: UpdateInstallModeKind | undefined;
+  readonly installModeErrorKind: string | undefined;
+}
+
+async function defaultInstallModeProbe(): Promise<UpdateInstallModeKind | undefined> {
+  const { detectUpdateInstallMode, productionUpdateFacts } = await loadServerModule();
+  return detectUpdateInstallMode(productionUpdateFacts(process.env), process.env).installKind;
+}
+
+async function probeInstallModeKind(
+  probe: () => Promise<UpdateInstallModeKind | undefined> = defaultInstallModeProbe,
+): Promise<InstallModeProbeResult> {
+  try {
+    return { installMode: await probe(), installModeErrorKind: undefined };
+  } catch (error) {
+    const installModeErrorKind = safeCliErrorKind(error);
+    return { installMode: undefined, installModeErrorKind };
+  }
+}
+
+interface ProcessStartedContext {
+  readonly activityLog: ServerLogSink | undefined;
+  readonly isRealLaunch: boolean;
+  readonly parsed: UiCliArgs;
+  readonly handlerDeps: UiHandlerDeps;
+  readonly stateDirSource: StateDirSource;
+  readonly logLevel: ServerLogThreshold;
+  // Runs on every heartbeat tick of a real launch (readiness refresh and loss summary).
+  readonly onHeartbeat: (() => void) | undefined;
+  // Threaded from `UiCliDeps.installModeProbe`. Undefined on every real launch that does not
+  // override it (the real detector runs) and on the injected-server path with no override (no
+  // probe runs at all, matching today's behavior) — defined only when a test explicitly injects
+  // one, in which case it runs regardless of `isRealLaunch` so the try/catch contract is
+  // reachable through `runUiCli` without a real server bind.
+  readonly installModeProbe: (() => Promise<UpdateInstallModeKind | undefined>) | undefined;
+}
+
+// Writes `process.started` (when an activity log is in scope) and, on the real CLI path only,
+// schedules the heartbeat. Returns the heartbeat's stop callback so the caller can thread it into
+// `waitForShutdown`; returns `undefined` when there is nothing to stop (no activity log, or the
+// injected-server test path, which never schedules a heartbeat in the first place).
+async function reportProcessStarted(
+  context: ProcessStartedContext,
+): Promise<(() => void) | undefined> {
+  const { activityLog, isRealLaunch, parsed, handlerDeps, stateDirSource, logLevel } = context;
+  const { installModeProbe } = context;
+  const shouldProbeInstallMode = isRealLaunch || installModeProbe !== undefined;
+  if (activityLog === undefined) return undefined;
+  const { installMode, installModeErrorKind } = shouldProbeInstallMode
+    ? await probeInstallModeKind(installModeProbe)
+    : { installMode: undefined, installModeErrorKind: undefined };
+  const gatewayProviderCount = handlerDeps.config?.providers.length;
+  // No `instanceId` in `extra` here: `instanceId` is a RESERVED field name
+  // (`log-redaction.ts`'s `RESERVED_FIELD_NAMES`), so `redactLogFields` silently drops it from
+  // `extra` the same way it drops any other reserved name a caller supplies — see
+  // `redactLogObject`'s `if (reserved?.has(name) === true) continue`. Every line the file sink
+  // writes already carries `instanceId` in its envelope (`identity.instanceId`, stamped at the
+  // physical write boundary in `server-log.ts`), so the invariant this field exists for — the
+  // manifest and the log agreeing on which process wrote a line — already holds without it.
+  activityLog.write(
+    activityLogEvent(
+      PROCESS_STARTED_OPERATION,
+      { level: "info" },
+      {
+        nodeVersion: process.version,
+        platform: process.platform,
+        arch: process.arch,
+        host: UI_HOST,
+        port: parsed.port,
+        stateDirSource,
+        logLevel,
+        ...(installMode === undefined ? {} : { installMode }),
+        ...(installModeErrorKind === undefined ? {} : { installModeErrorKind }),
+        ...(gatewayProviderCount === undefined ? {} : { gatewayProviderCount }),
+      },
+    ),
+  );
+  return isRealLaunch
+    ? startProcessHeartbeat(
+        activityLog,
+        HEARTBEAT_INTERVAL_MS,
+        monitorEventLoopDelay,
+        context.onHeartbeat,
+      )
+    : undefined;
+}
+
+// One options object rather than a positional list: the parameters are all context for the same
+// launch, and the list had grown past the point where a call site reads correctly.
+interface StartUiServerOptions {
+  readonly staticRoot: string;
+  readonly csp: string;
+  readonly cspProvider: (() => string | Promise<string>) | undefined;
+  readonly parsed: UiCliArgs;
+  readonly handlerDeps: UiHandlerDeps;
+  readonly io: CliIo;
+  readonly deps: UiCliDeps;
+  readonly stateDir: string;
+  readonly stateDirSource: StateDirSource;
+  readonly logLevel: ServerLogThreshold;
+  readonly runtimeEnv: EnvSource;
+}
+
+function startupRecoveryCurrent(parsed: UiCliArgs, env: EnvSource): UpdateStartupRecoveryCurrent {
+  const launchId = env[KEIKO_UI_LAUNCH_ID_ENV];
+  if (!isKeikoUiLaunchId(launchId ?? "")) {
+    throw new Error("Portable update startup recovery requires a valid launch identity.");
+  }
+  return {
+    pid: process.pid,
+    launchId: launchId ?? "",
+    host: UI_HOST,
+    port: parsed.port,
+    version: KEIKO_PRODUCT_VERSION,
+  };
+}
+
+function serverMatchesExpectedBinding(server: Server, port: number): boolean {
+  if (typeof server.address !== "function") return false;
+  const address = server.address();
+  return (
+    typeof address === "object" &&
+    address !== null &&
+    address.address === UI_HOST &&
+    address.port === port
+  );
+}
+
+async function closeAfterRecoveryFailure(server: Server): Promise<void> {
+  await new Promise<void>((resolve) => {
+    closeServerBounded(server, resolve, SHUTDOWN_FORCE_CLOSE_GRACE_MS);
+  });
+}
+
+function closeStartupActivityLog(
+  activityLog: ServerLogSink | undefined,
+  closeActivityLog: (() => void) | undefined,
+): void {
+  if (closeActivityLog !== undefined) closeActivityLog();
+  else activityLog?.close?.();
+}
+
+async function recordStartupRecoveryFailure(
+  activityLog: ServerLogSink | undefined,
+  error: unknown,
+): Promise<boolean> {
+  const normalized = error instanceof Error ? error : new Error("Startup recovery failed.");
+  try {
+    writeDurableServerErrorLog(
+      activityLog,
+      await classifyServerError(normalized),
+      normalized instanceof PortableStartupRecoveryRequiredError ? normalized : undefined,
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+interface StartupRecoveryContext {
+  readonly startupRecovery: UpdateStartupRecoveryPort | undefined;
+  readonly parsed: UiCliArgs;
+  readonly runtimeEnv: EnvSource;
+  readonly handlerDeps: UiHandlerDeps;
+  readonly activityLog: ServerLogSink | undefined;
+  readonly closeActivityLog: (() => void) | undefined;
+  readonly io: CliIo;
+}
+
+async function reconcileBeforeListen(
+  context: StartupRecoveryContext,
+): Promise<UpdateStartupRecoveryCurrent | undefined> {
+  if (context.startupRecovery === undefined) return undefined;
+  try {
+    const current = startupRecoveryCurrent(context.parsed, context.runtimeEnv);
+    const result = await context.startupRecovery.reconcile({ phase: "pre-listen", current });
+    context.handlerDeps.updateSession?.refreshDurableProjection?.();
+    if (result.status !== "ready") {
+      throw startupRecoveryRequiredError(
+        result,
+        "Portable update startup recovery is required before listening.",
+      );
+    }
+    return current;
+  } catch (error) {
+    try {
+      if (!(await recordStartupRecoveryFailure(context.activityLog, error))) {
+        context.io.err("keiko ui: startup recovery diagnostic could not be persisted.\n");
+      }
+    } finally {
+      closeStartupActivityLog(context.activityLog, context.closeActivityLog);
+    }
+    throw error;
+  }
+}
+
+async function reconcileAfterListen(
+  context: StartupRecoveryContext & {
+    readonly current: UpdateStartupRecoveryCurrent | undefined;
+    readonly server: Server;
+  },
 ): Promise<void> {
-  // Injected-server tests must not force-load the real server module graph.
+  if (context.startupRecovery === undefined || context.current === undefined) return;
+  try {
+    if (!serverMatchesExpectedBinding(context.server, context.parsed.port)) {
+      throw new Error("Portable update startup recovery observed an unexpected listener binding.");
+    }
+    const result = await context.startupRecovery.reconcile({
+      phase: "post-listen",
+      current: context.current,
+    });
+    context.handlerDeps.updateSession?.refreshDurableProjection?.();
+    if (result.status !== "ready") {
+      throw startupRecoveryRequiredError(
+        result,
+        "Portable update startup recovery failed after listening.",
+      );
+    }
+  } catch (error) {
+    await closeAfterRecoveryFailure(context.server);
+    try {
+      if (!(await recordStartupRecoveryFailure(context.activityLog, error))) {
+        context.io.err("keiko ui: startup recovery diagnostic could not be persisted.\n");
+      }
+    } finally {
+      closeStartupActivityLog(context.activityLog, context.closeActivityLog);
+    }
+    throw error;
+  }
+}
+
+// The #3532 evidence hooks a real launch threads into the lifecycle: the heartbeat re-evaluates
+// readiness and persists a changed loss summary; the exit path flushes the BFF's trailing
+// suppressed counts and persists the final loss summary. Absent on the injected-server path.
+interface LaunchEvidenceHooks {
+  readonly onHeartbeat: (() => void) | undefined;
+  readonly beforeExitEvidence: (() => void) | undefined;
+}
+
+interface ReportStartedInput {
+  readonly server: Server;
+  readonly options: StartUiServerOptions;
+  readonly activityLog: ServerLogSink | undefined;
+  readonly closeActivityLog: (() => void) | undefined;
+  readonly isRealLaunch: boolean;
+  readonly startedAt: number;
+  readonly exitLatch: ProcessExitLatch;
+  readonly hooks: LaunchEvidenceHooks;
+}
+
+// Last-resort exit evidence: an exit that none of the shutdown branches observed (a
+// `process.exit` from elsewhere) still records `process.exiting` synchronously from Node's `exit`
+// event. The shared latch makes this a no-op after any ordinary shutdown.
+export function armProcessExitFallback(activity: WaitForShutdownActivity): () => void {
+  const onExit = (): void => {
+    writeProcessExiting(activity, "process-exit");
+  };
+  process.once("exit", onExit);
+  return (): void => {
+    process.removeListener("exit", onExit);
+  };
+}
+
+async function reportStartedAndWaitForShutdown(input: ReportStartedInput): Promise<void> {
+  const { server, options, activityLog, closeActivityLog, isRealLaunch, startedAt } = input;
+  const { parsed, handlerDeps, io, deps, stateDir, stateDirSource, logLevel } = options;
+  io.out(`Keiko UI listening on http://${UI_HOST}:${String(parsed.port)}\n`);
+  const stopHeartbeat = await reportProcessStarted({
+    activityLog,
+    isRealLaunch,
+    parsed,
+    handlerDeps,
+    stateDirSource,
+    logLevel,
+    installModeProbe: deps.installModeProbe,
+    onHeartbeat: input.hooks.onHeartbeat,
+  });
+  const activity: WaitForShutdownActivity = {
+    activityLog,
+    startedAt,
+    onShutdown: stopHeartbeat,
+    closeActivityLog,
+    peekShutdownRequest: () =>
+      peekShutdownRequest(stateDir, process.pid, process.env[KEIKO_UI_LAUNCH_ID_ENV]),
+    exitLatch: input.exitLatch,
+    beforeExitEvidence: input.hooks.beforeExitEvidence,
+  };
+  const disarmExitFallback = isRealLaunch ? armProcessExitFallback(activity) : undefined;
+  try {
+    await maybeWaitForShutdown(server, deps, activity);
+  } finally {
+    disarmExitFallback?.();
+  }
+}
+
+async function importLegacyAuditAfterRecovery(
+  options: StartUiServerOptions,
+  isRealLaunch: boolean,
+  activityLog: ServerLogSink | undefined,
+): Promise<LegacyUpdateAuditImportOutcome | undefined> {
+  const importer =
+    options.deps.importLegacyUpdateAuditSnapshot ??
+    (isRealLaunch ? (await loadServerModule()).importLegacyUpdateAuditSnapshot : undefined);
+  if (importer === undefined) return undefined;
+  const outcome = await importer({ stateDir: options.stateDir, level: options.logLevel });
+  if (outcome.status === "deferred" && outcome.reason !== "log-level-filtered") {
+    activityLog?.write(
+      activityLogEvent(
+        LEGACY_UPDATE_IMPORT_DEFERRED_OPERATION,
+        { level: "warn", errorKind: "unavailable" },
+        { reason: outcome.reason },
+      ),
+    );
+    options.io.err(
+      "keiko ui: legacy update audit persistence was deferred; retained source will be retried.\n",
+    );
+  }
+  return outcome;
+}
+
+function readinessSummary(snapshot: ActivityLogReadinessSnapshot): string {
+  const reasons = snapshot.reasons.length === 0 ? "" : ` (${snapshot.reasons.join(", ")})`;
+  return `${snapshot.readiness}${reasons}`;
+}
+
+// The diagnostic-readiness self-check runs before the server accepts any work (#3532): the real
+// launch validates the catalog, probes the production sink with a real synced write, checks storage
+// and the logger wiring, and persists the result as `activity-log.readiness`. Anything but `ready`
+// is printed before the listening line, so an operator sees degraded evidence before relying on it.
+type LoadedServerModule = Awaited<ReturnType<typeof loadServerModule>>;
+
+function runStartupReadinessCheck(
+  options: StartUiServerOptions,
+  loadedServer: LoadedServerModule | undefined,
+): void {
+  const check =
+    options.deps.activityLogReadiness ??
+    (loadedServer === undefined
+      ? undefined
+      : (): ActivityLogReadinessSnapshot =>
+          loadedServer.checkActivityLogReadiness({
+            stateDir: options.stateDir,
+            env: options.runtimeEnv,
+          }));
+  if (check === undefined) return;
+  const snapshot = check();
+  if (snapshot.readiness !== "ready") {
+    options.io.err(`keiko ui: diagnostic evidence is ${readinessSummary(snapshot)}.\n`);
+  }
+}
+
+function launchEvidenceHooks(
+  server: LoadedServerModule | undefined,
+  stateDir: string,
+): LaunchEvidenceHooks {
+  if (server === undefined) return { onHeartbeat: undefined, beforeExitEvidence: undefined };
+  return {
+    onHeartbeat: (): void => {
+      server.refreshActivityLogReadiness({ stateDir });
+      server.persistActivityLogLossSummary("heartbeat");
+    },
+    beforeExitEvidence: (): void => {
+      server.flushClientDiagnosticsIngestCounts();
+      server.persistActivityLogLossSummary("exit");
+    },
+  };
+}
+
+interface LaunchActivityLog {
+  readonly loadedServer: LoadedServerModule | undefined;
+  readonly activityLog: ServerLogSink | undefined;
+  readonly closeActivityLog: LoadedServerModule["closeFileServerLogSinks"] | undefined;
+}
+
+// Injected-server tests must not force-load the real server module graph. The same rule governs
+// the activity log: the production sink mkdirs `<stateDir>/logs` on construction, so building it
+// on the injected path would write a directory outside the test's fixture. A test may still inject
+// its own sink via `deps.activityLog` to exercise the lifecycle log lines without either of those.
+// The real launch uses the level-gated production sink, which never filters the mandatory lifecycle
+// and loss evidence (#3532). `closeActivityLog` is the loaded module's `closeFileServerLogSinks`
+// (ADR-0173 export) for the shutdown path, rather than relying solely on `activityLog.close?.()` —
+// see `WaitForShutdownActivity.closeActivityLog`'s doc comment.
+async function launchActivityLog(
+  options: StartUiServerOptions,
+  isRealLaunch: boolean,
+): Promise<LaunchActivityLog> {
+  const loadedServer = isRealLaunch ? await loadServerModule() : undefined;
+  return {
+    loadedServer,
+    activityLog: options.deps.activityLog ?? loadedServer?.createActivityLogSink(options.stateDir),
+    closeActivityLog: loadedServer?.closeFileServerLogSinks,
+  };
+}
+
+// KEIKO-0858 / #2906 round 3 (comment 3865273692): durable server-lifetime error listener replaces
+// the settled-rejection one-shot listen() removes. A post-listen error now reaches io.err
+// (body-free) AND the activity log, then drives a bounded fatal shutdown, instead of being logged
+// and left running, or crashing the process with a raw stack. It shares the exit latch, so the crash
+// is recorded as `fatal-exception`, never relabelled by the close it causes.
+// Everything the exit paths share is created right after listen: the uptime origin, the one exit
+// latch, and the evidence hooks.
+interface ExitEvidence {
+  readonly startedAt: number;
+  readonly exitLatch: ProcessExitLatch;
+  readonly hooks: LaunchEvidenceHooks;
+}
+
+function armExitEvidence(
+  server: Parameters<typeof attachDurableServerErrorListener>[0],
+  io: CliIo,
+  launch: LaunchActivityLog,
+  stateDir: string,
+): ExitEvidence {
+  const exit: ExitEvidence = {
+    startedAt: Date.now(),
+    exitLatch: new ProcessExitLatch(),
+    hooks: launchEvidenceHooks(launch.loadedServer, stateDir),
+  };
+  const activity: WaitForShutdownActivity = {
+    activityLog: launch.activityLog,
+    startedAt: exit.startedAt,
+    closeActivityLog: launch.closeActivityLog,
+    exitLatch: exit.exitLatch,
+    beforeExitEvidence: exit.hooks.beforeExitEvidence,
+  };
+  attachDurableServerErrorListener(server, io, launch.activityLog, undefined, undefined, () => {
+    writeProcessExiting(activity, "fatal-exception");
+  });
+  return exit;
+}
+
+async function startUiServer(options: StartUiServerOptions): Promise<void> {
+  const { staticRoot, csp, cspProvider, parsed, handlerDeps, io, deps, stateDir } = options;
+  const { runtimeEnv } = options;
+  const isRealLaunch = deps.createServer === undefined;
+  const launch = await launchActivityLog(options, isRealLaunch);
+  const { loadedServer, activityLog, closeActivityLog } = launch;
   const factory = deps.createServer ?? (await loadServerModule()).createUiServer;
-  const server = await factory({ staticRoot, csp, port: parsed.port, handlerDeps });
+  runStartupReadinessCheck(options, loadedServer);
+  const startupRecovery = handlerDeps.updateStartupRecovery;
+  const readiness = { open: startupRecovery === undefined };
+  const recoveryContext = {
+    startupRecovery,
+    parsed,
+    runtimeEnv,
+    handlerDeps,
+    activityLog,
+    closeActivityLog,
+    io,
+  };
+  const recoveryCurrent = await reconcileBeforeListen(recoveryContext);
+  const server = await factory({
+    staticRoot,
+    csp,
+    ...(cspProvider === undefined ? {} : { cspProvider }),
+    port: parsed.port,
+    handlerDeps,
+    readiness: () => readiness.open,
+    ...(activityLog === undefined ? {} : { activityLog }),
+  });
   applyServerTimeouts(server);
   await listen(server, parsed.port);
-  io.out(`Keiko UI listening on http://${UI_HOST}:${String(parsed.port)}\n`);
+  const exit = armExitEvidence(server, io, launch, stateDir);
+  await reconcileAfterListen({ ...recoveryContext, current: recoveryCurrent, server });
+  if (recoveryCurrent !== undefined) readiness.open = true;
+  await importLegacyAuditAfterRecovery(options, isRealLaunch, activityLog);
+  // Printed before the (possibly filesystem-probing, on the real launch path) `process.started`
+  // write below, so the operator's terminal reports "listening" the instant it is true rather
+  // than waiting on install-mode detection.
   // Block only in the real CLI path (no injected factory). Injected-server tests skip blocking so
   // they don't hang; the real process must stay alive until signalled.
-  await maybeWaitForShutdown(server, deps);
+  await reportStartedAndWaitForShutdown({
+    server,
+    options,
+    activityLog,
+    isRealLaunch,
+    closeActivityLog,
+    ...exit,
+  });
 }
 
 export async function createLiveCspSource(
@@ -561,8 +1773,8 @@ export async function createLiveCspSource(
       warned = false;
     } catch (error) {
       if (!warned) {
-        const message = error instanceof Error ? error.message : String(error);
-        io.err(`Warning: failed to reload CSP hashes from ${hashesFile}: ${message}\n`);
+        // The content-free class only: a filesystem error's text carries the path it failed on.
+        io.err(`Warning: failed to reload CSP hashes (${safeCliErrorKind(error)}).\n`);
         warned = true;
       }
     } finally {
@@ -592,26 +1804,61 @@ export async function createLiveCspSource(
 // gate: tests keep the deps alive so they can assert against the store after
 // runUiCli returns). Closing explicitly checkpoints the WAL instead of relying
 // on process exit to drop the WAL/-shm files in an arbitrary state.
+interface CspSnapshot {
+  readonly csp: string;
+  readonly cspProvider: (() => string | Promise<string>) | undefined;
+}
+
 async function launchUiFromDeps(
   parsed: UiCliArgs,
   staticRoot: string,
-  csp: string,
+  csp: CspSnapshot,
   cwd: string,
   effectiveEnv: EnvSource,
   io: CliIo,
   deps: UiCliDeps,
 ): Promise<number> {
+  const stateDir = resolveRuntimeStateDir(cwd, effectiveEnv);
+  // Captured from the ORIGINAL env, before `withDefaultLocalRuntimeStateEnv` unconditionally sets
+  // `KEIKO_STATE_DIR` on the derived copy below — otherwise every launch would read back as
+  // `env-override` regardless of what the operator actually configured.
+  const stateDirSource = resolveStateDirSource(effectiveEnv);
+  // `resolveServerLogThreshold` (ADR-0173 export) replaces a local mirror of
+  // `observability/log-level.ts`'s env name, default, and alias table that had to duplicate that
+  // module's normalisation rules under a different name because neither was reachable through
+  // `loadServerModule()` before. Loading the server module here is not the GEN-PERF-CLI-001 cost
+  // this file otherwise guards against: `runUiCli` already unconditionally loads it for CSP header
+  // material (`loadCspMaterial`, above) before this point is ever reached, on the real launch path
+  // and the injected-server test path alike — this is a second, memoized, already-cached call, not
+  // a new load.
+  const logLevel = (await loadServerModule()).resolveServerLogThreshold(effectiveEnv);
+  const runtimeEnv = withDefaultLocalRuntimeStateEnv(stateDir, parsed, effectiveEnv, cwd);
   const handlerDeps = await buildHandlerDepsOrReport(
     parsed,
     cwd,
-    withDefaultLocalRuntimeStateEnv(cwd, parsed, effectiveEnv),
+    runtimeEnv,
     io,
+    deps.localGitMutationEnv,
+    deps.updateStartupRecovery,
+    deps.buildHandlerDeps,
   );
   if (typeof handlerDeps === "number") return handlerDeps;
   try {
     const launchProjectResult = await registerLaunchProjectOrReport(cwd, handlerDeps, io);
     if (launchProjectResult !== null) return launchProjectResult;
-    await startUiServer(staticRoot, csp, parsed, handlerDeps, io, deps);
+    await startUiServer({
+      staticRoot,
+      csp: csp.csp,
+      cspProvider: csp.cspProvider,
+      parsed,
+      handlerDeps,
+      io,
+      deps,
+      stateDir,
+      stateDirSource,
+      logLevel,
+      runtimeEnv,
+    });
     return 0;
   } finally {
     if (deps.createServer === undefined) await handlerDeps.dispose?.();
@@ -630,6 +1877,7 @@ export async function runUiCli(
   if (typeof parsed === "number") return parsed;
   const reExec = await maybeReExecForSqlite(effectiveEnv, deps, cwd);
   if (reExec !== undefined) return reExec;
+  prepareUiInstallLayoutEvidence(cwd, effectiveEnv, deps);
   const staticRoot = deps.staticRoot ?? defaultStaticRoot(cwd);
   if (!ensureStaticRoot(staticRoot, io)) {
     return 1;
@@ -642,10 +1890,13 @@ export async function runUiCli(
   // The finally now covers the deps-build error paths too: previously an early
   // return there leaked the csp-hashes file watcher for the process lifetime.
   try {
+    // Pass BOTH the startup snapshot (compat + fallback) and the live accessor. The server picks
+    // the fresher of the two via `(await cspProvider?.()) ?? csp` — KEIKO-0439 traced Issue-#1214's
+    // "UI blank until restart after a rebuild" back to the CLI passing only the snapshot.
     return await launchUiFromDeps(
       parsed,
       staticRoot,
-      cspRuntime.csp(),
+      { csp: cspRuntime.csp(), cspProvider: cspRuntime.csp },
       cwd,
       effectiveEnv,
       io,
@@ -654,4 +1905,16 @@ export async function runUiCli(
   } finally {
     cspRuntime.dispose();
   }
+}
+
+function prepareUiInstallLayoutEvidence(cwd: string, env: EnvSource, deps: UiCliDeps): void {
+  const stateDir = resolveRuntimeStateDir(cwd, env);
+  // Persist normalization before static-export and CSP reads can fail. The process-level fatal
+  // guard consumes the same resolved path on a real launch.
+  if (deps.createServer === undefined) process.env.KEIKO_STATE_DIR = stateDir;
+  if (deps.activityLog !== undefined) {
+    writeInstallLayoutOverrideEvidence(deps.activityLog, env);
+    return;
+  }
+  writeInstallLayoutOverrideEvidenceWithFactory(deps.activityLogSinkFactory, stateDir, env);
 }

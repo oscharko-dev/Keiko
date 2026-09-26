@@ -8,8 +8,8 @@
 // it intends to query is in the authorized set. Both helpers are pure and clock-free.
 
 import type { MemoryRetrievalRequest } from "./memory-operations.js";
-import type { MemoryScope } from "./memory.js";
-import { MEMORY_STATUSES, MEMORY_TYPES } from "./memory.js";
+import type { MemoryScope } from "./memory-contracts.js";
+import { MEMORY_STATUSES, MEMORY_TYPES } from "./memory-contracts.js";
 import { validateMemoryScope, type MemoryValidation } from "./memory-validation.js";
 import {
   MEMORY_BODY_MAX_CHARS,
@@ -54,12 +54,28 @@ function validateRetrievalEnumFilter(
   }
 }
 
-function validateRetrievalNumericLimit(field: string, value: unknown, errors: string[]): void {
+// KEIKO-1027: enforce contract-level ceilings on the two retrieval budget hints so a hostile
+// producer cannot ask the store for an unbounded scan (maxResults) or an unbounded body-byte
+// projection (maxBodyChars). Values are hints, not guarantees; the store may still clamp
+// tighter, but the contract now bounds the outer request shape at the naming boundary.
+export const MEMORY_RETRIEVAL_MAX_RESULTS = 1024 as const;
+export const MEMORY_RETRIEVAL_MAX_BODY_CHARS = MEMORY_BODY_MAX_CHARS;
+
+function validateRetrievalNumericLimit(
+  field: string,
+  value: unknown,
+  errors: string[],
+  ceiling: number,
+): void {
   if (value === undefined) {
     return;
   }
   if (!isFinitePositiveInteger(value)) {
     errors.push(`retrieval.${field} must be a positive integer when set`);
+    return;
+  }
+  if (value > ceiling) {
+    errors.push(`retrieval.${field} must be <= ${String(ceiling)} when set`);
   }
 }
 
@@ -75,8 +91,18 @@ function validateRetrievalFilters(input: Record<string, unknown>, errors: string
 }
 
 function validateRetrievalBudgetAndToggles(input: Record<string, unknown>, errors: string[]): void {
-  validateRetrievalNumericLimit("maxResults", input.maxResults, errors);
-  validateRetrievalNumericLimit("maxBodyChars", input.maxBodyChars, errors);
+  validateRetrievalNumericLimit(
+    "maxResults",
+    input.maxResults,
+    errors,
+    MEMORY_RETRIEVAL_MAX_RESULTS,
+  );
+  validateRetrievalNumericLimit(
+    "maxBodyChars",
+    input.maxBodyChars,
+    errors,
+    MEMORY_RETRIEVAL_MAX_BODY_CHARS,
+  );
   if (input.includeArchived !== undefined && typeof input.includeArchived !== "boolean") {
     errors.push("retrieval.includeArchived must be a boolean when set");
   }
@@ -108,7 +134,12 @@ export function validateMemoryRetrievalRequest(
 // A canonical coordinate string per scope. Distinct scope kinds always produce strings
 // with distinct kind prefixes, so a `userId` equal to a `workspaceId` cannot collide.
 // `global` carries a fixed coordinate so set membership remains a pure string compare.
-function scopeCoordinateKey(scope: MemoryScope): string {
+// Exported as the single source of truth for the scope→partition-key projection used by
+// keiko-memory-governance's conflict/forget scans and keiko-memory-consolidation's
+// dedupe/conflict ordering (#2906 KEIKO-0546). The encoding "kind:coordinate" is
+// load-bearing — two callers that partition with one function and compare with another
+// would silently mismatch on global-scoped memories if the encoding diverged.
+export function scopeCoordinateKey(scope: MemoryScope): string {
   switch (scope.kind) {
     case "global":
       return "global:";

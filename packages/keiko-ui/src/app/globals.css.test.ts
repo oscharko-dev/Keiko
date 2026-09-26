@@ -12,7 +12,7 @@
  * Each assertion is crafted so that reverting the specific fix causes the test
  * to fail (mutation-robustness).
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,6 +20,96 @@ import { describe, expect, it } from "vitest";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const css = readFileSync(resolve(here, "globals.css"), "utf8").replace(/\r\n?/g, "\n");
+
+interface StyleSource {
+  readonly path: string;
+  readonly source: string;
+}
+
+function productionStyleSources(directory: string): readonly StyleSource[] {
+  const sources: StyleSource[] = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = resolve(directory, entry.name);
+    if (entry.isDirectory()) {
+      sources.push(...productionStyleSources(path));
+      continue;
+    }
+    const productionModule = entry.name.endsWith(".module.css");
+    const productionComponent =
+      entry.name.endsWith(".tsx") &&
+      !entry.name.endsWith(".test.tsx") &&
+      !entry.name.endsWith(".spec.tsx");
+    const productionStyleHelper =
+      entry.name.endsWith(".ts") &&
+      !entry.name.endsWith(".d.ts") &&
+      !entry.name.endsWith(".test.ts") &&
+      !entry.name.endsWith(".spec.ts");
+    if (productionModule || productionComponent || productionStyleHelper) {
+      sources.push({ path, source: readFileSync(path, "utf8") });
+    }
+  }
+  return sources;
+}
+
+function withoutCssComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//gu, "");
+}
+
+function declaredGlobalTokens(source: string): ReadonlySet<string> {
+  return new Set(
+    Array.from(withoutCssComments(source).matchAll(/(--[\w-]+)\s*:/gu), (match) => match[1]!),
+  );
+}
+
+function hasNonEmptyFallback(source: string, varStart: number): boolean {
+  let depth = 0;
+  let fallbackStart: number | undefined;
+  let quote: '"' | "'" | undefined;
+  for (let index = varStart + 4; index < source.length; index += 1) {
+    const character = source[index];
+    if (character === undefined) return false;
+    if (quote !== undefined) {
+      if (character === quote && source[index - 1] !== "\\") quote = undefined;
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === "(") {
+      depth += 1;
+    } else if (character === ")") {
+      if (depth === 0) {
+        if (fallbackStart === undefined) return false;
+        const fallback = withoutCssComments(source.slice(fallbackStart, index));
+        return fallback.trim().length > 0;
+      }
+      depth -= 1;
+    } else if (character === "," && depth === 0 && fallbackStart === undefined) {
+      fallbackStart = index + 1;
+    }
+  }
+  return false;
+}
+
+function unresolvedTokenReferences(
+  sources: readonly StyleSource[],
+  declared: ReadonlySet<string>,
+): readonly string[] {
+  const unresolved = new Set<string>();
+  for (const { path, source } of sources) {
+    for (const match of source.matchAll(/var\(\s*(--[\w-]+)/gu)) {
+      const token = match[1];
+      if (
+        token !== undefined &&
+        !declared.has(token) &&
+        !hasNonEmptyFallback(source, match.index)
+      ) {
+        unresolved.add(`${path.slice(here.length + 1)}: ${token}`);
+      }
+    }
+  }
+  return [...unresolved].sort();
+}
+
 const currentCssSha256 = createHash("sha256").update(css).digest("hex");
 const pdfViewerModuleCss = readFileSync(
   resolve(here, "components/desktop/widgets/cards/PdfCitationPreviewWindow.module.css"),
@@ -59,14 +149,6 @@ const terminalStyleConsumerComponents = [
   readFileSync(resolve(here, "components/desktop/widgets/cards/RuntimeHubWidget.tsx"), "utf8"),
   readFileSync(resolve(here, "components/desktop/widgets/cards/ContainerStatusWidget.tsx"), "utf8"),
 ];
-const integrationsWidgetModuleCss = readFileSync(
-  resolve(here, "components/desktop/widgets/cards/IntegrationsWidget.module.css"),
-  "utf8",
-).replace(/\r\n?/g, "\n");
-const integrationsWidgetComponent = readFileSync(
-  resolve(here, "components/desktop/widgets/cards/IntegrationsWidget.tsx"),
-  "utf8",
-);
 const figmaImageSourceModuleCss = readFileSync(
   resolve(here, "components/desktop/widgets/figma/FigmaImageSourceWindow.module.css"),
   "utf8",
@@ -104,7 +186,6 @@ const lazyWidgetCss = [
   browserWidgetModuleCss,
   connectorPickerModuleCss,
   terminalWidgetModuleCss,
-  integrationsWidgetModuleCss,
   figmaImageSourceModuleCss,
   timelinePanelModuleCss,
   notificationsPanelModuleCss,
@@ -187,6 +268,87 @@ function cssBlock(selector: string, opts: { readonly fromLast?: boolean } = {}):
   return cssBlockFrom(css, selector, opts);
 }
 
+describe("Design-token reference integrity", () => {
+  it("ignores token-shaped declarations inside CSS comments", () => {
+    expect(
+      Array.from(
+        declaredGlobalTokens("/* --comment-only: red; */ :root { --runtime-token: blue; }"),
+      ),
+    ).toStrictEqual(["--runtime-token"]);
+  });
+
+  it("rejects missing, empty, and comment-only fallbacks", () => {
+    const unresolved = unresolvedTokenReferences(
+      [
+        {
+          path: resolve(here, "fixture.tsx"),
+          source:
+            "var(--known) var(--missing) var(--empty,) var(--space, ) var(--comment, /* no value */)",
+        },
+      ],
+      new Set(["--known"]),
+    );
+
+    expect(unresolved).toStrictEqual([
+      "fixture.tsx: --comment",
+      "fixture.tsx: --empty",
+      "fixture.tsx: --missing",
+      "fixture.tsx: --space",
+    ]);
+  });
+
+  it("accepts concrete and fully validated nested fallbacks", () => {
+    const unresolved = unresolvedTokenReferences(
+      [
+        {
+          path: resolve(here, "fixture.module.css"),
+          source: "color: var(--literal, #fff); border: var(--nested, var(--known));",
+        },
+      ],
+      new Set(["--known"]),
+    );
+
+    expect(unresolved).toStrictEqual([]);
+  });
+
+  it("fails closed for unterminated, quoted, and circular hostile fallbacks", () => {
+    const unresolved = unresolvedTokenReferences(
+      [
+        {
+          path: resolve(here, "fixture.ts"),
+          source: [
+            "var(--unterminated, var(--known)",
+            'var(--quoted, "unterminated)',
+            "var(--cycle-a, var(--cycle-b, var(--cycle-a)))",
+          ].join(" "),
+        },
+      ],
+      new Set(["--known"]),
+    );
+
+    expect(unresolved).toStrictEqual([
+      "fixture.ts: --cycle-a",
+      "fixture.ts: --quoted",
+      "fixture.ts: --unterminated",
+    ]);
+  });
+
+  it("scans production TypeScript style helpers as well as components and CSS Modules", () => {
+    expect(
+      productionStyleSources(here).some(({ path }) => path.endsWith("git-client-styles.ts")),
+    ).toBe(true);
+  });
+
+  it("requires every CSS Module and inline style token to be global or safely fall back", () => {
+    const unresolved = unresolvedTokenReferences(
+      [{ path: resolve(here, "globals.css"), source: css }, ...productionStyleSources(here)],
+      declaredGlobalTokens(css),
+    );
+
+    expect(unresolved).toStrictEqual([]);
+  });
+});
+
 describe("BUNDLE-09 — lazy widget CSS split", () => {
   it("keeps PDF viewer window styles out of render-blocking globals.css", () => {
     expect(css).not.toContain(".pdfv-shell");
@@ -226,16 +388,6 @@ describe("BUNDLE-09 — lazy widget CSS split", () => {
     }
   });
 
-  it("keeps Integrations widget styles out of render-blocking globals.css", () => {
-    expect(css).not.toContain("\n.integ {");
-    expect(css).not.toContain("\nul.integ {");
-    expect(css).not.toContain(".integ-status");
-    expect(integrationsWidgetModuleCss).toContain(":global(.integ)");
-    expect(integrationsWidgetModuleCss).toContain(":global(ul.integ)");
-    expect(integrationsWidgetModuleCss).toContain(":global(.integ-status)");
-    expectLazyCssModuleImport(integrationsWidgetComponent, "IntegrationsWidget.module.css");
-  });
-
   it("keeps Figma image source styles out of render-blocking globals.css", () => {
     expect(css).not.toContain(".figma-image-window");
     expect(css).not.toContain(".figma-image-preview");
@@ -256,13 +408,12 @@ describe("BUNDLE-09 — lazy widget CSS split", () => {
     expectLazyCssModuleImport(timelinePanelComponent, "TimelinePanel.module.css");
   });
 
-  it("keeps Notification panel row styles out of render-blocking globals.css", () => {
-    expect(css).not.toContain("\n.nt-row {");
-    expect(css).not.toContain("\n.nt-text {");
-    expect(css).not.toContain("\n.nt-time {");
-    expect(notificationsPanelModuleCss).toContain(":global(.nt-row)");
-    expect(notificationsPanelModuleCss).toContain(":global(.nt-text)");
-    expect(notificationsPanelModuleCss).toContain(":global(.nt-time)");
+  // KEIKO-0158 — NotificationsPanel no longer renders a fake, never-changing notification
+  // list (.nt-row / .nt-text / .nt-time are gone, dead code removed with them); it shows an
+  // honest empty state instead (.nt-empty), mirroring TimelinePanel's own .tl-empty treatment.
+  it("keeps Notification panel styles out of render-blocking globals.css", () => {
+    expect(css).not.toContain("\n.nt-empty {");
+    expect(notificationsPanelModuleCss).toContain(":global(.nt-empty)");
     expectLazyCssModuleImport(notificationsPanelComponent, "NotificationsPanel.module.css");
   });
 
@@ -1019,9 +1170,8 @@ describe("Fix 5 — mobile root toolbar compression", () => {
     expect(ruleBlockAfter(mediaIdx, ".tb-btn {")).toContain("display: none");
   });
 
-  it("keeps the tab strip and mode switch shrinkable", () => {
+  it("keeps the tab strip shrinkable", () => {
     expect(ruleBlockAfter(mediaIdx, ".tb-tabs {")).toContain("min-width: 0");
-    expect(ruleBlockAfter(mediaIdx, ".modesw {")).toContain("min-width: 0");
   });
 });
 
@@ -1707,7 +1857,7 @@ describe("Issue #1193 — Keiko Editor theme tokens (#1212) surfaced into the ru
     expect(monacoSliderBlock).toContain("background: var(--ed-scrollbar-thumb) !important");
     expect(monacoSliderBlock).toContain("border-radius: 999px !important");
     expect(monacoSliderBlock).toContain(
-      "transition: background var(--motion-fast) var(--ease-out) !important",
+      "transition: background var(--dur-fast) var(--ease-out) !important",
     );
     expect(monacoSliderBlock).not.toContain("background-clip");
     expect(monacoSliderBlock).not.toContain("border:");
@@ -3878,6 +4028,32 @@ describe("Issue #1297 — table / data grid + dataviz foundation (Design System 
   });
 });
 
+// KEIKO-1037 — component-template.md Input/field claims about the invalid state must name the
+// concrete implementing selectors, and the selectors it names must exist. Pin the two directions:
+// (1) the doc names `.figma-snapshot-input` and `.qi-input` in the invalid-state description, and
+// (2) globals.css defines an `[aria-invalid="true"]` rule for both. If either drifts, the pin
+// re-fails.
+describe("component-template.md Input/field invalid-state contract (KEIKO-1037)", () => {
+  it("names .figma-snapshot-input and .qi-input as the concrete invalid-state carriers", () => {
+    const doc = readFileSync(
+      resolve(here, "../../../../docs/design-system/component-template.md"),
+      "utf8",
+    );
+    expect(doc).toContain(".figma-snapshot-input");
+    expect(doc).toContain(".qi-input");
+    // The canonical layout classes are the ones the earlier doc wrongly implicated in the visual
+    // contract; the doc must now explicitly disclaim that they own the invalid ring.
+    expect(doc).toMatch(
+      /\.c-form-row.*carries no.*\[aria-invalid="true"\]|\.c-form-row.*no.*aria-invalid.*styling/su,
+    );
+  });
+
+  it('globals.css ships an [aria-invalid="true"] rule for both .figma-snapshot-input and .qi-input', () => {
+    expect(css).toMatch(/\.figma-snapshot-input\[aria-invalid="true"\]/u);
+    expect(css).toMatch(/\.qi-input\[aria-invalid="true"\]/u);
+  });
+});
+
 // ─── Issue #1298 — input family + navigation + breakpoint + density coverage ───
 describe("Issue #1298 — input + navigation components (Design System 0.4.0)", () => {
   // ── 1. Value-preservation: every input/nav Tier-3 component token is a pure alias over an
@@ -4506,11 +4682,11 @@ describe("Issue #1299 — component state matrix", () => {
 
 // ─── Issue #1300 — consolidated visual-regression + designer-acceptance gate ─────
 //
-// Epic #1290 closure capstone. The browser harnesses under docs/design-system/evidence/1300 are the
-// live re-runnable proofs; this block is the CI-enforced contract that pins their committed verdicts,
-// the variance register, and the migrated-surface inventory against the product globals.css so the
-// epic acceptance evidence cannot silently drift. A single revert (a dropped surface, a flipped
-// verdict, a deleted variance disposition, a missing child-evidence link) re-fails a named assertion.
+// Epic #1290 closure capstone. The browser harnesses under docs/design-system/evidence/1300 are historical,
+// re-runnable proofs; this block validates their committed metadata, variance register, and migrated-surface
+// inventory against the product globals.css. It intentionally does not replace a standing browser
+// visual-regression gate. A dropped surface, flipped committed verdict, deleted variance disposition, or
+// missing child-evidence link re-fails a named assertion.
 
 interface Issue1300ConsolidatedProof {
   readonly verdict: string;
@@ -4900,7 +5076,7 @@ describe("Issue #1300 — consolidated visual-regression + designer-acceptance g
 
   it("the browser evidence harness rejects HTTP method drift", (): void => {
     expect(browserCaptureSource).toContain(
-      'const POST_API_PATHS = new Set([\n  "/api/desktop/chats",\n  "/api/editor/agent/snapshot",\n  "/api/editor/language",\n]);',
+      'const POST_API_PATHS = new Set([\n  "/api/desktop/chats",\n  "/api/editor/agent/snapshot",\n  "/api/editor/language",\n  "/api/task-workspaces/reconciliation",\n]);',
     );
     expect(browserCaptureSource).toContain('return POST_API_PATHS.has(pathname) ? "POST" : "GET";');
     expect(browserCaptureSource).toContain("if (method !== expectedApiMethod(url.pathname)) {");

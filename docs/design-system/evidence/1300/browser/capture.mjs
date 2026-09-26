@@ -17,6 +17,10 @@ import { readFile, readdir, stat, mkdir, realpath } from "node:fs/promises";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, extname, resolve, dirname, normalize, sep, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  resolveHostExecutable,
+  shellCommandForTrustedExecutable,
+} from "../../../../../scripts/lib/host-executable.mjs";
 
 const CAPTURE_PATH = fileURLToPath(import.meta.url);
 const HERE = dirname(CAPTURE_PATH);
@@ -32,11 +36,21 @@ const POST_CSS_SHA256 = createHash("sha256")
   .digest("hex");
 
 function buildStaticExport() {
-  const build = spawnSync("npm", ["run", "build", "--workspace", "@oscharko-dev/keiko-ui"], {
-    cwd: REPO,
-    env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" },
-    stdio: "inherit",
-  });
+  const platform = process.platform;
+  const npmExecutable = shellCommandForTrustedExecutable(
+    resolveHostExecutable("npm", { platform, workspaceRoot: REPO }),
+    platform,
+  );
+  const build = spawnSync(
+    npmExecutable,
+    ["run", "build", "--workspace", "@oscharko-dev/keiko-ui"],
+    {
+      cwd: REPO,
+      env: { ...process.env, NEXT_TELEMETRY_DISABLED: "1" },
+      shell: platform === "win32",
+      stdio: "inherit",
+    },
+  );
   if (build.status !== 0) throw new Error("The UI static export build failed.");
 }
 
@@ -149,7 +163,49 @@ const VIEWPORTS = [
   { id: "tablet", width: 900, height: 1024 },
   { id: "mobile", width: 420, height: 820 },
 ];
-const DEMO_ROOT = "/tmp/keiko-issue-1300-static-evidence";
+const DEMO_ROOT = "/keiko/evidence/issue-1300-static-workspace";
+const DEMO_WORKSPACE_ID = "issue-1300-static-workspace";
+const DEMO_WORKSPACE_AT = "2026-06-22T00:00:00.000Z";
+const DEMO_WORKSPACE_INSTANCE = {
+  schemaVersion: "1",
+  workspaceId: DEMO_WORKSPACE_ID,
+  taskId: "issue-1300",
+  repositoryId: "issue-1300-static-repository",
+  repositoryRoot: DEMO_ROOT,
+  baseBranch: "main",
+  taskBranch: "main",
+  managedWorktreePath: DEMO_ROOT,
+  gitdirIdentity: "issue-1300-static-gitdir",
+  lifecycleState: "active",
+  health: "healthy",
+  lock: null,
+  createdAt: DEMO_WORKSPACE_AT,
+  updatedAt: DEMO_WORKSPACE_AT,
+  lastVerifiedAt: DEMO_WORKSPACE_AT,
+  lastVerifiedHead: "0".repeat(40),
+  driftMarkers: [],
+  recoveryHints: [],
+  auditCorrelationId: "issue-1300-static-audit",
+};
+const DEMO_WORKSPACE_BINDING = {
+  schemaVersion: "1",
+  workspaceId: DEMO_WORKSPACE_ID,
+  taskId: "issue-1300",
+  activeRoot: DEMO_ROOT,
+  boundSurfaces: ["editor", "files", "terminal", "git-delivery"],
+  gitDeliveryRoot: DEMO_ROOT,
+  editorProjectRoot: DEMO_ROOT,
+};
+const DEMO_ACTIVE_WORKSPACE = {
+  instance: DEMO_WORKSPACE_INSTANCE,
+  binding: DEMO_WORKSPACE_BINDING,
+  pointer: {
+    workspaceId: DEMO_WORKSPACE_ID,
+    setBy: "issue-1300-static-harness",
+    setAt: DEMO_WORKSPACE_AT,
+    updatedAt: DEMO_WORKSPACE_AT,
+  },
+};
 const WORKSPACE_WINDOWS = [
   {
     id: "issue-1300-chat",
@@ -315,7 +371,7 @@ const SCENARIOS = [
       '[data-window-id="issue-1574-git-desktop"]',
       '[data-window-id="issue-1574-git-desktop"] [aria-label="Git"]',
       '[data-window-id="issue-1574-git-desktop"] [role="combobox"][aria-label="Repository"]',
-      '[data-window-id="issue-1574-git-desktop"] [role="combobox"][aria-label^="Branch:"]',
+      '[data-window-id="issue-1574-git-desktop"] button[aria-haspopup="menu"][aria-label^="Branch:"]',
       '[data-window-id="issue-1574-git-desktop"] [role="tablist"][aria-label="Changes and history"]',
       '[data-window-id="issue-1574-git-desktop"] nav[aria-label="Changed files"]',
       // Issue #1575 — per-file staging checkboxes and the pinned commit composer.
@@ -334,7 +390,7 @@ const SCENARIOS = [
       '[data-window-id="issue-1574-git-constrained"]',
       '[data-window-id="issue-1574-git-constrained"] [aria-label="Git"]',
       '[data-window-id="issue-1574-git-constrained"] [role="combobox"][aria-label="Repository"]',
-      '[data-window-id="issue-1574-git-constrained"] [role="combobox"][aria-label^="Branch:"]',
+      '[data-window-id="issue-1574-git-constrained"] button[aria-haspopup="menu"][aria-label^="Branch:"]',
       '[data-window-id="issue-1574-git-constrained"] [role="tablist"][aria-label="Changes and history"]',
       '[data-window-id="issue-1574-git-constrained"] nav[aria-label="Changed files"]',
       // Issue #1575 — staging checkboxes and the pinned commit composer must survive the reflow.
@@ -487,6 +543,7 @@ const STATIC_API_BODIES = {
       createdAt: 1_750_000_000_000,
       lastOpenedAt: 1_750_000_000_000,
       available: true,
+      workspaceAvailable: true,
     },
     chat: DEMO_CHAT,
     messages: [],
@@ -498,6 +555,7 @@ const STATIC_API_BODIES = {
         createdAt: 1_750_000_000_000,
         lastOpenedAt: 1_750_000_000_000,
         available: true,
+        workspaceAvailable: true,
       },
     ],
     chats: [DEMO_CHAT],
@@ -511,6 +569,7 @@ const STATIC_API_BODIES = {
         createdAt: 1_750_000_000_000,
         lastOpenedAt: 1_750_000_000_000,
         available: true,
+        workspaceAvailable: true,
       },
     ],
     path: DEMO_ROOT,
@@ -567,12 +626,33 @@ const STATIC_API_BODIES = {
   "/api/editor/agent/sessions": { sessions: [] },
   "/api/editor/agent/snapshot": { snapshot: null },
   "/api/editor/agent/audit": { records: [] },
-  // Issue #446 (Epic #443) — the globally mounted task-workspace switcher reads the inventory and the
-  // active binding on boot. Without these the malformed fallback leaves `instances` undefined and the
-  // switcher throws on every route, so the read surface must return an empty inventory and no active
-  // binding (the unbound studio default), keeping every scenario error-free.
-  "/api/task-workspaces": { instances: [] },
-  "/api/task-workspaces/active": { active: null },
+  // The Git scenarios exercise repository authority and therefore need the same verified active
+  // task-workspace binding as the production surface. Reconciliation is stubbed below with a healthy,
+  // content-free report so restoration never widens authority or silently skips its verification pass.
+  "/api/task-workspaces": { instances: [DEMO_WORKSPACE_INSTANCE] },
+  "/api/task-workspaces/active": { active: DEMO_ACTIVE_WORKSPACE },
+  "/api/task-workspaces/reconciliation": {
+    report: {
+      schemaVersion: "1",
+      generatedAt: DEMO_WORKSPACE_AT,
+      entries: [
+        {
+          schemaVersion: "1",
+          workspaceId: DEMO_WORKSPACE_ID,
+          taskId: "issue-1300",
+          status: "healthy",
+          lifecycleState: "active",
+          health: "healthy",
+          driftMarkers: [],
+          recoveryHints: [],
+          repairable: false,
+          operatorActionRequired: false,
+          lastVerifiedAt: DEMO_WORKSPACE_AT,
+        },
+      ],
+      activeRestoration: { kind: "restored", workspaceId: DEMO_WORKSPACE_ID },
+    },
+  },
   // Issue #2619 — execution surfaces now fail closed while V2 workspace membership is unreadable.
   // This deterministic unbound fixture has no V2 manifests, so return the valid empty envelope
   // instead of the generic `{ ok: true }` fallback that the contract parser correctly rejects.
@@ -866,6 +946,7 @@ const POST_API_PATHS = new Set([
   "/api/desktop/chats",
   "/api/editor/agent/snapshot",
   "/api/editor/language",
+  "/api/task-workspaces/reconciliation",
 ]);
 
 function expectedApiMethod(pathname) {
@@ -976,9 +1057,9 @@ for (const vp of VIEWPORTS) {
       await page.evaluate(
         ({ theme, hc }) => {
           const r = document.documentElement;
-          r.setAttribute("data-theme", theme);
-          r.removeAttribute("data-hc");
-          if (hc) r.setAttribute("data-hc", hc);
+          r.dataset.theme = theme;
+          delete r.dataset.hc;
+          if (hc) r.dataset.hc = hc;
         },
         { theme: mode.theme, hc: mode.hc },
       );
@@ -1022,9 +1103,7 @@ for (const vp of VIEWPORTS) {
         console.log(`  missing selectors: ${info.missingRequiredSelectors.join(", ")}`);
       }
       if (info.visibleErrorNoticeCount > 0) {
-        console.log(
-          `  error notice diagnostic: rendered_count=${info.visibleErrorNoticeCount}`,
-        );
+        console.log(`  error notice diagnostic: rendered_count=${info.visibleErrorNoticeCount}`);
       }
       if (unexpectedApiRequests.size > 0) {
         console.log(`  unexpected APIs: ${[...unexpectedApiRequests].join(", ")}`);

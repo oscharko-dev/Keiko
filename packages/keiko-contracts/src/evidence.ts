@@ -5,6 +5,7 @@
 // from events/RunResult, never Date objects.
 
 import type { ContextAssemblyDiagnostics, ContextCompactionRecord } from "./context-engineering.js";
+import { deepFreeze } from "./deep-freeze.js";
 import type { CostClass } from "./gateway.js";
 import type {
   HarnessCode,
@@ -273,7 +274,10 @@ export interface EvidenceConnectedContextPlan {
   readonly anchorKinds: Record<string, number>;
   readonly anchorTermHashes: readonly string[];
   readonly ringKinds: readonly string[];
-  readonly clarificationReason: string | undefined;
+  // KEIKO-1032: the clarification reason is captured as a SHA-256 hash of the redacted string
+  // (matching planIdHash / anchorTermHashes treatment). Raw reason text is never persisted — this
+  // module's "never persist query text" invariant applies to this field too.
+  readonly clarificationReasonHash: string | undefined;
 }
 
 export interface EvidenceConnectedContextAudit {
@@ -383,9 +387,9 @@ export interface RetentionPolicy {
   readonly disabled?: boolean | undefined;
 }
 
-export const DEFAULT_RETENTION: RetentionPolicy = {
+export const DEFAULT_RETENTION: RetentionPolicy = deepFreeze({
   maxRunsByPartition: { "chat-rag": 50, regulated: 50 },
-} as const;
+});
 
 // ─── Build input + injectable deps (D10) ──────────────────────────────────────────
 

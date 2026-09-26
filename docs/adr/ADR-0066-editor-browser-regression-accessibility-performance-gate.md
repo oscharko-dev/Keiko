@@ -16,6 +16,15 @@ spec per child issue, and each spec re-declared the same fixtures and helpers:
   `createProjectFixture`, `seedEditorWindow`, `openEditor`, `openTreePath`, `collectPageErrors`, and
   `tabLabels`.
 
+_Housekeeping 2026-08-10: `editor-agent-1394.spec.ts` and `editor-agent-1395.spec.ts` were retired
+after months without a running lane (see the retirement note in ADR-0058). The other suites listed
+above remain in place. Two invariants those suites carried — the browser undo/redo round-trip after
+an agent-applied edit and the denied-path governance/redaction proof — retired without a successor
+pin. Both are restored as targeted pins in `tests/e2e/editor-agent-pins.spec.ts` (wired into the
+`e2e-extended` matrix): the denied-path proof, and the undo/redo round-trip proven in the mounted
+editor for the first time, backed by undo-preserving programmatic writes across keiko-editor
+(#3070)._
+
 This duplication has three costs. First, a change to the seeding contract (for example the workspace
 persistence key or the editor open sequence) must be edited in N places, and drifts silently when one
 is missed. Second, there is no single consolidated baseline that asserts the core editor workflows —
@@ -122,7 +131,9 @@ manual Studio process where it already lives.
 - The reuse migration is incremental and non-breaking: the existing per-issue specs keep their inline
   helpers and continue to pass; they may adopt the shared library later, spec by spec, without a
   coordinated rewrite. Issue #1377 ships the library and the new consolidated matrix; it does not
-  refactor the prior specs.
+  refactor the prior specs. (Housekeeping 2026-08-10: this stopped holding for
+  `editor-agent-1394.spec.ts` and `editor-agent-1395.spec.ts`, which were retired unmigrated — see
+  the Context note above and ADR-0058.)
 - Editor PRs gain a named, documented browser quality bar (`test:e2e:editor-baseline-1377`) that runs
   the real app and asserts on deterministic signals, so regressions in core workflows and the
   keyboard/focus contract are caught with reproducible, evidence-backed runs.

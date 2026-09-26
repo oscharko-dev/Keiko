@@ -4,7 +4,7 @@
 
 Accepted
 
-Superseded by ADR-0019 for module location only (moved from `src/gateway/` to `packages/keiko-model-gateway/` and `packages/keiko-cli/`); the core gateway/registry/resilience/redaction decisions remain in force unchanged.
+Superseded by ADR-0019 for module location only (moved from `src/gateway/` to `packages/keiko-model-gateway/` and `packages/keiko-cli/`); the core gateway/resilience/redaction decisions remain in force unchanged. **D3's static-registry-as-single-source claim is superseded for capability sourcing:** the shipped built-in `CAPABILITY_DATA` in [`packages/keiko-model-gateway/src/capabilities.data.ts`](../../packages/keiko-model-gateway/src/capabilities.data.ts) is intentionally empty — Keiko ships no customer or deployment-specific model ids — and the durable capability set is now assembled at runtime from operator-supplied `RuntimeGatewayConfig.capabilities` (see [`packages/keiko-server/src/gateway-setup.ts`](../../packages/keiko-server/src/gateway-setup.ts)), enriched at UI-onboarding time by LiteLLM's `/model/info` endpoint with a generic `/models` discovery fallback (`discoverLiteLlmModelInfo`, and the `/model/info` candidate builder). Readiness-observation reconciliation against that operator configuration is governed by [ADR-0171](ADR-0171-gateway-readiness-capability-reconciliation.md). Runtime-discovered models can carry metadata gaps — for example `contextWindow` defaulting to `0` until an operator supplies the correct value (per GEN-GATE-CONTEXT-001/003/004/005) — and those defaults never mutate `GatewayConfig.capabilities` on the strength of a probe alone. D3's routing invariant (workflows select by capability, never by hard-coded model name) is preserved; only the "single, static, checked-in registry" sourcing model has been replaced by operator configuration plus discovery. D4–D8 (usage metadata, error taxonomy, resilience, redaction, CLI surface) remain in force unchanged.
 
 ## Context
 
@@ -276,7 +276,7 @@ export interface ModelProviderConfig {
   readonly modelId: string;
   readonly baseUrl: string;
   readonly apiKey: string;               // Read from env/config; never logged
-  readonly timeoutMs: number;            // Default: 30_000
+  readonly timeoutMs: number;            // One attempt; default: 120_000 (#3591)
   readonly maxRetries: number;           // Default: 3
   readonly retryBaseDelayMs: number;     // Initial backoff; doubles each attempt; default: 500
 }
@@ -291,7 +291,29 @@ export interface GatewayConfig {
   readonly providers: readonly ModelProviderConfig[];
   readonly circuitBreaker: CircuitBreakerConfig;
 }
+```
 
+`GatewayConfig` has grown several optional blocks since Wave 1 (`capabilities`, `grounding`,
+`reranker`, `egress`, `figma`, `branding`, …) that this historical implementation-plan snapshot was
+never kept in sync with field-by-field; `packages/keiko-model-gateway/src/types.ts` is the current,
+authoritative shape. One addition is documented here because it is otherwise undiscoverable from
+code alone: **`branding?: GatewayBrandingConfig`** (Issue #3398) lets an operator declare a public,
+immutable, content-hashed HTTPS SVG logo URL for generated PR descriptions —
+
+```typescript
+export interface GatewayBrandingConfig {
+  readonly logoUrl?: string | undefined;   // Operator-declared candidate only; never trusted as-is
+}
+```
+
+`config.ts`'s `resolvePrDescriptionBrandingFromConfig` is the sole place that turns
+`branding.logoUrl` into a `PrDescriptionBranding`, reusing `validatedPrDescriptionLogoUrl`
+(`prDescription/render.ts`) to decide whether it clears the immutable-public-HTTPS-SVG bar. An
+absent or invalid value never fails config load — it falls back to Keiko's text-only
+`Generated with [Keiko](https://github.com/oscharko-dev/Keiko)` attribution, since branding is
+decorative, never load-bearing.
+
+```typescript
 // ─── Request / response ───────────────────────────────────────────────────────
 
 export interface ChatMessage {
@@ -489,24 +511,136 @@ Precedence order (highest wins):
 
 ### Resilience primitives
 
-**Timeout.** Each call creates a timeout signal via `AbortSignal.timeout(config.timeoutMs)`. If the
-caller also supplies a `cancellationSignal`, the two are composed:
-`AbortSignal.any([timeoutSignal, cancellationSignal])` (Node 22 built-in). The composed signal is
-passed to `fetch(url, { signal })`. A signal abort triggered by timeout throws `TimeoutError`;
-triggered by cancellation throws `CancelledError`.
+**Timeout.** Each attempt creates its own timeout signal via `AbortSignal.timeout()` when the read
+has no silence/budget bounds (below), or a pair of plain timers (`timedAbort`) when it does.
+`config.timeoutMs` bounds one attempt, and the attempt runs under the smaller of it and what is left
+of the call's end-to-end budget (below). If the caller also supplies a `cancellationSignal`, the two
+are composed: `AbortSignal.any([timeoutSignal, cancellationSignal])` (Node 22 built-in). The
+composed signal is passed to `fetch(url, { signal })`. A signal abort triggered by timeout throws
+`TimeoutError`; triggered by cancellation throws `CancelledError`.
 
-**Bounded retry.** On `TransportError`, `TimeoutError`, or `RateLimitError` (when `retryAfterMs` is
-null or zero), the gateway retries up to `config.maxRetries` times with exponential backoff:
-`delay = min(retryBaseDelayMs * 2^(attempt - 1), 30_000)`. The delay uses `clock.sleep()`. The
+**Silence and budget floors (#3591).** The field customer's LiteLLM proxy in front of vLLM answers
+slowly at peak load — 30s, 45s, 120s and longer before the first byte, with stalls between stream
+chunks — and Keiko must stay in the request rather than abort on its own for such delays. Every
+interactive gateway surface therefore floors its effective bound to at least the constants exported
+from `resilience.ts`: `GATEWAY_SILENCE_FLOOR_MS` (5 min — the longest wait for the first byte and
+between two stream data events), `GATEWAY_STREAM_BUDGET_FLOOR_MS` (30 min — the longest total read
+of a streamed answer, `Gateway.chatStream()`), and `GATEWAY_BUFFERED_BUDGET_FLOOR_MS` (10 min — the
+longest total read of a buffered answer, `Gateway.chat()`, including coding-workbench and every
+buffered call that answers a user action: commit draft, prompt enhancer, memory salience, quality
+judge). A caller's own configuration may only raise these bounds, never lower them; an already
+generous configured value passes through unmodified. Embeddings, rerank and the voice adapters each
+apply their own, smaller per-call floor (`GATEWAY_RETRIEVAL_TIMEOUT_FLOOR_MS` /
+`GATEWAY_VOICE_TIMEOUT_FLOOR_MS`, 2 min) to the actual outbound HTTP deadline only — never to the
+embedding ladder's own bookkeeping deadline, which stays driven by exactly what the caller
+configured (including an intentionally exhausted budget of 0), or the ladder could never expire. The
+default provider `timeoutMs` (`config.ts`'s `DEFAULT_TIMEOUT_MS`) is 120s.
+
+**Reading a buffered answer over the stream.** A buffered call to a route whose capability streams
+(`streaming: true`, with an adapter that can read a stream) reads each attempt's answer over the
+provider's SSE stream instead of waiting for one body. The silence bound — the configured
+`timeoutMs` floored to `GATEWAY_SILENCE_FLOOR_MS` — then bounds the provider's silence: before its
+response starts, until its first data event, and between two data events. What is left of the
+call's end-to-end budget bounds the whole read. A whole-body read (an adapter without
+`callStream`, or `chatStream()`'s buffered fallback) has no observable progress, so its single
+attempt deadline floors directly to `GATEWAY_BUFFERED_BUDGET_FLOOR_MS` instead (`chatAttemptTimeoutMs`,
+`resilience.ts`), and the gateway's call-started line records whichever bound applied. A long generation that
+keeps producing is therefore never cut off at `timeoutMs` and generated again, and a silent
+provider still ends with a retryable `TimeoutError`. A keep-alive comment (a LiteLLM proxy's
+`: ping` while it waits for its upstream) is not a data event. An error frame inside the stream
+(`data: {"error": …}`) maps like the same HTTP failure: LiteLLM's `code` is the upstream HTTP status
+as a string, and a frame that names no status (OpenAI and Azure name a failure in `code`, `type`
+and `message`) is classified by what it says (a context overflow, a rejected key, a missing
+permission, a rate limit or an invalid request) before it falls back to a retryable upstream
+failure (502), so a terminal failure is never generated again. The read releases the provider's
+body on every exit, also when its consumer stops early. The streamed answer runs through the same
+normalization as a whole body, and an endpoint that answers a streamed request with
+`application/json` is read as that whole body.
+An SSE answer counts as complete only after a recognized `finish_reason` or the `data: [DONE]`
+marker. If the connection closes after deltas without either signal, the adapter raises a typed
+provider error instead of turning the partial text into a successful assistant reply. An unknown
+finish reason can still complete when the proxy sends `[DONE]`. An explicit refusal delta retains
+its refusal classification on early close instead of being masked by the generic incomplete-stream
+error.
+An OpenAI-compatible endpoint that explicitly rejects optional `stream_options` receives one
+streaming retry without that field. LiteLLM can reinsert the field between Keiko and vLLM, so a
+second explicit rejection naming `stream_options` receives one bounded `stream: false` retry. The
+buffered answer passes through the same capped body reader, secret redaction, normalization, and
+tool-catalog binding as a streamed answer, and the retries share the original deadline. A buffered
+upstream sends no header before its generation ends, so the silence bound never applies to a
+`stream: false` request: what is left of the read budget bounds when its answer starts, and its
+dispatch line records that bound as `timeoutMs` (PR #3600 review). A credential-scoped
+compatibility memo avoids repeating rejected shapes for 15 minutes. Generic errors, rejections of
+another field, and model or content refusals remain terminal; the body-free compatibility line
+records only which field was omitted.
+Coding run 30 (2026-09-11): two gpt-5.4 generations of 4.8k to 5.9k output tokens at 27 to 45
+tokens per second were cut off at 120 s and generated a second time; Azure answered both with
+HTTP 200.
+
+**Bounded retry.** On an error whose `retryable` flag is set, among them `TransportError`,
+`TimeoutError` and `RateLimitError`, the gateway retries up to `config.maxRetries` times. The
+backoff is `min(retryBaseDelayMs * 2^(attempt - 1), 30_000)` at the top of an equal-jitter band
+(each sleep lies between half of it and all of it); a `RateLimitError` that carries `retryAfterMs`
+waits exactly that long instead, capped at 30 s. The delay uses `clock.sleep()`. The
 following error types are never retried: `AuthenticationError`, `ModelRefusalError`,
 `ContextOverflowError`, `CancelledError`, `CircuitOpenError`, `ConfigInvalidError`,
 `UnknownModelError`.
 
+**End-to-end budget.** A buffered call as a whole is bounded by `providerRequestBudgetMs(provider)`
+(`resilience.ts`): `(maxRetries + 1) × timeoutMs` plus 30 s before each retry, the longest sleep the
+loop honours (the backoff cap and the cap on a provider's `retryAfterMs` are both 30 s), so a
+rate-limited provider keeps all its configured attempts and the cool-down it asked for. A retry
+whose delay does not fit what is left of the budget could never run, so the call ends at once with
+the last error (`gateway.retry.exhausted` with `reason: "budget"`, the delay and the remaining
+budget) instead of sleeping the rest of it away. An attempt that starts with less than `timeoutMs`
+left, which only an earlier attempt overrunning its own timeout can cause, runs under what is left.
+A caller that builds its own deadline around a gateway call derives it from the same function; the
+coding sidecar route adds a grace so the gateway settles its own timeout first. The budget never exceeds 2^31 − 1 ms (`MAX_TIMER_DELAY_MS`, `config.ts`): config validation holds each of its terms to that timer ceiling but not their sum, and a deadline armed past the ceiling fires at once, so the derivation clamps the sum, and the adapter's read deadline and the coding sidecar route clamp whatever bound they are handed (PR #3452 review). A stream read (`chatStream`) is never retried, so it has no
+end-to-end budget to derive a total from; since #3591 it is NOT left unbounded either —
+`Gateway.chatStream()` builds its own `StreamReadBounds` from the provider's (possibly
+Coding-Workbench-raised) `timeoutMs`, floored to `GATEWAY_SILENCE_FLOOR_MS` for silence and
+`GATEWAY_STREAM_BUDGET_FLOOR_MS` for the total read, and passes them to `adapter.callStream()` —
+before that fix the call omitted bounds entirely, so a real adapter fell back to its own flat
+`STREAM_IDLE_TIMEOUT_MS` (60 s, `openai-adapter.ts`, unchanged as the fallback for a caller that
+still omits bounds) for silence and one whole-request `timeoutMs` for the total read, cutting off a
+live generation and reproducing coding run 30's failure on every desktop chat stream, not just the
+buffered path PR #3452 fixed. Until PR #3452 (2026-09-11) the provider's
+`timeoutMs` reached the retry loop as the budget of the whole call, so an attempt that hung to its
+timeout left no budget and a `TimeoutError` was never retried (coding run 23).
+
+The Coding Workbench uses a local `coding-workbench` latency profile on its sidecar gateway calls.
+That profile (`codingWorkbenchProviderTimeoutMs`, `resilience.ts`) raises a provider attempt below
+`GATEWAY_SILENCE_FLOOR_MS` to it — the two constants are equal since #3591 raised the historical
+90-second Workbench floor to match the universal silence floor, so a slow Workbench provider now
+gets no special treatment past what every other interactive `Gateway.chat()`/`chatStream()` caller
+already receives; a larger configured timeout is retained. The sidecar route derives its backstop
+from the same effective timeout. Retrieval, indexing and voice retain their own, smaller per-call
+floor (above). The gateway's body-free call-started line records the effective `timeoutMs` so a
+slow self-hosted provider can be distinguished from a hung turn.
+
 **Circuit breaker.** One `CircuitBreaker` instance per `(modelId, baseUrl)` pair, keyed in a `Map`.
 States:
 
-- **Closed**: requests pass through. Consecutive failure counter increments on each `GatewayError`.
-  When counter reaches `failureThreshold`, transition to **Open** and record `openedAt = clock.now()`.
+- **Closed**: requests pass through. Consecutive failure counter increments on each `GatewayError`
+  except the ones in `gateway.ts`'s `NON_PROVIDER_FAULTS` list — `CancelledError`,
+  `ConfigInvalidError`, `MalformedToolCallError`, since #3591 `ProviderOutputExhaustedError`, and,
+  since #3610, `ProviderEmptyAnswerError`: a reasoning model that spends its whole output budget on
+  an HTTP 200 answer is a caller-fixable budget problem, not a provider failure, and must not open
+  the breaker and lock out every other caller of that model. The same holds for an HTTP 200 answer
+  that completed with neither content nor a tool call: the provider answered, the model produced
+  nothing usable. It keeps the provider error code, so the chat surfaces are unchanged, and the
+  coding runtime reports it as its own `empty-answer` turn-failure cause instead of a broken
+  stream. A stream that ends without any terminal frame is still a provider failure.
+  `MalformedToolCallError` covers the model's own tool call that did not parse or did not match the
+  tool's schema, including the catalog rejection `GatewayToolCatalogError` and the redaction-depth
+  refusal `ResponseRedactionError`, which both extend it. The gateway still retries a schema
+  rejection so the model can regenerate the call, but the provider answered every time: a lab run of
+  1.1.8 behind a LiteLLM `hosted_vllm` route opened the breaker after five such calls and failed the
+  run on `CircuitOpenError`. The coding runtime reports it as its own `invalid-tool-call`
+  turn-failure cause, except the redaction-depth refusal: no tool call need be involved, so the
+  coding runtime reports that one as `turn-rejected` and keeps its error-level diagnostic. A `TimeoutError` DOES count: with the silence and budget floors of #3591 a
+  timeout is a multi-minute silence, which is the outage signal the breaker exists for. When counter
+  reaches `failureThreshold`, transition to **Open** and record `openedAt = clock.now()`.
 - **Open**: any call immediately throws `CircuitOpenError` without contacting the provider.
   When `clock.now() - openedAt >= cooldownMs`, transition to **Half-Open**.
 - **Half-Open**: the next `halfOpenProbes` calls are forwarded as probes. Each success decrements the

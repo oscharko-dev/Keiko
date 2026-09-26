@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { arch, cpus, platform, release, totalmem } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import {
@@ -23,10 +24,12 @@ import {
   openTreeFile,
   seedEditorWindow,
 } from "./support/editorWorkspace.js";
+import { editorModifier } from "./support/editor-chord.js";
 import {
   capturedStartedSessionIdAfter,
   capturedStartedSessionIds,
 } from "./support/debugSessionStartCapture.js";
+import { clickWindowChromeButton } from "./support/window-chrome.js";
 
 const { computeD12NearestRankPercentile: percentile } = (await import(
   new URL("../../scripts/check-perf-evidence.mjs", import.meta.url).href
@@ -43,7 +46,6 @@ const THROWS = "src/throws.ts";
 const CAP_STOPPED = "src/cap-stopped.ts";
 const CAP_OUTPUT = "src/cap-output.ts";
 const EDITOR_WINDOW_ID = "issue-2348-editor";
-const MODIFIER = process.platform === "darwin" ? "Meta" : "Control";
 const CAP_SAMPLE_COUNT = 10;
 // ADR-0139 D1: shared CI runners cannot schedule reliably enough for single-shot wall-clock
 // assertions. The D12 producer and the scheduled performance workflow set this flag and enforce
@@ -75,6 +77,9 @@ const CAP_RENDERED_ROWS = 200;
 const CAP_RESIDUAL_HEAP_BYTES = 16 * 1_024 * 1_024;
 const SHA_256 = /^[0-9a-f]{64}$/u;
 const FULL_COMMIT = /^[0-9a-f]{40}$/u;
+const requireFromSpec = createRequire(import.meta.url);
+// D12 measures both checkout apps through this spec's Playwright harness, not the checkout cwd.
+const PLAYWRIGHT_TEST_VERSION = packageVersionFromSpec("@playwright/test");
 const DEBUG_ACTIVATION_STATES = new Set([
   "available",
   "disabled",
@@ -90,6 +95,19 @@ const DEBUG_ACTIVATION_REASONS = new Set([
   "WORKSPACE_ACTIVATION_UNSET",
   "WORKSPACE_DISABLED",
 ]);
+
+function packageVersionFromSpec(packageName: string): string {
+  const packageJson = requireFromSpec(`${packageName}/package.json`) as unknown;
+  if (
+    typeof packageJson !== "object" ||
+    packageJson === null ||
+    !("version" in packageJson) ||
+    typeof packageJson.version !== "string"
+  ) {
+    throw new Error(`${packageName} package.json must expose a version string`);
+  }
+  return packageJson.version;
+}
 
 interface DebugSessionProjection {
   readonly pauseGeneration: number;
@@ -456,17 +474,24 @@ async function capturedStartedSessionCount(page: Page): Promise<number> {
   return capturedStartedSessionIds(await capturedDebugSessionEvents(page)).length;
 }
 
-async function capturedStartedSessionId(page: Page, observedStartCount: number): Promise<string> {
+async function capturedStartedSessionId(
+  page: Page,
+  observedStartCount: number,
+  expectedSessionId?: string,
+): Promise<string> {
   let sessionId: string | undefined;
-  await expect
-    .poll(async () => {
-      sessionId = capturedStartedSessionIdAfter(
-        await capturedDebugSessionEvents(page),
-        observedStartCount,
-      );
-      return sessionId;
-    })
-    .not.toBeUndefined();
+  const readCaptured = async (): Promise<string | undefined> => {
+    sessionId = capturedStartedSessionIdAfter(
+      await capturedDebugSessionEvents(page),
+      observedStartCount,
+    );
+    return sessionId;
+  };
+  if (expectedSessionId === undefined) {
+    await expect.poll(readCaptured).not.toBeUndefined();
+  } else {
+    await expect.poll(readCaptured).toBe(expectedSessionId);
+  }
   if (sessionId === undefined) throw new Error("DEBUG_SESSION_START_EVENT_NOT_OBSERVED");
   return sessionId;
 }
@@ -659,7 +684,15 @@ async function startCatalogDebugging(
 }
 
 async function runPaletteCommand(page: Page, commandTitle: string): Promise<void> {
-  await page.keyboard.press(`${MODIFIER}+Shift+KeyP`);
+  // "ControlOrMeta", NOT `editorModifier`: this is a PRODUCT shortcut, not a Monaco one — the
+  // combobox it opens is Keiko's own quick access ("Command query" is `quickAccess.query.commands`
+  // in keiko-ui's i18n catalog), and Keiko's `useKeyboardShortcuts` derives its platform from
+  // `navigator.platform`, which the device presets do NOT override. Measured under this suite's
+  // preset on a macOS host: `navigator.userAgent` reports "Windows NT 10.0" (so Monaco waits for
+  // Ctrl) while `navigator.platform` still reports "MacIntel" (so the product waits for Meta).
+  // Playwright's host-derived shorthand sends exactly the latter. `editorModifier` would send
+  // Control to a product listening for Meta and the palette would never open.
+  await page.keyboard.press("ControlOrMeta+Shift+KeyP");
   const combobox = page.getByRole("combobox", { name: "Command query" });
   await expect(combobox).toBeVisible();
   await combobox.fill(`>${commandTitle}`);
@@ -672,8 +705,12 @@ async function selectBreakpointSourceLine(pane: Locator): Promise<void> {
   const editor = pane.locator(EDITOR_SELECTORS.monaco).first();
   await expect(editor).toBeVisible();
   await editor.click();
-  await editor.page().keyboard.press(`${MODIFIER}+KeyF`);
-  await expect(editor.page().locator(".find-widget").first()).toBeVisible();
+  // MONACO chord (`.find-widget` is Monaco's own), so the modifier comes from the browser.
+  // Measured on a macOS host under this suite's preset: `Meta+KeyF` left the find widget closed
+  // (0 visible), `Control+KeyF` opened it (1) — the host-derived form reached nothing here.
+  const page = editor.page();
+  await page.keyboard.press(`${await editorModifier(page)}+KeyF`);
+  await expect(page.locator(".find-widget").first()).toBeVisible();
   await editor.page().keyboard.type("const displayed = total;");
   await editor.page().keyboard.press("Enter");
   await editor.page().keyboard.press("Escape");
@@ -718,11 +755,84 @@ function editorWindow(page: Page): Locator {
   return page.locator(`[data-window-id="${EDITOR_WINDOW_ID}"]`);
 }
 
+type DebugSessionStartSettlement =
+  | { readonly kind: "response"; readonly status: number; readonly body: string }
+  // The response arrived but the browser had already discarded its body (CDP
+  // `Network.getResponseBody`: "No data found for resource"); the status is still authoritative.
+  | { readonly kind: "unreadable"; readonly status: number }
+  | { readonly kind: "aborted"; readonly errorText: string | undefined };
+
+function isDebugSessionStartRequest(request: Request): boolean {
+  return (
+    new URL(request.url()).pathname === "/api/editor/debug/sessions" && request.method() === "POST"
+  );
+}
+
+function waitForDebugSessionStart(page: Page): Promise<DebugSessionStartSettlement> {
+  return new Promise((resolve) => {
+    let startRequest: Request | undefined;
+    const cleanup = (): void => {
+      page.off("request", onRequest);
+      page.off("response", onResponse);
+      page.off("requestfailed", onRequestFailed);
+    };
+    const finish = (settlement: DebugSessionStartSettlement): void => {
+      cleanup();
+      resolve(settlement);
+    };
+    const onRequest = (request: Request): void => {
+      if (startRequest === undefined && isDebugSessionStartRequest(request)) startRequest = request;
+    };
+    const onResponse = (response: PlaywrightResponse): void => {
+      if (response.request() !== startRequest) return;
+      cleanup();
+      const status = response.status();
+      void response.text().then(
+        (body) => {
+          resolve({ kind: "response", status, body });
+        },
+        () => {
+          resolve({ kind: "unreadable", status });
+        },
+      );
+    };
+    const onRequestFailed = (request: Request): void => {
+      if (request === startRequest) {
+        finish({ kind: "aborted", errorText: request.failure()?.errorText });
+      }
+    };
+    page.on("request", onRequest);
+    page.on("response", onResponse);
+    page.on("requestfailed", onRequestFailed);
+  });
+}
+
+async function startedSessionId(
+  page: Page,
+  observedStartCount: number,
+  settlement: DebugSessionStartSettlement,
+): Promise<string> {
+  if (settlement.kind === "aborted") {
+    expect(settlement.errorText).toBe("net::ERR_ABORTED");
+    return await capturedStartedSessionId(page, observedStartCount);
+  }
+  if (settlement.kind === "unreadable") {
+    // Same recovery as the aborted path: the product's own captured session events name the session
+    // the 201 created, so the test never depends on a body buffer the browser does not guarantee.
+    expect(settlement.status).toBe(201);
+    return await capturedStartedSessionId(page, observedStartCount);
+  }
+  expect(settlement.status, settlement.body).toBe(201);
+  const session = debugSession(JSON.parse(settlement.body) as unknown);
+  return await capturedStartedSessionId(page, observedStartCount, session.sessionId);
+}
+
 async function startFromEditor(page: Page, pane: Locator): Promise<DebugSessionProjection> {
   const observedStartCount = await capturedStartedSessionCount(page);
+  const started = waitForDebugSessionStart(page);
   await pane.locator(EDITOR_SELECTORS.monaco).click();
   await page.keyboard.press("F5");
-  const sessionId = await capturedStartedSessionId(page, observedStartCount);
+  const sessionId = await startedSessionId(page, observedStartCount, await started);
   activeSessionId = sessionId;
   const projection = await page.request.get(
     `/api/editor/debug/sessions/${encodeURIComponent(sessionId)}`,
@@ -734,8 +844,9 @@ async function startFromEditor(page: Page, pane: Locator): Promise<DebugSessionP
 
 async function startFromDebugPanel(page: Page, panel: Locator): Promise<DebugSessionProjection> {
   const observedStartCount = await capturedStartedSessionCount(page);
+  const started = waitForDebugSessionStart(page);
   await panel.getByRole("button", { name: "Start debugging current file" }).click();
-  const sessionId = await capturedStartedSessionId(page, observedStartCount);
+  const sessionId = await startedSessionId(page, observedStartCount, await started);
   activeSessionId = sessionId;
   const projection = await page.request.get(
     `/api/editor/debug/sessions/${encodeURIComponent(sessionId)}`,
@@ -1102,7 +1213,8 @@ async function collectInlineDecorations(page: Page, editor: Locator): Promise<nu
   const values = new Set<string>();
   const monaco = editor.locator(EDITOR_SELECTORS.monaco).first();
   await monaco.click();
-  await page.keyboard.press(`${MODIFIER}+Home`);
+  // MONACO chord (`cursorTop`), so the modifier comes from the browser — see `editorModifier`.
+  await page.keyboard.press(`${await editorModifier(page)}+Home`);
   for (let index = 0; index < 30; index += 1) {
     for (const value of await editor.locator(".keiko-debug-inline-value").allTextContents()) {
       values.add(value);
@@ -1137,10 +1249,7 @@ function resolveCapProvenance(browser: Browser | null): D12RunProvenance {
     npmVersion: commandVersion("npm", ["--version"]),
     osRelease: release(),
     platform: platform(),
-    playwrightVersion: commandVersion(process.execPath, [
-      "-p",
-      "require('@playwright/test/package.json').version",
-    ]),
+    playwrightVersion: PLAYWRIGHT_TEST_VERSION,
     zlibVersion: process.versions.zlib,
   };
 }
@@ -1266,16 +1375,10 @@ async function measureTerminalFlood(
   };
 }
 
-async function closeDebugAndMeasureResidual(
-  page: Page,
-  panel: Locator,
-  heapClient: CDPSession,
-  baselineHeap: number,
-): Promise<number> {
-  await panel.getByRole("button", { name: "Close Debug window" }).click();
+async function closeDebugPanel(page: Page, panel: Locator): Promise<void> {
+  await clickWindowChromeButton(panel, "Close Debug window");
   await expect(panel).toBeHidden();
   await awaitNextPaint(page);
-  return Math.max(0, (await readHeap(heapClient)) - baselineHeap);
 }
 
 function expectOutputFloodEvidence(evidence: OutputFloodEvidence): void {
@@ -1316,17 +1419,18 @@ async function measureOutputFloodEvidence(
   panel: Locator,
   heapClient: CDPSession,
 ): Promise<OutputFloodEvidence> {
+  // Forced CDP collection is measurement instrumentation, not product work. Establish the heap
+  // baseline before opening the long-task window, then read long tasks after the complete product
+  // teardown but before the second forced collection used only for residual-memory evidence.
   const baselineHeap = await readHeap(heapClient);
+  await awaitNextPaint(page);
+  await resetLongTasks(page);
   const stopSamples = await collectStopSamples(page, panel);
   const terminal = await measureTerminalFlood(page, panel);
   expect(terminal.limitMarkers).toBe(1);
-  const residualHeapBytes = await closeDebugAndMeasureResidual(
-    page,
-    panel,
-    heapClient,
-    baselineHeap,
-  );
+  await closeDebugPanel(page, panel);
   const observedLongTasks = await longTasks(page);
+  const residualHeapBytes = Math.max(0, (await readHeap(heapClient)) - baselineHeap);
   expect(observedLongTasks.installed).toBe(true);
   const maxLongTaskMs = Math.max(0, ...observedLongTasks.samples);
   return {
@@ -1522,6 +1626,26 @@ test("#2348 launches a governed catalog target through the real npm CLI artifact
   expect(session.targetKind).toBe("catalog");
 });
 
+test("#2348 waits for a slow successful session response before matching its start event", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  const { panel } = await prepareCapDebugging(page, CAP_STOPPED);
+  await page.route(
+    "**/api/editor/debug/sessions",
+    async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 20_500));
+      await route.continue();
+    },
+    { times: 1 },
+  );
+
+  const session = await startFromDebugPanel(page, panel);
+
+  expect(session.targetKind).toBe("file");
+  await stopFromDebugPanel(page, panel);
+});
+
 test("#2348 D12 composes exact stopped-projection caps through the real BFF and UI", async ({
   browser,
   page,
@@ -1572,7 +1696,6 @@ test("#2348 D12 composes the real output limit with bounded browser state and te
   test.setTimeout(300_000);
   capProvenance = resolveCapProvenance(browser);
   const { panel } = await prepareCapDebugging(page, CAP_OUTPUT);
-  await resetLongTasks(page);
   const heapClient = await page.context().newCDPSession(page);
   try {
     outputFloodEvidence = await measureOutputFloodEvidence(page, panel, heapClient);

@@ -28,7 +28,7 @@
 }
 
 .editorSurface :global(.keiko-git-gutter-added) {
-  border-left: 3px solid var(--success);
+  border-left: 3px solid var(--ok);
 }
 
 .editorSurface :global(.keiko-git-gutter-modified) {
@@ -46,7 +46,7 @@
 }
 
 .editorSurface :global(.keiko-blame-gutter)::before {
-  background: var(--surface-raised);
+  background: var(--surface-elevated);
   border: 1px solid var(--border-strong);
   border-radius: 50%;
   color: var(--text-secondary);
@@ -63,7 +63,7 @@
   background: var(--surface-elevated);
   border: 1px solid var(--border-strong);
   border-radius: 6px;
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-pop);
   inset: auto 12px 12px 48px;
   max-height: min(42%, 320px);
   overflow: auto;
@@ -73,7 +73,7 @@
 
 .header {
   align-items: center;
-  background: var(--surface-raised);
+  background: var(--surface-elevated);
   border-bottom: 1px solid var(--border-subtle);
   display: flex;
   gap: 8px;

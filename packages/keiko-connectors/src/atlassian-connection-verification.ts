@@ -9,19 +9,21 @@
 //   - Jira Cloud:       GET /rest/api/3/myself
 //   - Confluence Cloud: GET /wiki/rest/api/user/current
 
+import type {
+  AtlassianConnectionVerificationStatus,
+  AtlassianConnectorProvider,
+} from "@oscharko-dev/keiko-contracts";
 import {
   isAtlassianConnectorProvider,
   isSafeAtlassianConnectorBaseUrl,
-  type AtlassianConnectionVerificationStatus,
-  type AtlassianConnectorProvider,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 
 // Re-exported from the contracts leaf so the server package and the UI share one source of truth
 // for the verify-status wire union (ADR-0128 D3); this package keeps the probe behaviour.
 export {
   ATLASSIAN_CONNECTION_VERIFICATION_STATUSES,
   isAtlassianConnectionVerificationStatus,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 export type { AtlassianConnectionVerificationStatus } from "@oscharko-dev/keiko-contracts";
 import { AtlassianCredentialCustodyError } from "./atlassian-credential-custody.js";
 import type {

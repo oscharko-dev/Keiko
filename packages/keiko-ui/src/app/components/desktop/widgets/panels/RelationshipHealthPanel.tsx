@@ -31,7 +31,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type { RelationshipLifecycleState } from "@oscharko-dev/keiko-contracts";
-import { RELATIONSHIP_LIFECYCLE_STATES } from "@oscharko-dev/keiko-contracts";
+import { RELATIONSHIP_LIFECYCLE_STATES } from "@oscharko-dev/keiko-contracts/runtime/relationships";
 import {
   getHealth,
   RelationshipApiError,

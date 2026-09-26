@@ -4,6 +4,7 @@
 // instead of throwing or preserving untrusted fields.
 
 import type { DebugActivationSummary } from "./debug-activation.js";
+import { deepFreeze } from "./deep-freeze.js";
 import { GIT_COMMIT_MESSAGE_POLICY_MODES } from "./git-commit-policy.js";
 import type { GitCommitMessagePolicyMode } from "./git-commit-policy.js";
 
@@ -207,7 +208,11 @@ const ENUM_VALUES: Readonly<
   gitCommitMessagePolicy: GIT_COMMIT_MESSAGE_POLICY_MODES,
 });
 
-export const EDITOR_M7_SETTING_REGISTRY: readonly EditorM7SettingDefinition[] = Object.freeze([
+// deepFreeze, not Object.freeze: each entry's own `scopes` array was individually frozen at
+// declaration time, but the entry OBJECT itself was not, so a bound (e.g. `minimum`/`maximum`)
+// was still writable after construction — the same bug class command-runner.ts's
+// COMMAND_TASK_RULES already documents and was fixed for (KEIKO-0139).
+export const EDITOR_M7_SETTING_REGISTRY: readonly EditorM7SettingDefinition[] = deepFreeze([
   {
     id: "fontSize",
     type: "integer",
@@ -999,11 +1004,15 @@ export function planEditorM7ModelEviction(args: {
   for (const candidate of sorted) {
     if (!overBudget(retained, args.maximumCount, args.maximumBytes)) break;
     if (!evictionEligible(candidate)) continue;
+    // KEIKO-0822: `findIndex` returns -1 when the candidate's identity is not in `retained`
+    // (which happens on the second occurrence of two entries sharing an identity — the first
+    // splice already removed a matching entry, so the second lookup misses). splice(-1, 1) then
+    // removes the LAST retained entry, potentially one that was never evicted. Guard the splice
+    // so a missing match is a no-op and the identity is not double-recorded in `evicted`.
+    const index = retained.findIndex((entry) => entry.identity === candidate.identity);
+    if (index < 0) continue;
     evicted.push(candidate.identity);
-    retained.splice(
-      retained.findIndex((entry) => entry.identity === candidate.identity),
-      1,
-    );
+    retained.splice(index, 1);
   }
   const protectedEntries = args.entries.filter((entry) => !evictionEligible(entry));
   return {
@@ -1013,7 +1022,10 @@ export function planEditorM7ModelEviction(args: {
   };
 }
 
-export type EditorM7CommandScope = "global" | "editor" | "explorer" | "git" | "settings";
+export type EditorM7CommandScope = "global" | "editor" | "settings";
+// Contexts identify the runtime listener that receives a Keiko-owned keybinding. AppShell dispatches
+// both "global" and "settings" contexts, while EditorWidget owns the capturing "editor" context.
+// A command must not be advertised in a context until that listener exists.
 export type EditorM7CommandContext = "global" | "editor" | "monaco" | "settings" | "explorer";
 export type EditorM7CommandDispatchOwner = "keiko" | "monaco";
 
@@ -1049,7 +1061,11 @@ function editorCommand(
   };
 }
 
-export const EDITOR_M7_COMMAND_REGISTRY: readonly EditorM7CommandDefinition[] = Object.freeze([
+// deepFreeze, not Object.freeze: editorCommand() returns a plain, unfrozen object per call (its
+// own contexts/defaultBindings sub-arrays are individually frozen, the returned object itself is
+// not), and the outer Object.freeze only protected the array — so a command's own field (e.g.
+// `rebindable`, `dispatchOwner`) was still writable after construction.
+export const EDITOR_M7_COMMAND_REGISTRY: readonly EditorM7CommandDefinition[] = deepFreeze([
   editorCommand("undo", "command.undo", "global", ["global"], ["CtrlOrMeta+Z"], true),
   editorCommand("redo", "command.redo", "global", ["global"], ["CtrlOrMeta+Shift+Z"], true),
   editorCommand("focus-status", "command.focusStatus", "global", ["global"], ["Alt+S"], true),
@@ -1081,7 +1097,7 @@ export const EDITOR_M7_COMMAND_REGISTRY: readonly EditorM7CommandDefinition[] = 
     "open-editor-settings",
     "command.openEditorSettings",
     "settings",
-    ["settings"],
+    ["settings", "editor"],
     ["CtrlOrMeta+,"],
     true,
   ),
@@ -1219,8 +1235,11 @@ const MAX_KEYBINDING_OVERRIDE_BYTES = 192;
 const KEYBINDING_OVERRIDE_SEPARATOR = "|";
 type EditorM7KeybindingModifier = (typeof MODIFIERS)[number];
 
-function commandFor(id: string): EditorM7CommandDefinition | undefined {
-  return EDITOR_M7_COMMAND_REGISTRY.find((entry) => entry.id === id);
+function commandFor(
+  id: string,
+  registry: readonly EditorM7CommandDefinition[] = EDITOR_M7_COMMAND_REGISTRY,
+): EditorM7CommandDefinition | undefined {
+  return registry.find((entry) => entry.id === id);
 }
 
 function canonicalBinding(binding: string): string | undefined {
@@ -1351,30 +1370,78 @@ function normalizedDefaultKeybindings(): readonly EditorM7ActiveKeybinding[] {
   );
 }
 
-export function validateEditorM7Keybinding(args: {
+function hasMinimumKeybindingModifier(binding: string): boolean {
+  const modifiers = new Set(binding.split("+").slice(0, -1));
+  return (
+    modifiers.has("CtrlOrMeta") ||
+    modifiers.has("Ctrl") ||
+    modifiers.has("Meta") ||
+    modifiers.has("Alt")
+  );
+}
+
+function canonicalPersistableBinding(commandId: string, binding: string): string | undefined {
+  const canonical = canonicalBinding(binding);
+  if (canonical === undefined) return undefined;
+  const serialized = serializeEditorM7KeybindingOverride({
+    schemaVersion: EDITOR_M7_KEYBINDING_OVERRIDE_VERSION,
+    commandId,
+    binding: canonical,
+  });
+  return utf8ByteLength(serialized) > MAX_KEYBINDING_OVERRIDE_BYTES ? undefined : canonical;
+}
+
+export interface EditorM7KeybindingValidationArgs {
   readonly commandId: string;
   readonly binding: string;
   readonly activeBindings: Readonly<Record<string, string>> | readonly EditorM7ActiveKeybinding[];
-}): EditorM7ParseResult<string> {
+}
+
+function validateEditorM7KeybindingAgainstRegistry(
+  args: EditorM7KeybindingValidationArgs,
+  registry: readonly EditorM7CommandDefinition[],
+): EditorM7ParseResult<string> {
   try {
-    const command = commandFor(args.commandId);
+    const command = commandFor(args.commandId, registry);
     if (command === undefined) return { ok: false, reasonCode: "UNKNOWN_COMMAND" };
-    if (!command.rebindable) return { ok: false, reasonCode: "POLICY_LOCKED" };
-    const canonical = canonicalBinding(args.binding);
+    if (utf8ByteLength(args.binding) > MAX_KEYBINDING_OVERRIDE_BYTES) {
+      return { ok: false, reasonCode: "INVALID_INPUT" };
+    }
+    const canonical = canonicalPersistableBinding(args.commandId, args.binding);
     if (canonical === undefined) return { ok: false, reasonCode: "INVALID_INPUT" };
+    if (!hasMinimumKeybindingModifier(canonical)) {
+      return { ok: false, reasonCode: "INVALID_INPUT" };
+    }
+    if (!command.rebindable) return { ok: false, reasonCode: "POLICY_LOCKED" };
     if (isReservedBinding(canonical)) {
       return { ok: false, reasonCode: "RESERVED_KEYBINDING" };
     }
     const active = Array.isArray(args.activeBindings)
       ? (args.activeBindings as readonly EditorM7ActiveKeybinding[])
       : activeKeybindingsFromRecord(args.activeBindings as Readonly<Record<string, string>>);
-    const collision = active.find((entry) => collidesWithCommand(command, canonical, entry));
+    const collision = active.find((entry) =>
+      collidesWithCommand(command, canonical, entry, registry),
+    );
     return collision === undefined
       ? { ok: true, value: canonical }
       : { ok: false, reasonCode: "KEYBINDING_COLLISION" };
   } catch {
     return { ok: false, reasonCode: "INVALID_INPUT" };
   }
+}
+
+export function validateEditorM7Keybinding(
+  args: EditorM7KeybindingValidationArgs,
+): EditorM7ParseResult<string> {
+  return validateEditorM7KeybindingAgainstRegistry(args, EDITOR_M7_COMMAND_REGISTRY);
+}
+
+/** Test-only seam: pins the validator's context-disjoint reuse semantics without inventing UI commands. */
+export function __validateEditorM7KeybindingForTests(
+  args: EditorM7KeybindingValidationArgs,
+  registry: readonly EditorM7CommandDefinition[],
+): EditorM7ParseResult<string> {
+  return validateEditorM7KeybindingAgainstRegistry(args, registry);
 }
 
 // Collision is decided on the PHYSICAL chord, never on the canonical binding string: dispatch
@@ -1385,11 +1452,12 @@ function collidesWithCommand(
   command: EditorM7CommandDefinition,
   binding: string,
   active: EditorM7ActiveKeybinding,
+  registry: readonly EditorM7CommandDefinition[],
 ): boolean {
   const activeBinding = canonicalBinding(active.binding);
   if (active.commandId === command.id || activeBinding === undefined) return false;
   if (physicalChordKey(activeBinding) !== physicalChordKey(binding)) return false;
-  const other = commandFor(active.commandId);
+  const other = commandFor(active.commandId, registry);
   return other !== undefined && commandContextsOverlap(command, other);
 }
 

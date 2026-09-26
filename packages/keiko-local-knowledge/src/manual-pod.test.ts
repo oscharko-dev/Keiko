@@ -1,10 +1,10 @@
-import {
-  DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS,
-  sealedLocalPodModelUsePolicy,
-  type HtmlManualSource,
-  type KnowledgeCapsuleId,
-  type KnowledgeSourceId,
+import type {
+  HtmlManualSource,
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
 } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_DOCUMENTATION_MANUAL_SCOPE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/documentation-manual-proposal";
+import { sealedLocalPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import type { OpenAIEmbeddingOutcome } from "@oscharko-dev/keiko-model-gateway";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_EMBEDDING, freshStore } from "./_support.js";

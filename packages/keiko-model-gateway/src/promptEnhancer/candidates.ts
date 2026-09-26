@@ -18,16 +18,18 @@
 //
 // Determinism: pure. No IO, clock, or randomness.
 
+import type {
+  EnhancedPrompt,
+  MissingInformationStrategy,
+  PromptCandidateRejectionReason,
+  PromptEnhancementProfileId,
+  PromptTaskAnalysis,
+  RawPromptInput,
+} from "@oscharko-dev/keiko-contracts";
 import {
   asEnhancedPromptId,
   PROMPT_ENHANCEMENT_PROFILE_IDS,
-  type EnhancedPrompt,
-  type MissingInformationStrategy,
-  type PromptCandidateRejectionReason,
-  type PromptEnhancementProfileId,
-  type PromptTaskAnalysis,
-  type RawPromptInput,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { generateEnhancedPrompt } from "./generator.js";
 import { planPromptEnhancement, type PromptEnhancementPlan } from "./planner.js";

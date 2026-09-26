@@ -76,6 +76,17 @@ describe("error subclasses", () => {
     expect(new RateLimitError("rate", 5000).retryAfterMs).toBe(5000);
   });
 
+  it("RateLimitError.httpStatus defaults to 429 when not provided", () => {
+    expect(new RateLimitError("rate").httpStatus).toBe(429);
+    expect(new RateLimitError("rate", 5000).httpStatus).toBe(429);
+  });
+
+  it("RateLimitError.httpStatus carries an explicitly supplied value", () => {
+    // A distinct, non-default status (503, not 429) proves the constructor argument actually
+    // reaches httpStatus rather than the test merely observing the built-in default.
+    expect(new RateLimitError("rate", 5000, [], 503).httpStatus).toBe(503);
+  });
+
   it("ProviderError carries the http status", () => {
     expect(new ProviderError("boom", 503).httpStatus).toBe(503);
   });

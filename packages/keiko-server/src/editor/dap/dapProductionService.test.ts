@@ -223,6 +223,7 @@ function inertEventBridge(overrides: Partial<DapEventBridge> = {}): DapEventBrid
     publish: () => true,
     subscribe: () => ({ kind: "subscriberLimit", snapshot: emptyReplaySnapshot() }),
     snapshot: () => emptyReplaySnapshot(),
+    channelsForPartition: () => [],
     disposeChannel: () => undefined,
     disposeAll: () => undefined,
     ...overrides,

@@ -50,6 +50,8 @@ const FORBIDDEN_COMPOSITION_TOKENS: readonly string[] = [
   "scriptedFunctionalPortable",
 ];
 
+const SHARED_ENTRY_FILE = "coding-runtime-server-shared.mts";
+
 const PER_JOURNEY_ENTRIES: readonly string[] = [
   "coding-runtime-2385-server.mts",
   "coding-runtime-2386-server.mts",
@@ -102,4 +104,15 @@ describe("Code-task Playwright server entries", () => {
       });
     });
   }
+
+  it("shared entry injects the snapshot-store companion next to its UiStore", () => {
+    // Injecting a UiStore into the BFF assembly suppresses its own persistence composition; the
+    // snapshot-store companion is what keeps the coding-runtime control plane alive. Dropping it
+    // reproduced the daily `real-binary-journey-unqualified:undefined` outage (#2835 fallout),
+    // which only the scheduled lane could observe. Behavior is pinned in ordinary CI by
+    // productionOpenCodeBackend.functional.test.ts; this pin holds the journey composition
+    // itself to passing the companion through.
+    const code = stripComments(readFileSync(resolve(SERVERS_DIR, SHARED_ENTRY_FILE), "utf8"));
+    expect(code).toContain("codingRuntimeSnapshotStore: services.codingRuntimeSnapshots");
+  });
 });

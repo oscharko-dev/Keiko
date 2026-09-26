@@ -3,7 +3,12 @@
 
 import type { EvidenceAtom, RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
 
-import { buildCodeIntelligenceIndex, lookupCodeIntelligenceAtoms } from "./codeIntelligence.js";
+import {
+  buildCodeIntelligenceIndex,
+  lookupCodeIntelligenceAtoms,
+  queryCodeIntelligenceIndex,
+  type CodeIntelligenceIndex,
+} from "./codeIntelligence.js";
 import { RepoSearchInvalidQueryError } from "./errors.js";
 import type { WorkspaceFs } from "./fs.js";
 import type { SearchLimits, SearchScope } from "./repoSearch.js";
@@ -29,29 +34,46 @@ export const importGraphAdapter: StructuralAdapter = {
     deps?: StructuralAdapterDeps,
   ): Promise<readonly EvidenceAtom[]> => {
     try {
+      deps?.requestContext?.assertGraphBinding(scope, limits, fs);
       assertSupportedQuery(query);
-      return Promise.resolve(lookupCodeIntelligenceAtoms(scope, query, limits, fs, deps));
+      if (deps?.requestContext === undefined) {
+        return Promise.resolve(lookupCodeIntelligenceAtoms(scope, query, limits, fs, deps));
+      }
+      const nowMs = deps.nowMs ?? Date.now;
+      return deps.requestContext.codeIntelligenceIndex().then((index) => {
+        deps.requestContext?.assertGraphBinding(scope, limits, fs);
+        return queryCodeIntelligenceIndex(scope, query, index, nowMs()).slice(
+          0,
+          Math.min(limits.maxMatchesReturned, query.maxResults),
+        );
+      });
     } catch (error) {
       return Promise.reject(error instanceof Error ? error : new Error(String(error)));
     }
   },
-  coverage: (
+  coverage: async (
     scope: SearchScope,
     limits: SearchLimits,
     fs: WorkspaceFs,
     deps?: StructuralAdapterDeps,
   ) => {
+    deps?.requestContext?.assertGraphBinding(scope, limits, fs);
+    let index: CodeIntelligenceIndex;
     try {
-      const index = buildCodeIntelligenceIndex(scope, limits, fs, deps);
-      return Promise.resolve({
-        name: "import-graph",
-        filesIndexed: index.filesIndexed,
-        filesSkipped: index.filesSkipped,
-        filesPartiallyIndexed: index.filesPartiallyIndexed,
-        parserCoverage: index.parserCoverage,
-      });
+      index = await (deps?.requestContext === undefined
+        ? Promise.resolve(buildCodeIntelligenceIndex(scope, limits, fs, deps))
+        : deps.requestContext.codeIntelligenceIndex());
     } catch {
-      return Promise.resolve(undefined);
+      return undefined;
     }
+    deps?.requestContext?.assertGraphBinding(scope, limits, fs);
+    return {
+      name: "import-graph",
+      filesIndexed: index.filesIndexed,
+      filesSkipped: index.filesSkipped,
+      filesPartiallyIndexed: index.filesPartiallyIndexed,
+      candidateLimitReached: index.candidateLimitReached,
+      parserCoverage: index.parserCoverage,
+    };
   },
 };

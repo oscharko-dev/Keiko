@@ -1,7 +1,7 @@
 // Tests for sourceReconciliation (Epic #270, Issue #278).
 
 import { describe, expect, it } from "vitest";
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 
 import { reconcileSourceGroups } from "../sourceReconciliation.js";
 

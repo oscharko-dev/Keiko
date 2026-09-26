@@ -56,6 +56,34 @@ describe("deriveVoiceActionObservation", () => {
     expect(obs.staleness?.bothSeedsPresent).toBe(false);
   });
 
+  // KEIKO-0629: correctedSegments and turnAdvance are independently optional fields with no
+  // mutual-exclusivity constraint. Declaring both used to silently derive only the "correction"
+  // trajectory and drop "turn-advance" with no error -- deriveStaleness must now fail loudly instead.
+  it("throws when a fixture declares both correctedSegments and turnAdvance", () => {
+    const fx: VoiceActionEvalFixture = {
+      name: "both-triggers",
+      category: "adversarial",
+      description: "declares both staleness triggers at once",
+      profile: "speech-to-text",
+      source: "dictation",
+      turnIndex: 0,
+      segments: buildSegments(
+        [{ id: "s1", seq: 1, state: "committed", text: "update it" }],
+        "dictation",
+      ),
+      correctedSegments: buildSegments(
+        [{ id: "s1", seq: 1, state: "committed", text: "update it now" }],
+        "dictation",
+      ),
+      turnAdvance: true,
+      dimensions: new Set(["stale-intent-prevention"]),
+      oracle: { expectedGatingAllowed: true, expectsProposal: true },
+    };
+    expect(() => deriveVoiceActionObservation(fx)).toThrow(
+      /declares both correctedSegments and turnAdvance/,
+    );
+  });
+
   it("derives no staleness when the fixture declares neither a correction nor a turn advance", () => {
     const fx: VoiceActionEvalFixture = {
       name: "no-trajectory",
@@ -72,6 +100,67 @@ describe("deriveVoiceActionObservation", () => {
       oracle: { expectedGatingAllowed: true, expectsProposal: true },
     };
     expect(deriveVoiceActionObservation(fx).staleness).toBeUndefined();
+  });
+
+  // ─── KEIKO-0242 — audit outcome mirrors governance verdict (denied when confirmation missing) ───
+  it("reports audit.outcome='denied' for a confirmation-required proposal that was not confirmed", () => {
+    // A mutating request under a full-realtime profile derives a confirmation-requiring proposal; the
+    // eval never confirms it, so the audit outcome must be `denied` — matching keiko-server's
+    // denyConfirmation for the confirmation-required reason. Previously buildAuditFor returned `routed`
+    // unconditionally, misrepresenting the security posture as executed rather than denied.
+    const fx: VoiceActionEvalFixture = {
+      name: "mutating-unconfirmed",
+      category: "voice",
+      description: "mutating request under full-realtime; requires confirmation",
+      profile: "full-realtime",
+      source: "realtime",
+      turnIndex: 0,
+      segments: buildSegments(
+        [{ id: "s1", seq: 1, state: "committed", text: "update the customer record" }],
+        "realtime",
+      ),
+      dimensions: new Set(["confirmation-discipline", "evidence-safety"]),
+      oracle: {
+        expectedGatingAllowed: true,
+        expectsProposal: true,
+        expectedEffectClass: "mutating",
+        expectedRequiresConfirmation: true,
+      },
+    };
+    const obs = deriveVoiceActionObservation(fx);
+    expect(obs.proposal?.requiresConfirmation).toBe(true);
+    expect(obs.audit.confirmationRequired).toBe(true);
+    expect(obs.audit.confirmed).toBe(false);
+    expect(obs.audit.outcome).toBe("denied");
+  });
+
+  it("reports audit.outcome='routed' for a read-only proposal (no confirmation required)", () => {
+    // Read-only actions do not require confirmation, so the audit outcome is `routed` — preserving the
+    // existing behaviour for non-confirmation-required proposals (the fix branches on requiresConfirmation
+    // rather than blanketing every proposal).
+    const fx: VoiceActionEvalFixture = {
+      name: "read-only-routed",
+      category: "voice",
+      description: "read-only request under speech-to-text",
+      profile: "speech-to-text",
+      source: "dictation",
+      turnIndex: 0,
+      segments: buildSegments(
+        [{ id: "s1", seq: 1, state: "committed", text: "show the invoice" }],
+        "dictation",
+      ),
+      dimensions: new Set(["confirmation-discipline"]),
+      oracle: {
+        expectedGatingAllowed: true,
+        expectsProposal: true,
+        expectedEffectClass: "read-only",
+        expectedRequiresConfirmation: false,
+      },
+    };
+    const obs = deriveVoiceActionObservation(fx);
+    expect(obs.proposal?.requiresConfirmation).toBe(false);
+    expect(obs.audit.confirmationRequired).toBe(false);
+    expect(obs.audit.outcome).toBe("routed");
   });
 });
 

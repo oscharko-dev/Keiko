@@ -77,13 +77,22 @@ A `workflow-hygiene` job whose check context is `workflow hygiene`. It runs, on 
 after one checkout: actionlint 1.7.12 downloaded from the same URL and verified against the same
 SHA-256 `8aca8db9…a3d8`, invoked as `./actionlint -color .github/workflows/*.yml`; the pinned-SHA
 grep verbatim, including its `./` and `docker://` exemptions and its 40-hex pattern; zizmor 1.26.1
-through `zizmorcore/zizmor-action@6599ee8b7a49aef6a770f63d261d214911a7ce02` (v0.6.0) with
+through `zizmorcore/zizmor-action@70fb788f84895a7701f5643d103d587e460b5c99` (v0.6.3) with
 `config: .github/zizmor.yml`, `advanced-security: false` and `annotations: true`, and `.github/zizmor.yml`
 itself unchanged; and OSV-Scanner through
-`google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2` (v2.3.8)
+`google/osv-scanner-action/osv-scanner-action@a345acffa64b0eaede81a3d9aae6141214d9c8fc` (v2.6.0)
 with `--config=osv-scanner.toml --recursive ./`. The job holds `permissions: contents: read` — the
 union of the four, which is also each of the four, so no step gains an authority its own job did not
 have.
+
+Since #3130 the job also runs `node scripts/check-zizmor-anchors.mjs` immediately ahead of zizmor.
+It is not a fifth external tool and adds no authority — it reads the repository with Node builtins
+and needs no dependency install. It is here because the finding it explains is emitted by the step
+that follows it: `.github/zizmor.yml` scopes every risk acceptance to a LINE NUMBER, so a diff that
+inserts a line above one silently drops a reviewed acceptance and zizmor then reports the underlying
+finding with nothing pointing at the cause. That has now turned this required context red three
+times on unrelated changes. Running the check first makes the context name the corrected line. It
+carries the same guard as the gates around it, so it reports independently of them.
 
 No step carries `continue-on-error`. A failing step fails the job and the single context is red.
 
@@ -170,7 +179,7 @@ required context.
 3. **Phase 3 (the follow-up pull request).** The three micro-jobs are removed; the bundled job moves
    to its own workflow file with the union trigger surface (D2), taking the `osv-scanner.yml`
    pull-request and merge-queue lanes with it; and the required-check list is updated in
-   `CONTRIBUTING.md`, `AGENTS.md` §10, `docs/qa/autonomous-quality-gates.md`,
+   `CONTRIBUTING.md`, `AGENTS.md` §11, `docs/qa/autonomous-quality-gates.md`,
    `RELEASE_REQUIRED_CHECKS` in
    `release.yml` and `portable-assets.yml`, and `reevaluationCheckNames` in
    the then-active external aggregate. Four structural pins are relocated, none relaxed: the
@@ -190,7 +199,7 @@ unchanged too. See D2 for why `push` moved rather than staying as the issue text
 The documentation lists move in phase 3 rather than phase 1 for the same reason the jobs do.
 `CONTRIBUTING.md` is authoritative for what branch protection actually requires (ADR-0002), and an
 authoritative list that anticipates the owner's action is wrong for the whole window it anticipates —
-to a contributor, and to an agent that reads AGENTS.md §10 to learn what must be green.
+to a contributor, and to an agent that reads AGENTS.md §11 to learn what must be green.
 
 **D5 — The enumerated required-check set.** ADR-0135 D3's set is amended: the action-security and
 dependency-lockfile categories are executed inside the single required `workflow hygiene` context.

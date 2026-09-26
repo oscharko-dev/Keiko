@@ -69,6 +69,7 @@ const recordingAnswerer: { pack: ConnectedContextPack | null } & GroundedAnswere
 function fakeWorkspace(): WorkspaceInfo {
   return {
     root: ROOT,
+    selectedRoot: ROOT,
     name: "demo",
     version: "0.0.0",
     testFramework: "vitest",
@@ -158,6 +159,7 @@ afterEach(() => {
 describe("grounded exploration with connected documents", () => {
   it("includes bounded DOCX evidence and discloses an unsupported legacy .doc", async () => {
     const output = await runGroundedExploration(input(), {
+      correlationId: undefined,
       answerer: recordingAnswerer,
       nowMs: () => 1_000,
       detectWorkspace: () => fakeWorkspace(),
@@ -206,12 +208,14 @@ describe("grounded exploration with connected documents", () => {
   it("bypasses the micro-index cache when document evidence or omissions are present", async () => {
     const microIndex = recordingMicroIndex();
     const first = await runGroundedExploration(input(), {
+      correlationId: undefined,
       answerer: recordingAnswerer,
       nowMs: () => 1_000,
       detectWorkspace: () => fakeWorkspace(),
       microIndex: microIndex.index,
     });
     const second = await runGroundedExploration(input(), {
+      correlationId: undefined,
       answerer: recordingAnswerer,
       nowMs: () => 2_000,
       detectWorkspace: () => fakeWorkspace(),

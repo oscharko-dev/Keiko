@@ -1,5 +1,8 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
+
+import { PACKAGE_COVERAGE_GATE_SCRIPTS } from "./scripts/lib/package-coverage-gate-scripts.mjs";
 
 export default defineConfig({
   plugins: [react()],
@@ -14,6 +17,10 @@ export default defineConfig({
       "scripts/__tests__/**/*.test.mjs",
     ],
     exclude: ["**/node_modules/**", "tests/fixtures/**", "packages/keiko-ui/**"],
+    // #3532: explicit Activity Log test-writer injection, identical to the root suite.
+    setupFiles: [
+      fileURLToPath(new URL("./tests/support/activity-log-test-writer.ts", import.meta.url)),
+    ],
     execArgv: ["--experimental-sqlite", "--disable-warning=ExperimentalWarning"],
     // GEN-TEST-FLAKE-002: coverage instrumentation is substantially more CPU-intensive than the
     // root suite. Keep the same bounded worker count so performance guardrails and subprocess-heavy
@@ -36,24 +43,25 @@ export default defineConfig({
       include: [
         "packages/*/src/**/*.{ts,tsx}",
         "src/**/*.{ts,tsx}",
-        "scripts/check-lcov-source-mapping.mjs",
-        "scripts/check-mutation-quality.mjs",
-        "scripts/check-mutation-scope.mjs",
-        "scripts/check-sonar-analysis-log.mjs",
-        "scripts/check-sonar-main-quality-gate.mjs",
-        "scripts/check-sonar-pr-quality-gate.mjs",
-        "scripts/sonar-analysis-scope.mjs",
-        "scripts/sonar-quality-gate-contract.mjs",
+        ...PACKAGE_COVERAGE_GATE_SCRIPTS,
       ],
       exclude: [
         "packages/keiko-ui/**",
         "**/*.test.*",
+        "**/*.bench.*",
         "**/__tests__/**",
         "**/_support.ts",
         "**/test-support.ts",
+        // KEIKO-0130: shared per-package test-fixture modules live under `src/test-support/`
+        // and are never bundled into the package's public surface. Excluded for the same
+        // reason `**/test-support.ts` is.
+        "**/test-support/**",
         "**/test-fixtures.ts",
         "**/testing.ts",
         "**/*.config.ts",
+        // Sonar excludes generated assets from source analysis. Keep them out of its LCOV input
+        // too, otherwise a newly generated TypeScript asset creates an unresolvable source path.
+        "**/*.generated.*",
         "dist/**",
         "node_modules/**",
       ],

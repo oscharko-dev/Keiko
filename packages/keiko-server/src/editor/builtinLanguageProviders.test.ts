@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_LANGUAGE_SERVICE_LIMITS } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_LANGUAGE_SERVICE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/language-service";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { createDeadlineCancellation } from "./languageCancellation.js";
 import type { LanguageProviderContext } from "./languageProvider.js";
@@ -93,6 +93,39 @@ describe("formatByLanguage", () => {
   it("formats html through the tag-nesting formatter", () => {
     const result = formatByLanguage(ctx("html", "<div><span>hi</span></div>"), undefined);
     expect(result).toBe("<div>\n  <span>hi</span>\n</div>\n");
+  });
+
+  it("KEIKO-0712: indents content nested inside an opening tag whose attribute value contains a literal '>'", () => {
+    // opensHtmlIndentScope's previous `^<[^/!][^>]*>$` treated any `>` as tag-end, so this line
+    // read as "not an opening tag" and the <span> stayed at depth 0. Quote-aware scanning
+    // recognizes the `>` inside `"a > b"` as part of the attribute value.
+    const result = formatByLanguage(
+      ctx("html", '<div *ngIf="a > b"><span>x</span></div>'),
+      undefined,
+    );
+    expect(result).toBe('<div *ngIf="a > b">\n  <span>x</span>\n</div>\n');
+  });
+
+  it("KEIKO-0712-r3: does not split inside a quoted attribute value containing a literal '> <'", () => {
+    // Round-3 finding: the pre-split `/>\s*</gu` ran over the WHOLE document before any per-line
+    // quote-aware scanning existed, so a quoted attribute value containing a literal "> <" (e.g.
+    // `data-value="> <"`) matched the regex exactly like a real tag boundary and was split
+    // mid-quote -- corrupting the document before opensHtmlIndentScope ever got a chance to run.
+    const result = formatByLanguage(
+      ctx("html", '<div data-value="> <"><span>x</span></div>'),
+      undefined,
+    );
+    // The quoted "> <" must survive verbatim on the opening tag's own line, and the nested <span>
+    // must still be recognized and indented as a child of that (real) opening tag.
+    expect(result).toBe('<div data-value="> <">\n  <span>x</span>\n</div>\n');
+  });
+
+  it("KEIKO-0712-r3: does not split inside a single-quoted attribute value containing a literal '> <'", () => {
+    const result = formatByLanguage(
+      ctx("html", "<div data-value='> <'><span>x</span></div>"),
+      undefined,
+    );
+    expect(result).toBe("<div data-value='> <'>\n  <span>x</span>\n</div>\n");
   });
 
   it("falls back to trailing-whitespace normalization for other builtin text languages", () => {

@@ -28,20 +28,22 @@
 // same runtime-mechanics posture as #498 / #499 / #500.
 
 import type { VoiceProfile } from "@/lib/types";
+import type {
+  DiscussionMode,
+  DiscussionModePlan,
+  DiscussionTurnContext,
+  DiscussionTurnStatus,
+  VoiceTranscriptSegment,
+} from "@oscharko-dev/keiko-contracts";
 import {
-  type DiscussionMode,
-  type DiscussionModePlan,
-  type DiscussionTurnContext,
-  type DiscussionTurnStatus,
-  type VoiceTranscriptSegment,
   applyDiscussionInterruption,
   applyDiscussionRecovery,
   beginDiscussionTurn,
   discussionModePlan,
   resolveDiscussionTurn,
-  selectCommittedVoiceTranscript,
   voiceCanDriveDiscussion,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/discussion-intelligence";
+import { selectCommittedVoiceTranscript } from "@oscharko-dev/keiko-contracts/runtime/voice-transcript";
 import type { VoiceTurnSnapshot } from "./voice-turn-manager";
 
 // ─── Spoken discussion intents (semantic, not the wire encoding) ─────────────────

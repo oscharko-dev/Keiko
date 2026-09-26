@@ -152,6 +152,10 @@ export interface KeikoCodeEditorProps {
   readonly onCursorChange?: ((position: EditorPosition) => void) | undefined;
   readonly revealRequest?: EditorRevealRequest | undefined;
   readonly hostEditRequest?: EditorHostEditRequest | undefined;
+  /**
+   * Reports a non-fatal runtime notice as a code-owned sentence (runtime-notice.ts): a closed code,
+   * and an error only as its class name, never its message (F29).
+   */
   readonly onRuntimeError?: ((message: string) => void) | undefined;
   /**
    * Host-injected completion resolver (Issue #1199). When present, the editor registers a Monaco

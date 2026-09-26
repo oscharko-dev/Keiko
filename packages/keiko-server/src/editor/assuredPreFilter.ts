@@ -12,12 +12,12 @@
 // the runner (which materialises a disposable execution root and runs build/vitest/Stryker through the
 // sandboxed command boundary) is the effect, assembled in assuredGateRunner.ts.
 
-import {
-  EDITOR_TEST_GENERATION_STABILITY_RUNS,
-  type EditorTestGenerationAssurance,
-  type EditorTestGenerationFunnel,
-  type EditorTestGenerationGateState,
+import type {
+  EditorTestGenerationAssurance,
+  EditorTestGenerationFunnel,
+  EditorTestGenerationGateState,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_TEST_GENERATION_STABILITY_RUNS } from "@oscharko-dev/keiko-contracts/runtime/editor-test-generation";
 
 export interface GateOutcome {
   readonly ok: boolean;

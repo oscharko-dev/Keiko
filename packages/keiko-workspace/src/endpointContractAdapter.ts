@@ -4,13 +4,19 @@ import { RepoSearchInvalidQueryError } from "./errors.js";
 import { buildAtom } from "./repoSearchScan.js";
 import type { SearchLimits, SearchScope } from "./repoSearch.js";
 import type { WorkspaceFs } from "./fs.js";
-import type { StructuralAdapter, StructuralAdapterDeps } from "./structuralAdapters.js";
+import type {
+  StructuralAdapter,
+  StructuralAdapterDeps,
+  StructuralCoverageDiagnostics,
+} from "./structuralAdapters.js";
 import { buildEndpointContractGraph } from "./endpointContractGraph.js";
 import type {
   EndpointClientCallContract,
+  EndpointContractGraph,
   EndpointContractLink,
   EndpointRouteContract,
 } from "./endpointContractTypes.js";
+import { createStructuralExecutionControl } from "./structuralExecution.js";
 
 function queryFingerprint(query: RetrievalQuery): string {
   return createHash("sha256")
@@ -109,6 +115,30 @@ function linkAtoms(
   ];
 }
 
+async function graphForRequest(
+  scope: SearchScope,
+  limits: SearchLimits,
+  fs: WorkspaceFs,
+  deps: StructuralAdapterDeps | undefined,
+): Promise<EndpointContractGraph> {
+  deps?.requestContext?.assertGraphBinding(scope, limits, fs);
+  const graph =
+    deps?.requestContext === undefined
+      ? await buildEndpointContractGraph(
+          scope,
+          limits,
+          fs,
+          createStructuralExecutionControl(
+            limits.elapsedMsMax,
+            deps?.nowMs ?? Date.now,
+            deps?.signal,
+          ),
+        )
+      : await deps.requestContext.endpointContractGraph();
+  deps?.requestContext?.assertGraphBinding(scope, limits, fs);
+  return graph;
+}
+
 export const endpointContractAdapter: StructuralAdapter = {
   name: "endpoint-contract-linker",
   isAvailable: (): Promise<boolean> => Promise.resolve(true),
@@ -126,10 +156,25 @@ export const endpointContractAdapter: StructuralAdapter = {
     }
     const nowMs = deps?.nowMs ?? Date.now;
     const fingerprint = queryFingerprint(query);
-    const graph = await buildEndpointContractGraph(scope, limits, fs);
+    const graph = await graphForRequest(scope, limits, fs, deps);
     const atoms = graph.links
       .filter((link) => linkMatchesQuery(link, query))
       .flatMap((link) => linkAtoms(scope, link, fingerprint, nowMs));
     return atoms.slice(0, Math.min(limits.maxMatchesReturned, query.maxResults));
+  },
+  coverage: async (scope, limits, fs, deps): Promise<StructuralCoverageDiagnostics> => {
+    const graph = await graphForRequest(scope, limits, fs, deps);
+    return {
+      name: "endpoint-contract-linker",
+      filesIndexed: graph.diagnostics.filesScanned,
+      filesSkipped: graph.diagnostics.filesSkipped,
+      candidateLimitReached: graph.diagnostics.candidateLimitReached,
+      parserCoverage: [
+        {
+          parser: "polyglot-endpoint-contract",
+          filesIndexed: graph.diagnostics.filesScanned,
+        },
+      ],
+    };
   },
 };

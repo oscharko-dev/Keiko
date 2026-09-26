@@ -20,6 +20,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 
 function writeDurableTextFile(path: string, content: string, mode: number): void {
   const fd = openSync(path, "wx", mode);
@@ -68,7 +69,7 @@ export function savePrivateJson(path: string, raw: Record<string, unknown>): voi
     if (process.platform !== "win32") {
       chmodSync(tempPath, 0o600);
     }
-    renameSync(tempPath, resolvedPath);
+    atomicPublishRename(tempPath, resolvedPath, { rename: renameSync });
     fsyncDirectory(dir);
   } finally {
     if (existsSync(tempPath)) {

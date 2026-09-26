@@ -244,10 +244,12 @@ redacted no-op/degraded diagnostics instead of failing the grounded answer.
 Three clarifications on the current behavior:
 
 - `mode: "local-only"` on a policy-denied result does not mean a local reranker executed.
-  Keiko ships no local reranker yet, so a sealed or reranking-denied pod degrades to a
-  redacted no-op that preserves the fused retrieval order. The `localReranking` policy
-  operation is reserved forward-compatible surface for a future local reranker and has no
-  runtime consumer today; only `externalReranking` currently gates the provider call.
+  Keiko ships no local reranker yet, so a sealed or reranking-denied pod falls back to a
+  redacted no-op that preserves the fused retrieval order — this is a policy denial,
+  reported via the `policy-denied` reason code, not a degradation. The `localReranking`
+  policy operation is reserved forward-compatible surface for a future local reranker and
+  has no runtime consumer today; only `externalReranking` currently gates the provider
+  call.
 - A reranker that is simply not configured is the default, fully-supported install state.
   It is reported as `status: "disabled"` with failure kind `not-configured` and is treated
   as an ordinary searched pod, not a degraded one, on both the single-scope and hybrid

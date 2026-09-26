@@ -23,6 +23,7 @@
 // layered separately and never replaces these items.
 
 import { parseHexRgba, type Rgb, type Rgba } from "./color.js";
+import { fnv1aHex } from "./idHash.js";
 import type { BoundingBox, IrNode, ScreenIr } from "./irTypes.js";
 import type { StructuralTestItem } from "./screenIrTestBaseline.js";
 
@@ -77,13 +78,7 @@ interface ScreenContext {
 }
 
 function a11yItemId(prefix: string, key: string): string {
-  // Deterministic non-cryptographic id (FNV-1a) — stable across runs, no IO. Mirrors #754/#811.
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < key.length; i += 1) {
-    hash ^= key.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return `${prefix}-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+  return `${prefix}-${fnv1aHex(key)}`;
 }
 
 const a11yItem = (

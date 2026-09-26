@@ -4,7 +4,7 @@
 // capture storage, the graceful no-model path, the swallow-on-failure contract, and the pure
 // cosine helper. The gateway is driven through an injected fake adapter (no network).
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -30,11 +30,24 @@ import {
   memoryEmbeddingCalibrationFor,
   type NoveltyInsertOutcome,
   memoryEmbeddingProviderIdentity,
+  refreshMemoryEmbeddingAfterBodyEdit,
   RELATED_LINK_COSINE_THRESHOLD,
   selectMemoryEmbeddingModelId,
 } from "./memory-embedding.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+  type BufferedServerLogSink,
+  type ServerLogThreshold,
+} from "./observability/index.js";
 import { createInMemoryUiStore } from "./store/index.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const EMBEDDING_MODEL = "text-embedding-3-large";
 const CHAT_MODEL = "gpt-4o-mini";
@@ -114,7 +127,7 @@ afterEach(() => {
 });
 
 function makeVault(): MemoryVaultStore {
-  const dir = mkdtempSync(join(tmpdir(), "keiko-mem-embed-"));
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-mem-embed-"));
   dirs.push(dir);
   const vault = createMemoryVault({ memoryDir: dir, redactString: (s) => s });
   vaults.push(vault);
@@ -739,5 +752,299 @@ describe("insertSalienceMemoryWithNoveltyGate auto-linking (#204, O-P4)", () => 
     await insertSalienceMemoryWithNoveltyGate(deps, vault, makeRecord("alpha note", "id-alpha"));
     await insertSalienceMemoryWithNoveltyGate(deps, vault, makeRecord("beta note", "id-beta"));
     expect(vault.listOutgoingEdges(memoryId("id-beta"))).toEqual([]);
+  });
+});
+
+// Every failure in this module degrades silently by contract: the caller keeps its pre-semantic
+// behaviour and never learns that memory stopped being embedded, deduplicated or searchable.
+// These lines are the only signal an operator has that semantic memory is not actually running.
+describe("memory embedding activity log", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  function capture(level: ServerLogThreshold): BufferedServerLogSink {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level }));
+    return sink;
+  }
+
+  function opsIn(sink: BufferedServerLogSink): readonly string[] {
+    return sink.events.map((event) => event.op);
+  }
+
+  it("classifies a refused embedding request without reading the provider's message", async () => {
+    const deps = makeDeps({
+      embeddingRequest: () =>
+        Promise.resolve({ ok: false as const, kind: "rate-limited" as const, status: 429 }),
+    });
+    const sink = capture("info");
+
+    expect(await embedMemoryText(deps, "the user prefers tabs")).toBeNull();
+
+    const [event] = sink.events;
+    expect(event?.level).toBe("warn");
+    expect(event?.category).toBe("embedding");
+    expect(event?.op).toBe("embedding.memory.failed");
+    expect(event?.errorKind).toBe("rate-limited");
+    expect(event?.status).toBe(429);
+    expect(event?.extra).toMatchObject({
+      modelId: EMBEDDING_MODEL,
+      failureKind: "rate-limited",
+    });
+    expect(sink.lines().join("\n")).not.toContain("the user prefers tabs");
+
+    const persisted = expectActivityLogProof(
+      "embedding.memory.failed.line",
+      formatActivityLogProofLine(event ?? {}),
+    );
+    expect(persisted).toMatchObject({ modelId: EMBEDDING_MODEL, failureKind: "rate-limited" });
+  });
+
+  it("classifies a thrown transport failure by its code and never by its message", async () => {
+    const deps = makeDeps({
+      embeddingRequest: () =>
+        Promise.reject(Object.assign(new Error("getaddrinfo ENOTFOUND"), { code: "ENOTFOUND" })),
+    });
+    const sink = capture("info");
+
+    expect(await embedMemoryText(deps, "a durable preference")).toBeNull();
+
+    expect(sink.events[0]?.errorKind).toBe("unknown");
+    expect(sink.events[0]?.extra?.failureKind).toBe("ENOTFOUND");
+    expect(sink.lines().join("\n")).not.toContain("getaddrinfo");
+  });
+
+  it("reduces a 128-character machine token to the registered failure-kind vocabulary", async () => {
+    const failureKind = `E${"X".repeat(127)}`;
+    const deps = makeDeps({
+      embeddingRequest: () =>
+        Promise.reject(Object.assign(new Error("secret"), { code: failureKind })),
+    });
+    const sink = capture("info");
+
+    await expect(embedMemoryText(deps, "a durable preference")).resolves.toBeNull();
+
+    expect(sink.events[0]?.extra?.failureKind).toBe("unknown");
+    expect(sink.lines().join("\n")).not.toContain(failureKind);
+  });
+
+  it("hashes a non-machine model id without breaking never-throw degradation", async () => {
+    const modelId = "Llama Embedding 3.1 8B Instruct";
+    const deps = makeDeps({
+      modelId,
+      embeddingRequest: () => Promise.reject(new Error("provider unavailable")),
+    });
+    const sink = capture("info");
+
+    await expect(embedMemoryText(deps, "a durable preference")).resolves.toBeNull();
+
+    expect(sink.events[0]?.extra?.modelId).toMatch(/^model-[a-f0-9]{64}$/u);
+    expect(sink.lines().join("\n")).not.toContain(modelId);
+  });
+
+  it("keeps an unconfigured install at debug and reports the dimensions of a success there too", async () => {
+    const unconfigured = makeDeps({ modelId: CHAT_MODEL });
+    const configured = makeDeps({ embeddingRequest: okAdapter(8) });
+
+    const atInfo = capture("info");
+    expect(await embedMemoryText(unconfigured, "no model here")).toBeNull();
+    expect(await embedMemoryText(configured, "a durable preference")).not.toBeNull();
+    expect(atInfo.events).toEqual([]);
+
+    const atDebug = capture("debug");
+    expect(await embedMemoryText(unconfigured, "no model here")).toBeNull();
+    expect(await embedMemoryText(configured, "a durable preference")).not.toBeNull();
+
+    expect(opsIn(atDebug)).toEqual(["embedding.memory.unavailable", "embedding.memory.succeeded"]);
+    expect(atDebug.events[0]?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      reason: "no-embedding-capable-model",
+      providerCount: 0,
+    });
+    expect(atDebug.events[1]?.extra).toMatchObject({ dimensions: 8, embeddingKind: "document" });
+    expect(typeof atDebug.events[1]?.durationMs).toBe("number");
+
+    const unavailablePersisted = expectActivityLogProof(
+      "embedding.memory.unavailable.line",
+      formatActivityLogProofLine(atDebug.events[0] ?? {}),
+    );
+    expect(unavailablePersisted).toMatchObject({
+      reason: "no-embedding-capable-model",
+      providerCount: 0,
+    });
+
+    const succeededPersisted = expectActivityLogProof(
+      "embedding.memory.succeeded.line",
+      formatActivityLogProofLine(atDebug.events[1] ?? {}),
+    );
+    expect(succeededPersisted).toMatchObject({ dimensions: 8, embeddingKind: "document" });
+  });
+
+  it("names the novelty gate's decision for an insert and for a merge", async () => {
+    const deps = makeDeps();
+    const vault = makeVault();
+    const sink = capture("info");
+
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, makeRecord("the user prefers postgres"));
+    await insertSalienceMemoryWithNoveltyGate(deps, vault, makeRecord("the user's db is postgres"));
+
+    const decisions = sink.events.filter((event) => event.op === "memory.capture.novelty-gate");
+    expect(decisions.map((event) => event.extra?.outcome)).toEqual(["inserted", "merged"]);
+    expect(decisions[0]?.category).toBe("memory");
+    expect(decisions[0]?.extra).toMatchObject({
+      scopeKind: "user",
+      embedded: true,
+      neighborCount: 0,
+    });
+    expect(decisions[1]?.extra).toMatchObject({ neighborCount: 1 });
+    // The scoping id and the memory body are the two things this line must never carry.
+    expect(sink.lines().join("\n")).not.toContain("local-operator");
+    expect(sink.lines().join("\n")).not.toContain("postgres");
+
+    const persisted = expectActivityLogProof(
+      "memory.capture.novelty-gate.line",
+      formatActivityLogProofLine(decisions[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ outcome: "inserted", scopeKind: "user" });
+  });
+
+  it("records that a capture was suppressed as a paraphrase of a refusal, and why", async () => {
+    const vDark = Float32Array.from([1, 0, 0, 0]);
+    const deps = makeDeps({
+      embeddingRequest: () =>
+        Promise.resolve({ ok: true as const, value: { vector: vDark, modelId: EMBEDDING_MODEL } }),
+    });
+    const vault = makeVault();
+    const rejected = makeRecord("the user dislikes dark mode", "id-rejected");
+    vault.insertMemory({ ...rejected, status: "rejected" });
+    vault.upsertEmbedding(rejected.id, {
+      provider: memoryEmbeddingProviderIdentity({
+        modelId: EMBEDDING_MODEL,
+        baseUrl: "https://gateway.example.test/v1",
+        apiKey: "redacted",
+        timeoutMs: 30_000,
+        maxRetries: 2,
+        retryBaseDelayMs: 500,
+      }),
+      modelId: EMBEDDING_MODEL,
+      metric: "cosine",
+      vector: vDark,
+    });
+    const sink = capture("info");
+
+    const outcome = await insertSalienceMemoryWithNoveltyGate(
+      deps,
+      vault,
+      makeRecord("dark mode is not for this user", "id-paraphrase"),
+    );
+
+    expect(outcome.kind).toBe("suppressed");
+    const [decision] = sink.events.filter((event) => event.op === "memory.capture.novelty-gate");
+    expect(decision?.extra).toMatchObject({ outcome: "suppressed", embedded: true });
+    expect(decision?.extra?.reason).toBe(
+      outcome.kind === "suppressed" ? outcome.reason : undefined,
+    );
+  });
+
+  it("surfaces a vault rejection that the capture path deliberately swallows", async () => {
+    const deps = makeDeps();
+    const vault = makeVault();
+    const rejection = Object.assign(new Error("dimension mismatch"), { code: "EDIMENSION" });
+    vi.spyOn(vault, "upsertEmbedding").mockImplementation(() => {
+      throw rejection;
+    });
+    const sink = capture("info");
+
+    await expect(
+      embedAndStoreMemory(deps, vault, memoryId("mem-store-reject"), "a durable preference"),
+    ).resolves.toBeUndefined();
+
+    expect(sink.events).toEqual([
+      {
+        level: "warn",
+        category: "memory",
+        op: "memory.embedding.store-rejected",
+        correlationId: undefined,
+        parentCorrelationId: undefined,
+        durationMs: undefined,
+        status: undefined,
+        errorKind: "unknown",
+        extra: { completeness: "complete", failureKind: "EDIMENSION", loss: "none" },
+      },
+    ]);
+    expect(sink.lines().join("\n")).not.toContain("dimension mismatch");
+
+    const persisted = expectActivityLogProof(
+      "memory.embedding.store-rejected.line",
+      formatActivityLogProofLine(sink.events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ failureKind: "EDIMENSION" });
+  });
+
+  it("names the stale-vector invalidation a body edit falls back to when re-embedding fails", async () => {
+    const deps = makeDeps({ modelId: CHAT_MODEL });
+    const vault = makeVault();
+    const stored = insertAccepted(vault, "the user prefers tabs");
+    vault.upsertEmbedding(stored.id, {
+      provider: "openai-compatible:0123456789abcdef",
+      modelId: EMBEDDING_MODEL,
+      metric: "cosine",
+      vector: Float32Array.from([1, 0, 0, 0]),
+    });
+    const sink = capture("info");
+
+    await refreshMemoryEmbeddingAfterBodyEdit(deps, vault, stored.id, "the user prefers spaces");
+
+    expect(vault.getEmbedding(stored.id)).toBeUndefined();
+    expect(opsIn(sink)).toEqual(["memory.embedding.invalidated"]);
+    expect(sink.events[0]?.level).toBe("warn");
+    expect(sink.events[0]?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      reason: "no-embedding",
+    });
+
+    const persisted = expectActivityLogProof(
+      "memory.embedding.invalidated.line",
+      formatActivityLogProofLine(sink.events[0] ?? {}),
+    );
+    expect(persisted).toMatchObject({ reason: "no-embedding" });
+  });
+
+  it("surfaces a vault rejection when the stale embedding cannot even be deleted", async () => {
+    const deps = makeDeps({ modelId: CHAT_MODEL });
+    const vault = makeVault();
+    const stored = insertAccepted(vault, "the user prefers tabs");
+    vault.upsertEmbedding(stored.id, {
+      provider: "openai-compatible:0123456789abcdef",
+      modelId: EMBEDDING_MODEL,
+      metric: "cosine",
+      vector: Float32Array.from([1, 0, 0, 0]),
+    });
+    const deletionFailure = Object.assign(new Error("row locked"), { code: "EBUSY" });
+    vi.spyOn(vault, "deleteEmbedding").mockImplementation(() => {
+      throw deletionFailure;
+    });
+    const sink = capture("info");
+
+    await refreshMemoryEmbeddingAfterBodyEdit(deps, vault, stored.id, "the user prefers spaces");
+
+    expect(opsIn(sink)).toEqual([
+      "memory.embedding.invalidated",
+      "memory.embedding.invalidation-failed",
+    ]);
+    const [, failure] = sink.events;
+    expect(failure?.level).toBe("warn");
+    expect(failure?.category).toBe("memory");
+    expect(failure?.extra).toMatchObject({ failureKind: "EBUSY" });
+    expect(sink.lines().join("\n")).not.toContain("row locked");
+
+    const persisted = expectActivityLogProof(
+      "memory.embedding.invalidation-failed.line",
+      formatActivityLogProofLine(failure ?? {}),
+    );
+    expect(persisted).toMatchObject({ failureKind: "EBUSY" });
   });
 });

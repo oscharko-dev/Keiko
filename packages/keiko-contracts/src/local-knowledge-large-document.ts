@@ -187,6 +187,10 @@ export const LARGE_DOCUMENT_DIAGNOSTIC_CODES = Object.freeze({
   CHECKPOINT_INCOMPATIBLE: "CHECKPOINT_INCOMPATIBLE",
   EXTRACTION_RESUMED: "EXTRACTION_RESUMED",
   EXTRACTION_PROGRESS: "EXTRACTION_PROGRESS",
+  // The selected file left the generation the extraction pinned before its first read. This is a
+  // property of the SOURCE, not of the parser: flattening it into a parser failure records a
+  // healthy document as malformed and loses the only evidence that a replacement occurred.
+  SOURCE_CHANGED_DURING_EXTRACTION: "SOURCE_CHANGED_DURING_EXTRACTION",
 } as const);
 
 export type LargeDocumentDiagnosticCode =

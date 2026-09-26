@@ -10,7 +10,12 @@
 // digests, counts, bounded reason codes, and validated public domains only — never raw pages,
 // prompts, queries beyond the sanitized visible text digest, child scratch, tool bodies, or secrets.
 import type { CodeTaskFact } from "./code-task-acceptance.js";
-import { isCodeTaskIsoInstant, isCodeTaskSha256Digest } from "./code-task-acceptance.js";
+import {
+  hasInheritedEnumerableProperty,
+  isCodeTaskIsoInstant,
+  isCodeTaskSha256Digest,
+  ownField,
+} from "./code-task-acceptance.js";
 import type {
   CodeTaskGrantId,
   CodeTaskIdempotencyKey,
@@ -24,6 +29,7 @@ import {
   isCodeTaskRunId,
   isCodeTaskTaskId,
   isCodeTaskWorkspaceId,
+  isContentFreeReasonCode,
 } from "./code-task-governance.js";
 import { CODING_WORKBENCH_AUXILIARY_STATUSES } from "./coding-workbench.js";
 import type {
@@ -67,8 +73,6 @@ const RESERVED_DOMAIN_NAMES = Object.freeze([
   "invalid",
   "example",
 ]);
-// Content-free bounded reason code (mirrors the code-task-governance content-free rule).
-const REASON_CODE_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/u;
 
 export function isCodeTaskSkillId(value: unknown): value is CodeTaskSkillId {
   return typeof value === "string" && SKILL_ID_PATTERN.test(value);
@@ -106,8 +110,20 @@ export function isCodeTaskPublicDomain(value: unknown): value is string {
   return !isReservedDomainName(value);
 }
 
+// KfQ Critical on code-task-acceptance.ts's identical unknownKeys (this file mirrors it, and was
+// missed by that audit round): a value shaped via Object.create(secretHolder) can carry every
+// required field as an OWN property (so it looks complete) plus one extra field reachable ONLY
+// through the prototype -- no own-property-only scan (Object.keys, Object.getOwnPropertyNames, or
+// an exact-own-count check) ever sees it, while ordinary property access on it still resolves
+// through the prototype chain. Rejecting any non-default prototype closes this at the single choke
+// point every validator in this file already passes through.
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype
+  );
 }
 
 function isNonNegativeInteger(value: unknown): value is number {
@@ -122,18 +138,22 @@ function isOneOf<T extends string>(value: unknown, allowed: readonly T[]): value
   return typeof value === "string" && (allowed as readonly string[]).includes(value);
 }
 
-function isContentFreeReasonCode(value: unknown): value is string {
-  return typeof value === "string" && REASON_CODE_PATTERN.test(value);
-}
-
+// Object.getOwnPropertyNames (not Object.keys) plus an own-symbol check, matching the sibling
+// files' idiom: Object.keys alone misses a non-enumerable own property. isRecord above rejects a
+// non-default prototype; neither closes a genuinely polluted Object.prototype (see
+// hasInheritedEnumerableProperty's own comment at its definition in code-task-acceptance.ts).
 function unknownKeys(
   value: Record<string, unknown>,
   allowed: readonly string[],
   path: string,
 ): string[] {
-  return Object.keys(value)
+  const errors = Object.getOwnPropertyNames(value)
     .filter((key) => !allowed.includes(key))
     .map((key) => `${path}.${key} is not allowed`);
+  if (Object.getOwnPropertySymbols(value).length > 0) {
+    errors.push(`${path} must not carry symbol-keyed properties`);
+  }
+  return errors;
 }
 
 // ─── Shared target (parent authority refs) ─────────────────────────────────────────
@@ -152,13 +172,15 @@ const AUXILIARY_TARGET_KEYS = ["taskId", "runId", "workspaceId", "stateRevision"
 
 function targetErrors(value: Record<string, unknown>): string[] {
   const errors: string[] = [];
-  if (!isCodeTaskTaskId(value.taskId)) errors.push("taskId is invalid");
-  if (!isCodeTaskRunId(value.runId)) errors.push("runId is invalid");
-  if (!isCodeTaskWorkspaceId(value.workspaceId)) errors.push("workspaceId is invalid");
-  if (!isNonNegativeInteger(value.stateRevision)) {
+  if (!isCodeTaskTaskId(ownField(value, "taskId"))) errors.push("taskId is invalid");
+  if (!isCodeTaskRunId(ownField(value, "runId"))) errors.push("runId is invalid");
+  if (!isCodeTaskWorkspaceId(ownField(value, "workspaceId"))) errors.push("workspaceId is invalid");
+  if (!isNonNegativeInteger(ownField(value, "stateRevision"))) {
     errors.push("stateRevision must be a non-negative integer");
   }
-  if (!isCodeTaskIdempotencyKey(value.idempotencyKey)) errors.push("idempotencyKey is invalid");
+  if (!isCodeTaskIdempotencyKey(ownField(value, "idempotencyKey"))) {
+    errors.push("idempotencyKey is invalid");
+  }
   return errors;
 }
 
@@ -181,21 +203,46 @@ function isCodeTaskIsoInstantLike(value: unknown): value is string {
   return isCodeTaskIsoInstant(value);
 }
 
+// KEIKO-0302 follow-on: this validated `outcome`/`value` but never rejected an extra key riding
+// alongside a well-formed value, so a valid known fact (or an absent/unknown/unavailable fact with
+// no "value" key) padded with free text validated and was returned verbatim. This contract family
+// is documented as content-free (see the module header). The two pinned messages —
+// `${path}.value is invalid` and `${path} must not carry a value for outcome ${outcome}` — are
+// preserved exactly for their original cases; every other extra key is now rejected too, via the
+// shared unknownKeys helper.
+// Round 3 (#2899): this file's isRecord had no prototype-identity check at all until this same
+// change, so it was reachable by the basic Object.create({value: "secret"}) attack from the very
+// first round of this audit series -- not just by a genuinely polluted global Object.prototype like
+// the sibling files. hasInheritedEnumerableProperty (imported, not reimplemented: see its own
+// definition and comment in code-task-acceptance.ts, which this module already imports value
+// exports from) is a strict superset of the old "value" in value check and closes the same
+// polluted-outcome/polluted-undeclared-field gap Codex found there. Reused rather than duplicated:
+// code-task-run-control.ts keeps its own separate copy for now (pre-existing, tested, out of scope
+// for this change), but a fresh third copy in a third file would be the "another per-property
+// special case" this audit explicitly stopped doing. Both branches below now collect instead of
+// early-returning, matching the fix already applied to every sibling validator (KfQ 3789542365's
+// shape existed here too, in both branches).
 function factErrors(
   value: unknown,
   path: string,
   isKnownValue: (candidate: unknown) => boolean,
 ): string[] {
   if (!isRecord(value)) return [`${path} must be a tagged fact object`];
-  if (value.outcome === "known") {
-    return isKnownValue(value.value) ? [] : [`${path}.value is invalid`];
+  if (hasInheritedEnumerableProperty(value)) {
+    return [`${path} must not resolve any field through its prototype chain`];
   }
-  if (
-    value.outcome === "unknown" ||
-    value.outcome === "unavailable" ||
-    value.outcome === "absent"
-  ) {
-    return "value" in value ? [`${path} must not carry a value for outcome ${value.outcome}`] : [];
+  const outcome = ownField(value, "outcome");
+  if (outcome === "known") {
+    const errors = unknownKeys(value, ["outcome", "value"], path);
+    if (!isKnownValue(ownField(value, "value"))) errors.push(`${path}.value is invalid`);
+    return errors;
+  }
+  if (outcome === "unknown" || outcome === "unavailable" || outcome === "absent") {
+    const errors = unknownKeys(value, ["outcome"], path);
+    if (Object.hasOwn(value, "value")) {
+      errors.push(`${path} must not carry a value for outcome ${outcome}`);
+    }
+    return errors;
   }
   return [`${path}.outcome must be known, unknown, unavailable, or absent`];
 }
@@ -203,19 +250,25 @@ function factErrors(
 function researchScopeErrors(value: unknown): string[] {
   if (!isRecord(value)) return ["research scope must be an object"];
   const errors = unknownKeys(value, RESEARCH_SCOPE_KEYS, "researchScope");
-  if (!isCodeTaskGrantId(value.grantId)) errors.push("researchScope.grantId is invalid");
+  if (!isCodeTaskGrantId(ownField(value, "grantId")))
+    errors.push("researchScope.grantId is invalid");
+  const domains = ownField(value, "domains");
   if (
-    !Array.isArray(value.domains) ||
-    value.domains.length === 0 ||
-    !value.domains.every((domain) => isCodeTaskPublicDomain(domain))
+    !Array.isArray(domains) ||
+    domains.length === 0 ||
+    !domains.every((domain) => isCodeTaskPublicDomain(domain))
   ) {
     errors.push("researchScope.domains must be a non-empty list of public domains");
   }
-  if (!isCodeTaskIsoInstantLike(value.expiresAt)) {
+  if (!isCodeTaskIsoInstantLike(ownField(value, "expiresAt"))) {
     errors.push("researchScope.expiresAt must be an ISO-8601 UTC instant");
   }
   errors.push(
-    ...factErrors(value.queryTextDigest, "researchScope.queryTextDigest", isCodeTaskSha256Digest),
+    ...factErrors(
+      ownField(value, "queryTextDigest"),
+      "researchScope.queryTextDigest",
+      isCodeTaskSha256Digest,
+    ),
   );
   return errors;
 }
@@ -275,16 +328,19 @@ function requestKeysFor(capability: unknown): readonly string[] | undefined {
 }
 
 function requestVariantErrors(value: Record<string, unknown>): string[] {
-  if (value.capability === "research") return researchScopeErrors(value.research);
-  if (value.capability === "skill") {
+  const capability = ownField(value, "capability");
+  if (capability === "research") return researchScopeErrors(ownField(value, "research"));
+  if (capability === "skill") {
     const errors: string[] = [];
-    if (!isCodeTaskSkillId(value.skillId)) errors.push("skillId is invalid");
-    if (!isOneOf(value.invocation, AUXILIARY_INVOCATIONS)) errors.push("invocation is invalid");
+    if (!isCodeTaskSkillId(ownField(value, "skillId"))) errors.push("skillId is invalid");
+    if (!isOneOf(ownField(value, "invocation"), AUXILIARY_INVOCATIONS)) {
+      errors.push("invocation is invalid");
+    }
     return errors;
   }
   const errors: string[] = [];
-  if (!isCodeTaskChildRunId(value.childRunId)) errors.push("childRunId is invalid");
-  if (!isPositiveInteger(value.maxToolCalls)) {
+  if (!isCodeTaskChildRunId(ownField(value, "childRunId"))) errors.push("childRunId is invalid");
+  if (!isPositiveInteger(ownField(value, "maxToolCalls"))) {
     errors.push("maxToolCalls must be a positive integer");
   }
   return errors;
@@ -294,12 +350,12 @@ export function validateAuxiliaryCapabilityRequestV1(
   value: unknown,
 ): CodingWorkbenchValidationResult<AuxiliaryCapabilityRequestV1> {
   if (!isRecord(value)) return { ok: false, errors: ["auxiliary request must be an object"] };
-  const keys = requestKeysFor(value.capability);
+  const keys = requestKeysFor(ownField(value, "capability"));
   if (keys === undefined) {
     return { ok: false, errors: ["capability must be research, skill, or child-agent"] };
   }
   const errors = unknownKeys(value, keys, "auxiliaryRequest");
-  if (value.schemaVersion !== CODE_TASK_AUXILIARY_SCHEMA_VERSION) {
+  if (ownField(value, "schemaVersion") !== CODE_TASK_AUXILIARY_SCHEMA_VERSION) {
     errors.push("schemaVersion must be the literal 1");
   }
   errors.push(...targetErrors(value), ...requestVariantErrors(value));
@@ -350,20 +406,34 @@ function isChildResultCountFact(value: unknown): boolean {
 
 function acceptedOutcomeErrors(value: Record<string, unknown>): string[] {
   const errors = factErrors(
-    value.resultDigest,
+    ownField(value, "resultDigest"),
     "auxiliaryOutcome.resultDigest",
     isCodeTaskSha256Digest,
   );
-  if (!isChildResultCountFact(value.childResultCount)) {
+  if (!isChildResultCountFact(ownField(value, "childResultCount"))) {
     errors.push("auxiliaryOutcome.childResultCount must be a tagged non-negative-integer fact");
+  }
+  // KEIKO-0626 (sub-fix on the auxiliary side): only a child-agent outcome may report a `known`
+  // childResultCount — a research or skill call has no children, so a known count on those
+  // capabilities is a producer defect that must not silently reach downstream consumers.
+  const capability = ownField(value, "capability");
+  const childResultCount = ownField(value, "childResultCount");
+  const childCountOutcome = isRecord(childResultCount)
+    ? ownField(childResultCount, "outcome")
+    : undefined;
+  if (childCountOutcome === "known" && capability !== "child-agent") {
+    errors.push(
+      `auxiliaryOutcome.childResultCount.outcome=known is only valid when capability is child-agent, got ${String(capability)}`,
+    );
   }
   return errors;
 }
 
 function outcomeVariantErrors(value: Record<string, unknown>): string[] {
-  if (value.status === "accepted") return acceptedOutcomeErrors(value);
-  if (!isOneOf(value.status, AUXILIARY_OUTCOME_STATUSES)) return [];
-  return isContentFreeReasonCode(value.reasonCode)
+  const status = ownField(value, "status");
+  if (status === "accepted") return acceptedOutcomeErrors(value);
+  if (!isOneOf(status, AUXILIARY_OUTCOME_STATUSES)) return [];
+  return isContentFreeReasonCode(ownField(value, "reasonCode"))
     ? []
     : ["auxiliaryOutcome.reasonCode must be a bounded content-free reason code"];
 }
@@ -372,16 +442,19 @@ export function validateAuxiliaryCapabilityOutcomeV1(
   value: unknown,
 ): CodingWorkbenchValidationResult<AuxiliaryCapabilityOutcomeV1> {
   if (!isRecord(value)) return { ok: false, errors: ["auxiliary outcome must be an object"] };
+  const status = ownField(value, "status");
   const errors = unknownKeys(
     value,
-    value.status === "accepted" ? ACCEPTED_OUTCOME_KEYS : REJECTED_OUTCOME_KEYS,
+    status === "accepted" ? ACCEPTED_OUTCOME_KEYS : REJECTED_OUTCOME_KEYS,
     "auxiliaryOutcome",
   );
-  if (value.schemaVersion !== CODE_TASK_AUXILIARY_SCHEMA_VERSION) {
+  if (ownField(value, "schemaVersion") !== CODE_TASK_AUXILIARY_SCHEMA_VERSION) {
     errors.push("schemaVersion must be the literal 1");
   }
-  if (!isOneOf(value.status, AUXILIARY_OUTCOME_STATUSES)) errors.push("status is invalid");
-  if (!isOneOf(value.capability, AUXILIARY_CAPABILITIES)) errors.push("capability is invalid");
+  if (!isOneOf(status, AUXILIARY_OUTCOME_STATUSES)) errors.push("status is invalid");
+  if (!isOneOf(ownField(value, "capability"), AUXILIARY_CAPABILITIES)) {
+    errors.push("capability is invalid");
+  }
   errors.push(...outcomeVariantErrors(value));
   return errors.length === 0
     ? { ok: true, value: value as unknown as AuxiliaryCapabilityOutcomeV1 }

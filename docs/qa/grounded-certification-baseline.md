@@ -28,15 +28,16 @@ are commit-independent because every gate is deterministic).
 
 | Metric                                            | Value  | Floor    |
 | ------------------------------------------------- | ------ | -------- |
-| fixtures                                          | 6      | —        |
+| fixtures                                          | 15     | —        |
 | unsupported-claim detection rate                  | 100.0% | 100.0%   |
 | claim precision (no false positives)              | 100.0% | 100.0%   |
 | degradation correctness (unavailable ⇒ WARN)      | 100.0% | 100.0%   |
 | non-tautology proven (pass-through checker fails) | yes    | required |
 
-The gate scores the real claim-segmentation / entailment-reconciliation / marker logic over a
-deterministic scripted judge (the same `EntailmentJudge` port the gateway judge implements). The
-non-tautology proof is intrinsic: a pass-through judge must fail to detect the unsupported fixtures.
+The gate scores the real path-and-line and numeric-marker claim-segmentation / entailment-
+reconciliation / marker logic over a deterministic scripted judge (the same `EntailmentJudge` port
+the gateway judge implements). The non-tautology proof is intrinsic: a pass-through judge must fail
+to detect the unsupported fixtures.
 
 ### `check:grounded-faithfulness` — membership moat (unchanged floors)
 
@@ -84,9 +85,9 @@ path.
 
 - The entailment gate above is **single-answer** entailment. Multi-hop non-tautology proofs belong to
   K M5 (#2559); M8 measures both against this anchor once M5 lands.
-- The connector (`[n]`) topology performs citation-support via the pre-existing token-overlap check
-  (`citation-attacher.ts`); its unification onto the shared NLI judge is a K M2 (#2556) follow-up. M8
-  should record which topology's mechanism produced each entailment number.
+- The connector (`[n]`) topology uses the shared `EntailmentJudge` for semantic numeric claims. The
+  token-overlap filter in `citation-attacher.ts` remains the attachment eligibility guard; M8 should
+  record which topology supplied the selected evidence.
 - Floors on the two faithfulness/entailment gates are correctness invariants pinned at 1.0 and must
   not be lowered to obtain a green certification.
 

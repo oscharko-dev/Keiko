@@ -36,10 +36,7 @@ function readVerificationChecks(value, target) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     fail("verification input verificationChecks must be an object");
   }
-  const allowedKeys =
-    target.nodePlatform === "win32"
-      ? ["publisherChainVerified", "timestampVerified"]
-      : ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"];
+  const allowedKeys = verificationCheckKeys(target.nodePlatform);
   for (const key of exactInputKeys(value)) {
     if (!allowedKeys.includes(key)) fail("verification checks contain unsupported keys");
   }
@@ -49,6 +46,12 @@ function readVerificationChecks(value, target) {
     checks[key] = value[key];
   }
   return checks;
+}
+
+function verificationCheckKeys(platform) {
+  if (platform === "win32") return ["publisherChainVerified", "timestampVerified"];
+  if (platform === "linux") return ["provenanceVerified"];
+  return ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"];
 }
 
 function sidecarTarget(sidecar) {

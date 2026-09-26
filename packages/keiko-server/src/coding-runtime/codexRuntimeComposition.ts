@@ -1,12 +1,14 @@
 import { Buffer } from "node:buffer";
 import { join, posix, win32 } from "node:path";
 
-import {
-  CODING_WORKBENCH_SCHEMA_VERSION,
-  validateCodingWorkbenchCodexSubscriptionProfile,
-  validateCodingWorkbenchRuntimeEvent,
-  type CodingWorkbenchRuntimeEvent,
+import type {
+  CodingWorkbenchMode,
+  CodingWorkbenchRuntimeEvent,
 } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
+import { validateCodingWorkbenchCodexSubscriptionProfile } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth";
+import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 
 import {
   type CodexAuthNavigationIntentCoordinator,
@@ -33,7 +35,9 @@ import type { RuntimeProcessTree } from "./runtimeProcessSupervisor.js";
 /* eslint-disable complexity -- protocol projection variants intentionally fail closed independently. */
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- contextual port types are authoritative. */
 
-const CLIENT_VERSION = "0.2.15";
+// Derived, never restated: a literal here silently drifts from the product version at every
+// release bump, and no gate compares the two (0.3.0 release audit).
+const CLIENT_VERSION = KEIKO_PRODUCT_VERSION;
 const MAX_TOOL_TEXT_BYTES = 32 * 1024;
 const MAX_USER_AGENT_BYTES = 64 * 1024;
 
@@ -160,6 +164,13 @@ export interface CodexRuntimeCompositionInput {
   readonly onTransientDelta?:
     ((delta: Extract<CodexAppServerProjection, { kind: "delta" }>) => void) | undefined;
   readonly onAdapterFailure: (runId: string, code: CodexAppServerClientFailureCode) => void;
+  // KEIKO-0679: accessors for the run's actual mode state (same source as
+  // codingRuntimeOrchestratorState.ts's publicSnapshot). Before this fix the "task-submitted"
+  // event hardcoded requestedMode/effectiveMode to "governed-assist" regardless of the run's
+  // real mode. Both are optional (undefined => defaults to "governed-assist") so existing test
+  // fixtures do not need to change.
+  readonly requestedMode?: ((runId: string) => CodingWorkbenchMode | undefined) | undefined;
+  readonly effectiveMode?: ((runId: string) => CodingWorkbenchMode | undefined) | undefined;
 }
 
 export interface CodexRuntimeComposition {
@@ -452,10 +463,15 @@ async function project(
     return;
   }
   if (projection.event === "turn/started" && projection.turnId !== undefined) {
+    // KEIKO-0679: derive the run's real modes from the injected accessors instead of hardcoding
+    // "governed-assist" for every turn. Fall back to "governed-assist" only when a fixture (or a
+    // legacy caller that has not yet threaded the accessors) leaves them unset.
+    const requestedMode = input.requestedMode?.(runId) ?? "governed-assist";
+    const effectiveMode = input.effectiveMode?.(runId) ?? requestedMode;
     emit(input, runId, run, "task-submitted", {
       taskRef: "codex-task",
-      requestedMode: "governed-assist",
-      effectiveMode: "governed-assist",
+      requestedMode,
+      effectiveMode,
     });
   }
   if (projection.terminalStatus !== undefined && projection.turnId !== undefined) {

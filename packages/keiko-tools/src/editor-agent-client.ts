@@ -1,25 +1,27 @@
+import type {
+  EditorAgentAction,
+  EditorAgentActionQueuedResponse,
+  EditorAgentActionResult,
+  EditorAgentGovernedAuthorityReference,
+  EditorAgentRootBinding,
+  EditorAgentSessionsRequest,
+  EditorAgentSessionsResponse,
+  EditorAgentSnapshotRequest,
+  EditorAgentSnapshotResponse,
+  EditorAgentVerificationResult,
+  EditorAgentVerificationRunRequest,
+} from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_LANGUAGE_SERVICE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/language-service";
+import { DEFAULT_LSP_PROCESS_CONFIG } from "@oscharko-dev/keiko-contracts/runtime/lsp-process";
 import {
-  DEFAULT_LANGUAGE_SERVICE_LIMITS,
-  DEFAULT_LSP_PROCESS_CONFIG,
   EDITOR_AGENT_SCHEMA_VERSION,
-  MANAGED_LSP_RUST_MAX_INDEX_DEADLINE_MS,
   isEditorAgentActionResult,
   isEditorAgentRootAttribution,
   parseEditorAgentQueryGitData,
   isEditorAgentSessionSnapshot,
-  parseEditorAgentVerificationResult,
-  type EditorAgentAction,
-  type EditorAgentActionQueuedResponse,
-  type EditorAgentActionResult,
-  type EditorAgentGovernedAuthorityReference,
-  type EditorAgentRootBinding,
-  type EditorAgentSessionsRequest,
-  type EditorAgentSessionsResponse,
-  type EditorAgentSnapshotRequest,
-  type EditorAgentSnapshotResponse,
-  type EditorAgentVerificationResult,
-  type EditorAgentVerificationRunRequest,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { MANAGED_LSP_RUST_MAX_INDEX_DEADLINE_MS } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-runtime";
+import { parseEditorAgentVerificationResult } from "@oscharko-dev/keiko-contracts/runtime/editor-agent-verification";
 
 type EditorAgentConflictDetail = NonNullable<EditorAgentActionResult["conflict"]>;
 type EditorAgentFileActionResult = NonNullable<EditorAgentActionResult["files"]>[number];

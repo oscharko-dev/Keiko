@@ -28,6 +28,16 @@ const CHAT_ROLE_MARKERS = ["user", "assistant", "system"] as const;
 // range makes this canonical stripper a true superset of the keiko-tools git-ref sanitizer
 // (GEN-DUP-NEAR-003 case B); it is additive — it can only remove more. Numeric scan keeps the
 // set auditable and avoids embedding invisible literals in the source.
+// Exported so no consumer needs a private copy: two had already drifted from this canonical set
+// (the QI source-envelope guard was missing the whole U+2060-U+206F block, and the QI branded-id
+// validator had no bidi check at all). One definition, one behaviour.
+export function containsBidiOrZeroWidth(value: string): boolean {
+  for (const ch of value) {
+    if (isBidiOrZeroWidthCodePoint(ch.codePointAt(0) ?? 0)) return true;
+  }
+  return false;
+}
+
 function isBidiOrZeroWidthCodePoint(cp: number): boolean {
   return (
     cp === 0x061c ||
@@ -39,24 +49,66 @@ function isBidiOrZeroWidthCodePoint(cp: number): boolean {
   );
 }
 
+// U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR render as a line break in most text
+// renderers, Markdown/HTML pipelines, and JSON deserializers. They are neither C0/C1 controls nor
+// bidi/zero-width format characters, so the two predicates above miss them — leaving a spoofing
+// gap where untrusted evidence containing one of these separators can still smuggle a fresh line
+// (and therefore a fake `role:` header) into an LLM prompt or a citation wire. This predicate
+// closes that gap so stripUnsafeFormatChars removes them the same way it removes bidi overrides.
+function isUnsafeLineSeparatorCodePoint(cp: number): boolean {
+  return cp === 0x2028 || cp === 0x2029;
+}
+
+// The raw C0/DEL/C1 control range (0x00–0x1F, 0x7F–0x9F), no exception.
+function isControlCodePoint(cp: number): boolean {
+  return cp <= 0x1f || (cp >= 0x7f && cp <= 0x9f);
+}
+
 // True for a C0 control (0x00–0x1F) or DEL/C1 control (0x7F–0x9F), EXCEPT TAB/LF/CR which
 // are legitimate whitespace and preserved.
 function isStrippableControlCodePoint(cp: number): boolean {
   if (cp === 0x09 || cp === 0x0a || cp === 0x0d) return false;
-  return cp <= 0x1f || (cp >= 0x7f && cp <= 0x9f);
+  return isControlCodePoint(cp);
 }
 
 /**
- * Remove Unicode bidi/zero-width/BOM/format spoofing code points and C0/C1/DEL control
- * characters from `value`, preserving TAB/LF/CR. Pure; returns the input unchanged (a no-op,
- * byte-identical) when it contains no unsafe code points.
+ * True if `value` contains any C0/DEL/C1 control code point, INCLUDING TAB/LF/CR. Unlike
+ * `stripUnsafeFormatChars` (which preserves TAB/LF/CR for legitimate multi-line text content),
+ * this is the check for values that must be a single token — branded identifiers, keys, short
+ * path-like segments — where an embedded newline or tab is itself the defect: it can smuggle a
+ * forged extra record into a line-oriented export, or make two ids that render differently
+ * compare equal once something downstream normalises whitespace.
+ */
+export function hasControlCharacter(value: string): boolean {
+  for (const ch of value) {
+    if (isControlCodePoint(ch.codePointAt(0) ?? 0)) return true;
+  }
+  return false;
+}
+
+// Single "unsafe format" predicate covering every class stripUnsafeFormatChars removes:
+// bidi/zero-width/BOM/format overrides, C0/C1/DEL controls (except TAB/LF/CR), and the U+2028/
+// U+2029 line and paragraph separators. Consolidated so the scan and rebuild loops stay under the
+// complexity cap and, more importantly, so a future added class only needs one line to include.
+function isUnsafeFormatCodePoint(cp: number): boolean {
+  return (
+    isBidiOrZeroWidthCodePoint(cp) ||
+    isStrippableControlCodePoint(cp) ||
+    isUnsafeLineSeparatorCodePoint(cp)
+  );
+}
+
+/**
+ * Remove Unicode bidi/zero-width/BOM/format spoofing code points, the U+2028/U+2029 line and
+ * paragraph separators, and C0/C1/DEL control characters from `value`, preserving TAB/LF/CR.
+ * Pure; returns the input unchanged (a no-op, byte-identical) when it contains no unsafe code
+ * points.
  */
 export function stripUnsafeFormatChars(value: string): string {
   // Fast path: scan once; only allocate a rebuilt string if something must be removed.
   let needsStrip = false;
   for (const ch of value) {
-    const cp = ch.codePointAt(0) ?? 0;
-    if (isBidiOrZeroWidthCodePoint(cp) || isStrippableControlCodePoint(cp)) {
+    if (isUnsafeFormatCodePoint(ch.codePointAt(0) ?? 0)) {
       needsStrip = true;
       break;
     }
@@ -64,8 +116,7 @@ export function stripUnsafeFormatChars(value: string): string {
   if (!needsStrip) return value;
   let out = "";
   for (const ch of value) {
-    const cp = ch.codePointAt(0) ?? 0;
-    if (isBidiOrZeroWidthCodePoint(cp) || isStrippableControlCodePoint(cp)) continue;
+    if (isUnsafeFormatCodePoint(ch.codePointAt(0) ?? 0)) continue;
     out += ch;
   }
   return out;

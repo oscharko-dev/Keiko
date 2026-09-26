@@ -1,40 +1,45 @@
-import { relative } from "node:path";
+import { isAbsolute, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import type {
+  LanguageCodeAction,
+  LanguageCallHierarchyIncomingCall,
+  LanguageCallHierarchyItem,
+  LanguageCallHierarchyOutgoingCall,
+  LanguageCallHierarchyRoot,
+  LanguageCompletionItem,
+  LanguageCompletionItemKind,
+  LanguageDiagnostic,
+  LanguageDiagnosticSeverity,
+  LanguageDocumentSymbol,
+  LanguageHoverResult,
+  LanguageInlayHint,
+  LanguageLocation,
+  LanguagePosition,
+  LanguageRange,
+  LanguageRenameApplyResult,
+  LanguageRenamePrepareResult,
+  LanguageSignatureInformation,
+  LanguageSignatureParameterInformation,
+  LanguageServiceLimits,
+  LanguageServiceRequest,
+  LanguageSymbolKind,
+  LanguageTextEdit,
+  LspProcessConfig,
+  ManagedLspLanguage,
+  ManagedLspProcessHealthSnapshot,
+  ManagedLspSemanticTokenData,
+  ManagedLspSemanticTokenLegend,
+} from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_LSP_PROCESS_CONFIG,
+  isTerminalLspStatus,
+} from "@oscharko-dev/keiko-contracts/runtime/lsp-process";
+import {
   DEFAULT_LANGUAGE_SERVICE_LIMITS,
   LANGUAGE_RENAME_CHANGESET_SCHEMA_VERSION,
-  MANAGED_LSP_LANGUAGES,
-  isManagedLspOperationNegotiated,
-  type LanguageCodeAction,
-  type LanguageCallHierarchyIncomingCall,
-  type LanguageCallHierarchyItem,
-  type LanguageCallHierarchyOutgoingCall,
-  type LanguageCallHierarchyRoot,
-  type LanguageCompletionItem,
-  type LanguageCompletionItemKind,
-  type LanguageDiagnostic,
-  type LanguageDiagnosticSeverity,
-  type LanguageDocumentSymbol,
-  type LanguageHoverResult,
-  type LanguageInlayHint,
-  type LanguageLocation,
-  type LanguagePosition,
-  type LanguageRange,
-  type LanguageRenameApplyResult,
-  type LanguageRenamePrepareResult,
-  type LanguageSignatureInformation,
-  type LanguageSignatureParameterInformation,
-  type LanguageServiceLimits,
-  type LanguageServiceRequest,
-  type LanguageSymbolKind,
-  type LanguageTextEdit,
-  type LspProcessConfig,
-  type ManagedLspLanguage,
-  type ManagedLspProcessHealthSnapshot,
-  type ManagedLspSemanticTokenData,
-  type ManagedLspSemanticTokenLegend,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/language-service";
+import { MANAGED_LSP_LANGUAGES } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-activation";
+import { isManagedLspOperationNegotiated } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-capabilities";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import type { CommandRule } from "@oscharko-dev/keiko-tools";
 import { isWithinWorkspace } from "@oscharko-dev/keiko-workspace";
@@ -70,6 +75,9 @@ import {
   type HostLanguageProviderSpec,
 } from "./hostLanguageProviders.js";
 import { sanitizeSemanticTokenResponse } from "./lspSemanticTokens.js";
+import { recordLspLifecycleEvent } from "./lspLifecycleLedger.js";
+import { managedLspWorkspaceFingerprint } from "./managedLspActivationStore.js";
+import { createLspRuntimeStatePort } from "./lspRuntimeStateStore.js";
 
 export interface HostLanguageOperationOptions {
   readonly workspace: WorkspaceInfo;
@@ -124,9 +132,9 @@ export interface HostSemanticTokenResult {
 // module-level pool of WARM LSP processes keyed by (workspace root, languageId): a process is
 // spawned once, reused across ops via didChange overlay updates, serialized per-manager (a
 // queue) so concurrent ops queue instead of failing busy, and shut down after an idle window.
-// Spawn-per-request survives only as the degraded fallback when a warm process cannot be
-// obtained. Governance (commandRules preflight, root containment, availability detection) is
-// unchanged and still runs before any pooling decision.
+// Governance (commandRules preflight, root containment, availability detection) is unchanged and
+// still runs before any pooling decision. A manager with retained process ownership is a quarantine
+// tombstone: no configuration change, retry, or idle eviction may start a potentially parallel tree.
 const LSP_POOL_IDLE_TIMEOUT_MS = 60_000;
 
 interface LspOperationContext {
@@ -158,9 +166,12 @@ interface PooledLspEntry {
   queue: Promise<unknown>;
   idleTimer: ReturnType<typeof setTimeout> | undefined;
   disposed: boolean;
+  quarantined: boolean;
 }
 
 const LSP_PROCESS_POOL = new Map<string, PooledLspEntry>();
+const LSP_POOL_ACQUISITION_TAILS = new Map<string, Promise<void>>();
+let lspPoolShutdown: Promise<void> | undefined;
 
 function poolKey(root: string, languageId: string): string {
   return `${root}\0${languageId}`;
@@ -190,16 +201,22 @@ function scheduleIdleShutdown(key: string, entry: PooledLspEntry): void {
 
 async function evictPooledEntry(key: string, entry: PooledLspEntry): Promise<void> {
   if (entry.disposed) return;
-  entry.disposed = true;
   clearIdleTimer(entry);
-  if (LSP_PROCESS_POOL.get(key) === entry) {
-    LSP_PROCESS_POOL.delete(key);
-  }
   closeOpenDocuments(entry);
+  let disposalCompleted = false;
   try {
     await entry.manager.dispose();
+    disposalCompleted = true;
   } catch {
-    // Best-effort shutdown; a manager that fails to dispose is already being discarded.
+    // An exceptional disposal cannot prove release; retain a permanent fail-closed pool tombstone.
+    entry.quarantined = true;
+  }
+  if (!disposalCompleted || entry.manager.hasRetainedProcessOwnership()) {
+    return;
+  }
+  entry.disposed = true;
+  if (LSP_PROCESS_POOL.get(key) === entry) {
+    LSP_PROCESS_POOL.delete(key);
   }
 }
 
@@ -215,10 +232,29 @@ function closeOpenDocuments(entry: PooledLspEntry): void {
 
 // Test/shutdown hook: dispose every pooled LSP process. Exposed so tests can guarantee a
 // clean slate and a server shutdown can release warm children without touching DI wiring.
-export async function shutdownHostLspPool(): Promise<void> {
+async function shutdownHostLspPoolEntries(): Promise<void> {
+  await Promise.all(LSP_POOL_ACQUISITION_TAILS.values());
   const entries = [...LSP_PROCESS_POOL.entries()];
+  await Promise.all(entries.map(async ([key, entry]) => evictPooledEntry(key, entry)));
+}
+
+export function shutdownHostLspPool(): Promise<void> {
+  if (lspPoolShutdown !== undefined) return lspPoolShutdown;
+  const shutdown = shutdownHostLspPoolEntries().finally(() => {
+    if (lspPoolShutdown === shutdown) lspPoolShutdown = undefined;
+  });
+  lspPoolShutdown = shutdown;
+  return shutdown;
+}
+
+// Vitest module state survives between tests in one file. A deliberately unconfirmed fake process
+// must remain quarantined under production APIs, so tests clear that inert tombstone explicitly only
+// after `shutdownHostLspPool()` has exercised and asserted the fail-closed behavior.
+export function _resetHostLspPoolForTests(): void {
+  for (const entry of LSP_PROCESS_POOL.values()) clearIdleTimer(entry);
   LSP_PROCESS_POOL.clear();
-  await Promise.all(entries.map(async ([, entry]) => evictPooledEntry("", entry)));
+  LSP_POOL_ACQUISITION_TAILS.clear();
+  lspPoolShutdown = undefined;
 }
 
 export function listHostLspHealthSnapshots(): readonly ManagedLspProcessHealthSnapshot[] {
@@ -239,33 +275,72 @@ export function listHostLspHealthSnapshotsForRoot(
   });
 }
 
-export function notifyHostLspWorkspaceFileChanged(
-  workspaceRoot: string,
-  absolutePath: string,
-): void {
-  if (!isWithinWorkspace(workspaceRoot, absolutePath)) return;
-  const prefix = `${workspaceRoot}\0`;
-  const params = { changes: [{ uri: pathToFileURL(absolutePath).href, type: 2 }] };
-  for (const [key, entry] of LSP_PROCESS_POOL) {
-    if (key.startsWith(prefix) && !entry.disposed) {
-      entry.manager.sendNotification("workspace/didChangeWatchedFiles", params);
+// Path-segment-safe "candidate is deletedPath itself, or nested under it" check. A raw string
+// prefix (`candidate.startsWith(deletedPath)`) would wrongly match "/root/pkg-sibling/x" against
+// deleted directory "/root/pkg"; `relative` compares whole path segments instead.
+function isUnderOrEqual(deletedPath: string, candidate: string): boolean {
+  const rel = relative(deletedPath, candidate);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+// A Deleted watched-file event (file OR directory) must stop the pool from treating the removed
+// path's overlay(s) as still open BEFORE the watched-file notification is published — otherwise
+// the next op for that URI reaches syncDocument with the entry still present and sends
+// textDocument/didChange instead of didOpen, so diagnostics/symbols keep serving the deleted (or,
+// for a rename, renamed-away) path's stale content until the pooled process is next idle-evicted.
+// Mirrors the didClose/removal seam closeOpenDocuments already uses on full eviction, scoped to
+// exactly the deleted URI plus, for a directory delete, every overlay nested under it.
+function closeDeletedOverlayDocuments(entry: PooledLspEntry, deletedAbsolutePath: string): void {
+  const childGeneration = entry.manager.getChildGeneration();
+  for (const [uri, document] of entry.openDocuments) {
+    let absolutePath: string;
+    try {
+      absolutePath = fileURLToPath(uri);
+    } catch {
+      continue;
     }
+    if (!isUnderOrEqual(deletedAbsolutePath, absolutePath)) continue;
+    if (document.childGeneration === childGeneration) {
+      entry.manager.sendNotification("textDocument/didClose", { textDocument: { uri } });
+    }
+    entry.openDocuments.delete(uri);
   }
 }
 
-// Activation/configuration changes invalidate exactly one governed process. Removing the entry from
-// the map before awaiting disposal guarantees subsequent work cannot reuse stale configuration even
-// when the child needs forceful shutdown; unrelated workspace/language entries remain warm.
+// FileChangeType per the LSP spec: Created=1, Changed=2, Deleted=3. Defaults to Changed so the
+// existing content-save call site (files.ts writeFilesContentRoute) needs no change.
+export function notifyHostLspWorkspaceFileChanged(
+  workspaceRoot: string,
+  absolutePath: string,
+  changeType: 1 | 2 | 3 = 2,
+): void {
+  if (!isWithinWorkspace(workspaceRoot, absolutePath)) return;
+  const prefix = `${workspaceRoot}\0`;
+  const params = { changes: [{ uri: pathToFileURL(absolutePath).href, type: changeType }] };
+  for (const [key, entry] of LSP_PROCESS_POOL) {
+    if (!key.startsWith(prefix) || entry.disposed) continue;
+    if (changeType === 3) closeDeletedOverlayDocuments(entry, absolutePath);
+    entry.manager.sendNotification("workspace/didChangeWatchedFiles", params);
+  }
+}
+
+// Activation/configuration changes invalidate exactly one governed process. The entry remains in the
+// map until disposal proves ownership released; if that proof is unavailable it becomes a fail-closed
+// tombstone so subsequent work cannot start a parallel process tree. Unrelated entries remain warm.
 export async function disposeHostLspPoolEntry(
   workspaceRoot: string,
   languageId: string,
 ): Promise<void> {
   const spec = findSpec(languageId);
   const key = poolKey(workspaceRoot, spec === undefined ? languageId : poolLanguageAxis(spec));
-  const entry = LSP_PROCESS_POOL.get(key);
-  if (entry === undefined) return;
-  LSP_PROCESS_POOL.delete(key);
-  await evictPooledEntry(key, entry);
+  if (lspPoolShutdown !== undefined) {
+    await lspPoolShutdown;
+    return;
+  }
+  await serializePoolAcquisition(key, async () => {
+    const entry = LSP_PROCESS_POOL.get(key);
+    if (entry !== undefined) await evictPooledEntry(key, entry);
+  });
 }
 
 function successBody(
@@ -391,15 +466,7 @@ async function waitForReady(
   while (Date.now() <= deadline) {
     const status = manager.getLspProcessStatus();
     if (status === "READY") return true;
-    if (
-      status === "EXECUTABLE_NOT_FOUND" ||
-      status === "SPAWN_FAILED" ||
-      status === "INITIALIZE_TIMEOUT" ||
-      status === "RESTART_THROTTLED" ||
-      status === "CRASHED"
-    ) {
-      return false;
-    }
+    if (isTerminalLspStatus(status)) return false;
     await delay(20, signal);
   }
   return false;
@@ -1292,6 +1359,12 @@ function createPooledEntry(
     options.protocolConfiguration?.resourceBudget,
     options.lspProcessConfig,
   );
+  // KEIKO-0556-r3: wire the content-free lifecycle ledger into the real pooled manager. The
+  // partition key is the same opaque per-workspace digest managedLspActivationStore already uses
+  // for its own on-disk record, never the raw root -- so the ledger's KEIKO-0556 partitioning
+  // (and its round-3 partition bound / chronological merge) actually receives production events
+  // instead of only ones a test recorded directly.
+  const partitionKey = managedLspWorkspaceFingerprint(options.workspace.root);
   const manager = createLspProcessManager({
     config,
     workspace: options.workspace,
@@ -1299,6 +1372,19 @@ function createPooledEntry(
     commandRules: options.commandRules,
     now: options.now,
     protocol: managerProtocol(spec, options),
+    onLifecycleEvent: (event) => {
+      recordLspLifecycleEvent(event, partitionKey);
+    },
+    ...(options.privateRuntimeStateRoot === undefined
+      ? {}
+      : {
+          runtimeState: createLspRuntimeStatePort({
+            stateDir: options.privateRuntimeStateRoot,
+            workspaceRoot: options.workspace.root,
+            managerId: spec.id,
+            configurationRevision: options.protocolConfiguration?.revision ?? 0,
+          }),
+        }),
     ...managerOverrides(spec, options),
   });
   return {
@@ -1309,6 +1395,7 @@ function createPooledEntry(
     queue: Promise.resolve(),
     idleTimer: undefined,
     disposed: false,
+    quarantined: false,
   };
 }
 
@@ -1361,12 +1448,76 @@ function managedLanguageForSpec(spec: HostLanguageProviderSpec): ManagedLspLangu
     : "python";
 }
 
-// A pooled process is only reusable while its status is one of the pre-READY/READY states.
-// A crashed/failed/throttled process is discarded so the next request re-spawns (the degraded
-// spawn-per-request fallback), never serving requests against a dead child.
+// A pooled process is only reusable while its status is one of the pre-READY/READY states. A
+// terminal manager may be replaced only after its process ownership is fully settled.
 function isReusableStatus(manager: LspProcessManager): boolean {
   const status = manager.getLspProcessStatus();
   return status === "READY" || status === "STARTING" || status === "INITIALIZING";
+}
+
+function hasRetainedOwnership(entry: PooledLspEntry | undefined): boolean {
+  return entry?.quarantined === true || entry?.manager.hasRetainedProcessOwnership() === true;
+}
+
+function canReusePooledEntry(
+  entry: PooledLspEntry | undefined,
+  options: HostLanguageOperationOptions,
+): entry is PooledLspEntry {
+  if (entry === undefined || entry.disposed) return false;
+  if (!matchesPooledConfiguration(entry, options)) return false;
+  return isReusableStatus(entry.manager);
+}
+
+function matchesPooledConfiguration(
+  entry: PooledLspEntry,
+  options: HostLanguageOperationOptions,
+): boolean {
+  return (
+    sameSpawn(entry.spawn, options.spawn) &&
+    entry.configurationRevision === (options.protocolConfiguration?.revision ?? 0)
+  );
+}
+
+function isRestartThrottledEntry(
+  entry: PooledLspEntry | undefined,
+  options: HostLanguageOperationOptions,
+): entry is PooledLspEntry {
+  if (entry === undefined || entry.disposed) return false;
+  return (
+    matchesPooledConfiguration(entry, options) &&
+    entry.manager.getLspProcessStatus() === "RESTART_THROTTLED"
+  );
+}
+
+function reusePooledEntry(entry: PooledLspEntry): PooledLspEntry {
+  clearIdleTimer(entry);
+  return entry;
+}
+
+async function retireExistingEntry(
+  key: string,
+  entry: PooledLspEntry | undefined,
+): Promise<PooledLspEntry | undefined> {
+  if (entry === undefined || entry.disposed) return undefined;
+  await evictPooledEntry(key, entry);
+  return hasRetainedOwnership(entry) ? entry : undefined;
+}
+
+async function serializePoolAcquisition<T>(key: string, action: () => Promise<T>): Promise<T> {
+  const previous = LSP_POOL_ACQUISITION_TAILS.get(key) ?? Promise.resolve();
+  let release = (): void => undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const tail = previous.then(() => gate);
+  LSP_POOL_ACQUISITION_TAILS.set(key, tail);
+  await previous;
+  try {
+    return await action();
+  } finally {
+    release();
+    if (LSP_POOL_ACQUISITION_TAILS.get(key) === tail) LSP_POOL_ACQUISITION_TAILS.delete(key);
+  }
 }
 
 function providerUnhealthyOutcome(): LanguageServiceOutcome {
@@ -1376,45 +1527,36 @@ function providerUnhealthyOutcome(): LanguageServiceOutcome {
   );
 }
 
-function acquirePooledEntry(
+async function acquirePooledEntry(
   spec: HostLanguageProviderSpec,
   options: HostLanguageOperationOptions,
-): PooledLspEntry {
+): Promise<PooledLspEntry> {
+  if (lspPoolShutdown !== undefined) throw new LspProcessError("DISPOSED");
   const key = poolKey(options.workspace.root, poolLanguageAxis(spec));
-  const existing = LSP_PROCESS_POOL.get(key);
-  if (
-    existing !== undefined &&
-    !existing.disposed &&
-    sameSpawn(existing.spawn, options.spawn) &&
-    existing.configurationRevision === (options.protocolConfiguration?.revision ?? 0) &&
-    isReusableStatus(existing.manager)
-  ) {
-    clearIdleTimer(existing);
-    return existing;
-  }
-  // Claim the slot SYNCHRONOUSLY (no intervening await) so two concurrent first-requests for
-  // the same key cannot each create a manager and leak one. A stale/unreusable prior entry is
-  // disposed in the background — its own generation guards keep that shutdown independent.
-  const entry = createPooledEntry(spec, options);
-  LSP_PROCESS_POOL.set(key, entry);
-  if (existing !== undefined && !existing.disposed) {
-    void evictStaleEntry(existing);
-  }
-  return entry;
+  return serializePoolAcquisition(key, () => acquirePooledEntryLocked(key, spec, options));
 }
 
-// Dispose a superseded entry WITHOUT touching the pool map (the map already points at the
-// replacement). Used when a fresh entry has already claimed the key synchronously.
-async function evictStaleEntry(entry: PooledLspEntry): Promise<void> {
-  if (entry.disposed) return;
-  entry.disposed = true;
-  clearIdleTimer(entry);
-  closeOpenDocuments(entry);
-  try {
-    await entry.manager.dispose();
-  } catch {
-    // Best-effort shutdown of a discarded manager.
-  }
+async function acquirePooledEntryLocked(
+  key: string,
+  spec: HostLanguageProviderSpec,
+  options: HostLanguageOperationOptions,
+): Promise<PooledLspEntry> {
+  if (lspPoolShutdown !== undefined) throw new LspProcessError("DISPOSED");
+  const existing = LSP_PROCESS_POOL.get(key);
+  if (existing !== undefined && hasRetainedOwnership(existing)) return reusePooledEntry(existing);
+  if (canReusePooledEntry(existing, options)) return reusePooledEntry(existing);
+  // Preserve the manager-owned restart window for the same configuration. Every other settled
+  // terminal state is retired below so a transient spawn/configuration failure cannot poison the
+  // pool forever; retained ownership was already handled fail-closed above.
+  if (isRestartThrottledEntry(existing, options)) return reusePooledEntry(existing);
+  const retained = await retireExistingEntry(key, existing);
+  if (retained !== undefined) return retained;
+  // Creation and map publication are synchronous under the per-key acquisition queue, after the
+  // prior generation has released its slot. A conflicting concurrent revision cannot publish or be
+  // returned here, and an unconfirmed predecessor returned above remains the fail-closed tombstone.
+  const entry = createPooledEntry(spec, options);
+  LSP_PROCESS_POOL.set(key, entry);
+  return entry;
 }
 
 // The spec serves a fixed language set; the pool key uses the spec id as the language axis so
@@ -1429,6 +1571,11 @@ async function runPooledOperation(
   request: LanguageServiceRequest,
   options: HostLanguageOperationOptions,
 ): Promise<LanguageServiceOutcome> {
+  // A manager whose child/tree lease remains retained is a permanent fail-closed tombstone. Its
+  // CRASHED status is normally non-terminal because safely settled crashes may restart, but this
+  // instance cannot restart. Waiting the full initialize deadline here delayed every retry and
+  // durable-restart refusal even though the manager already had a definitive unavailable answer.
+  if (hasRetainedOwnership(entry)) return providerUnhealthyOutcome();
   const config = makeConfig(
     spec,
     options.protocolConfiguration?.resourceBudget,
@@ -1471,7 +1618,7 @@ export async function runHostLanguageOperation(
   if (!matchingAvailableProvider(spec, options)) return undefined;
 
   const key = poolKey(options.workspace.root, poolLanguageAxis(spec));
-  const entry = acquirePooledEntry(spec, options);
+  const entry = await acquirePooledEntry(spec, options);
 
   // Serialize onto the entry's queue: a concurrent second op chains after the first and runs
   // on the same warm process (it QUEUES and resolves) rather than being rejected as busy.
@@ -1487,14 +1634,25 @@ export async function runHostLanguageOperation(
 
   const outcome = await run;
 
-  // Post-op lifecycle: a process that died mid-op is evicted (next call re-spawns — degraded
-  // fallback); a healthy process is kept warm with a fresh idle-shutdown timer.
+  // Post-op lifecycle: a process with unsettled ownership remains quarantined; a safely released
+  // terminal manager is evicted, and a healthy process stays warm with a fresh idle timer.
   await finalizePooledEntry(key, entry);
   return outcome;
 }
 
 async function finalizePooledEntry(key: string, entry: PooledLspEntry): Promise<void> {
   if (entry.disposed) return;
+  if (hasRetainedOwnership(entry)) {
+    clearIdleTimer(entry);
+    return;
+  }
+  // RESTART_THROTTLED is an intentional same-configuration tombstone: keeping its manager in the
+  // pool preserves the exhausted restart window. Evict every other settled non-reusable state so
+  // transient crashes, disposal, and configuration failures cannot poison later acquisitions.
+  if (entry.manager.getLspProcessStatus() === "RESTART_THROTTLED") {
+    clearIdleTimer(entry);
+    return;
+  }
   if (!isReusableStatus(entry.manager)) {
     await evictPooledEntry(key, entry);
     return;
@@ -1513,13 +1671,14 @@ export async function initializeHostLanguageProvider(
   const spec = findSpec(languageId);
   if (spec === undefined || !matchingAvailableProvider(spec, options)) return undefined;
   const key = poolKey(options.workspace.root, poolLanguageAxis(spec));
-  const entry = acquirePooledEntry(spec, options);
+  const entry = await acquirePooledEntry(spec, options);
   const config = makeConfig(
     spec,
     options.protocolConfiguration?.resourceBudget,
     options.lspProcessConfig,
   );
   try {
+    if (entry.quarantined) return entry.manager.getHealthSnapshot();
     await waitForReady(entry.manager, config.initializeTimeoutMs, options.signal);
     return entry.manager.getHealthSnapshot();
   } finally {
@@ -1555,6 +1714,7 @@ async function requestSemanticTokens(
   document: HostSemanticTokenDocument,
   options: HostLanguageOperationOptions,
 ): Promise<HostSemanticTokenResult | undefined> {
+  if (entry.quarantined) return undefined;
   const config = makeConfig(
     spec,
     options.protocolConfiguration?.resourceBudget,
@@ -1589,7 +1749,7 @@ export async function runHostLanguageSemanticTokens(
   const spec = findSpec(document.languageId);
   if (spec === undefined || !matchingAvailableProvider(spec, options)) return undefined;
   const key = poolKey(options.workspace.root, poolLanguageAxis(spec));
-  const entry = acquirePooledEntry(spec, options);
+  const entry = await acquirePooledEntry(spec, options);
   const run = entry.queue.then(async () => {
     try {
       return await requestSemanticTokens(entry, spec, document, options);

@@ -1,11 +1,16 @@
-# Editor performance evidence — producer runbook (ADR-0139)
+# Performance evidence — producer runbook (ADR-0139)
 
-The two committed editor evidence documents live in `docs/release/`:
+The committed performance evidence documents live in `docs/release/`:
 
-| Document                    | Content                                                               | PR-time validation                      |
-| --------------------------- | --------------------------------------------------------------------- | --------------------------------------- |
-| `1209-perf-evidence.json`   | Immutable D12 baseline/candidate paired performance comparison        | `npm run check:perf-evidence:editor`    |
-| `1209-bundle-evidence.json` | Editor release bundle measurement (B1/B2/B3) of the production export | `npm run check:editor-release-evidence` |
+| Document                                 | Content                                                               | PR-time validation                           |
+| ---------------------------------------- | --------------------------------------------------------------------- | -------------------------------------------- |
+| `1209-perf-evidence.json`                | Immutable D12 baseline/candidate paired performance comparison        | `npm run check:perf-evidence:editor`         |
+| `1209-bundle-evidence.json`              | Editor release bundle measurement (B1/B2/B3) of the production export | `npm run check:editor-release-evidence`      |
+| `1580-workspace-perf-evidence.json`      | Workspace browser-performance measurement                             | `npm run check:perf-evidence:workspace`      |
+| `2952-coding-runtime-calibration.json`   | Frozen native coding-runtime reference samples and provenance         | `npm run check:perf-evidence:coding-runtime` |
+| `2952-coding-runtime-perf-evidence.json` | Native coding-runtime candidate measurements                          | `npm run check:perf-evidence:coding-runtime` |
+| `3415-tool-catalog-calibration.json`     | Frozen tool-catalog reference samples and provenance                  | `npm run check:tool-catalog-performance`     |
+| `3415-tool-catalog-perf-evidence.json`   | Tool-catalog candidate compiler and lookup measurements               | `npm run check:tool-catalog-performance`     |
 
 ## When evidence must be regenerated
 
@@ -41,6 +46,122 @@ what every merge into `packages/keiko-editor/`, `packages/keiko-ui/`, `packages/
 undoes any repair. That finding is reported in the run's job summary instead, where it says how far
 the committed numbers have travelled from the product without pretending anyone owes work for it.
 
+### Workspace browser-performance evidence
+
+The workspace measurement has its own toolchain digest, defined by
+`scripts/workspace-performance-measurement-toolchain.mjs`. A change to any listed member requires
+a fresh workspace measurement; a mismatched digest is always rejected so an evidence document cannot
+be re-stamped without running the producer.
+
+**Its reference environment is Linux**, and that is evidenced rather than asserted: `ci.yml`
+refreshes this document on every `push` to `dev` (`ubuntu-latest`) and only _validates_ its freshness
+on a pull request. A pull request that moves the workspace ruler must therefore bring a
+Linux-produced document with it; nothing else makes `check:perf-evidence:workspace` green.
+
+Unlike the editor D12 document, this one records no per-machine provenance and its budgets carry
+wide headroom — it is a browser-performance regression detector, not an absolute instrument
+calibrated to one machine class. That is why `ubuntu-latest` and the pinned `arm64` container are
+both acceptable producers, and why a macOS host is not: the harness serves the packaged CLI through
+Chromium, which is what CI exercises.
+
+One command, from any host with Docker. It provisions the self-contained clone, runs the pinned
+container, and copies the document back:
+
+```bash
+npm run perf:evidence:regen:workspace
+```
+
+Equivalent when you are already on Linux with the dependencies installed:
+
+```bash
+rm -f docs/release/1580-workspace-perf-evidence.json
+npm run test:e2e:workspace-perf
+```
+
+Deleting first is part of the contract, not tidiness: the gate rejects a stale extra project entry,
+so a re-measurement must not be able to silently narrow the committed run set.
+
+The committed document has an exact, intentionally Chromium-only run set: `chromium` and
+`chromium-mixed-windows`. The first is the representative workspace journey and the second proves
+the heavy-widget fixture. `webkit` remains a local cross-browser functional aid, but is deliberately
+not committed as timing evidence: its headless renderer does not produce comparable frame-gap or
+write-coalescing measurements, and CI installs and runs Chromium only. The gate rejects both a
+missing required run and an additional stale project entry, so deleting the prior document before
+the Chromium producer cannot silently narrow the evidence contract.
+
+Commit the resulting document as the final change that moves the workspace measurement ruler.
+
+## Tool-catalog compiler evidence (#3415)
+
+This target measures the shipped tool-catalog producer through its built package. It covers the
+legacy native profile, the shipped OpenCode V2 managed profile (including closed-object schema
+projection), and a 300-tool synthetic profile, the largest stable fixture below the
+producer's 262,144-byte catalog bound. A separate 320-tool fixture must be rejected with
+`input-bound`. Each case retains two warmups and then thirty samples. Lookup work is bounded by
+6,000 comparisons per sample, so the normal pull-request gate proves complete work without using a
+host-dependent timeout as a performance threshold.
+
+The initial committed ceiling uses the same percentile and derivation policy as the native
+coding-runtime target: nearest-rank p95 with a ceiling no wider than the calibration maximum plus
+its full observed range. The budget then freezes those reviewed values as explicit non-widening
+ceilings. A ruler recalibration rebinds the calibration digest but carries every prior maximum
+forward unchanged; it cannot widen or opportunistically tighten a threshold from one noisy run.
+The candidate binds the measured tool-catalog source tree and lockfile; both documents bind the
+measurement ruler and reference environment. A routine source or lockfile update therefore writes
+a new candidate against the frozen calibration and budget. It never moves the threshold.
+`npm run check:tool-catalog-performance` runs a fresh deterministic work check on every invocation,
+then evaluates the committed reference evidence. Fresh local or CI wall-clock values are reported
+for diagnosis and are never compared with the reference threshold.
+
+The reference environment is the pinned Linux arm64 Node image below with at least 14 logical cores.
+The repository command creates a self-contained clone at the exact source revision, installs and
+builds inside the container, supplies the image identity to the producer, validates the candidate,
+and copies only the candidate document back. It refuses a dirty working tree because a clean clone
+could not reproduce that subject.
+
+```bash
+npm run perf:evidence:regen:tool-catalog
+```
+
+The V2 case is added with the explicit one-time extension mode:
+
+```bash
+npm run perf:evidence:regen:tool-catalog -- --extend-managed-runtime
+```
+
+This mode accepts only the previous two-case inventory and the same reference environment and
+case identities. It derives the new managed-case ceiling from fresh calibration samples, preserves
+both previous numeric maxima and ceilings exactly, and records an independent candidate run.
+The normal gate requires all three cases; it cannot accept evidence that omits the managed path.
+
+When a reviewed producer-only change intentionally changes the catalog revision or projection
+digest without changing the measurement ruler, reference environment, case inventory, or tool
+counts, use the explicit case-identity rebind mode:
+
+```bash
+npm run perf:evidence:regen:tool-catalog -- --rebind-case-identity
+```
+
+The rebind refuses ruler, environment, and tool-count drift. It writes a fresh calibration and an
+independent candidate while carrying every existing numeric maximum and ceiling forward exactly.
+It also refuses a no-op rebind so routine changes continue to use candidate measurement mode.
+
+If and only if the measurement ruler itself intentionally changes, use the explicit recalibration
+mode in the reviewed change:
+
+```bash
+npm run perf:evidence:regen:tool-catalog -- --recalibrate
+```
+
+Recalibration refuses a different reference environment or case identity and carries every
+existing numeric ceiling forward unchanged. Tightening a reviewed ceiling requires a separate,
+explicit budget change with representative evidence; one unusually fast recalibration run cannot
+silently convert measurement noise into a stricter release gate. Initial calibration is a separate
+`--calibrate` operation and refuses to overwrite existing calibration or budget files.
+
+This is functional compiler and lookup performance evidence. It does not qualify provider latency,
+live-model behavior, or production customer workloads.
+
 ## How to regenerate (one command)
 
 ```bash
@@ -58,9 +179,10 @@ On Linux you can also drive the producer directly, without the container:
 npm run perf:evidence:regen
 ```
 
-On Linux this provisions two clean checkouts (pinned baseline `18750d079e2a61c7d7044f3f6ec977a104b9884f`, candidate = your
-HEAD), runs the official D12 producer (warm-ups, six alternating Common runs, three cap runs, at full
-sample depth via `KEIKO_D12_FULL_SAMPLE_DEPTH=1`), refreshes the bundle
+On Linux this provisions two clean checkouts (pinned baseline
+`18750d079e2a61c7d7044f3f6ec977a104b9884f`, candidate = your HEAD), runs the official D12 producer
+(warm-ups, six alternating Common runs, three cap runs, at full sample depth via
+`KEIKO_D12_FULL_SAMPLE_DEPTH=1`), refreshes the bundle
 evidence from a fresh production build, validates everything with the independent checker, and
 copies both documents back — review and commit them as your final commit (the documents are not
 subject paths, so committing them does not invalidate what they bind).
@@ -74,9 +196,11 @@ throwaway clone below; only after mounting your working checkout directly re-run
 
 - **Full, non-worktree checkout.** In a git worktree, `$PWD/.git` is a file pointing at the main
   repository and the container cannot resolve it. Make a self-contained clone first —
-  `git clone --no-local . <dest>` — and mount that alone; the pinned baseline commit must be
-  present (`git merge-base --is-ancestor 18750d079e2a61c7d7044f3f6ec977a104b9884f HEAD`). Name the clone directory `*.noindex`
-  so Spotlight does not index-storm the host during the run.
+  `git clone --no-local . <dest>` — and mount that alone. The wrapper fetches the exact pinned
+  baseline commit when needed; it may be a squash-only foreign commit, so Git ancestry is not the
+  trust anchor. Commit identity, clean checkouts, source-tree digests, lockfile digests, and the
+  independent evidence checker are. Name the clone directory `*.noindex` so Spotlight does not
+  index-storm the host during the run.
 - **Single occupancy.** Measurement is exclusive: before starting, check
   `docker ps` for any other `node:24*` measurement container (other agents measure too) and do
   not run builds/tests/gates on the host for the duration. A budget verdict measured on a loaded
@@ -116,10 +240,16 @@ misleading anywhere else.
 
 ## Invariants
 
+The editor invariants in this section retain their existing ruler. The coding-runtime target's
+distinct native procedure follows below.
+
 - Baseline and candidate each bind their own commit-exact `package-lock.json` digest; the producer
   provisions both checkouts with `npm ci --ignore-scripts` under a deterministic environment
   allowlist. A dependency change is therefore measured as part of the candidate instead of making
   evidence generation impossible or silently substituting dependency state.
+- The pinned baseline is exact by commit and digest, not by being an ancestor of the candidate.
+  This keeps the same reference usable after squash-only integrations while still refusing a dirty
+  checkout or a document whose baseline digest no longer matches the pinned commit.
 - Budgets are enforced in exactly one place: `scripts/perf-evidence-gate.mjs` (`npm run check:perf-evidence`), reading the committed
   document on every pull request (ADR-0156 D1/D5). Measurement lanes — this one and the scheduled
   workflow — measure and record; they never abort on a budget verdict, because the document that
@@ -127,3 +257,118 @@ misleading anywhere else.
   trusted still aborts the producer, and a defect never rides along with a verdict.
 - Never hand-edit the documents: schemas are exact-key closed, canonical-byte checked, and every
   aggregate is independently recomputed from the raw samples.
+
+## Native coding-runtime evidence (#2952)
+
+This target covers the coding-runtime portion of #2952. Atlassian sync and connector-window
+performance require their own target and calibration; these numbers do not qualify that surface.
+
+The producer reuses the existing canonical artifact bytes, nearest-rank percentile calculation,
+byte-framed measurement digest, governed host-executable lookup and diff-owned freshness policy.
+It discovers the approved OpenCode payload through the production dev lane, creates a real local
+Git repository and managed task workspace for each sample, pairs through the real launcher
+attestation, and exercises the mounted BFF. The only substituted execution is a deterministic model
+response: 64 chunks of 32 ASCII characters, one gateway call, no tool requests. The exact 2,048
+characters must arrive in the protected activity channel. No prompts, responses, paths, endpoints,
+bearers, raw CPU model names or customer content are written to the evidence.
+
+| Metric                | Start                       | End                                          | What it proves                                                                                        |
+| --------------------- | --------------------------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `coldStartMs`         | Authenticated run POST      | Parsed running snapshot                      | Fresh sidecar process, production admission and native readiness handshake, initial turn accepted     |
+| `readinessMs`         | Readiness GET               | Parsed available projection                  | Preflight route with its honest functional evidence class                                             |
+| `sseFirstByteMs`      | Runtime event-stream GET    | First nonempty SSE data frame                | Mounted stream's time to first data, including initial state replay; not model-token latency          |
+| `boundedThroughputMs` | First fixture gateway delta | Observed successful native terminal snapshot | Completion of a fixed 2,048-character streamed workload; exact delivered output is checked separately |
+
+Terminal observation polls every 5 ms and therefore includes that bounded sampling quantization.
+For interpretation, throughput in characters/second is `2048 * 1000 / boundedThroughputMs`; the
+judge uses duration of the fixed workload so all four ceilings share the same direction. The
+60-second operational deadline is a deadlock/invalid-measurement bound, not the performance budget.
+Two warmups are discarded, followed by three contiguous groups of ten retained samples. Each has
+fresh runtime state and a new sidecar; the BFF module process remains warm and OS caches are not
+flushed. Neither retries nor outlier deletion are permitted.
+
+The reference is native **macOS arm64**, with exact comparability to the committed calibration's
+environment: kernel release, core count, memory, hashed CPU model, Node/npm/Git versions, approved
+runtime version, executable digest and secure-read helper digest. There is no claim that this
+developer machine is a named CI worker. Linux editor timings and hosted runner results are
+incompatible and must not be substituted, even if they are faster. As with the D12 reference,
+reserve the host for one measurement: stop other benchmark containers and wait for builds, tests,
+coverage and analyzers to finish before starting. Keep that quiet window through both runs.
+
+An approved OpenCode upgrade changes the measured payload itself. For that explicit migration,
+`npm run perf:evidence:coding-runtime -- --recalibrate-runtime` permits only the runtime version
+and payload digest to differ from the previous calibration. The host, toolchain and secure-read
+helper must still match exactly, and both runtime fields must change. Production discovery still
+verifies the approved payload during every sample. This mode uses the same shrink-only budget
+ratchet as `--recalibrate`; it cannot widen a previously reviewed ceiling. Follow it with a
+separate ordinary candidate measurement and the full freshness check. Ordinary recalibration
+continues to reject runtime changes.
+
+From a clean checkout on that reference:
+
+```sh
+npm ci
+npm run build:packages
+npm run dev:coding-runtime:stage
+npm run perf:evidence:coding-runtime
+npm run check:perf-evidence:coding-runtime -- --enforce-source-freshness
+```
+
+Use the pinned Node 24.18.0/npm 11.16.0 installation. Staging uses the existing approved-payload
+downloader/verifier and builds the secure-read helper; production discovery checks their integrity
+again for the measurement. The producer compiles the existing test-only production-composition
+support before collecting samples. Source, ruler and environment stamps must remain equal before
+and after sampling. Dirty measured files or ruler inputs refuse generation, including new untracked
+production files; unrelated documentation changes do not invalidate the subject.
+
+Initial calibration is a separate operation:
+
+```sh
+npm run perf:evidence:coding-runtime -- --calibrate
+npm run perf:evidence:coding-runtime
+npm run check:perf-evidence:coding-runtime -- --enforce-source-freshness
+```
+
+`--calibrate` refuses to overwrite an existing calibration or budget. It writes
+`docs/release/2952-coding-runtime-calibration.json` and
+`scripts/coding-runtime-performance-budget.json`. For each metric, the reviewed policy is
+`maximumP95Ms = observed maximum + (observed maximum - observed minimum)` across the thirty samples.
+This empirical regression allowance is derived before seeing candidate results. It is not an SLO
+or a statistical confidence interval. The budget anchors the calibration's whole-document digest;
+the judge independently re-derives both percentiles and ceilings. Calibration and candidate must
+also carry the same ruler digest: a changed measurement definition requires an explicitly reviewed
+calibration run, not just a candidate measured against incompatible old thresholds. Ordinary
+generation only writes `docs/release/2952-coding-runtime-perf-evidence.json`.
+
+When a reviewed ruler change makes the frozen calibration incomparable, use the explicit
+non-widening path in the same quiet machine window, followed by an independent candidate run:
+
+```sh
+npm run perf:evidence:coding-runtime -- --recalibrate
+npm run perf:evidence:coding-runtime
+npm run check:perf-evidence:coding-runtime -- --enforce-source-freshness
+```
+
+`--recalibrate` requires the exact existing reference environment and a valid existing calibration
+and budget. It derives ceilings from the new samples but writes the minimum of each new ceiling and
+its previously reviewed value, so recalibration can only preserve or tighten a budget. A wider
+ceiling is rejected by the judge even when its calibration digest is valid. Use this operation only
+for an explicitly reviewed ruler change; never recalibrate simply to erase a regression or change
+the reference class.
+
+The PR lane runs `check:perf-evidence:coding-runtime` and the hermetic ruler tests
+(`test:perf:coding-runtime`). It checks integrity and budgets unconditionally. Set
+`KEIKO_PERF_EVIDENCE_BASE_REF` to the PR/merge-group base for diff-owned toolchain freshness, as for
+the editor target; an absent or unresolvable base checks the ruler rather than skipping. A change
+only to unrelated package metadata does not move the bound producer command. The reference/release
+lane adds `--enforce-source-freshness`. Scheduled hosted checks add
+`--enforce-source-freshness --report-subject-drift`: source-tree and candidate-lockfile drift are
+evaluated and reported as advisories under ADR-0162; ruler drift, dirty inputs, malformed evidence
+and budget overruns still fail. The advisory flag is refused without full source evaluation.
+Scheduled checks must not run the native producer or compare their clocks.
+
+Trustworthy budget overruns are written, then rejected by the separate judge. Missing/invalid
+samples, a changed source, incomplete output, a tampered calibration or a foreign environment are
+measurement defects and do not produce candidate evidence. The emitted class is
+`functional-performance-not-platform-qualified`: these controlled provider calls are neither an
+approved live-model qualification nor platform-signature or release-closeout evidence.

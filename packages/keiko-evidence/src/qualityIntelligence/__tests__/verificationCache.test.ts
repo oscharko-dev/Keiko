@@ -28,7 +28,19 @@ import {
 import type { QualityIntelligenceEvidenceManifest } from "../manifestSchema.js";
 
 let evidenceDir: string;
-const BOUNDED_LIST_BUDGET_MS = 2_000;
+// 15_000ms, not an arbitrary raise: this repo already has one established "slow disk / CI load"
+// wall-clock allowance — packages/keiko-cli, keiko-ui, keiko-editor, keiko-local-knowledge, and the
+// root vitest.config.ts all pin `testTimeout: 15_000` "to match the numbers every CI runner already
+// uses" (see packages/keiko-cli/vitest.config.ts). Reuse that same evidence-backed number here
+// instead of inventing a new one. The prior 2_000ms bound was measured exceeded (firstMs+secondMs
+// = 3128ms) under real host contention during #2907 follow-up verification; a standalone,
+// vitest-overhead-free rerun of the identical 100-manifest list/list sequence on that same loaded
+// host (7 reps) measured min 1486ms / median 2882ms / max 4336ms for pure listAll() cost alone,
+// confirming genuine disk/host contention rather than a test or product defect. 15_000ms keeps
+// >=3.5x margin over that worst observed sample while staying far below what a real cache-miss
+// regression (100 manifests re-parsed + re-hashed, twice) would cost — the hard regression guard
+// remains the verification-count assertion below, not this wall-clock check.
+const BOUNDED_LIST_BUDGET_MS = 15_000;
 
 beforeEach(async () => {
   evidenceDir = await mkdtemp(join(tmpdir(), "keiko-qi-vcache-"));
@@ -86,6 +98,10 @@ function noMtimeFs(): WorkspaceFs {
 
 describe("QI manifest verification cache (GEN-PERF-PERSISTENCE-009)", () => {
   it("re-verifies ZERO unchanged manifests on a second list, and stays bounded for 100", () => {
+    // Explicit per-test timeout, matching the sibling 257-manifest eviction test below: this
+    // package sets no vitest.config.ts testTimeout, so Vitest's 5_000ms default applies, and the
+    // 100 sync writes + two listAll() passes measurably exceed that under real host/disk load (see
+    // BOUNDED_LIST_BUDGET_MS derivation above) independent of the in-test wall-clock assertion.
     const count = 100;
     for (let i = 0; i < count; i += 1) {
       recordQualityIntelligenceRun(baseInput(`run-vcache-${String(i).padStart(3, "0")}`), {
@@ -111,7 +127,7 @@ describe("QI manifest verification cache (GEN-PERF-PERSISTENCE-009)", () => {
     // The hard regression guard is the counter above. Keep the wall-clock check broad enough to
     // survive local/CI load while still catching pathological cache misses or filesystem stalls.
     expect(firstMs + secondMs).toBeLessThan(BOUNDED_LIST_BUDGET_MS);
-  });
+  }, 60_000);
 
   it("re-verifies a manifest after an on-disk change bumps its mtime (tamper-evidence preserved)", async () => {
     const runId = "run-vcache-mtime";

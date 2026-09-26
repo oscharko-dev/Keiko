@@ -1,12 +1,17 @@
-import {
-  CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-  validateCodingWorkbenchRuntimeSseEvent,
-} from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import type { CodingWorkbenchTurnFailureCode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import { validateCodingWorkbenchRuntimeSseEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import type {
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
+
+import {
+  contentFreeErrorClass,
+  type ServerDiagnosticSink,
+  type ServerDiagnosticSummary,
+} from "../diagnostics-log.js";
 
 /** Maximum replay retention. Kept small because this is an SSE recovery aid, not a history store. */
 export const CODING_RUNTIME_EVENT_HUB_MAX_EVENTS = 256;
@@ -40,7 +45,8 @@ export type CodingRuntimeEventHubInput =
         CodingWorkbenchRuntimeSseEvent,
         { kind: "runtime-event" }
       >["contentTrust"];
-      readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+      readonly failureCode?:
+        CodingWorkbenchRuntimeFailureCode | CodingWorkbenchTurnFailureCode | undefined;
     };
 
 export type CodingRuntimeEventHubResetReason =
@@ -84,12 +90,18 @@ export interface CodingRuntimeEventHubOptions {
   readonly maxBytes?: number | undefined;
   readonly maxSubscribers?: number | undefined;
   readonly now?: (() => Date) | undefined;
+  /**
+   * When present, mid-stream subscriber-write failures are recorded once per subscriber via this
+   * sink with a redacted, correlation-preserving summary. Without a sink the failure was still
+   * closed cleanly but left no operator trail (KEIKO-0225).
+   */
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
 }
 
 interface RetainedEvent {
   readonly event: CodingWorkbenchRuntimeSseEvent;
   readonly bytes: number;
-  readonly critical: boolean;
+  critical: boolean;
 }
 
 interface RunBuffer {
@@ -119,6 +131,7 @@ export class CodingRuntimeEventHub {
   private readonly maxBytes: number;
   private readonly maxSubscribers: number;
   private readonly now: () => Date;
+  private readonly diagnostics: ServerDiagnosticSink | undefined;
 
   constructor(options: CodingRuntimeEventHubOptions = {}) {
     this.maxEvents = positiveInteger(options.maxEvents, CODING_RUNTIME_EVENT_HUB_MAX_EVENTS);
@@ -128,6 +141,7 @@ export class CodingRuntimeEventHub {
       CODING_RUNTIME_EVENT_HUB_MAX_SUBSCRIBERS,
     );
     this.now = options.now ?? ((): Date => new Date());
+    this.diagnostics = options.diagnostics;
   }
 
   publish(input: CodingRuntimeEventHubInput): CodingRuntimeEventHubPublishResult {
@@ -153,6 +167,7 @@ export class CodingRuntimeEventHub {
 
     // A terminal projection must not retain any potentially content-bearing live stream.
     if (isContainment(event)) this.removeLossy(run);
+    if (isTurnFailure(event)) this.demotePriorTurnFailures(run);
     if (!this.makeCapacity(run, retained)) return { ok: false, reason: "capacity-pressure" };
 
     run.nextSequence += 1;
@@ -162,6 +177,26 @@ export class CodingRuntimeEventHub {
     this.fanOut(run, event);
     if (run.terminal) this.closeSubscribers(run);
     return { ok: true, event };
+  }
+
+  /** Reports each content-free gateway failure, including retries at the same task revision. */
+  publishTurnFailure(
+    runId: string,
+    state: CodingWorkbenchRuntimeStateName,
+    revision: number,
+    failureCode: CodingWorkbenchTurnFailureCode,
+  ): CodingRuntimeEventHubPublishResult | { readonly ok: false; readonly reason: "terminal-run" } {
+    const run = this.runs.get(runId);
+    if (run?.terminal === true) return { ok: false, reason: "terminal-run" };
+    return this.publish({
+      schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+      kind: "runtime-event",
+      runId,
+      state,
+      revision,
+      eventKind: "failure-redacted",
+      failureCode,
+    });
   }
 
   replay(runId: string, lastEventId?: string): CodingRuntimeEventHubReplay {
@@ -194,7 +229,8 @@ export class CodingRuntimeEventHub {
     const run = this.runs.get(runId) ?? this.newRun(runId);
     if (run.subscribers.size >= this.maxSubscribers) return reset("subscriber-capacity");
     for (const event of replay.events) {
-      if (!write(subscriber, event)) return { ok: true, detach: () => undefined };
+      if (!write(subscriber, event, runId, this.diagnostics))
+        return { ok: true, detach: () => undefined };
     }
     if (run.terminal) {
       close(subscriber);
@@ -202,16 +238,6 @@ export class CodingRuntimeEventHub {
     }
     run.subscribers.add(subscriber);
     return { ok: true, detach: () => run.subscribers.delete(subscriber) };
-  }
-
-  /** Explicit lifecycle cleanup for a restart before its first new status/event. */
-  restart(runId: string): void {
-    const run = this.runs.get(runId);
-    if (run === undefined) return;
-    this.removeLossy(run);
-    this.removePermissionRequested(run);
-    run.terminal = false;
-    this.closeSubscribers(run);
   }
 
   /** Retention coupling: delete only ids selected by the durable snapshot ledger. */
@@ -241,6 +267,13 @@ export class CodingRuntimeEventHub {
     // Keep one bounded slot (and equivalent byte headroom) for the terminal/recovery fact. If a
     // nonterminal critical burst consumes that reserve, fail admission so the orchestrator can move
     // the run to recovery-required; the terminal containment fact itself is never dropped.
+    //
+    // The `incoming.bytes * 2` headroom is an exact reservation only when every retained critical
+    // event is comparably sized to `incoming` — true today because every field of
+    // CodingRuntimeEventHubInput is a small fixed-width primitive or bounded string enum (KEIKO-0796).
+    // If that type ever gains a variable-length field, this heuristic must be re-derived against a
+    // fixed worst-case per-event byte constant instead of assuming the incoming event's own size
+    // stands in for every other critical event already retained.
     if (
       incoming.critical &&
       !isContainment(incoming.event) &&
@@ -272,23 +305,16 @@ export class CodingRuntimeEventHub {
     }
   }
 
-  /** Permission requests bind to a prior revision; clients must obtain the fresh snapshot after restart. */
-  private removePermissionRequested(run: RunBuffer): void {
-    for (let index = run.events.length - 1; index >= 0; index -= 1) {
-      const retained = run.events[index];
-      if (
-        retained?.event.kind === "runtime-event" &&
-        retained.event.eventKind === "permission-requested"
-      ) {
-        run.bytes -= retained.bytes;
-        run.events.splice(index, 1);
-      }
+  private demotePriorTurnFailures(run: RunBuffer): void {
+    for (const retained of run.events) {
+      if (isTurnFailure(retained.event)) retained.critical = false;
     }
   }
 
   private fanOut(run: RunBuffer, event: CodingWorkbenchRuntimeSseEvent): void {
     for (const subscriber of run.subscribers) {
-      if (!write(subscriber, event)) run.subscribers.delete(subscriber);
+      if (!write(subscriber, event, event.runId, this.diagnostics))
+        run.subscribers.delete(subscriber);
     }
   }
 
@@ -321,8 +347,13 @@ function isCritical(event: CodingWorkbenchRuntimeSseEvent): boolean {
     event.state === "awaiting-approval" ||
     event.state === "recovery-required" ||
     event.failureCode === "revoked" ||
-    (event.kind === "runtime-event" && event.eventKind === "permission-requested")
+    (event.kind === "runtime-event" &&
+      (event.eventKind === "permission-requested" || event.eventKind === "failure-redacted"))
   );
+}
+
+function isTurnFailure(event: CodingWorkbenchRuntimeSseEvent): boolean {
+  return event.kind === "runtime-event" && event.eventKind === "failure-redacted";
 }
 
 function isTerminal(event: CodingWorkbenchRuntimeSseEvent): boolean {
@@ -394,14 +425,52 @@ function positiveInteger(value: number | undefined, fallback: number): number {
 function write(
   subscriber: CodingRuntimeEventHubSubscriber,
   event: CodingWorkbenchRuntimeSseEvent,
+  runId: string,
+  diagnostics: ServerDiagnosticSink | undefined,
 ): boolean {
   try {
     const accepted = subscriber.write(event);
-    if (accepted === false) close(subscriber);
+    if (accepted === false) {
+      // A subscriber that returns `false` from write() is signalling backpressure exhaustion.
+      // Emit a redacted operator record so the failure is diagnosable — previously it was
+      // silently swallowed and closed. KEIKO-0225.
+      recordSseFailure(diagnostics, runId, "sse-backpressure", "Error");
+      close(subscriber);
+    }
     return accepted !== false;
-  } catch {
+  } catch (error) {
+    // A throwing subscriber write means the wire is gone (client hung up, socket broken).
+    // Same treatment: record one line and close the subscriber. `contentFreeErrorClass` is the
+    // shared, prototype-safe classifier (protects against shadowed/throwing `constructor`).
+    recordSseFailure(
+      diagnostics,
+      runId,
+      "sse-subscriber-write-failed",
+      contentFreeErrorClass(error),
+    );
     close(subscriber);
     return false;
+  }
+}
+
+function recordSseFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  message: ServerDiagnosticSummary,
+  errorClass: string,
+): void {
+  if (diagnostics === undefined) return;
+  try {
+    diagnostics.record({
+      correlationId: runId,
+      timestamp: new Date().toISOString(),
+      operation: "coding-runtime.sse-fanout",
+      source: "coding-runtime-event-hub.write",
+      errorClass,
+      message,
+    });
+  } catch {
+    // Diagnostic sink misbehaviour must not corrupt fan-out.
   }
 }
 

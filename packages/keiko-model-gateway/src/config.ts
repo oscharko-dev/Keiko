@@ -5,25 +5,39 @@
 
 import { readFileSync } from "node:fs";
 import { isIP } from "node:net";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
 import {
   DEFAULT_GROUNDING_LIMITS,
+  DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG,
   resolveGroundingLimits,
   type GroundingLimits,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { VOICE_PERSONAS, VOICE_PROVIDER_LOCALITIES } from "./types.js";
-import { isVoiceCapability, modelSupportsSpeechOutput } from "@oscharko-dev/keiko-contracts";
+import {
+  MODEL_REASONING_EFFORTS,
+  PROVIDER_ENDPOINT_STYLES,
+  REALTIME_AUTH_MODES,
+  isToolCallingVerificationFresh,
+  isVoiceCapability,
+  modelSupportsSpeechOutput,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { outboundTargetBlockedReason } from "./egress-policy.js";
 import { projectSafeCapabilities, type SafeModelCapability } from "./model-selection.js";
+import { validatedPrDescriptionLogoUrl } from "./prDescription/render.js";
+import type { PrDescriptionBranding } from "./prDescription/types.js";
 import type {
   CircuitBreakerConfig,
   CostClass,
   FigmaConnectorConfig,
+  GatewayBrandingConfig,
   GatewayConfig,
   InfillingAlignment,
   LatencyClass,
   ModelCapability,
+  ModelCapabilityPricing,
   ModelKind,
+  ModelReasoningEffort,
   ModelProviderConfig,
   ModelTokenAccounting,
   OutputTokenParameter,
@@ -31,18 +45,48 @@ import type {
   ProviderEndpointStyle,
   RealtimeAuthMode,
   RerankerConfig,
+  ToolCallingVerification,
   VoicePersona,
   VoicePersonaVoice,
   VoiceProviderLocality,
 } from "./types.js";
 
-const DEFAULT_TIMEOUT_MS = 30_000;
+export function toolCallingConfigurationFingerprint(provider: ModelProviderConfig): string {
+  // Credential header spelling controls authentication transport, not the provider protocol or its
+  // tool-call semantics. Deliberately exclude it: hashing a request-supplied header name creates a
+  // misleading password-hash dataflow and cannot make a capability verdict more authoritative.
+  const binding = [
+    provider.modelId,
+    provider.baseUrl,
+    provider.endpointStyle ?? "openai-compatible",
+    provider.apiVersion ?? "",
+  ];
+  return sha256Hex(canonicalise(binding));
+}
+
+// #3591: raised from 30s so an unconfigured provider's default already tolerates the field
+// customer's slow LiteLLM/vLLM proxy instead of relying solely on the gateway's own silence/budget
+// floors (resilience.ts) to compensate for a too-short default.
+const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_RETRY_BASE_DELAY_MS = 500;
-const DEFAULT_FAILURE_THRESHOLD = 5;
-const DEFAULT_COOLDOWN_MS = 30_000;
-const DEFAULT_HALF_OPEN_PROBES = 2;
+// KEIKO-0572: exported so gateway-setup.ts / grounded-retrieval-eval.ts can import the shared
+// defaults instead of restating the literal `{ failureThreshold: 5, cooldownMs: 30_000,
+// halfOpenProbes: 2 }` at three call sites. #2906 round 3: the VALUES themselves now come from
+// keiko-contracts's DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG (the one place keiko-ui's
+// gatewayConfigParsing.ts can also reach across the ADR-0019 package boundary), so this package no
+// longer holds an independent copy that could drift from the wire default silently.
+export const DEFAULT_FAILURE_THRESHOLD = DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG.failureThreshold;
+export const DEFAULT_COOLDOWN_MS = DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG.cooldownMs;
+export const DEFAULT_HALF_OPEN_PROBES = DEFAULT_SAFE_CIRCUIT_BREAKER_CONFIG.halfOpenProbes;
+export const DEFAULT_CIRCUIT_BREAKER_CONFIG = {
+  failureThreshold: DEFAULT_FAILURE_THRESHOLD,
+  cooldownMs: DEFAULT_COOLDOWN_MS,
+  halfOpenProbes: DEFAULT_HALF_OPEN_PROBES,
+} as const;
 export const DEFAULT_API_KEY_HEADER_NAME = "authorization";
+export { TOOL_CALLING_VERIFICATION_MAX_AGE_MS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+export { isToolCallingVerificationFresh };
 const MAX_API_KEY_HEADER_NAME_LENGTH = 64;
 const API_KEY_HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/u;
 export const SUPPORTED_API_KEY_HEADER_NAMES = [
@@ -56,11 +100,8 @@ const BEARER_API_KEY_HEADER_NAME_SET = new Set<string>([
   DEFAULT_API_KEY_HEADER_NAME,
   "x-litellm-key",
 ]);
-const PROVIDER_ENDPOINT_STYLES: readonly ProviderEndpointStyle[] = [
-  "openai-compatible",
-  "azure-openai-deployment",
-];
-const REALTIME_AUTH_MODES: readonly RealtimeAuthMode[] = ["api-key", "ephemeral-session"];
+// The endpoint-protocol value arrays come from the contract seam — one source for the UI upload
+// parser, the server setup route, and this parser (#3037 follow-up).
 const OUTPUT_TOKEN_PARAMETERS: readonly OutputTokenParameter[] = [
   "max_tokens",
   "max_completion_tokens",
@@ -73,8 +114,44 @@ const TOKEN_ACCOUNTING_KNOWN_KEYS: ReadonlySet<string> = new Set([
   "scaleMilli",
   "offsetTokens",
 ]);
+const PRICING_KNOWN_KEYS: ReadonlySet<string> = new Set([
+  "inputUsdPerMillionTokens",
+  "outputUsdPerMillionTokens",
+]);
 
 export type EnvSource = Readonly<Record<string, string | undefined>>;
+
+const ENV_MODEL_PREFIX = "KEIKO_MODEL_";
+const ENV_MODEL_API_KEY_SUFFIX = "_API_KEY";
+
+function envModelProviderTokenQualifies(token: string, env: EnvSource): boolean {
+  const apiKey = env[`${ENV_MODEL_PREFIX}${token}${ENV_MODEL_API_KEY_SUFFIX}`];
+  const baseUrl = env[`${ENV_MODEL_PREFIX}${token}_BASE_URL`];
+  return (apiKey?.length ?? 0) > 0 && (baseUrl?.length ?? 0) > 0;
+}
+
+/**
+ * The ONE env-only Model Gateway provider-admission formula: a `KEIKO_MODEL_<TOKEN>_API_KEY` /
+ * `KEIKO_MODEL_<TOKEN>_BASE_URL` pair counts as a configured provider only when BOTH are present
+ * and non-empty — never the API key alone. Every caller that needs to know whether an env-only
+ * provider is configured (keiko-server's production Gateway composition, and the #3390 real-model
+ * qualification harness) shares this exact check, so none of them can drift into accepting a
+ * profile the others would refuse.
+ *
+ * Pass `modelId` to check one specific provider (its token is derived the same way production
+ * derives it: non-alphanumeric characters become `_`, then upper-cased); omit it to ask whether
+ * ANY env-only provider in `env` qualifies.
+ */
+export function hasConfiguredEnvModelProvider(env: EnvSource, modelId?: string): boolean {
+  if (modelId !== undefined) {
+    return envModelProviderTokenQualifies(modelId.replace(/[^A-Za-z0-9]/g, "_").toUpperCase(), env);
+  }
+  return Object.keys(env).some((key) => {
+    if (!key.startsWith(ENV_MODEL_PREFIX) || !key.endsWith(ENV_MODEL_API_KEY_SUFFIX)) return false;
+    const token = key.slice(ENV_MODEL_PREFIX.length, -ENV_MODEL_API_KEY_SUFFIX.length);
+    return token.length > 0 && envModelProviderTokenQualifies(token, env);
+  });
+}
 
 // Resolves an opaque, NON-SECRET credential reference (persisted in the config file as a provider's
 // `apiKeySecretRef`) to its plaintext secret, or undefined when the reference is unknown. The gateway
@@ -121,8 +198,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// A timer armed with more than 2^31 - 1 ms fires at once (setTimeout, AbortSignal.timeout), so a
+// larger request timeout would abort every call the moment it starts. A delay the gateway derives
+// instead of reading it from its config is held to the same ceiling where it is derived.
+export const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+function requireTimerDelayMs(value: unknown, path: string): number {
+  const delayMs = requirePositiveInt(value, path);
+  if (delayMs > MAX_TIMER_DELAY_MS) {
+    throw new ConfigInvalidError(
+      `${path} must be at most ${String(MAX_TIMER_DELAY_MS)} milliseconds`,
+    );
+  }
+  return delayMs;
+}
+
 function requirePositiveInt(value: unknown, path: string): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
     throw new ConfigInvalidError(`${path} must be a positive integer`);
   }
   return value;
@@ -305,6 +397,11 @@ const EGRESS_FIELDS: readonly EgressField<keyof OutboundHttpEgressConfig>[] = [
     envNames: ["KEIKO_ALLOW_PRIVATE_EGRESS"],
     parser: optionalEgressBoolean,
   },
+  {
+    key: "acknowledgeProxiedHostnamePolicy",
+    envNames: [],
+    parser: optionalEgressBoolean,
+  },
 ];
 
 function setEgressField<K extends keyof OutboundHttpEgressConfig>(
@@ -451,6 +548,49 @@ function optionalTokenAccountingField(
   return tokenAccounting === undefined ? {} : { tokenAccounting };
 }
 
+function assertKnownPricingKeys(value: Record<string, unknown>, path: string): void {
+  for (const key of Object.keys(value)) {
+    if (!PRICING_KNOWN_KEYS.has(key)) {
+      throw new ConfigInvalidError(`${path}.${key} is not a recognised pricing field`);
+    }
+  }
+}
+
+function requireNonNegativeFiniteNumber(value: unknown, path: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new ConfigInvalidError(`${path} must be a non-negative finite number`);
+  }
+  return value;
+}
+
+// live-journey-readiness-1: public per-million-token USD list price, optional on every capability.
+// A model without this block carries no known dollar cost — a spend-budget check on an un-priced
+// model must fail closed, never assume free (see coding-sidecar-gateway.ts's
+// "spend-pricing-unavailable" reason).
+function parsePricing(value: unknown, path: string): ModelCapabilityPricing | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new ConfigInvalidError(`${path} must be an object`);
+  assertKnownPricingKeys(value, path);
+  return {
+    inputUsdPerMillionTokens: requireNonNegativeFiniteNumber(
+      value.inputUsdPerMillionTokens,
+      `${path}.inputUsdPerMillionTokens`,
+    ),
+    outputUsdPerMillionTokens: requireNonNegativeFiniteNumber(
+      value.outputUsdPerMillionTokens,
+      `${path}.outputUsdPerMillionTokens`,
+    ),
+  };
+}
+
+function optionalPricingField(
+  value: unknown,
+  path: string,
+): Partial<Pick<ModelCapability, "pricing">> {
+  const pricing = parsePricing(value, path);
+  return pricing === undefined ? {} : { pricing };
+}
+
 // Model id → KEIKO_MODEL_<UPPER>_ form: non-alphanumerics become "_", uppercased.
 function envModelToken(modelId: string): string {
   return modelId.replace(/[^A-Za-z0-9]/g, "_").toUpperCase();
@@ -573,14 +713,22 @@ function resolveProviderEndpointStyle(
 
 function resolveProviderApiVersion(
   rawValue: unknown,
-  path: string,
+  providerPath: string,
   modelId: string,
   env: EnvSource,
+  endpointStyle: ProviderEndpointStyle | undefined,
 ): string | undefined {
+  const path = `${providerPath}.apiVersion`;
   const token = envModelToken(modelId);
   const perModelName = `KEIKO_MODEL_${token}_API_VERSION`;
   const perModel = env[perModelName];
-  const defaultValue = env.KEIKO_DEFAULT_API_VERSION;
+  // The GLOBAL default applies only where an api version is meaningful: a provider whose
+  // resolved style is not the Azure deployment path must not inherit it, or one
+  // KEIKO_DEFAULT_API_VERSION would make every explicitly openai-compatible provider on the
+  // same server unparseable through the pairing rule below (review finding on #3042 —
+  // per-model and file values stay authoritative and still fail the pairing loudly).
+  const defaultValue =
+    endpointStyle === "azure-openai-deployment" ? env.KEIKO_DEFAULT_API_VERSION : undefined;
   const value = resolvePerModelValue(perModel, rawValue, defaultValue);
   if (value === undefined || value === "") {
     return undefined;
@@ -648,6 +796,17 @@ function isLoopbackHost(hostname: string): boolean {
   // here is the 127.0.0.0/8 block — never a domain such as "127.evil.com" or "127.0.0.1.evil.com".
   // The WHATWG URL parser has already canonicalised IPv4 shorthand/hex into url.hostname.
   return isIP(hostname) === 4 && hostname.startsWith("127.");
+}
+
+/**
+ * Removes ONE trailing slash before a path is joined onto a base URL. A file- or env-authored
+ * base URL ending in "/" otherwise yields "//chat/completions", which LiteLLM answers with a
+ * 404 (LiteLLM production audit). Deliberately not a normalizer: it strips a single trailing
+ * slash and returns everything else untouched, which is exactly what each adapter's inline
+ * expression did before this became their single owner (review finding on #3042).
+ */
+export function trimTrailingSlash(value: string): string {
+  return value.endsWith("/") ? value.slice(0, -1) : value;
 }
 
 // eslint-disable-next-line complexity -- URL policy validation intentionally enumerates each reject reason for operator clarity.
@@ -780,6 +939,74 @@ function assertWorkflowEligibleForKind(
       `${path}.workflowEligible must be false when ${path}.kind is not "chat"`,
     );
   }
+}
+
+// Mirrors assertWorkflowEligibleForKind: a chat capability without a positive contextWindow is a
+// degraded sentinel that only surfaces later through disconnected downstream symptoms
+// (GEN-GATE-CONTEXT-001/004). Voice capabilities deliberately declare contextWindow: 0
+// (createDefaultVoiceCapabilityForSetup in gateway-setup.ts), and embedding/ocr-vision have
+// their own zero-conventions; both remain unrestricted here. Audit KEIKO-0520.
+function assertContextWindowForKind(kind: ModelKind, contextWindow: number, path: string): void {
+  if (kind === "chat" && contextWindow <= 0) {
+    throw new ConfigInvalidError(
+      `${path}.contextWindow must be greater than 0 when ${path}.kind is "chat"`,
+    );
+  }
+}
+
+// PR-review follow-ups on KEIKO-0520 + Codex threads 3770357725 + 3770517473 + 3772192295:
+// gateway configs persisted by pre-KEIKO-0520 releases can carry `kind: "chat"` capabilities
+// with `contextWindow: 0` because the OLD `createDefaultChatCapability` returned that value
+// and gateway setup persisted it. Rejecting them outright at file load would prevent the
+// gateway from starting after an upgrade. Migration therefore runs at the FILE-LOAD boundary
+// (loadConfigFromFile) and rewrites the raw JSON before it reaches the strict parser.
+//
+// The migration is gated on TWO conditions that together prove the record is legacy:
+//   1. `contextWindow` is the exact legacy value 0 (the pre-KEIKO-0520 factory's output).
+//   2. The config root is missing `schemaVersion`, OR carries `schemaVersion: 1` — the
+//      pre-KEIKO-0520 shape never wrote this field, and every modern setup / test emits
+//      `schemaVersion: 2` or higher (see `GATEWAY_CONFIG_SCHEMA_VERSION`). A modern file with
+//      `contextWindow: 0` is a real bug and MUST fail strict parsing so the operator sees
+//      the rejection instead of an invented 4096-token capacity.
+//
+// Direct callers of parseGatewayConfig (setup wizard saves, live validation) never invoke
+// this migration, so a wizard bug that emits 0 is still caught. The migration is idempotent
+// on legacy files: a fresh run of gateway-setup will overwrite the migrated default with the
+// discovered value and stamp `schemaVersion: 2`.
+const LEGACY_CHAT_CONTEXT_WINDOW_DEFAULT = 4096;
+export const GATEWAY_CONFIG_SCHEMA_VERSION = 2;
+
+function isLegacySchemaRoot(root: Record<string, unknown>): boolean {
+  const version = root.schemaVersion;
+  if (version === undefined) return true;
+  return version === 1;
+}
+
+function migrateChatCapabilityContextWindow(raw: unknown): unknown {
+  if (!isRecord(raw)) return raw;
+  if (raw.kind !== "chat") return raw;
+  if (raw.contextWindow !== 0) return raw;
+  return { ...raw, contextWindow: LEGACY_CHAT_CONTEXT_WINDOW_DEFAULT };
+}
+
+export function migrateLegacyChatContextWindows(raw: unknown): unknown {
+  if (!isRecord(raw)) return raw;
+  if (!isLegacySchemaRoot(raw)) return raw;
+  const migrated: Record<string, unknown> = { ...raw };
+  if (Array.isArray(migrated.capabilities)) {
+    migrated.capabilities = (migrated.capabilities as unknown[]).map(
+      migrateChatCapabilityContextWindow,
+    );
+  }
+  if (Array.isArray(migrated.providers)) {
+    migrated.providers = (migrated.providers as unknown[]).map(migrateProviderCapability);
+  }
+  return migrated;
+}
+
+function migrateProviderCapability(provider: unknown): unknown {
+  if (!isRecord(provider) || !isRecord(provider.capability)) return provider;
+  return { ...provider, capability: migrateChatCapabilityContextWindow(provider.capability) };
 }
 
 // ─── Voice capability parsing (Issue #493, ADR-0100 D5/D7) ─────────────────────
@@ -995,13 +1222,18 @@ function buildProviderCapabilityBody(
 ): ModelCapability {
   const flags = providerCapabilityFlags(raw, path);
   const tokenAccounting = parseTokenAccounting(raw.tokenAccounting, `${path}.tokenAccounting`);
+  const contextWindow = optionalNonNegativeInt(raw.contextWindow, `${path}.contextWindow`, 0);
+  assertContextWindowForKind(kind, contextWindow, path);
   return {
     id,
     kind,
-    contextWindow: optionalNonNegativeInt(raw.contextWindow, `${path}.contextWindow`, 0),
+    contextWindow,
     maxOutputTokens: optionalNonNegativeInt(raw.maxOutputTokens, `${path}.maxOutputTokens`, 0),
     ...(tokenAccounting === undefined ? {} : { tokenAccounting }),
     ...flags,
+    ...optionalToolCallingVerification(raw, path, kind),
+    ...optionalChatModeDeclaredFlag(raw, path),
+    ...optionalReasoningEfforts(raw.reasoningEfforts, `${path}.reasoningEfforts`, kind),
     ...resolveInfillingAlignment(raw, path, flags.supportsInfilling ?? false, kind),
     ...parseVoiceCapabilityFields(raw, path, kind),
     workflowEligible,
@@ -1071,14 +1303,17 @@ const MODEL_CAPABILITY_KNOWN_KEYS: ReadonlySet<string> = new Set([
   "contextWindow",
   "maxOutputTokens",
   "toolCalling",
+  "toolCallingVerification",
   "structuredOutput",
   "streaming",
   "supportsImageInput",
   "supportsDocumentInput",
   "supportsSeeding",
   "supportsResponseFormat",
+  "reasoningEfforts",
   "supportsInfilling",
   "infillingAlignment",
+  "chatModeDeclared",
   "supportsSpeechInput",
   "supportsSpeechOutput",
   "supportsSpeechSynthesisInstructions",
@@ -1093,6 +1328,7 @@ const MODEL_CAPABILITY_KNOWN_KEYS: ReadonlySet<string> = new Set([
   "preferredUseCases",
   "knownLimitations",
   "tokenAccounting",
+  "pricing",
 ]);
 
 function requireBoolean(value: unknown, path: string): boolean {
@@ -1103,7 +1339,7 @@ function requireBoolean(value: unknown, path: string): boolean {
 }
 
 function requireNonNegativeIntStrict(value: unknown, path: string): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
     throw new ConfigInvalidError(`${path} must be a non-negative integer`);
   }
   return value;
@@ -1114,6 +1350,132 @@ function requireStringArray(value: unknown, path: string): readonly string[] {
     throw new ConfigInvalidError(`${path} must be an array of strings`);
   }
   return value as readonly string[];
+}
+
+function optionalReasoningEfforts(
+  value: unknown,
+  path: string,
+  kind: ModelKind,
+): Partial<Pick<ModelCapability, "reasoningEfforts">> {
+  if (value === undefined) return {};
+  if (!Array.isArray(value)) throw new ConfigInvalidError(`${path} must be an array`);
+  const efforts = value.map((entry, index) =>
+    requireEnum<ModelReasoningEffort>(entry, `${path}[${String(index)}]`, MODEL_REASONING_EFFORTS),
+  );
+  if (kind !== "chat" && efforts.length > 0) {
+    throw new ConfigInvalidError(`${path} is only valid for chat models`);
+  }
+  if (new Set(efforts).size !== efforts.length) {
+    throw new ConfigInvalidError(`${path} must not contain duplicates`);
+  }
+  return efforts.length === 0 ? {} : { reasoningEfforts: efforts };
+}
+
+// Optional discovery-mode flag — preserved only when declared so a capability record round-trips
+// exactly. Records whether discovery explicitly declared a chat-compatible mode for this model
+// (LiteLLM `/model/info` `mode`); the conversation-default preference in keiko-contracts ranks
+// mode-declared models ahead of mode-less ones (customer field incident: a mode-less OCR model
+// first in the configured list captured the default for every new chat).
+function optionalChatModeDeclaredFlag(
+  value: Record<string, unknown>,
+  path: string,
+): Partial<Pick<ModelCapability, "chatModeDeclared">> {
+  return value.chatModeDeclared !== undefined
+    ? { chatModeDeclared: requireBoolean(value.chatModeDeclared, `${path}.chatModeDeclared`) }
+    : {};
+}
+
+function isCanonicalIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== "string" || value.length === 0) return false;
+  const parsed = new Date(value);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value;
+}
+
+const TOOL_CALLING_VERIFICATION_KEYS = new Set([
+  "status",
+  "checkedAt",
+  "probe",
+  "configurationFingerprint",
+]);
+const TOOL_CALLING_VERIFICATION_STATUSES = new Set<ToolCallingVerification["status"]>([
+  "verified",
+  "unsupported",
+  "unverified",
+]);
+
+function isToolCallingVerificationStatus(
+  value: unknown,
+): value is ToolCallingVerification["status"] {
+  return (
+    typeof value === "string" &&
+    TOOL_CALLING_VERIFICATION_STATUSES.has(value as ToolCallingVerification["status"])
+  );
+}
+
+function requiredToolCallingVerification(value: unknown, path: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new ConfigInvalidError(`${path}.toolCallingVerification must be an object`);
+  }
+  const unknown = Object.keys(value).find((key) => !TOOL_CALLING_VERIFICATION_KEYS.has(key));
+  if (unknown !== undefined) {
+    throw new ConfigInvalidError(`${path}.toolCallingVerification.${unknown} is not recognised`);
+  }
+  return value;
+}
+
+function requiredToolCallingStatus(
+  value: unknown,
+  path: string,
+): ToolCallingVerification["status"] {
+  if (!isToolCallingVerificationStatus(value)) {
+    throw new ConfigInvalidError(`${path}.toolCallingVerification.status is invalid`);
+  }
+  return value;
+}
+
+function requiredToolCallingTimestamp(value: unknown, path: string): string {
+  if (!isCanonicalIsoTimestamp(value)) {
+    throw new ConfigInvalidError(
+      `${path}.toolCallingVerification.checkedAt must be an ISO-8601 instant`,
+    );
+  }
+  return value;
+}
+
+function requiredToolCallingFingerprint(value: unknown, path: string): string {
+  if (typeof value !== "string" || !/^[a-f0-9]{64}$/u.test(value)) {
+    throw new ConfigInvalidError(
+      `${path}.toolCallingVerification.configurationFingerprint must be a SHA-256 hex digest`,
+    );
+  }
+  return value;
+}
+
+function optionalToolCallingVerification(
+  value: Record<string, unknown>,
+  path: string,
+  kind: ModelKind,
+): Partial<Pick<ModelCapability, "toolCallingVerification">> {
+  const raw = value.toolCallingVerification;
+  if (raw === undefined) return {};
+  if (kind !== "chat") {
+    throw new ConfigInvalidError(`${path}.toolCallingVerification is only valid for chat models`);
+  }
+  const verification = requiredToolCallingVerification(raw, path);
+  if (verification.probe !== "gateway-tool-calling-v1") {
+    throw new ConfigInvalidError(`${path}.toolCallingVerification.probe is invalid`);
+  }
+  return {
+    toolCallingVerification: {
+      status: requiredToolCallingStatus(verification.status, path),
+      checkedAt: requiredToolCallingTimestamp(verification.checkedAt, path),
+      probe: "gateway-tool-calling-v1",
+      configurationFingerprint: requiredToolCallingFingerprint(
+        verification.configurationFingerprint,
+        path,
+      ),
+    },
+  };
 }
 
 // Optional determinism flags for the strict list parser — preserved only when declared so a
@@ -1165,11 +1527,10 @@ function assertKnownCapabilityKeys(value: Record<string, unknown>, path: string)
   }
 }
 
-export function parseModelCapability(value: unknown, path: string): ModelCapability {
-  if (!isRecord(value)) {
-    throw new ConfigInvalidError(`${path} must be an object`);
-  }
-  assertKnownCapabilityKeys(value, path);
+function parseCapabilityCore(
+  value: Record<string, unknown>,
+  path: string,
+): { id: string; kind: ModelKind; workflowEligible: boolean; contextWindow: number } {
   const id = requireNonEmptyString(value.id, `${path}.id`);
   const kind = requireEnum<ModelKind>(value.kind, `${path}.kind`, [
     "chat",
@@ -1179,21 +1540,36 @@ export function parseModelCapability(value: unknown, path: string): ModelCapabil
   ]);
   const workflowEligible = requireBoolean(value.workflowEligible, `${path}.workflowEligible`);
   assertWorkflowEligibleForKind(kind, workflowEligible, path);
+  const contextWindow = requireNonNegativeIntStrict(value.contextWindow, `${path}.contextWindow`);
+  assertContextWindowForKind(kind, contextWindow, path);
+  return { id, kind, workflowEligible, contextWindow };
+}
+
+export function parseModelCapability(value: unknown, path: string): ModelCapability {
+  if (!isRecord(value)) {
+    throw new ConfigInvalidError(`${path} must be an object`);
+  }
+  assertKnownCapabilityKeys(value, path);
+  const { id, kind, workflowEligible, contextWindow } = parseCapabilityCore(value, path);
   return {
     id,
     kind,
-    contextWindow: requireNonNegativeIntStrict(value.contextWindow, `${path}.contextWindow`),
+    contextWindow,
     maxOutputTokens: requireNonNegativeIntStrict(value.maxOutputTokens, `${path}.maxOutputTokens`),
     toolCalling: requireBoolean(value.toolCalling, `${path}.toolCalling`),
     structuredOutput: requireBoolean(value.structuredOutput, `${path}.structuredOutput`),
     streaming: requireBoolean(value.streaming, `${path}.streaming`),
     ...optionalTokenAccountingField(value.tokenAccounting, `${path}.tokenAccounting`),
+    ...optionalPricingField(value.pricing, `${path}.pricing`),
+    ...optionalToolCallingVerification(value, path, kind),
     supportsImageInput: requireBoolean(value.supportsImageInput, `${path}.supportsImageInput`),
     supportsDocumentInput: requireBoolean(
       value.supportsDocumentInput,
       `${path}.supportsDocumentInput`,
     ),
     ...optionalDeterminismFlags(value, path),
+    ...optionalReasoningEfforts(value.reasoningEfforts, `${path}.reasoningEfforts`, kind),
+    ...optionalChatModeDeclaredFlag(value, path),
     ...optionalInfillingFlags(value, path, kind),
     ...parseVoiceCapabilityFields(value, path, kind),
     workflowEligible,
@@ -1244,6 +1620,35 @@ function resolveProviderConnection(
   return { baseUrl, apiKey };
 }
 
+interface ProviderProtocolConfig {
+  readonly endpointStyle?: ReturnType<typeof resolveProviderEndpointStyle>;
+  readonly apiVersion?: ReturnType<typeof resolveProviderApiVersion>;
+  readonly realtimeAuthMode?: ReturnType<typeof resolveRealtimeAuthMode>;
+}
+
+function resolveProviderProtocol(
+  raw: Record<string, unknown>,
+  path: string,
+  modelId: string,
+  env: EnvSource,
+): ProviderProtocolConfig {
+  const endpointStyle = resolveProviderEndpointStyle(
+    raw.endpointStyle,
+    `${path}.endpointStyle`,
+    modelId,
+    env,
+  );
+  const apiVersion = resolveProviderApiVersion(raw.apiVersion, path, modelId, env, endpointStyle);
+  assertProviderEndpointVersion(endpointStyle, apiVersion, path);
+  const realtimeAuthMode = resolveRealtimeAuthMode(
+    raw.realtimeAuthMode,
+    `${path}.realtimeAuthMode`,
+    modelId,
+    env,
+  );
+  return { endpointStyle, apiVersion, realtimeAuthMode };
+}
+
 function parseProviderConfig(
   raw: Record<string, unknown>,
   path: string,
@@ -1254,19 +1659,15 @@ function parseProviderConfig(
 ): ModelProviderConfig {
   const { baseUrl, apiKey } = resolveProviderConnection(raw, path, modelId, env, egress, options);
   const voiceProfiles = parseVoiceProfiles(raw.voiceProfiles, `${path}.voiceProfiles`);
-  const endpointStyle = resolveProviderEndpointStyle(
-    raw.endpointStyle,
-    `${path}.endpointStyle`,
+  const { endpointStyle, apiVersion, realtimeAuthMode } = resolveProviderProtocol(
+    raw,
+    path,
     modelId,
     env,
   );
-  const apiVersion = resolveProviderApiVersion(raw.apiVersion, `${path}.apiVersion`, modelId, env);
-  assertProviderEndpointVersion(endpointStyle, apiVersion, path);
-  const realtimeAuthMode = resolveRealtimeAuthMode(
-    raw.realtimeAuthMode,
-    `${path}.realtimeAuthMode`,
-    modelId,
-    env,
+  const circuitBreaker = parseOptionalProviderCircuitBreaker(
+    raw.circuitBreaker,
+    `${path}.circuitBreaker`,
   );
   return {
     modelId,
@@ -1282,13 +1683,14 @@ function parseProviderConfig(
     ...(apiVersion === undefined ? {} : { apiVersion }),
     ...(realtimeAuthMode === undefined ? {} : { realtimeAuthMode }),
     ...outputTokenParameterConfig(raw.outputTokenParameter, path),
-    timeoutMs: requirePositiveInt(raw.timeoutMs ?? DEFAULT_TIMEOUT_MS, `${path}.timeoutMs`),
+    timeoutMs: requireTimerDelayMs(raw.timeoutMs ?? DEFAULT_TIMEOUT_MS, `${path}.timeoutMs`),
     maxRetries: requireNonNegativeInt(raw.maxRetries ?? DEFAULT_MAX_RETRIES, `${path}.maxRetries`),
     retryBaseDelayMs: requirePositiveInt(
       raw.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS,
       `${path}.retryBaseDelayMs`,
     ),
     ...(voiceProfiles === undefined ? {} : { voiceProfiles }),
+    ...(circuitBreaker === undefined ? {} : { circuitBreaker }),
   };
 }
 
@@ -1384,9 +1786,9 @@ function rerankerBaseUrl(
 function rerankerTimeoutMs(block: Record<string, unknown>, env: EnvSource): number {
   const envValue = env.KEIKO_RERANKER_TIMEOUT_MS;
   if (envValue !== undefined && envValue.length > 0) {
-    return requirePositiveInt(Number(envValue), "KEIKO_RERANKER_TIMEOUT_MS");
+    return requireTimerDelayMs(Number(envValue), "KEIKO_RERANKER_TIMEOUT_MS");
   }
-  return requirePositiveInt(block.timeoutMs ?? DEFAULT_TIMEOUT_MS, "reranker.timeoutMs");
+  return requireTimerDelayMs(block.timeoutMs ?? DEFAULT_TIMEOUT_MS, "reranker.timeoutMs");
 }
 
 function rerankerHeaderName(block: Record<string, unknown>, env: EnvSource): string {
@@ -1439,22 +1841,78 @@ function parseFigmaConnectorConfig(raw: unknown): FigmaConnectorConfig | undefin
   return accessToken === undefined ? {} : { accessToken };
 }
 
-function parseCircuitBreaker(raw: unknown): CircuitBreakerConfig {
+// Issue #3398: the operator declares a candidate logo URL only. Whether it actually renders is
+// decided once, downstream, by `resolvePrDescriptionBrandingFromConfig` reusing
+// `validatedPrDescriptionLogoUrl` — never restated here, and never rejected at load time, because
+// a bad branding value must degrade to Keiko's text-only attribution, not break config loading.
+function parseGatewayBrandingConfig(raw: unknown): GatewayBrandingConfig | undefined {
+  if (!isRecord(raw) || raw.branding === undefined) {
+    return undefined;
+  }
+  const block = raw.branding;
+  if (!isRecord(block)) {
+    throw new ConfigInvalidError("branding must be an object");
+  }
+  const logoUrl = optionalTrimmedString(block.logoUrl, "branding.logoUrl");
+  return logoUrl === undefined ? {} : { logoUrl };
+}
+
+/**
+ * Resolves the server-configured branding into the exact shape the PR-description renderer
+ * consumes. `validatedPrDescriptionLogoUrl` is the single owner of "is this a safe, immutable,
+ * publicly hosted HTTPS SVG"; an absent or invalid `branding.logoUrl` yields `{}`, which the
+ * renderer's own fallback turns into the trusted text attribution — never a thrown error.
+ */
+export function resolvePrDescriptionBrandingFromConfig(
+  config: GatewayConfig,
+): PrDescriptionBranding {
+  const logoUrl = config.branding?.logoUrl;
+  if (logoUrl === undefined) {
+    return {};
+  }
+  const candidate: PrDescriptionBranding = { immutableLogoUrl: logoUrl, availability: "public" };
+  return validatedPrDescriptionLogoUrl(candidate) === undefined ? {} : candidate;
+}
+
+function parseCircuitBreaker(raw: unknown, path = "circuitBreaker"): CircuitBreakerConfig {
   const source = isRecord(raw) ? raw : {};
   return {
     failureThreshold: requirePositiveInt(
       source.failureThreshold ?? DEFAULT_FAILURE_THRESHOLD,
-      "circuitBreaker.failureThreshold",
+      `${path}.failureThreshold`,
     ),
-    cooldownMs: requirePositiveInt(
-      source.cooldownMs ?? DEFAULT_COOLDOWN_MS,
-      "circuitBreaker.cooldownMs",
-    ),
+    cooldownMs: requirePositiveInt(source.cooldownMs ?? DEFAULT_COOLDOWN_MS, `${path}.cooldownMs`),
     halfOpenProbes: requirePositiveInt(
       source.halfOpenProbes ?? DEFAULT_HALF_OPEN_PROBES,
-      "circuitBreaker.halfOpenProbes",
+      `${path}.halfOpenProbes`,
     ),
   };
+}
+
+// Per-provider circuitBreaker override (audit KEIKO-0167). Parsed present-only: absent when the
+// operator did not declare a provider-level block, so a mixed deployment can leave most providers
+// on the shared top-level policy and single out only the ones that need a different threshold
+// (e.g. a flakier LiteLLM proxy vs. a strict-latency direct Azure).
+//
+// PR-review follow-up: an explicit provider-level override must be a real object with only the
+// three supported keys. `parseCircuitBreaker` would otherwise coerce a non-record (e.g. the
+// string "off") to `{}` and quietly install the built-in defaults as a per-provider override —
+// silently replacing a deliberately-tuned top-level policy on `Gateway.breakerFor`. Reject
+// malformed shapes explicitly here so validation errors surface at config-parse time.
+const CIRCUIT_BREAKER_KEYS = new Set(["failureThreshold", "cooldownMs", "halfOpenProbes"]);
+function parseOptionalProviderCircuitBreaker(
+  raw: unknown,
+  path: string,
+): CircuitBreakerConfig | undefined {
+  if (raw === undefined) return undefined;
+  if (!isRecord(raw)) {
+    throw new ConfigInvalidError(`${path} must be an object when provided`);
+  }
+  const unknownKey = Object.keys(raw).find((key) => !CIRCUIT_BREAKER_KEYS.has(key));
+  if (unknownKey !== undefined) {
+    throw new ConfigInvalidError(`${path} has unsupported key ${unknownKey}`);
+  }
+  return parseCircuitBreaker(raw, path);
 }
 
 function providersWithEgress(
@@ -1548,6 +2006,59 @@ function applyVoicePersonaDerivation(
   return [...byId.values()];
 }
 
+function hasCurrentToolCallingVerification(
+  verification: ToolCallingVerification | undefined,
+  provider: ModelProviderConfig,
+  now: number,
+): boolean {
+  if (
+    verification?.status !== "verified" ||
+    verification.configurationFingerprint !== toolCallingConfigurationFingerprint(provider)
+  ) {
+    return false;
+  }
+  return isToolCallingVerificationFresh(verification, { nowMs: now });
+}
+
+function verifiedToolCallingCapability(
+  capability: ModelCapability,
+  provider: ModelProviderConfig | undefined,
+): ModelCapability {
+  if (capability.kind !== "chat") return capability;
+  if (provider === undefined) return { ...capability, toolCalling: false };
+  return hasCurrentToolCallingVerification(
+    capability.toolCallingVerification,
+    provider,
+    Date.now(),
+  ) && capability.toolCalling
+    ? capability
+    : { ...capability, toolCalling: false };
+}
+
+function applyToolCallingVerification(
+  capabilities: readonly ModelCapability[],
+  providers: readonly ModelProviderConfig[],
+): readonly ModelCapability[] {
+  const providersByModelId = new Map(providers.map((provider) => [provider.modelId, provider]));
+  return capabilities.map((capability) =>
+    verifiedToolCallingCapability(capability, providersByModelId.get(capability.id)),
+  );
+}
+
+// Rejects a config in which any two provider entries share the same modelId across the
+// merged chat/embedding/voice set (#2906 KEIKO-0567). Gateway's constructor builds a
+// modelId→provider Map — a duplicate silently lets the later entry win and routes chat
+// requests to the wrong (e.g. voice) provider with no error at setup time.
+function assertUniqueProviderModelIds(providers: readonly { readonly modelId: string }[]): void {
+  const seen = new Set<string>();
+  for (const provider of providers) {
+    if (seen.has(provider.modelId)) {
+      throw new ConfigInvalidError(`duplicate provider modelId '${provider.modelId}'`);
+    }
+    seen.add(provider.modelId);
+  }
+}
+
 function buildGatewayConfig(
   raw: Record<string, unknown>,
   providersRaw: readonly unknown[],
@@ -1559,11 +2070,16 @@ function buildGatewayConfig(
     parseProvider(item, index, env, egress, options),
   );
   const providers = providersWithEgress(parsed, egress);
+  assertUniqueProviderModelIds(providers);
   const merged = mergeCapabilities(inlineCapabilities(parsed), topLevelCapabilities(raw));
-  const capabilities = applyVoicePersonaDerivation(merged, providers);
+  const capabilities = applyToolCallingVerification(
+    applyVoicePersonaDerivation(merged, providers),
+    providers,
+  );
   const grounding = parseGroundingLimits(raw);
   const reranker = parseRerankerConfig(raw, env, egress, options);
   const figma = parseFigmaConnectorConfig(raw);
+  const branding = parseGatewayBrandingConfig(raw);
   return {
     providers,
     circuitBreaker: parseCircuitBreaker(raw.circuitBreaker),
@@ -1572,6 +2088,7 @@ function buildGatewayConfig(
     ...(reranker !== undefined ? { reranker } : {}),
     ...(egress !== undefined ? { egress } : {}),
     ...(figma !== undefined ? { figma } : {}),
+    ...(branding !== undefined ? { branding } : {}),
   };
 }
 
@@ -1616,7 +2133,14 @@ export function loadConfigFromFile(
   env: EnvSource = {},
   options: ParseGatewayConfigOptions = {},
 ): GatewayConfig {
-  return parseGatewayConfig(readGatewayConfigFile(path), env, options);
+  // PR-review follow-up (Codex thread 3770357725): migration for pre-KEIKO-0520 persisted
+  // configs runs HERE at the file-load boundary — not inside parseGatewayConfig — so a
+  // fresh setup wizard save with contextWindow:0 still gets the strict rejection.
+  return parseGatewayConfig(
+    migrateLegacyChatContextWindows(readGatewayConfigFile(path)),
+    env,
+    options,
+  );
 }
 
 export function loadEgressConfigFromFile(

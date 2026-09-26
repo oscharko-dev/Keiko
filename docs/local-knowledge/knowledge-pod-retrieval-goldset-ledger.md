@@ -14,7 +14,7 @@ new sealed-pod scorecard fixture, and the release evidence recorded here.
 
 | Area               | Reused surface                                                                                                                                   | This epic's residual work                                                                                     |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| Eval harness       | `runRetrievalEval` over `ALL_FIXTURES` in `packages/keiko-local-knowledge/src/evaluations`, `runLocalKnowledgeRetrieval` invoked unchanged       | One new goldset fixture (`sealed-pod`) and one pure aggregation module (`comparison.ts`); no parallel harness |
+| Eval harness       | `runRetrievalEval` over `ALL_FIXTURES` in `packages/keiko-evaluations/src/local-knowledge`, `runLocalKnowledgeRetrieval` invoked unchanged       | One new goldset fixture (`sealed-pod`) and one pure aggregation module (`comparison.ts`); no parallel harness |
 | Scorecard metrics  | `recall`, `precision`, `meanReciprocalRank`, `ndcg`, `sourceIsolation`, `citationQuality`, `noEvidenceAccuracy`, `contextBudgetFit` (Epic #1817) | Documented reference only; no metric re-implemented                                                           |
 | Multi-space fusion | `multi-space` fixture, rank-only cross-space RRF, embedding profile status handling (Epic #1818)                                                 | Confirmed and mapped in the taxonomy; no new cross-space code                                                 |
 | Sealed-pod policy  | `sealedLocalPodModelUsePolicy`, deny-wins scope aggregation, fail-closed `policy-denied` retrieval (Epic #1819)                                  | Made scorecard-visible via the new `sealed-pod` fixture; policy layer unchanged                               |
@@ -101,7 +101,7 @@ branch. No new ranking metric helper was required.
 ## Retrieval-mode comparison (#2010)
 
 `computeRetrievalModeComparison` / `renderRetrievalModeComparisonReport`
-(`packages/keiko-local-knowledge/src/evaluations/comparison.ts`) aggregate the existing
+(`packages/keiko-evaluations/src/local-knowledge/comparison.ts`) aggregate the existing
 per-fixture scorecards into one per-leg view. `scripts/check-retrieval-quality.mjs` now emits that
 comparison report next to the existing Local Knowledge scorecard table, so the required gate shows
 lexical, vector, and fused movement in one place. It adds no retrieval path and no fixtures: it
@@ -192,7 +192,7 @@ and policy contracts") ships real capability and policy contracts to evaluate ag
 
 | Gate                          | Status | Evidence                                                                                                                                                                                                                                                                                                                                                                                                |
 | ----------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Focused eval and gate tests   | passed | `npm test -- --run packages/keiko-local-knowledge/src/evaluations scripts/__tests__/check-retrieval-quality.test.mjs` — 9 files, 110 tests, including `sealed-pod.test.ts`, `comparison.test.ts`, and retrieval-gate wiring                                                                                                                                                                             |
+| Focused eval and gate tests   | passed | `npm test -- --run packages/keiko-evaluations/src/local-knowledge scripts/__tests__/check-retrieval-quality.test.mjs` — 9 files, 110 tests, including `sealed-pod.test.ts`, `comparison.test.ts`, and retrieval-gate wiring                                                                                                                                                                             |
 | TypeScript                    | passed | `npm run typecheck` — `build:packages`, `check:package-graph` PASS, `tsc -p tsconfig.json --noEmit`                                                                                                                                                                                                                                                                                                     |
 | Lint                          | passed | `npm run lint` — `eslint . --max-warnings=0` and the keiko-ui workspace lint                                                                                                                                                                                                                                                                                                                            |
 | Format                        | passed | `npm run format:check` — all matched files use Prettier code style                                                                                                                                                                                                                                                                                                                                      |
@@ -232,7 +232,7 @@ Before claiming a Knowledge Pod retrieval change improved or regressed answer qu
   reranker/embedding regression controls.
 - `npm run check:grounded-faithfulness` — abstention on empty evidence and fabricated-citation
   detection.
-- `npm test -- --run packages/keiko-local-knowledge/src/evaluations` — the eval harness, mode
+- `npm test -- --run packages/keiko-evaluations/src/local-knowledge` — the eval harness, mode
   comparison, and `sealed-pod` governance proofs.
 
 When retrieval behaviour intentionally changes, update the affected fixtures and record why in the

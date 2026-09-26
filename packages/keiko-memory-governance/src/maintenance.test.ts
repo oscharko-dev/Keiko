@@ -3,11 +3,13 @@ import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts/memor
 import { MEMORY_TYPE_DECAY_HALF_LIFE_MULTIPLIERS } from "@oscharko-dev/keiko-contracts/memory";
 import {
   effectiveStrength,
+  planAcknowledgedArchivedForgets,
   planMemoryMaintenance,
   MEMORY_MAINTENANCE_DEFAULTS,
   type MemoryAccessStatLike,
   type MemoryMaintenancePlan,
 } from "./maintenance.js";
+import { GovernanceError } from "./errors.js";
 import { makeRecord } from "./_support.js";
 
 const DAY = 864e5;
@@ -362,6 +364,53 @@ describe("planMemoryMaintenance — forget", () => {
       createdAt: NOW - 40 * DAY,
     });
     expect(planFor([r], emptyStats()).forget).toEqual([]);
+  });
+
+  it("surfaces old archived records only through the acknowledged retention planner", () => {
+    const archived = makeRecord({
+      id: "archived-old",
+      status: "archived",
+      createdAt: NOW - 90 * DAY,
+      updatedAt: NOW - 31 * DAY,
+    });
+    const recent = makeRecord({
+      id: "archived-recent",
+      status: "archived",
+      createdAt: NOW - 90 * DAY,
+      updatedAt: NOW - 29 * DAY,
+    });
+    const boundary = makeRecord({
+      id: "archived-boundary",
+      status: "archived",
+      createdAt: NOW - 90 * DAY,
+      updatedAt: NOW - 30 * DAY,
+    });
+    const candidates = planAcknowledgedArchivedForgets([archived, recent, boundary], {
+      nowMs: NOW,
+      retentionAcknowledged: true,
+    });
+
+    expect(candidates).toEqual([
+      { id: "archived-boundary", reason: "archived-retention" },
+      { id: "archived-old", reason: "archived-retention" },
+    ]);
+    expect(planFor([archived], emptyStats()).forget).toEqual([]);
+  });
+
+  it("rejects missing runtime retention acknowledgement", () => {
+    const archived = makeRecord({ id: "archived-old", status: "archived" });
+    const untrustedOptions: unknown = { nowMs: NOW, retentionAcknowledged: false };
+
+    expect(() =>
+      planAcknowledgedArchivedForgets(
+        [archived],
+        untrustedOptions as Parameters<typeof planAcknowledgedArchivedForgets>[1],
+      ),
+    ).toThrow(
+      expect.objectContaining<Partial<GovernanceError>>({
+        code: "destructive-acknowledgement-required",
+      }),
+    );
   });
 
   it("EXPIRES rather than forgets a very faint, old, unaccessed proposed memory", () => {

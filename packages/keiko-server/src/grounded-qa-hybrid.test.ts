@@ -13,6 +13,7 @@ import {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
   DEFAULT_EXPLORATION_BUDGET,
   type ConnectedContextPack,
+  type ExplorationBudget,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import type {
   ChatConnectedScope,
@@ -32,7 +33,7 @@ import type {
 import {
   KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
   standardPodModelUsePolicy,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 
 import {
   openKnowledgeStore,
@@ -47,11 +48,15 @@ import {
 } from "@oscharko-dev/keiko-local-knowledge/testing";
 
 import { handleGroundedAsk, type GroundedRunner, type HybridSeam } from "./grounded-qa.js";
+import type { EntailmentStage } from "./grounded-entailment-stage.js";
 import { ClarificationNeededError } from "./grounded-orchestrator.js";
+import { GROUNDED_NO_EVIDENCE_ANSWER } from "./grounded-faithfulness.js";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   parseGatewayConfig,
+  type GatewayCallRequest,
   type ModelCapability,
+  type NormalizedResponse,
   type RerankOutcome,
 } from "@oscharko-dev/keiko-model-gateway";
 import type { GroundedRetriever } from "./grounded-qa-multi-source.js";
@@ -59,11 +64,13 @@ import {
   EmbeddingAdapterError,
   connectorQuery,
   connectorRetrievalTopK,
+  createHybridAnswerer,
   estimateConnectorExcerptBytes,
   hashString32,
   runHybridGroundedAsk,
   type ConnectorRetrieve,
 } from "./grounded-qa-hybrid.js";
+import { normalizeGroundedAnswerPayload } from "./grounded-answer.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { buildRedactor, createRunRegistry } from "./index.js";
@@ -166,6 +173,7 @@ function fakeRes(): RouteContext["res"] {
 
 function routeCtx(body: string, res: RouteContext["res"] = fakeRes()): RouteContext {
   return {
+    correlationId: undefined,
     req: fakeReq(body),
     res,
     params: {},
@@ -1326,7 +1334,9 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
 
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     const answer = asHybrid(result.body as GroundedAnswer);
-    expect(answer.content).toBe("No evidence found in the selected connected sources.");
+    // KEIKO-0196: the hybrid abstention text now matches folder + multi-source (they both
+    // emit GROUNDED_NO_EVIDENCE_ANSWER via grounded-faithfulness.ts).
+    expect(answer.content).toBe(GROUNDED_NO_EVIDENCE_ANSWER);
     expect(answer.citations).toHaveLength(0);
     expect(answer.knowledgeCitations).toHaveLength(0);
     expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
@@ -1401,6 +1411,68 @@ describe("hybrid grounded ask — 2 connectors, 0 folders", () => {
 });
 
 // ─── Case 3: Not-ready connector skipped, others answer ──────────────────────
+
+// ─── Case 2b: every folder denied + 2 connectors ─────────────────────────────
+//
+// Canonicalization skips a denied folder; the hybrid merge (2+ connectors) must then answer from the
+// connectors ALONE. Before the fix, `withCanonicalFolderScopes(chat, [])` returned the ORIGINAL chat,
+// so `capSourcesToLimits` re-read the denied legacy `connectedScope` through `buildConnectedScopes`
+// and retrieved it without the authority canonicalization had withheld (#3376 review P1).
+
+describe("hybrid grounded ask — every folder denied + 2 connectors", () => {
+  it("answers from the connectors alone and never retrieves the denied folder", async () => {
+    // Arrange — the folder resolves to the chat's project path, which sits inside a credential
+    // directory (deny-listed locus; the store refuses an explicit deny-listed `root`, so the denial
+    // is reached the way the route reaches it). It is stored in the LEGACY single-scope field so the
+    // exact bypass the review named is on the table.
+    const { capsuleId: capA, label: labelA } = await seedReadyCapsule("Denied Folder Docs A");
+    const { capsuleId: capB, label: labelB } = await seedReadyCapsule("Denied Folder Docs B");
+    const deniedRoot = join(tmp, ".aws", "project");
+    mkdirSync(deniedRoot, { recursive: true });
+    const project = store.createProject(deniedRoot, "denied");
+    const chat = store.createChat(project.path, "Denied folder + 2 connectors", CHAT_MODEL);
+    store.updateChat(chat.id, {
+      connectedScope: { kind: "directory", relativePaths: ["src/secret.ts"], connectedAtMs: NOW },
+      localKnowledgeScopes: [
+        { kind: "capsule", capsuleId: capA, connectedAtMs: NOW },
+        { kind: "capsule", capsuleId: capB, connectedAtMs: NOW },
+      ],
+    });
+    const folderRetrievals = { count: 0 };
+    const hybrid: HybridSeam = {
+      folderRetriever: (): Promise<RetrievalOnlyOutput> => {
+        folderRetrievals.count += 1;
+        return Promise.reject(new Error("a denied folder must never be retrieved"));
+      },
+      connectorRetrieve: dualConnectorRetrieve(capA, capB),
+      answer: sentinelAnswerer(),
+    };
+
+    // Act
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId: chat.id, content: "What do the connectors say?" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      hybrid,
+    );
+
+    // Assert — the ask proceeds from the connectors; the denied folder is skipped, never retrieved.
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(folderRetrievals.count).toBe(0);
+    const answer = asHybrid(result.body as GroundedAnswer);
+    expect(answer.citations).toHaveLength(0);
+    expect(answer.contextPack.folderSourceCount).toBe(0);
+    expect(answer.contextPack.connectorSourceCount).toBe(2);
+    const kciLabels = answer.knowledgeCitations.map((kc) => kc.source);
+    expect(kciLabels.some((label) => label?.startsWith(`${labelA} / `))).toBe(true);
+    expect(kciLabels.some((label) => label?.startsWith(`${labelB} / `))).toBe(true);
+    // The skip is visible as uncertainty (the hybrid path keys it by its reason) and never echoes
+    // the denied path (CWE-209).
+    expect(answer.uncertainty.some((u) => u.kind === "not-accessible")).toBe(true);
+    expect(JSON.stringify(result.body)).not.toContain(".aws");
+  });
+});
 
 describe("hybrid grounded ask — not-ready connector is skipped", () => {
   it("skips the indexing connector, surfaces uncertainty naming it, and the ready connector's citations are present", async () => {
@@ -1517,7 +1589,9 @@ describe("hybrid grounded ask — not-ready connector is skipped", () => {
 
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     const answer = asHybrid(result.body as GroundedAnswer);
-    expect(answer.content).toBe("No evidence found in the selected connected sources.");
+    // KEIKO-0196: the hybrid abstention text now matches folder + multi-source (they both
+    // emit GROUNDED_NO_EVIDENCE_ANSWER via grounded-faithfulness.ts).
+    expect(answer.content).toBe(GROUNDED_NO_EVIDENCE_ANSWER);
     expect(answer.citations).toHaveLength(0);
     expect(answer.knowledgeCitations).toHaveLength(0);
     expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
@@ -2057,7 +2131,7 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
           {
             modelId: CHAT_MODEL,
             baseUrl: "https://provider.example/v1",
-            apiKey: "test-api-key-1234567890",
+            apiKey: "example-secret-token",
             timeoutMs: 30_000,
             maxRetries: 0,
             retryBaseDelayMs: 500,
@@ -2065,7 +2139,7 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
           {
             modelId: embeddingModelId,
             baseUrl: "https://provider.example/v1",
-            apiKey: "test-api-key-1234567890",
+            apiKey: "example-secret-token",
             timeoutMs: 30_000,
             maxRetries: 0,
             retryBaseDelayMs: 500,
@@ -2116,6 +2190,100 @@ describe("AC5 routing — single connector must route to handleLocalKnowledgeGro
     // Type narrowing confirms we got the right answer shape (throws if wrong groundingKind)
     const lkAnswer = asLocalKnowledge(answer);
     expect(lkAnswer.contextPack.kind).toBe("local-knowledge");
+  });
+
+  // ADR-0173 D5: local-knowledge-grounded-qa.ts's StoreBackedAnswerGenerator.generate is the real
+  // model.call site this dispatch path reaches (no seam bypasses it here, unlike the hybrid tests
+  // above) — it must stamp the request's correlation id into GatewayCallRequest.logContext.
+  it("threads the request correlation id into the local-knowledge answerer's model gateway call", async () => {
+    const { capsuleId: capId } = await seedReadyCapsule("Solo Docs Correlation");
+    const chatId = makeHybridChat([], [{ kind: "capsule", capsuleId: capId, connectedAtMs: NOW }]);
+    const hybrid: HybridSeam = { answer: throwingHybridAnswerer() };
+    const embeddingModelId = "text-embedding-3-small";
+    const adapter = scriptedAdapter();
+    const seenRequests: GatewayCallRequest[] = [];
+    const recordingModelPort: ModelPort = {
+      call: (request): Promise<NormalizedResponse> => {
+        seenRequests.push(request);
+        return Promise.resolve({
+          modelId: CHAT_MODEL,
+          content: "Local knowledge answer [1].",
+          finishReason: "stop" as const,
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "lk-logcontext-test",
+            promptTokens: 10,
+            completionTokens: 5,
+            latencyMs: 5,
+            costClass: "medium" as const,
+          },
+        });
+      },
+    };
+    const configuredDeps: UiHandlerDeps = {
+      ...hybridDeps({ localKnowledgeEmbeddingRequest: adapter.request }),
+      config: {
+        providers: [
+          {
+            modelId: CHAT_MODEL,
+            baseUrl: "https://provider.example/v1",
+            apiKey: "example-secret-token",
+            timeoutMs: 30_000,
+            maxRetries: 0,
+            retryBaseDelayMs: 500,
+          },
+          {
+            modelId: embeddingModelId,
+            baseUrl: "https://provider.example/v1",
+            apiKey: "example-secret-token",
+            timeoutMs: 30_000,
+            maxRetries: 0,
+            retryBaseDelayMs: 500,
+          },
+        ],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: [
+          {
+            id: CHAT_MODEL,
+            kind: "chat",
+            contextWindow: 64_000,
+            maxOutputTokens: 4_096,
+            toolCalling: true,
+            structuredOutput: true,
+            streaming: true,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: false,
+            costClass: "medium",
+            latencyClass: "standard",
+            throughputHint: "test",
+            preferredUseCases: [],
+            knownLimitations: [],
+          },
+        ],
+      },
+      configPresent: true,
+      modelPortFactory: () => recordingModelPort,
+    };
+    const requestCtx: RouteContext = {
+      ...routeCtx(JSON.stringify({ chatId, content: "Solo question", modelId: CHAT_MODEL })),
+      correlationId: "cid-local-knowledge-000001",
+    };
+
+    const result = await handleGroundedAsk(
+      requestCtx,
+      configuredDeps,
+      undefined,
+      undefined,
+      hybrid,
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(seenRequests.length).toBeGreaterThan(0);
+    for (const request of seenRequests) {
+      expect(request.logContext?.correlationId).toBe("cid-local-knowledge-000001");
+    }
   });
 });
 
@@ -2616,7 +2784,9 @@ describe("shared byte budget — oversized evidence fails closed", () => {
     expect(result.status, JSON.stringify(result.body)).toBe(200);
     const answer = asHybrid(result.body as GroundedAnswer);
 
-    expect(answer.content).toBe("No evidence found in the selected connected sources.");
+    // KEIKO-0196: the hybrid abstention text now matches folder + multi-source (they both
+    // emit GROUNDED_NO_EVIDENCE_ANSWER via grounded-faithfulness.ts).
+    expect(answer.content).toBe(GROUNDED_NO_EVIDENCE_ANSWER);
     expect(answer.citations).toHaveLength(0);
     expect(answer.knowledgeCitations).toHaveLength(0);
     expect(answer.uncertainty.some((u) => u.kind === "no-evidence")).toBe(true);
@@ -3167,5 +3337,190 @@ describe("estimateConnectorExcerptBytes", () => {
 
   it("never returns a negative estimate for a malformed (end < start) span", () => {
     expect(estimateConnectorExcerptBytes(referenceWithOffsets(500, 100), 900)).toBe(0);
+  });
+});
+
+// ─── KEIKO-0174 + KEIKO-0237 (#2901) ─────────────────────────────────────────
+//
+// Two integration-level assertions the hybrid path was missing:
+//
+// - KEIKO-0174: retrieveFolderPacks called `splitExplorationBudget(base, n)` (singular), which
+//   returned the FIRST slice of an equal split and reused it for every folder — every folder got
+//   the same rich share, breaking the documented "sum of every budget dimension equals the base
+//   cap" invariant. The fix uses the plural, per-folder form.
+//
+// - KEIKO-0237: hybrid entailment forwards folder packs to the judge. The wiring test covers the
+//   helper in isolation; that says nothing about which packs the real hybrid call site hands over.
+//   The entailmentStageFactory seam lets a test capture the actual argument.
+
+describe("hybrid folder budgets stay within the base cap (KEIKO-0174)", () => {
+  it("sums each dimension across folders to at most DEFAULT_EXPLORATION_BUDGET", async () => {
+    const { capsuleId } = await seedReadyCapsule("Budget-Sum Connector");
+    const folders: ChatConnectedScope[] = Array.from({ length: 3 }, (_unused, i) => ({
+      kind: "directory" as const,
+      relativePaths: [`src/budget-${String(i)}.ts`],
+      connectedAtMs: NOW,
+      root: tempRoot(`budget-folder-${String(i)}`),
+    }));
+    const chatId = makeHybridChat(folders, [{ kind: "capsule", capsuleId, connectedAtMs: NOW }]);
+
+    const observedBudgets: ExplorationBudget[] = [];
+    const retriever: GroundedRetriever = (input): Promise<RetrievalOnlyOutput> => {
+      if (input.budget !== undefined) observedBudgets.push(input.budget);
+      const key = input.scope.relativePaths[0] ?? "";
+      return Promise.resolve({
+        pack: folderPack(key, 0.5, `atom-${key}`),
+        elapsedMs: 5,
+        plan: { state: "ready" } as never,
+      });
+    };
+
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "answer within cap" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      {
+        folderRetriever: retriever,
+        connectorRetrieve: singleConnectorRetrieve(capsuleId),
+        answer: sentinelAnswerer(),
+      },
+    );
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(observedBudgets).toHaveLength(3);
+    for (const key of Object.keys(
+      DEFAULT_EXPLORATION_BUDGET,
+    ) as (keyof typeof DEFAULT_EXPLORATION_BUDGET)[]) {
+      const sum = observedBudgets.reduce((total, budget) => total + budget[key], 0);
+      const cap = DEFAULT_EXPLORATION_BUDGET[key];
+      expect(
+        sum,
+        `dimension ${key} exceeded cap ${String(cap)} (sum=${String(sum)})`,
+      ).toBeLessThanOrEqual(cap);
+    }
+  });
+});
+
+describe("hybrid entailment forwards the retrieved folder packs (KEIKO-0237)", () => {
+  it("hands the judge exactly the folder packs the retriever returned", async () => {
+    const { capsuleId } = await seedReadyCapsule("Entailment Forwarding Connector");
+    const folderA: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/pack-a.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("entail-a"),
+    };
+    const folderB: ChatConnectedScope = {
+      kind: "directory",
+      relativePaths: ["src/pack-b.ts"],
+      connectedAtMs: NOW,
+      root: tempRoot("entail-b"),
+    };
+    const packMap = new Map<string, ConnectedContextPack>([
+      ["src/pack-a.ts", folderPack("src/pack-a.ts", 0.6, "atom-a")],
+      ["src/pack-b.ts", folderPack("src/pack-b.ts", 0.6, "atom-b")],
+    ]);
+    const chatId = makeHybridChat(
+      [folderA, folderB],
+      [{ kind: "capsule", capsuleId, connectedAtMs: NOW }],
+    );
+
+    const observedPacksPerCall: (readonly ConnectedContextPack[])[] = [];
+    const observedNumericEvidence: { readonly marker: number; readonly excerptText: string }[] = [];
+    const observedCapsulesPerCall: number[] = [];
+    const stage: EntailmentStage = {
+      evaluate: (_answer, packs, _now) => {
+        observedPacksPerCall.push(packs);
+        return Promise.resolve([]);
+      },
+      evaluateNumeric: (_answer, evidence, _now) => {
+        observedNumericEvidence.push(...evidence);
+        return Promise.resolve([]);
+      },
+    };
+    const result = await handleGroundedAsk(
+      routeCtx(JSON.stringify({ chatId, content: "trace the packs" })),
+      hybridDeps(),
+      undefined,
+      undefined,
+      {
+        folderRetriever: folderRetrieverFor(packMap),
+        connectorRetrieve: singleConnectorRetrieve(capsuleId),
+        answer: sentinelAnswerer(),
+        entailmentStageFactory: (input): EntailmentStage => {
+          observedCapsulesPerCall.push(input.capsules.length);
+          return stage;
+        },
+      },
+    );
+
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+    expect(observedPacksPerCall).toHaveLength(1);
+    const forwardedIds = (observedPacksPerCall[0] ?? []).map((pack) => pack.stableId).sort();
+    expect(forwardedIds).toEqual(["pack-atom-a", "pack-atom-b"]);
+    // A hybrid ask with one connector capsule enters createEntailmentStage with its capsule list;
+    // capsule policy is evaluated inside the factory. Pin the count so ADD-01's connector-pack
+    // forwarding stays visible if it changes.
+    expect(observedCapsulesPerCall).toEqual([1]);
+    expect(observedNumericEvidence.map((evidence) => evidence.marker).sort()).toEqual([1, 2, 3]);
+    expect(
+      observedNumericEvidence.some((evidence) =>
+        evidence.excerptText.includes("### Connector source:"),
+      ),
+    ).toBe(true);
+    expect(
+      observedNumericEvidence.some((evidence) =>
+        evidence.excerptText.includes("### Folder source:"),
+      ),
+    ).toBe(true);
+  });
+});
+
+// ─── Correlation threading (ADR-0173 D5) ──────────────────────────────────────
+//
+// Every hybrid dispatch test above injects `HybridSeam.answer` (a bare (system, user) => string
+// function), which never touches the real Gateway-backed answerer this file's production code
+// builds via `resolveHybridAnswerer` -> `createHybridAnswerer`. That builder is the actual
+// model.call site fixed here, so it is unit-tested directly against a fake ModelPort that records
+// the request it receives.
+describe("createHybridAnswerer correlation threading", () => {
+  it("stamps the caller's correlation id into the Gateway double's GatewayCallRequest.logContext", async () => {
+    const seenRequests: GatewayCallRequest[] = [];
+    const recordingModel: ModelPort = {
+      call(request): Promise<NormalizedResponse> {
+        seenRequests.push(request);
+        return Promise.resolve({
+          modelId: request.modelId,
+          content: "hybrid answer",
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "hybrid-answerer-test",
+            promptTokens: 3,
+            completionTokens: 2,
+            latencyMs: 1,
+            costClass: "medium",
+          },
+        });
+      },
+    };
+
+    const answerer = createHybridAnswerer(
+      recordingModel,
+      CHAT_MODEL,
+      new AbortController().signal,
+      "cid-hybrid-answerer-000001",
+    );
+    // `HybridAnswerer`'s declared return type is `Promise<GroundedAnswerPayload>` (a
+    // `string | GroundedAnswerResult` union), even though `createHybridAnswerer`'s own
+    // implementation always resolves the object branch — `normalizeGroundedAnswerPayload` is the
+    // SAME narrowing every production caller already applies to a `HybridAnswerer` result
+    // (grounded-qa-hybrid.ts, grounded-orchestrator.ts), not a test-only cast.
+    const result = normalizeGroundedAnswerPayload(await answerer("system prompt", "user prompt"));
+
+    expect(result.content).toBe("hybrid answer");
+    expect(seenRequests).toHaveLength(1);
+    expect(seenRequests[0]?.logContext?.correlationId).toBe("cid-hybrid-answerer-000001");
   });
 });

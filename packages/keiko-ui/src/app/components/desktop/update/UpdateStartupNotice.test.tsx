@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import type { UpdatePreflightReport } from "@/lib/types";
 import { UpdateStartupNotice } from "./UpdateStartupNotice";
 
@@ -28,6 +29,27 @@ function report(overrides: Partial<UpdatePreflightReport> = {}): UpdatePreflight
 describe("UpdateStartupNotice", () => {
   beforeEach(() => {
     window.localStorage.clear();
+    resetClientDiagnosticWriter();
+  });
+
+  it("reports a bounded startup diagnostic without exposing the fetch error", async () => {
+    const diagnostics: string[] = [];
+    const privateError = "request failed for https://private.example/token";
+    setClientDiagnosticWriter((message) => diagnostics.push(message));
+
+    render(
+      <UpdateStartupNotice
+        ready
+        openUpdates={vi.fn()}
+        fetchReport={vi.fn(async () => Promise.reject(new Error(privateError)))}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(diagnostics).toEqual(["update-startup-notice: preflight-fetch-failed"]);
+    });
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(diagnostics.join("\n")).not.toContain(privateError);
   });
 
   it("waits for shell readiness before fetching the startup report", async () => {

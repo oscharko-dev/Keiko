@@ -1,3 +1,4 @@
+import { CODING_HISTORY_ROUTES } from "./coding-runtime/codingHistoryRoutes.js";
 // BFF route dispatch (ADR-0011 D5). The route contract is wired here. The route TABLE
 // (method + pattern) is static and dependency-free; each entry names a handler that receives the
 // request context AND the per-server handler dependencies (resolved config, evidence store, run
@@ -6,8 +7,15 @@
 // (the SSE events route). Non-2xx bodies use the redacted error envelope `{ error: { code, message } }`.
 
 import type { IncomingMessage, ServerResponse } from "node:http";
+import type { HealthResponse } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import type { UiHandlerDeps } from "./deps.js";
+import { currentActivityLogReadiness } from "./observability/activity-log-readiness.js";
+import { errorBody, type ApiError } from "./route-error.js";
+export { errorBody } from "./route-error.js";
+export type { ApiError } from "./route-error.js";
+import { STREAMING } from "./route-outcome.js";
+export { STREAMING } from "./route-outcome.js";
 import {
   handleConfig,
   handleModels,
@@ -42,11 +50,13 @@ import {
   handleDeleteChat,
   handleListMessages,
   handleCreateMessage,
-  handleCreateRunSummaryPair,
   handleUpdateMessage,
 } from "./store-handlers.js";
 import { WORKSPACE_MANIFEST_ROUTE_GROUP } from "./workspace-manifest-routes.js";
 import {
+  createHandleGitChangeApproveDescription,
+  createHandleGitChangeApplyDescription,
+  createHandleGitChangeReviewDescription,
   handleCreateDesktopChat,
   handleRegenerateDesktopChat,
   handleSendDesktopChat,
@@ -72,6 +82,7 @@ import {
   handleCorrectMemory,
   handleResolveMemoryConflict,
   handleAcceptMemoryProposal,
+  handleGetCorrectionPredecessors,
   handleRejectMemoryProposal,
 } from "./memory-handlers.js";
 import {
@@ -87,6 +98,11 @@ import {
 import { handleRunMaintenance } from "./memory-maintenance-handlers.js";
 import { handleGetMemoryHealthScan } from "./memory-health-scan-handlers.js";
 import {
+  handleGetGitHubIssueReaderAuthorization,
+  handlePutGitHubIssueReaderAuthorization,
+} from "./coding-context/githubAuthorizationRoutes.js";
+import { handleCodingWorkbenchIssuePreview } from "./coding-context/issuePreviewRoutes.js";
+import {
   handleGetMemoryAutonomyPolicy,
   handlePutMemoryAutonomyPolicy,
 } from "./memory-autonomy-policy-handlers.js";
@@ -98,6 +114,7 @@ import {
   handleCodingSidecarGatewayChatCompletions,
   handleCodingSidecarGatewayProfile,
 } from "./coding-sidecar-gateway.js";
+import { handleCodingSidecarToolFacade } from "./coding-sidecar-tool-facade.js";
 import {
   handleCodingCodexSubscriptionProfile,
   handleCodingCodexSubscriptionSetup,
@@ -143,7 +160,6 @@ import {
 } from "./editor/verificationRoutes.js";
 import { handleEditorAgentVerificationRun } from "./editor/agentVerificationRoute.js";
 import {
-  handleActivateTaskWorkspace,
   handleCleanupOrphanTaskWorkspaces,
   handleCleanupTaskWorkspace,
   handleClearActiveTaskWorkspace,
@@ -179,6 +195,8 @@ import {
   handleFilesTree,
 } from "./files.js";
 import {
+  GIT_DIFF_ROUTE_TEMPLATE,
+  GIT_STRUCTURED_DIFF_ROUTE_TEMPLATE,
   handleGitBlame,
   handleGitBranches,
   handleGitDiff,
@@ -229,11 +247,7 @@ import {
   handleEditorWorkspaceWatchHealth,
   handleEditorWorkspaceWatchSnapshot,
 } from "./editor/watch/workspaceWatchRoutes.js";
-import {
-  handleEditorContext,
-  handleEditorLocalKnowledgeRetrieve,
-  handleEditorRepoSearch,
-} from "./editor/contextRoutes.js";
+import { handleEditorContext, handleEditorLocalKnowledgeRetrieve } from "./editor/contextRoutes.js";
 import {
   handleEditorWorkspaceReplaceApply,
   handleEditorWorkspaceReplacePreview,
@@ -369,24 +383,17 @@ import {
 import { GIT_DELIVERY_ACTION_SHEET_ROUTE_GROUP } from "./gitDelivery/actionSheetRoutes.js";
 import { GIT_DELIVERY_EVIDENCE_ROUTE_GROUP } from "./gitDelivery/evidenceRoutes.js";
 import { GIT_DELIVERY_LOCAL_MUTATION_ROUTE_GROUP } from "./gitDelivery/localMutationRoutes.js";
+import { GIT_REPOSITORY_INITIALIZATION_ROUTE_GROUP } from "./gitDelivery/repositoryInitializationRoutes.js";
 import { GIT_DELIVERY_COMMIT_ROUTE_GROUP } from "./gitDelivery/commitRoutes.js";
 import { GIT_DELIVERY_PUSH_ROUTE_GROUP } from "./gitDelivery/pushRoutes.js";
 import { GIT_DELIVERY_PR_ROUTE_GROUP } from "./gitDelivery/prRoutes.js";
+import { GIT_DELIVERY_PR_DESCRIPTION_ROUTE_GROUP } from "./gitDelivery/prDescriptionRoutes.js";
 import { GIT_DELIVERY_MERGE_ROUTE_GROUP } from "./gitDelivery/mergeRoutes.js";
 import { GIT_DELIVERY_SYNC_ROUTE_GROUP } from "./gitDelivery/syncRoutes.js";
 import { GIT_AGENT_OPERATION_ROUTE_GROUP } from "./gitDelivery/agentOperationsRoutes.js";
-
-export interface ApiError {
-  readonly error: {
-    readonly code: string;
-    readonly message: string;
-    // RB-6 (GEN-OBS-CORRELATION-103/402): a request-scoped correlation id an operator can grep for.
-    // Optional and additive — when absent the body is byte-identical to the pre-RB-6 shape, so the
-    // hundreds of routes/tests that assert `{ error: { code, message } }` are unaffected. Only the
-    // paths that mint an id (the top-level 500 and any handler that opts in) surface it.
-    readonly correlationId?: string;
-  };
-}
+import { GIT_DELIVERY_JOURNEY_ROUTE_GROUP } from "./gitDelivery/journeyRoutes.js";
+import { GIT_CHANGE_ROUTE_GROUP } from "./gitChangeRoutes.js";
+import { handleClientDiagnosticIngest } from "./client-diagnostics-routes.js";
 
 // A route handler returns the HTTP status and the JSON body to serialize, or STREAMING when it has
 // written directly to the ServerResponse (SSE) and the server must not write a JSON body.
@@ -396,7 +403,6 @@ export interface RouteResult {
   readonly headers?: Readonly<Record<string, string | readonly string[]>> | undefined;
 }
 
-export const STREAMING = Symbol("streaming");
 export type HandlerOutcome = RouteResult | typeof STREAMING;
 
 export interface RouteContext {
@@ -407,8 +413,17 @@ export interface RouteContext {
   readonly url: URL;
   // RB-6: the request-scoped correlation id minted at request entry (server.ts). Handlers that build
   // error responses or SSE error frames thread it through so a failure is traceable end-to-end.
-  // Optional so the many existing RouteContext literals in tests compile unchanged.
-  readonly correlationId?: string;
+  //
+  // REQUIRED, and the optionality is what made it necessary. Keiko delegates between routes
+  // IN-PROCESS by constructing a fresh `RouteContext` — the git-agent operations, Git delivery,
+  // and the editor's coding-context providers all do it — and every one of those
+  // factories silently omitted this field, so the routes they called logged under
+  // `UNKNOWN_CORRELATION_ID` and could not be joined to the operation that caused them. Four such
+  // families were found across three review rounds, one at a time, because nothing forced the
+  // question. `undefined` is still an accepted VALUE (a synthetic context with no originating
+  // request says so explicitly); what no longer compiles is a construction that never considered
+  // it. That turns an open-ended class of defect into a closed one (AGENTS.md §7, §8 Rule 1).
+  readonly correlationId: string | undefined;
 }
 
 export type RouteHandler = (
@@ -423,8 +438,55 @@ export interface RouteDefinition {
   readonly handler: RouteHandler;
 }
 
+// `diagnostics` is additive (#3532): the Activity Log readiness evaluated before this server
+// accepted work, with a live lost-event count. It is a closed, body-free projection — states,
+// reason codes and a count — so a health probe never discloses a path or an error message.
 function health(): RouteResult {
-  return { status: 200, body: { status: "ok", version: SDK_VERSION } };
+  const body: HealthResponse = {
+    status: "ok",
+    version: SDK_VERSION,
+    diagnostics: currentActivityLogReadiness(),
+  };
+  return { status: 200, body };
+}
+
+// #3400 final-audit F5: chat-handlers.ts and gitChangeRoutes.ts already form an ESM import cycle
+// through this module (chat-handlers.ts -> gitChangeRoutes.ts -> routes.ts, for `errorBody` and
+// the shared route types). Calling `createHandleGitChangeApplyDescription()` eagerly while
+// building the `API_ROUTES` array below can run during that cycle's re-entry into chat-handlers.ts
+// before its own top-level evaluation reaches the definition, when THIS module happens to be
+// reached first (e.g. from a test entry point that imports chat-handlers.ts directly). Deferring
+// the factory call to first dispatch, well after every module has finished loading, sidesteps the
+// ordering hazard entirely; the built handler is cached and reused for every later request.
+let gitChangeApplyDescriptionHandler:
+  ReturnType<typeof createHandleGitChangeApplyDescription> | undefined;
+let gitChangeApproveDescriptionHandler:
+  ReturnType<typeof createHandleGitChangeApproveDescription> | undefined;
+let gitChangeReviewDescriptionHandler:
+  ReturnType<typeof createHandleGitChangeReviewDescription> | undefined;
+
+function dispatchGitChangeApproveDescription(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  gitChangeApproveDescriptionHandler ??= createHandleGitChangeApproveDescription();
+  return gitChangeApproveDescriptionHandler(ctx, deps);
+}
+
+function dispatchGitChangeReviewDescription(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  gitChangeReviewDescriptionHandler ??= createHandleGitChangeReviewDescription();
+  return gitChangeReviewDescriptionHandler(ctx, deps);
+}
+
+function dispatchGitChangeApplyDescription(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  gitChangeApplyDescriptionHandler ??= createHandleGitChangeApplyDescription();
+  return gitChangeApplyDescriptionHandler(ctx, deps);
 }
 
 // The full route contract: the twelve original (ADR-0011 D5), the first-run gateway setup
@@ -467,6 +529,16 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   },
   {
     method: "POST",
+    pattern: "/api/git-change/approve-description",
+    handler: dispatchGitChangeApproveDescription,
+  },
+  {
+    method: "POST",
+    pattern: "/api/git-change/review-description",
+    handler: dispatchGitChangeReviewDescription,
+  },
+  {
+    method: "POST",
     pattern: "/api/editor/language/semantic-tokens",
     handler: (ctx, deps) =>
       handleEditorLanguageSemanticTokens(ctx, deps, deps.editorLanguageRouteOptions),
@@ -475,6 +547,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/coding-sidecar/gateway/chat/completions",
     handler: handleCodingSidecarGatewayChatCompletions,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-sidecar/tool",
+    handler: handleCodingSidecarToolFacade,
   },
   {
     method: "GET",
@@ -536,12 +613,6 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "DELETE", pattern: "/api/chats", handler: handleDeleteChat },
   { method: "GET", pattern: "/api/chats/messages", handler: handleListMessages },
   { method: "POST", pattern: "/api/chats/messages", handler: handleCreateMessage },
-  // Issue #66 — atomic composer write: exactly one user message plus one run-summary system message.
-  {
-    method: "POST",
-    pattern: "/api/chats/messages/run-summary-pair",
-    handler: handleCreateRunSummaryPair,
-  },
   // Issue #66 — PATCH a run-summary message (status/shortResult/taskType).
   { method: "PATCH", pattern: "/api/chats/messages", handler: handleUpdateMessage },
   // Issue #185 — grounded repository-aware Q&A. Composes #179-#183 behind the chat-scope binding.
@@ -596,12 +667,12 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   },
   {
     method: "GET",
-    pattern: "/api/git/diff",
+    pattern: GIT_DIFF_ROUTE_TEMPLATE,
     handler: (ctx, deps) => handleGitDiff(ctx, deps, deps.gitRouteOptions),
   },
   {
     method: "GET",
-    pattern: "/api/git/diff/structured",
+    pattern: GIT_STRUCTURED_DIFF_ROUTE_TEMPLATE,
     handler: (ctx, deps) => handleGitStructuredDiff(ctx, deps, deps.gitRouteOptions),
   },
   {
@@ -684,11 +755,6 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/task-workspaces/:workspaceId/handoff",
     handler: handleHandoffTaskWorkspace,
-  },
-  {
-    method: "POST",
-    pattern: "/api/task-workspaces/:workspaceId/activate",
-    handler: handleActivateTaskWorkspace,
   },
   // Issue #447 (Epic #443, ADR-0091) — startup reconciliation report (read-only, derived from the
   // persisted content-free fields), an explicit live reconcile pass (CSRF-gated POST), and the
@@ -788,12 +854,10 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     handler: (ctx, deps) => handleEditorLanguage(ctx, deps, deps.editorLanguageRouteOptions),
   },
   // Issue #1211 — governed coding-context retrieval (ADR-0042 D6). The context route assembles a
-  // bounded, redacted pack (repo-search always; Local Knowledge + memory only for explicit,
-  // embedding-eligible purposes) and returns the content-free wire pack; the repo-search and
-  // local-knowledge routes expose the governed building blocks (EvidenceAtom[] and query-only
-  // retrieval references). No browser-side retrieval, embedding, or model access.
+  // bounded, redacted pack (repository context always; Local Knowledge + memory only for explicit,
+  // embedding-eligible purposes) and returns the content-free wire pack. The Local Knowledge route
+  // exposes query-only retrieval references. No browser-side retrieval, embedding, or model access.
   { method: "POST", pattern: "/api/editor/context", handler: handleEditorContext },
-  { method: "POST", pattern: "/api/editor/repo-search", handler: handleEditorRepoSearch },
   {
     method: "POST",
     pattern: "/api/editor/workspace-search",
@@ -1178,6 +1242,25 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/memory/autonomy-policy",
     handler: handlePutMemoryAutonomyPolicy,
   },
+  // #3385: the in-product grant/revoke surface for the GitHub issue reader, scoped to one local
+  // checkout (not to the remote whose issues it reads — see githubIssueReaderAuthorization.ts). The
+  // caller names a registered project; the server refuses an unregistered path and derives the
+  // content-free identity itself.
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/issue/preview",
+    handler: handleCodingWorkbenchIssuePreview,
+  },
+  {
+    method: "GET",
+    pattern: "/api/coding-workbench/github-authorization",
+    handler: handleGetGitHubIssueReaderAuthorization,
+  },
+  {
+    method: "PUT",
+    pattern: "/api/coding-workbench/github-authorization",
+    handler: handlePutGitHubIssueReaderAuthorization,
+  },
   { method: "GET", pattern: "/api/memory/review-queue", handler: handleMemoryReviewQueue },
   { method: "GET", pattern: "/api/memory/health-scan", handler: handleGetMemoryHealthScan },
   { method: "GET", pattern: "/api/memory/tombstones", handler: handleListMemoryTombstones },
@@ -1195,6 +1278,11 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   { method: "POST", pattern: "/api/memory/:id/forget", handler: handleForgetMemory },
   { method: "DELETE", pattern: "/api/memory/:id", handler: handleDeleteMemory },
   { method: "POST", pattern: "/api/memory/:id/correct", handler: handleCorrectMemory },
+  {
+    method: "GET",
+    pattern: "/api/memory/proposals/:id/correction-predecessors",
+    handler: handleGetCorrectionPredecessors,
+  },
   {
     method: "POST",
     pattern: "/api/memory/proposals/:id/accept",
@@ -1321,12 +1409,6 @@ export const API_ROUTES: readonly RouteDefinition[] = [
     pattern: "/api/atlassian-connectors/credentials/:authRef/activity",
     handler: handleListAtlassianConnectorActivity,
   },
-  // Issue #2244 (Epic #2238, ADR-0128 D4/D6) — governed Confluence/Jira write actions under the
-  // three-mode authority model. Every action request resolves the validated Authority Envelope
-  // (ADR-0125 registry: opaque run id + envelope digest) and is dispositioned by the shared D4
-  // matrix; review-required parks a bounded pending approval (approve executes, reject records —
-  // rendered by the #2245 UI), denied answers exactly one content-free reason, and every attempt
-  // emits one content-free activity record. POST inherits the server CSRF + JSON gate.
   {
     method: "POST",
     pattern: "/api/atlassian-connectors/credentials/:authRef/actions",
@@ -1467,6 +1549,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // #475 governed local write flows: branch create/switch, staging, and commit preview/execute. These
   // EXECUTE through the #472 kernel + #474 evidence ledger; gated by the same capability flag and CSRF.
   ...GIT_DELIVERY_LOCAL_MUTATION_ROUTE_GROUP,
+  ...GIT_REPOSITORY_INITIALIZATION_ROUTE_GROUP,
   ...GIT_DELIVERY_COMMIT_ROUTE_GROUP,
   // #476 governed remote publish: push preview (read-only) + execute through the SEPARATE publish
   // gateway (dedicated push-only allowlist) + #474 evidence ledger; same capability flag and CSRF.
@@ -1475,6 +1558,13 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // recommendation) + execute through the SEPARATE PR gateway (dedicated `gh api` allowlist) + #474
   // evidence ledger; same capability flag and CSRF.
   ...GIT_DELIVERY_PR_ROUTE_GROUP,
+  // #3399 governed PR-description application: preview (exact snapshot + validated Model Gateway
+  // artifact, never mutating) + approve (one-use description-apply approval) + apply (body-only PATCH
+  // through the dedicated GitPullRequestBodyAdapter, never title/base/draft-state) + status
+  // (read-only reconciliation). Admitted through gitDeliveryAuthorityGate for "pull-request", which
+  // also accepts the server-minted description authority when no run is active (epic #3384
+  // correction 4); same capability flag and CSRF.
+  ...GIT_DELIVERY_PR_DESCRIPTION_ROUTE_GROUP,
   // #478 governed merge: merge preview (read-only readiness/eligible-strategies/recommendation) +
   // execute through the SEPARATE merge gateway (dedicated `gh api` merge allowlist, readiness gate, final
   // approval) + #474 evidence ledger; same capability flag and CSRF.
@@ -1487,9 +1577,38 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // #1577 agent repository operations: typed facade over existing Git read and governed delivery
   // handlers. No shell/provider authority is introduced; command-shaped payloads are denied first.
   ...GIT_AGENT_OPERATION_ROUTE_GROUP,
-  // #2256: browser-owned Authority Envelope confirmation/execution is intentionally not mounted.
+  // #3389 read-only journey observation/reconciliation: admitted by the per-checkout GitHub-reader
+  // grant alone, never gitDeliveryAuthorityGate, so refresh keeps working after the originating run
+  // has terminated. Never mints merge or issue-close authority.
+  ...GIT_DELIVERY_JOURNEY_ROUTE_GROUP,
+  // #3400 Git-to-Chat connect/refresh: resolves an exact base/head comparison or one existing
+  // same-repository PR, captures its immutable snapshot and records the reads-context
+  // relationship. CSRF + JSON content-type enforced centrally for POST; the per-checkout
+  // GitHub-reader grant gates the PR-by-head read, never a fetch or silent remote adoption.
+  ...GIT_CHANGE_ROUTE_GROUP,
+  // #3400 Chat's apply action (final-audit F5): a body-only PR-description apply for a connected,
+  // PR-resolved git-change scope, reusing the SAME #3399 per-(project, repository, PR)
+  // `PrDescriptionApplicationService` the existing pr-description preview/approve/apply routes
+  // above use -- never a second write path. Mounted here, not inside GIT_CHANGE_ROUTE_GROUP,
+  // so gitChangeRoutes.test.ts's Frozen Product Decision 6 structural pin (connect/refresh only,
+  // exactly two routes) stays exactly as strict: this endpoint adds no branch/fetch/pull/push/
+  // PR-create/merge/close effect of its own -- it only consumes a one-use description-apply
+  // approval and executes through the existing governed body-only PATCH. CSRF + JSON content-type
+  // enforced centrally for POST, same posture as connect/refresh above.
+  {
+    method: "POST",
+    pattern: "/api/git-change/apply-description",
+    handler: dispatchGitChangeApplyDescription,
+  },
+  // #2256 left the browser-owned Authority Envelope confirmation/execution routes unmounted;
+  // #2958 (KEIKO-0115/KEIKO-0135) deleted them outright, together with the policy and approval
+  // store behind them, so there is no second front door left to mount by accident. The one
+  // autonomous coding-delivery authority path is this group plus the Git-delivery admission in
+  // gitDelivery/runBoundAuthority.ts and its approval store. routes.test.ts pins the deleted
+  // patterns as unmatched.
   // Productive coding-runtime actions flow only through the singleton server aggregate below.
   ...CODING_RUNTIME_ROUTE_GROUP,
+  ...CODING_HISTORY_ROUTES,
   // ADR-0141 (#2477): the authenticated local app-session channel — a distinct authenticated
   // fetch/snapshot + stream surface. It does not widen the permanently content-free runtime SSE
   // union above; content-bearing reads fail closed to a content-free projection without a session.
@@ -1498,6 +1617,10 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // authorization, the server deployment ceiling, and connector-scope grants. Context stays
   // untrusted-labeled and evidence content-free; upstream failures answer as an opaque 502.
   ...CODING_CONTEXT_ROUTE_GROUP,
+  // Browser-side diagnostic ingest (Wave 5 of epic #3233): a bounded, redaction-checked crash/error
+  // report from the UI's client-diagnostics sink, joined to the server request it describes via
+  // `correlationId`. See client-diagnostics-routes.ts for the trust boundary this route enforces.
+  { method: "POST", pattern: "/api/diagnostics/client", handler: handleClientDiagnosticIngest },
 ];
 
 interface PreparedRoute {
@@ -1603,10 +1726,6 @@ export function matchRoute(
 
 export function isApiPath(pathname: string): boolean {
   return pathname === "/api" || pathname.startsWith("/api/");
-}
-
-export function errorBody(code: string, message: string, correlationId?: string): ApiError {
-  return { error: { code, message, ...(correlationId === undefined ? {} : { correlationId }) } };
 }
 
 export function notFoundBody(): ApiError {

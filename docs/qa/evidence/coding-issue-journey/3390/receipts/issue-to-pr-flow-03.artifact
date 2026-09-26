@@ -1,0 +1,154 @@
+{
+  "evidenceKind": "code-task-qualification-flow-evidence",
+  "schemaVersion": 1,
+  "flowId": "issue-to-pr-flow-03",
+  "ordinal": 3,
+  "repository": "oscharko/Wegwerf-Repo",
+  "issueNumber": 4,
+  "mode": "autonomous-delivery",
+  "issueReference": "https://github.com/oscharko/Wegwerf-Repo/issues/4",
+  "issueState": "closed",
+  "issueClosedAt": "2026-09-08T23:57:01Z",
+  "taskRunId": "run-295831735895694763093656499337782170492",
+  "pullRequestReference": "https://github.com/oscharko/Wegwerf-Repo/pull/46",
+  "pullRequestNumber": 46,
+  "pullRequestHeadSha": "84e54abe679801f5e4f87023923c8addbe020990",
+  "pullRequestState": "merged",
+  "pullRequestMergedAt": "2026-09-08T23:57:00Z",
+  "mergeCommitSha": "01afec341a664ec47a5822ef3cdd06d9cd1e2a84",
+  "requiredChecks": {
+    "observation": "observed",
+    "headSha": "84e54abe679801f5e4f87023923c8addbe020990",
+    "requirementsVersion": "1",
+    "requirementsDigest": "bf8f080d9d5dca4aec5de1413d150c6fec7be858e88858c3b311905d78b7e58a",
+    "evidenceRef": "ci-551b5130a28612819a735d6a926dddfb3085c02f9a8ab031d42c2b8c2022573f",
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "pending": 0
+  },
+  "authorityObservation": {
+    "requestedMode": "autonomous-delivery",
+    "effectiveMode": "autonomous-delivery",
+    "approvalRequestCount": 0,
+    "approvalRequests": [],
+    "approvedProposalActions": [],
+    "effectStartedTools": [
+      {
+        "canonicalId": "keiko.changeset.edit",
+        "contractVersion": 1,
+        "invocationCount": 2
+      },
+      {
+        "canonicalId": "keiko.ci.status",
+        "contractVersion": 1,
+        "invocationCount": 3
+      },
+      {
+        "canonicalId": "keiko.git.commit",
+        "contractVersion": 1,
+        "invocationCount": 1
+      },
+      {
+        "canonicalId": "keiko.git.execute",
+        "contractVersion": 1,
+        "invocationCount": 4
+      },
+      {
+        "canonicalId": "keiko.git.pullrequest",
+        "contractVersion": 1,
+        "invocationCount": 1
+      },
+      {
+        "canonicalId": "keiko.git.push",
+        "contractVersion": 1,
+        "invocationCount": 1
+      },
+      {
+        "canonicalId": "keiko.git.stage",
+        "contractVersion": 1,
+        "invocationCount": 1
+      },
+      {
+        "canonicalId": "keiko.git.status",
+        "contractVersion": 1,
+        "invocationCount": 2
+      },
+      {
+        "canonicalId": "keiko.repo.search",
+        "contractVersion": 1,
+        "invocationCount": 1
+      },
+      {
+        "canonicalId": "keiko.verification.run",
+        "contractVersion": 1,
+        "invocationCount": 6
+      },
+      {
+        "canonicalId": "keiko.workspace.read",
+        "contractVersion": 1,
+        "invocationCount": 5
+      }
+    ],
+    "toolInvocationCount": 27,
+    "effectStartedCount": 27,
+    "completedToolCount": 26,
+    "deniedToolCount": 0,
+    "failedToolCount": 1,
+    "otherToolCount": 0
+  },
+  "rubricReview": {
+    "flowId": "issue-to-pr-flow-03",
+    "taskRunId": "run-295831735895694763093656499337782170492",
+    "repository": "oscharko/Wegwerf-Repo",
+    "issueNumber": 4,
+    "pullRequestNumber": 46,
+    "pullRequestHeadSha": "84e54abe679801f5e4f87023923c8addbe020990",
+    "sourceCommitSha": "3af295760373908725ebc6391de722e100093d3e",
+    "rubricDigest": "62117fee53c43f2d69b9adf8e0511aeb6c225028e5663ce189d4b0382f356c03",
+    "reviewId": "flow-03-run-53b-review",
+    "reviewDigest": "e515143e7d6e3f4dcf682e88fede0f14b2f236b8ad0848cff59c3ea1fb4c8627",
+    "verdict": "approved",
+    "criteriaTotal": 9,
+    "criteriaPassed": 9
+  },
+  "stageEvidence": {
+    "issueToPr": {
+      "scenarioId": "issue-to-pr-autonomous-delivery",
+      "receiptDigest": "dd17c3bd7c8f572ce6f06651978af041fd68a87112909289821534eb00800d6d"
+    },
+    "ciRepair": null,
+    "description": {
+      "scenarioId": "description-auto-draft-and-apply",
+      "receiptDigest": "517d70fffe0449a24f0a5967aaad28b77182203db604aa6ac88aedd475880cde"
+    },
+    "markReady": {
+      "scenarioId": "mark-ready-intent",
+      "receiptDigest": "f1df87066d7d4c05aeafb2556bb9e6b9352e556f5f2001ad49a617fa6c00308e"
+    },
+    "governedMerge": {
+      "scenarioId": "human-merge-and-closure",
+      "receiptDigest": "70a8a5c727c51e784149174f766880b3175aca2938e276259ee0045362705e10"
+    }
+  },
+  "transitions": [
+    "issue-accepted",
+    "coding-task-started",
+    "verified-commit",
+    "pushed-head",
+    "draft-pull-request",
+    "required-checks-observed",
+    "description-applied",
+    "ready-for-review",
+    "merge-observed",
+    "issue-closure-observed"
+  ],
+  "observedAt": "2026-09-08T23:57:03.964Z",
+  "sourceCommitSha": "3af295760373908725ebc6391de722e100093d3e",
+  "spend": {
+    "budgetNanoUsd": 100000000000,
+    "chargedDeltaNanoUsd": 1768835000,
+    "cumulativeChargedNanoUsd": 3678837500,
+    "remainingNanoUsd": 96321162500
+  }
+}

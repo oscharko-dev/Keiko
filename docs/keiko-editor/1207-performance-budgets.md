@@ -99,17 +99,16 @@ values live in `scripts/editor-bundle-size.budget.json`. The gate runs in `ci` d
 the prepack chain (`smoke:install` → `npm pack` → `prepack`) via `check:package-surface`; it is also
 available standalone via `npm run check:editor-bundle-size`.
 
-**Baselines (monaco-editor 0.55.1):**
+**Baselines (monaco-editor 0.56.0):**
 
-- Editor package own code (`keiko-editor/dist/**/*.js`): **~98 KiB gzip** (observed 100,629 B
-  across 71 files after a clean `@oscharko-dev/keiko-editor` build). Committed ceiling **100 KiB**
-  (`editorOwnCodeGzipBytesCeiling = 102400`) — ≈ 1.7 KiB headroom, intentionally tight after the
-  multi-language editor dist growth while still catching the headline regression (a heavy dependency,
-  or Monaco itself, accidentally bundled into the editor package's own code, which would balloon this
-  by orders of magnitude). Re-baseline by updating `editorOwnCodeGzipBytesObserved` and, if
-  intentional, the ceiling, with a rationale in the PR.
-- Monaco runtime footprint (informational): the full installed `monaco-editor/esm` tree is ~26 MB raw
-  / ~4.9 MB gzip across 1,227 files; the governed v1 production bundle ships only the tree-shaken
+- Editor package own code (`keiko-editor/dist/**/*.js`): **~77 KiB gzip** (observed 79,041 B
+  across 78 files after a clean `@oscharko-dev/keiko-editor` build). Committed ceiling **100 KiB**
+  (`editorOwnCodeGzipBytesCeiling = 102400`) — ≈ 23 KiB headroom while still catching the headline
+  regression (a heavy dependency, or Monaco itself, accidentally bundled into the editor package's
+  own code, which would balloon this by orders of magnitude). Re-baseline by updating
+  `editorOwnCodeGzipBytesObserved` and, if intentional, the ceiling, with a rationale in the PR.
+- Monaco runtime footprint (informational): the full installed `monaco-editor/esm` tree is ~27 MB raw
+  / ~5.2 MB gzip across 1,601 files; the governed v1 production bundle ships only the tree-shaken
   editor runtime plus `editor.worker.js`. #1209 measures that shipped static export against B2
   (≤ 2.5 MB gzip) and B3 (≤ 750 KB gzip per worker). Keiko's server-governed TS/JS provider remains
   the language-intelligence source of truth; #1213 owns any future multi-language worker expansion.

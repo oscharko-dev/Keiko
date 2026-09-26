@@ -17,11 +17,11 @@
 // build-time or persist-time redaction is scrubbed on the way out, and a tampered/malformed record is
 // dropped rather than served.
 
+import type { GitDeliveryEvidenceRecord } from "@oscharko-dev/keiko-contracts";
 import {
   buildGitDeliveryAuditPacket,
   isGitDeliveryEvidenceRecord,
-  type GitDeliveryEvidenceRecord,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";

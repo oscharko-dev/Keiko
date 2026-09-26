@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { globSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -23,6 +23,8 @@ const CONFIGS = [
   { name: "script coverage gate", path: "vitest.coverage.scripts.config.ts" },
   { name: "keiko-ui coverage gate", path: "packages/keiko-ui/vitest.coverage.config.ts" },
   { name: "keiko-ui suite", path: "packages/keiko-ui/vitest.config.ts" },
+  { name: "keiko-local-knowledge suite", path: "packages/keiko-local-knowledge/vitest.config.ts" },
+  { name: "keiko-editor suite", path: "packages/keiko-editor/vitest.config.ts" },
 ];
 
 function readPackageScripts() {
@@ -72,12 +74,68 @@ describe("vitest config timeout parity (GEN-TEST-FLAKE-001)", () => {
   // one package coverage configuration — which is what this now asserts.
   it("keeps every package coverage shard at the same bounded worker count", () => {
     const scripts = readPackageScripts();
+    expect(scripts["test:coverage:packages"]).toMatch(/^npm run build && /u);
+    expect(scripts["test:coverage:packages:shard"]).toMatch(/^npm run build && /u);
     expect(scripts["test:coverage:packages:shard"]).toContain(
       `--config ${JUDGING_COVERAGE_CONFIG}`,
     );
     expect(scripts["test:coverage:packages:merge"]).toContain(
       `--config ${JUDGING_COVERAGE_CONFIG}`,
     );
+  });
+
+  it("keeps generated assets out of the LCOV report Sonar cannot resolve", async () => {
+    const coverage = await loadConfig(JUDGING_COVERAGE_CONFIG);
+    expect(coverage.test.coverage.exclude).toContain("**/*.generated.*");
+  });
+});
+
+// KEIKO-0251: the root suite's `include` list collected zero *.test.tsx files while the package
+// coverage config collected eight, so `npm test` and `conversation:release-check` — the loop
+// AGENTS.md §3 documents as the local minimum — went green without ever running the editor's two
+// a11y suites or its GEN-PERF-EDITOR-005 per-keystroke allocation pin. The two lists diverged
+// silently because nothing compared them. This is that comparison. It asserts the collected SET of
+// files, not the pattern text, so a differently-spelled but equivalent glob still passes and a
+// dropped entry still fails.
+function collectTestFiles(config) {
+  return new Set(
+    config.test.include
+      .flatMap((pattern) => globSync(pattern, { cwd: repoRoot }))
+      .map((path) => path.replaceAll("\\", "/"))
+      .filter((path) => !path.includes("node_modules/") && !path.startsWith("packages/keiko-ui/")),
+  );
+}
+
+describe("root suite collects the same component tests as the coverage gate (KEIKO-0251)", () => {
+  it("collects the identical set of *.test.tsx files", async () => {
+    const [rootConfig, coverageConfig] = await Promise.all([
+      loadConfig("vitest.config.ts"),
+      loadConfig(JUDGING_COVERAGE_CONFIG),
+    ]);
+    const tsxOnly = (files) => [...files].filter((path) => path.endsWith(".test.tsx")).sort();
+    const rootTsx = tsxOnly(collectTestFiles(rootConfig));
+    const coverageTsx = tsxOnly(collectTestFiles(coverageConfig));
+
+    // Guard the guard: if the editor package ever stops shipping .test.tsx files, an empty-vs-empty
+    // comparison would pass while proving nothing. Assert the corpus is non-empty first.
+    expect(
+      coverageTsx.length,
+      "the coverage gate must still collect editor component tests",
+    ).toBeGreaterThan(0);
+    expect(
+      rootTsx,
+      "vitest.config.ts must collect every *.test.tsx the package coverage gate does, " +
+        "or `npm test` goes green on untested editor components",
+    ).toEqual(coverageTsx);
+  });
+
+  it("wires the React plugin the .test.tsx files need to parse", async () => {
+    const rootConfig = await loadConfig("vitest.config.ts");
+    expect(
+      rootConfig.plugins?.flat(Infinity).length ?? 0,
+      "vitest.config.ts must declare @vitejs/plugin-react; without it the collected " +
+        ".test.tsx files fail to transform",
+    ).toBeGreaterThan(0);
   });
 });
 
@@ -91,8 +149,19 @@ describe("vitest config timeout parity (GEN-TEST-FLAKE-001)", () => {
 // structural, and this is the pin that keeps it structural. A `coverage.thresholds` block
 // reappearing in any configuration re-creates both the sharding hazard and the two-engine split.
 describe("no vitest configuration reaches a coverage verdict (ADR-0157 D1, ADR-0158 D1)", () => {
-  for (const { name, path } of CONFIGS) {
-    it(`${name} (${path}) declares no coverage thresholds`, async () => {
+  // KEIKO-0883: the previous test iterated a hand-maintained CONFIGS list and therefore missed
+  // every packages/*/vitest.config.ts that was not on it. Discover the actual configuration set
+  // from the filesystem so a fresh package config is covered the moment it is added.
+  const discovered = new Set([
+    ...CONFIGS.map(({ path }) => path),
+    "vitest.config.ts",
+    JUDGING_COVERAGE_CONFIG,
+    ...globSync("vitest.coverage.*.config.ts", { cwd: repoRoot }),
+    ...globSync("packages/*/vitest.config.ts", { cwd: repoRoot }),
+    ...globSync("packages/*/vitest.coverage.config.ts", { cwd: repoRoot }),
+  ]);
+  for (const path of [...discovered].sort()) {
+    it(`${path} declares no coverage thresholds`, async () => {
       const config = await loadConfig(path);
       expect(
         config?.test?.coverage?.thresholds,
@@ -100,4 +169,68 @@ describe("no vitest configuration reaches a coverage verdict (ADR-0157 D1, ADR-0
       ).toBeUndefined();
     });
   }
+});
+
+// KEIKO-0540: the eight package-coverage gate scripts sit in coverage.include of the packages run
+// AND in coverage.exclude of the scripts run — expressing one partition as two independently
+// edited literal arrays lets a new entry drift into just one and be silently measured by both
+// runs (or by neither). scripts/lib/package-coverage-gate-scripts.mjs is now the one edge; this
+// test enforces the three-way partition property so a bypass fails closed.
+describe("package coverage gate-script partition (KEIKO-0540)", () => {
+  it("no script appears in BOTH the packages-run include AND the scripts-run include", async () => {
+    const [pkg, scr] = await Promise.all([
+      loadConfig("vitest.coverage.packages.config.ts"),
+      loadConfig("vitest.coverage.scripts.config.ts"),
+    ]);
+    const pkgInclude = new Set(pkg.test.coverage.include);
+    const scrExclude = new Set(scr.test.coverage.exclude);
+    // Every script the packages run measures must be excluded from the scripts run's include —
+    // the scripts run's include is "scripts/**/*.{js,mjs}", so the check reduces to: every
+    // `scripts/*.mjs` in packages.include is either in scripts.exclude or is a NON_LCOV_SCRIPTS
+    // entry that is excluded from both runs by construction.
+    const { NON_LCOV_SCRIPTS } = await import(
+      resolve(repoRoot, "scripts/sonar-analysis-scope.mjs")
+    );
+    for (const entry of pkgInclude) {
+      if (!entry.endsWith(".mjs")) continue;
+      const partitioned = scrExclude.has(entry) || NON_LCOV_SCRIPTS.has(entry);
+      expect(
+        partitioned,
+        `${entry} must be partitioned (in scripts.exclude or NON_LCOV_SCRIPTS)`,
+      ).toBe(true);
+    }
+  });
+
+  it("both configs reference the shared PACKAGE_COVERAGE_GATE_SCRIPTS constant", () => {
+    const pkgSource = readFileSync(resolve(repoRoot, "vitest.coverage.packages.config.ts"), "utf8");
+    const scrSource = readFileSync(resolve(repoRoot, "vitest.coverage.scripts.config.ts"), "utf8");
+    expect(pkgSource).toMatch(/PACKAGE_COVERAGE_GATE_SCRIPTS/u);
+    expect(scrSource).toMatch(/PACKAGE_COVERAGE_GATE_SCRIPTS/u);
+    // The shared constant is the ONE edge; neither config may reintroduce its own literal array
+    // of the eight gate scripts alongside the import (would defeat the partition test above).
+    for (const source of [pkgSource, scrSource]) {
+      const literalCount = (source.match(/scripts\/check-sonar-main-quality-gate\.mjs/gu) ?? [])
+        .length;
+      expect(literalCount, "gate-script paths must only appear in the shared module").toBe(0);
+    }
+  });
+
+  it("every script excluded from the scripts run is either in the packages-run include or NON_LCOV_SCRIPTS", async () => {
+    const [pkg, scr] = await Promise.all([
+      loadConfig("vitest.coverage.packages.config.ts"),
+      loadConfig("vitest.coverage.scripts.config.ts"),
+    ]);
+    const pkgInclude = new Set(pkg.test.coverage.include);
+    const { NON_LCOV_SCRIPTS } = await import(
+      resolve(repoRoot, "scripts/sonar-analysis-scope.mjs")
+    );
+    for (const entry of scr.test.coverage.exclude) {
+      if (!entry.endsWith(".mjs")) continue;
+      const covered = pkgInclude.has(entry) || NON_LCOV_SCRIPTS.has(entry);
+      expect(
+        covered,
+        `${entry} excluded from scripts run must have an owner in packages.include or NON_LCOV_SCRIPTS`,
+      ).toBe(true);
+    }
+  });
 });

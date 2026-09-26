@@ -10,13 +10,19 @@ export type RerankerAvailability =
   | { readonly available: true; readonly modelLabel: string }
   | { readonly available: false; readonly reason: string };
 
+export interface RerankerExecutionContext {
+  readonly signal?: AbortSignal | undefined;
+  readonly timeoutMs?: number | undefined;
+}
+
 export interface RerankerSeam {
   readonly name: string;
-  isAvailable(): Promise<RerankerAvailability>;
+  isAvailable(context?: RerankerExecutionContext): Promise<RerankerAvailability>;
   rerank(
     candidates: readonly CandidateFile[],
     atomsByPath: ReadonlyMap<string, readonly EvidenceAtom[]>,
     topK: number,
+    context?: RerankerExecutionContext,
   ): Promise<readonly CandidateFile[]>;
 }
 

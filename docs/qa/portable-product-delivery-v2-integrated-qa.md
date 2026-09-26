@@ -34,29 +34,30 @@ repository state above.
 
 ## Product Journey Coverage
 
-| Journey step                            | Primary evidence                                                                                                                                                    | Settlement                                                                                                                                                                                                                                                   |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Download                                | `docs/release/portable-runtime-artifact-contract.md`, `scripts/__tests__/release-portable-assets-workflow.test.mjs`                                                 | Exactly three first-class stable artifacts are required: Windows x64, macOS arm64, macOS x64.                                                                                                                                                                |
-| Open launcher                           | `docs/release/portable-launch-setup-guide.md`, `scripts/__tests__/portable-launch-setup-smoke.test.mjs`                                                             | Users double-click `Keiko.exe` or `Keiko.app`; no Node/npm/shell primary path.                                                                                                                                                                               |
-| First-run setup                         | `scripts/portable-launch-setup-smoke.mjs`, `packages/keiko-cli/src/portable-maintenance.ts`                                                                         | Setup copies into a user-owned managed install root and records content-free attestation.                                                                                                                                                                    |
-| App launch from managed install         | `docs/release/portable-launch-setup-guide.md`, launch/setup smoke                                                                                                   | Windows search/Start Menu and Finder/Spotlight registration are user-local.                                                                                                                                                                                  |
-| Update detection                        | `packages/keiko-server/src/update-preflight.test.ts`, `docs/qa/portable-updater-v2-qa-matrix.md`                                                                    | GitHub Release Assets are portable installability truth; release-impact is compatibility truth.                                                                                                                                                              |
-| One-click update                        | `packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.test.tsx`, `tests/e2e/update-ui-1696.spec.ts`                                                     | Existing update notice/window shows one detected recommended action for eligible installs.                                                                                                                                                                   |
-| Download, verify, stage, activate       | `packages/keiko-server/src/update-portable-staging.test.ts`, `packages/keiko-server/src/update-portable-activation.test.ts`                                         | Asset verification, safe staging, activation, relaunch, and version verification are automatic.                                                                                                                                                              |
-| Remediation completion                  | `packages/keiko-server/src/update-integration.test.ts`, `packages/keiko-server/src/update-remediation.test.ts`                                                      | Portable activation is not full success until remediation completes or is safely deferred.                                                                                                                                                                   |
-| Sidecar-bearing and sidecar-free assets | `scripts/__tests__/portable-runtime.test.mjs`, `packages/keiko-server/src/update-preflight.test.ts`, `packages/keiko-server/src/update-portable-staging.test.ts`    | Sidecar payloads are inert and update only as part of the complete Keiko release asset.                                                                                                                                                                      |
-| Portable release qualification          | `scripts/__tests__/portable-runtime.test.mjs`, `scripts/__tests__/release-portable-assets-workflow.test.mjs`, `scripts/__tests__/release-publish-pipeline.test.mjs` | Only an exact-three verified zero-id candidate set from one successful stable-tag run/attempt reaches assembly; fresh native jobs re-verify final bytes, API-bound manifests receive real ids, and full remote bytes are digest-checked before npm mutation. |
+| Journey step                            | Primary evidence                                                                                                                                                    | Settlement                                                                                                                                                                                                                                                  |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Download                                | `docs/release/portable-runtime-artifact-contract.md`, `scripts/__tests__/release-portable-assets-workflow.test.mjs`                                                 | Exactly four first-class stable artifacts are required: Windows x64, macOS arm64, macOS x64, Linux x64.                                                                                                                                                     |
+| Open launcher                           | `docs/release/portable-launch-setup-guide.md`, `scripts/__tests__/portable-launch-setup-smoke.test.mjs`                                                             | Users double-click `Keiko.exe` or `Keiko.app`; no Node/npm/shell primary path.                                                                                                                                                                              |
+| First-run setup                         | `scripts/portable-launch-setup-smoke.mjs`, `packages/keiko-cli/src/portable-maintenance.ts`                                                                         | Setup copies into a user-owned managed install root and records content-free attestation.                                                                                                                                                                   |
+| App launch from managed install         | `docs/release/portable-launch-setup-guide.md`, launch/setup smoke                                                                                                   | Windows search/Start Menu and Finder/Spotlight registration are user-local.                                                                                                                                                                                 |
+| Update detection                        | `packages/keiko-server/src/update-preflight.test.ts`, `docs/qa/portable-updater-v2-qa-matrix.md`                                                                    | GitHub Release Assets are portable installability truth; release-impact is compatibility truth.                                                                                                                                                             |
+| One-click update                        | `packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.test.tsx`, `tests/e2e/update-ui-1696.spec.ts`                                                     | Existing update notice/window shows one detected recommended action for eligible installs.                                                                                                                                                                  |
+| Download, verify, stage, activate       | `packages/keiko-server/src/update-portable-staging.test.ts`, `packages/keiko-server/src/update-portable-activation.test.ts`                                         | Asset verification, safe staging, activation, relaunch, and version verification are automatic.                                                                                                                                                             |
+| Remediation completion                  | `packages/keiko-server/src/update-integration.test.ts`, `packages/keiko-server/src/update-remediation.test.ts`                                                      | Portable activation is not full success until remediation completes or is safely deferred.                                                                                                                                                                  |
+| Sidecar-bearing and sidecar-free assets | `scripts/__tests__/portable-runtime.test.mjs`, `packages/keiko-server/src/update-preflight.test.ts`, `packages/keiko-server/src/update-portable-staging.test.ts`    | Sidecar payloads are inert and update only as part of the complete Keiko release asset.                                                                                                                                                                     |
+| Portable release qualification          | `scripts/__tests__/portable-runtime.test.mjs`, `scripts/__tests__/release-portable-assets-workflow.test.mjs`, `scripts/__tests__/release-publish-pipeline.test.mjs` | Only an exact-four verified zero-id candidate set from one successful stable-tag run/attempt reaches assembly; fresh native jobs re-verify final bytes, API-bound manifests receive real ids, and full remote bytes are digest-checked before npm mutation. |
 
 ## Platform Settlement
 
-Windows x64, macOS arm64, and macOS x64 are equally release-blocking. macOS arm64 and macOS x64 have
-the same product importance and the same signing/notarization expectation.
+Windows x64, macOS arm64, macOS x64, and Linux x64 are equally release-blocking. macOS arm64 and
+macOS x64 have the same product importance and the same signing/notarization expectation.
 
 | Target        | Required asset          | Required launcher | Release status                 |
 | ------------- | ----------------------- | ----------------- | ------------------------------ |
 | `windows-x64` | `keiko-windows-x64.zip` | `Keiko.exe`       | First-class, release-blocking. |
 | `macos-arm64` | `keiko-macos-arm64.zip` | `Keiko.app`       | First-class, release-blocking. |
 | `macos-x64`   | `keiko-macos-x64.zip`   | `Keiko.app`       | First-class, release-blocking. |
+| `linux-x64`   | `keiko-linux-x64.zip`   | `Keiko`           | First-class, release-blocking. |
 
 ## Local Manual UX Review Harness
 
@@ -91,7 +92,7 @@ The generated matrix covers:
 | -------------------- | ------------------------------------------------------------------------------------- |
 | Current release      | `current-release`                                                                     |
 | Fresh install        | `fresh-install` plus copied current artifacts under `artifacts/current/<target>/`     |
-| Happy path update    | `happy-update` for `windows-x64`, `macos-arm64`, and `macos-x64`                      |
+| Happy path update    | `happy-update` for `windows-x64`, `macos-arm64`, `macos-x64`, and `linux-x64`         |
 | Negative artifacts   | `bad-checksum`, `bad-manifest`, `missing-asset`, `missing-signing`, `hostile-archive` |
 | Remediation          | `remediation-required`                                                                |
 | Sidecar variants     | `sidecar-absent`, `sidecar-present`, `sidecar-failure`                                |
@@ -128,7 +129,9 @@ The final user-visible release-impact entry is:
 It records:
 
 - Release-note category `new-additions` with high priority.
-- Three release-blocking targets: `windows-x64`, `macos-arm64`, `macos-x64`.
+- Three release-blocking targets as that entry recorded them: `windows-x64`, `macos-arm64`,
+  `macos-x64`. `linux-x64` became a fourth release-blocking target later (#3455); this line
+  reports the dated 0.2.14 entry as written and is not current guidance.
 - Managed first-run install registration, update runtime state, and local remediation state as
   content-free affected state areas.
 - Non-goals as machine-readable metadata: no promoted package-manager path, no rollback, no
@@ -192,7 +195,6 @@ must receive a fresh #1944 verify receipt and the final PR to `dev` must wait fo
 - No rollback, downgrade, prerelease/private channel install, silent background update, or
   organization-managed rollout.
 - No MSI/MSIX/PKG/DMG/MDM/Jamf/Intune/SCCM/Munki packaging in v1.
-- No Linux portable artifact.
 - No independent OpenCode or sidecar updater.
 - No runtime storage of package payloads, customer data, raw logs, prompts, model output, private
   paths, credentials, or token-bearing evidence.

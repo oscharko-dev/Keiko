@@ -24,7 +24,7 @@ import type {
   MemorySensitivity,
   MemoryStatus,
   MemoryType,
-} from "./memory.js";
+} from "./memory-contracts.js";
 import type {
   MemoryProvenance,
   MemoryRetentionHint,
@@ -39,6 +39,7 @@ export const MEMORY_FORGET_REASON_EXPIRE_PROPOSAL = "expire-proposal";
 export const MEMORY_FORGET_REASON_EVICT_OVERFLOW = "evict-overflow";
 export const MEMORY_FORGET_REASON_VALIDITY_EXPIRED = "validity-expired";
 export const MEMORY_FORGET_REASON_PROPOSED_FAINT_AGED_OUT = "proposed-faint-aged-out";
+export const MEMORY_FORGET_REASON_ARCHIVED_RETENTION = "archived-retention";
 
 export const MEMORY_FORGET_REASONS = [
   MEMORY_FORGET_REASON_USER_REQUEST,
@@ -48,6 +49,7 @@ export const MEMORY_FORGET_REASONS = [
   MEMORY_FORGET_REASON_EVICT_OVERFLOW,
   MEMORY_FORGET_REASON_VALIDITY_EXPIRED,
   MEMORY_FORGET_REASON_PROPOSED_FAINT_AGED_OUT,
+  MEMORY_FORGET_REASON_ARCHIVED_RETENTION,
 ] as const;
 
 export type MemoryForgetReason = (typeof MEMORY_FORGET_REASONS)[number];

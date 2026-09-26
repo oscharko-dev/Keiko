@@ -10,10 +10,12 @@
 
 import { randomUUID } from "node:crypto";
 import {
+  createEditorAgentCatalogFactory,
   createSession,
   MemoryEventSink,
   type HarnessEvent,
   type ModelPort,
+  type RunOutcome,
   type ToolCallCompletedEvent,
   type ToolCallResult,
   type ToolPort,
@@ -24,34 +26,130 @@ import {
   EditorAgentToolHost,
   type EditorAgentToolOutput,
 } from "@oscharko-dev/keiko-tools";
+import type {
+  CodingWorkbenchAuthorityEnvelope,
+  EditorAgentActionType,
+  EditorAgentSessionSnapshot,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_AGENT_SCHEMA_VERSION,
   isEditorAgentGovernedAuthorityReference,
-  type EditorAgentSessionSnapshot,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogLossState,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  EDITOR_AGENT_ACTION_APPROVAL_RISK,
+  classifyEditorAgentAction,
+  composeEditorAgentActionPolicyDecision,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent-governance";
 import type { UiHandlerDeps } from "../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { defaultServerDiagnosticSink } from "../diagnostics-log.js";
 import { readJsonObject } from "../files.js";
+import {
+  logHarnessContextCompactionEvents,
+  serverHarnessContextCompactor,
+} from "../harness-context-compactor.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import { editorAgentAuthorityRegistry } from "./agentAuthorityRegistry.js";
+import {
+  emitToolLifecycleEvent,
+  type CatalogLifecycleLogPort,
+} from "../tool-catalog/catalogToolLifecycle.js";
 import {
   EDITOR_AGENT_ROOT_BOUNDARY_ERROR_CODE,
   resolveEditorAgentActionRoot,
 } from "./agentRootBoundary.js";
 
+type ProducerCatalogEvidence = ReturnType<typeof createEditorAgentCatalogFactory>["evidence"];
+type ProducerCatalogObserver = NonNullable<Parameters<typeof createEditorAgentCatalogFactory>[1]>;
+type ProducerCatalogObservation = Parameters<ProducerCatalogObserver>[0];
+
 // Scope IN (#2489): the first Keiko-native producer is restricted to the four tools whose
 // dispatch is server-resolved (navigateSymbol/searchWorkspace/queryGit) or synchronously governed
 // (requestVerification). The five review-gated mutation tools (openFile/.../applyChangeset) need a
 // live human reviewer attached to the browser bridge and stay out of this slice.
-const PRODUCER_TOOL_NAMES: ReadonlySet<string> = new Set([
-  "editor_navigate_symbol",
-  "editor_search_workspace",
-  "editor_git_context",
-  "editor_request_verification",
-]);
+const PRODUCER_ACTION_BY_TOOL_NAME = {
+  editor_navigate_symbol: "navigateSymbol",
+  editor_search_workspace: "searchWorkspace",
+  editor_git_context: "queryGit",
+  editor_request_verification: "requestVerification",
+} as const satisfies Readonly<Record<string, EditorAgentActionType>>;
+const PRODUCER_TOOL_NAMES: ReadonlySet<string> = new Set(Object.keys(PRODUCER_ACTION_BY_TOOL_NAME));
 
 const MAX_PRODUCER_BODY_BYTES = 65_536;
 const MAX_GOAL_CHARS = 4_000;
+
+const EDITOR_PRODUCER_TURN_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "editor.producer-turn.completed",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "editor.agentProducerRoute.recordProducerCompletion",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["completed", "cancelled", "failed", "limit-exceeded"],
+    },
+    toolCallCount: { type: "integer", dataClass: "count", required: true },
+    toolNames: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: true,
+      maxLength: 64,
+      maxItems: 5,
+      values: [
+        "editor_navigate_symbol",
+        "editor_search_workspace",
+        "editor_git_context",
+        "editor_request_verification",
+        "unrecognized",
+      ],
+    },
+    toolNameLoss: { type: "string", dataClass: "loss-state", required: true },
+    catalogRevision: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    catalogProfile: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["editor@1", "unrecognized"],
+    },
+    catalogProfileLoss: { type: "string", dataClass: "loss-state", required: true },
+    projectionDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    handlerSetDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    advertisedToolRefs: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: true,
+      maxLength: 64,
+      maxItems: 32,
+      values: [
+        "keiko.editor.git@1",
+        "keiko.editor.search@1",
+        "keiko.editor.symbol@1",
+        "keiko.editor.verify@1",
+        "unrecognized",
+      ],
+    },
+    advertisedToolRefLoss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["editor-producer-turn"],
+  proofIds: ["editor.producer-turn.completed.emitted-line"],
+  releaseImpact: "patch",
+});
 
 // A content-free (enum/boolean only, never raw content) per-call outcome the producer surfaces
 // alongside toolCallCount/toolNames -- without this, a caller (or a reachability test) cannot tell
@@ -127,7 +225,7 @@ function producerToolOutcome(toolName: string, rawOutput: string): ProducerToolO
 // The fail-closed arms above cannot be reached through the route: every tool output the producer
 // ever parses is produced in-process by EditorAgentToolHost, so no real dispatch can hand it an
 // unknown kind or a non-record payload. Exposing the pure parser is the only way to prove the guards
-// actually degrade instead of echoing (AGENTS.md §9 -- both branches of every guard). Same
+// actually degrade instead of echoing (AGENTS.md §10 -- both branches of every guard). Same
 // `_...ForTests` seam convention as `_resetEditorAgentAuditForTests` in agentActionAudit.ts.
 export const _producerToolOutcomeForTests = producerToolOutcome;
 
@@ -151,11 +249,12 @@ function outOfScopeToolResult(request: { toolCallId: string; toolName: string })
 function scopedProducerToolPort(
   host: EditorAgentToolHost,
   outcomes: ProducerToolOutcome[],
+  eligibleToolNames: ReadonlySet<string> = PRODUCER_TOOL_NAMES,
 ): ToolPort {
   return {
-    listTools: () => host.listTools().filter((tool) => PRODUCER_TOOL_NAMES.has(tool.name)),
+    listTools: () => host.listTools().filter((tool) => eligibleToolNames.has(tool.name)),
     execute: async (request): Promise<ToolCallResult> => {
-      if (!PRODUCER_TOOL_NAMES.has(request.toolName)) {
+      if (!eligibleToolNames.has(request.toolName)) {
         const rejection = outOfScopeToolResult(request);
         outcomes.push(producerToolOutcome(request.toolName, rejection.output));
         return rejection;
@@ -164,6 +263,38 @@ function scopedProducerToolPort(
       outcomes.push(producerToolOutcome(request.toolName, result.output));
       return result;
     },
+  };
+}
+
+function producerEligibleToolNames(
+  authority: CodingWorkbenchAuthorityEnvelope,
+): ReadonlySet<string> {
+  const eligible = new Set<string>();
+  for (const [toolName, actionType] of Object.entries(PRODUCER_ACTION_BY_TOOL_NAME)) {
+    const baseline = classifyEditorAgentAction(actionType, {
+      targetPath: null,
+      targetSensitive: false,
+      origin: "agent",
+    });
+    const decision = composeEditorAgentActionPolicyDecision(
+      baseline,
+      authority,
+      EDITOR_AGENT_ACTION_APPROVAL_RISK[actionType],
+      "trusted",
+    );
+    if (decision.disposition === "allowed") eligible.add(toolName);
+  }
+  return eligible;
+}
+
+function producerRuntimePorts(
+  host: EditorAgentToolHost,
+  authority: CodingWorkbenchAuthorityEnvelope,
+): { readonly outcomes: ProducerToolOutcome[]; readonly scopedTools: ToolPort } {
+  const outcomes: ProducerToolOutcome[] = [];
+  return {
+    outcomes,
+    scopedTools: scopedProducerToolPort(host, outcomes, producerEligibleToolNames(authority)),
   };
 }
 
@@ -215,6 +346,7 @@ interface ProducerTurnResult {
   readonly toolCallCount: number;
   readonly toolNames: readonly string[];
   readonly toolOutcomes: readonly ProducerToolOutcome[];
+  readonly catalog: ProducerCatalogEvidence;
 }
 
 // Reads the local (server-bound) port off the live connection so the producer calls itself over a
@@ -277,27 +409,247 @@ async function runProducerTurn(
   workspaceRoot: string,
   model: ModelPort,
   host: EditorAgentToolHost,
+  authority: CodingWorkbenchAuthorityEnvelope,
+  requestCorrelationId: string | undefined,
+  activityLog: ServerLogSink = processServerLogSink(),
 ): Promise<ProducerTurnResult> {
-  const outcomes: ProducerToolOutcome[] = [];
+  // The SAME scoped port both feeds the (now dispatch-inert) legacy `tools` field and selects the
+  // exact ready catalog projection. Dispatch still executes through scopedProducerToolPort.execute(),
+  // the one place PRODUCER_TOOL_NAMES is enforced, before EditorAgentToolHost can be reached.
+  // This producer has no approval/resume channel. Therefore Ask-mode approval-required operations
+  // cannot be truthfully offered as currently executable; supervised and full modes keep the
+  // operations the shared policy classifies allowed. Concrete arguments, authority freshness, and
+  // workspace policy are still rechecked by the downstream route.
+  const { outcomes, scopedTools } = producerRuntimePorts(host, authority);
+  const correlationId = requestCorrelationId ?? UNKNOWN_CORRELATION_ID;
+  const catalog = createEditorAgentCatalogFactory(
+    scopedTools,
+    producerCatalogObserver(activityLog, correlationId),
+  );
   const session = createSession(
     { taskType: "editor-agent-turn", input: { goal: request.goal, sessionId: request.sessionId } },
-    { model: request.modelId, workingDirectory: workspaceRoot },
-    { model, tools: scopedProducerToolPort(host, outcomes), sink: new MemoryEventSink() },
+    { model: request.modelId, workingDirectory: workspaceRoot, dryRun: false },
+    {
+      model,
+      tools: scopedTools,
+      bindToolCatalog: catalog,
+      sink: new MemoryEventSink(),
+      // KEIKO-0726 (#3323): a real, tool-using production call site — unlike explain-plan's
+      // single-shot read-only path, an editor-agent-turn producer run can loop through several
+      // model/tool rounds and genuinely grow past maxContextBytes, so this is where the gap this
+      // issue closes actually gets exercised.
+      compactionPort: serverHarnessContextCompactor,
+    },
   );
   const result = await session.result;
+  logHarnessContextCompactionEvents(result.events, {
+    ...(requestCorrelationId === undefined ? {} : { parentCorrelationId: requestCorrelationId }),
+  });
   const toolCompletions = result.events.filter(isToolCallCompleted);
+  const toolNames = [...new Set(toolCompletions.map((event) => event.toolName))];
+  // Every editor-agent turn now actually dispatches through the mandatory catalog (#3407/#3408)
+  // instead of failing closed on every tool call, so this line is the only activity-log evidence
+  // of what a producer turn actually did: outcome, tool identifiers, and a bounded count -- never
+  // the goal text, tool arguments, or tool output (AGENTS.md §8 body-free rule).
+  recordProducerCompletion(activityLog, {
+    catalog: catalog.evidence,
+    correlationId,
+    outcome: result.outcome,
+    runId: session.runId,
+    toolCallCount: toolCompletions.length,
+    toolNames,
+  });
   return {
     schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
     runId: session.runId,
     outcome: result.outcome,
     toolCallCount: toolCompletions.length,
-    toolNames: [...new Set(toolCompletions.map((event) => event.toolName))],
+    toolNames,
     toolOutcomes: outcomes,
+    catalog: catalog.evidence,
+  };
+}
+
+interface ProducerCompletionEvidence {
+  readonly catalog: ProducerCatalogEvidence;
+  readonly correlationId: string;
+  readonly outcome: RunOutcome;
+  readonly runId: string;
+  readonly toolCallCount: number;
+  readonly toolNames: readonly string[];
+}
+
+type ProducerActivityToolName =
+  | "editor_navigate_symbol"
+  | "editor_search_workspace"
+  | "editor_git_context"
+  | "editor_request_verification"
+  | "unrecognized";
+
+type ProducerActivityToolRef =
+  | "keiko.editor.git@1"
+  | "keiko.editor.search@1"
+  | "keiko.editor.symbol@1"
+  | "keiko.editor.verify@1"
+  | "unrecognized";
+
+function producerActivityToolName(toolName: string): ProducerActivityToolName {
+  if (toolName === "editor_navigate_symbol") return toolName;
+  if (toolName === "editor_search_workspace") return toolName;
+  if (toolName === "editor_git_context") return toolName;
+  if (toolName === "editor_request_verification") return toolName;
+  return "unrecognized";
+}
+
+function producerActivityToolRef(
+  canonicalId: string,
+  contractVersion: number,
+): ProducerActivityToolRef {
+  const reference = `${canonicalId}@${String(contractVersion)}`;
+  if (reference === "keiko.editor.git@1") return reference;
+  if (reference === "keiko.editor.search@1") return reference;
+  if (reference === "keiko.editor.symbol@1") return reference;
+  if (reference === "keiko.editor.verify@1") return reference;
+  return "unrecognized";
+}
+
+function producerLoss(values: readonly string[]): ActivityLogLossState {
+  return values.includes("unrecognized") ? "event-location-unknown" : "none";
+}
+
+function recordProducerCompletion(log: ServerLogSink, evidence: ProducerCompletionEvidence): void {
+  const toolNames = [...new Set(evidence.toolNames.map(producerActivityToolName))];
+  const advertisedToolRefs = evidence.catalog.toolRefs.map((tool) =>
+    producerActivityToolRef(tool.canonicalId, tool.contractVersion),
+  );
+  const catalogProfile =
+    evidence.catalog.profile.id === "editor" && evidence.catalog.profile.version === 1
+      ? "editor@1"
+      : "unrecognized";
+  log.write(
+    activityLogEvent(
+      EDITOR_PRODUCER_TURN_COMPLETED_OPERATION,
+      { correlationId: evidence.correlationId },
+      {
+        runId: evidence.runId,
+        outcome: evidence.outcome,
+        toolCallCount: evidence.toolCallCount,
+        toolNames,
+        toolNameLoss: producerLoss(toolNames),
+        catalogRevision: evidence.catalog.catalogRevision,
+        catalogProfile,
+        catalogProfileLoss: producerLoss([catalogProfile]),
+        projectionDigest: evidence.catalog.projectionDigest,
+        handlerSetDigest: evidence.catalog.handlerSetDigest,
+        advertisedToolRefs,
+        advertisedToolRefLoss: producerLoss(advertisedToolRefs),
+      },
+    ),
+  );
+}
+
+function lifecycleIdentity(
+  correlationId: string,
+  observation: ProducerCatalogObservation,
+): Record<string, unknown> {
+  return {
+    correlationId,
+    catalogRevision: observation.binding.catalogRevision,
+    profile: observation.binding.profile,
+    projectionDigest: observation.binding.projectionDigest,
+  };
+}
+
+function emitCatalogBinding(
+  logPort: CatalogLifecycleLogPort,
+  correlationId: string,
+  observation: Extract<ProducerCatalogObservation, { readonly phase: "binding" }>,
+): void {
+  const identity = lifecycleIdentity(correlationId, observation);
+  emitToolLifecycleEvent(logPort, {
+    ...identity,
+    op: "tool-catalog.projection",
+    readiness: observation.binding.readiness,
+    resultCount: observation.binding.toolRefs.length,
+  });
+  emitToolLifecycleEvent(logPort, {
+    ...identity,
+    op: "tool-catalog.bind-ready",
+    readiness: "ready",
+    handlerSetDigest: observation.binding.handlerSetDigest,
+  });
+}
+
+function emitCatalogStarted(
+  logPort: CatalogLifecycleLogPort,
+  correlationId: string,
+  observation: Extract<ProducerCatalogObservation, { readonly phase: "invocation-started" }>,
+): void {
+  emitToolLifecycleEvent(logPort, {
+    ...lifecycleIdentity(correlationId, observation),
+    op: "tool-catalog.invocation-started",
+    invocationId: observation.invocationId,
+    toolRef: observation.toolRef,
+    state: "started",
+    reason: "none",
+    reservationId: observation.reservationId,
+  });
+}
+
+function emitCatalogSettled(
+  logPort: CatalogLifecycleLogPort,
+  correlationId: string,
+  observation: Extract<ProducerCatalogObservation, { readonly phase: "invocation-settled" }>,
+): void {
+  emitToolLifecycleEvent(logPort, {
+    ...lifecycleIdentity(correlationId, observation),
+    op: "tool-catalog.invocation-settled",
+    invocationId: observation.invocationId,
+    toolRef: observation.toolRef,
+    settlementId: observation.settlementId,
+    reservationId: observation.reservationId,
+    status: observation.status,
+    reason: observation.reason,
+    effectStarted: observation.effectStarted,
+    budgetDisposition: observation.budgetDisposition,
+    inputBytes: observation.inputBytes,
+    outputBytes: observation.outputBytes,
+    resultCount: observation.resultCount,
+    durationMs: observation.durationMs,
+    truncated: observation.truncated,
+    ...(observation.status === "failed"
+      ? { errorKind: "internal", frames: [], causeChain: [] }
+      : {}),
+  });
+}
+
+function emitProducerCatalogObservation(
+  logPort: CatalogLifecycleLogPort,
+  correlationId: string,
+  observation: ProducerCatalogObservation,
+): void {
+  if (observation.phase === "binding") emitCatalogBinding(logPort, correlationId, observation);
+  else if (observation.phase === "invocation-started")
+    emitCatalogStarted(logPort, correlationId, observation);
+  else emitCatalogSettled(logPort, correlationId, observation);
+}
+
+function producerCatalogObserver(
+  activityLog: ServerLogSink,
+  correlationId: string,
+): ProducerCatalogObserver {
+  const logPort = { primary: activityLog, diagnostics: defaultServerDiagnosticSink };
+  return (observation): void => {
+    emitProducerCatalogObservation(logPort, correlationId, observation);
   };
 }
 
 type ProducerAdmission =
-  | { readonly ok: true; readonly snapshot: EditorAgentSessionSnapshot }
+  | {
+      readonly ok: true;
+      readonly snapshot: EditorAgentSessionSnapshot;
+      readonly authority: CodingWorkbenchAuthorityEnvelope;
+    }
   | { readonly ok: false; readonly response: RouteResult };
 
 function producerAdmission(
@@ -334,6 +686,7 @@ function producerAdmission(
   }
   return {
     ok: true,
+    authority: authority.envelope,
     snapshot:
       rooted.root.workspaceRoot === snapshot.workspaceRoot
         ? snapshot
@@ -393,6 +746,9 @@ export async function handleEditorAgentProducerTurn(
     rootedSnapshot.workspaceRoot,
     model,
     hostOutcome.host,
+    admission.authority,
+    ctx.correlationId,
+    deps.activityLog,
   );
   return { status: 200, body: summary };
 }

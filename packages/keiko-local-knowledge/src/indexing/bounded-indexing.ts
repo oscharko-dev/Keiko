@@ -48,7 +48,7 @@ import {
   type StoredChunkIndexedTextColumns,
 } from "./chunk-indexed-text-persist.js";
 import { upsertLexicalRows } from "./lexical-index-persist.js";
-import type { ChunkToEmbed, EmbedBatchResult } from "./types.js";
+import type { ChunkToEmbed, EmbedBatchResult, EmbedRetryOptions } from "./types.js";
 
 export interface BoundedChunkParams {
   readonly capsuleId: KnowledgeCapsuleId;
@@ -266,6 +266,10 @@ export interface BoundedEmbedDeps {
   readonly signal?: AbortSignal;
   readonly policy?: LargeDocumentResourcePolicy;
   readonly contextualRetrieval?: ContextualRetrievalOptions;
+  // Pass-through to the embedding batcher's transient-failure retry policy, mirroring
+  // IndexingOptions.embedRetry so the bounded large-document path honours the same operator
+  // retry configuration as the standard flush path.
+  readonly retry?: EmbedRetryOptions;
   // Called after each successfully embedded batch with the new embedded-chunk cursor and id, so the
   // caller can advance the durable checkpoint between model calls.
   readonly onBatch?: (cursor: number, lastChunkId: ChunkId) => void;
@@ -361,6 +365,7 @@ function embedOptions(deps: BoundedEmbedDeps): Parameters<typeof embedChunkBatch
     pinnedIdentity: deps.identity,
     concurrency: deps.concurrency,
     ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
+    ...(deps.retry !== undefined ? { retry: deps.retry } : {}),
     now: deps.now,
     idSource: deps.idSource,
     ...(deps.tokenizer !== undefined ? { tokenizer: deps.tokenizer } : {}),

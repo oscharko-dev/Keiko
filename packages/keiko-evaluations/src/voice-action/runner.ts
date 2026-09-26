@@ -6,19 +6,21 @@
 // boundary is exercised for real — every fixture's segments pass through `selectCommittedVoiceTranscript`
 // before any proposal can form, so partial / discarded / superseded text is excluded structurally.
 
+import type {
+  SpokenActionAuditRecord,
+  SpokenActionConfirmationInput,
+  SpokenActionEffectClass,
+  SpokenActionOutcome,
+  SpokenActionProposal,
+  VoiceTranscriptSegment,
+} from "@oscharko-dev/keiko-contracts";
 import {
   buildSpokenActionAuditRecord,
   canonicalizeSpokenActionConfirmation,
   normalizeSpokenActionProposal,
-  selectCommittedVoiceTranscript,
   voiceCanProposeAction,
-  type SpokenActionAuditRecord,
-  type SpokenActionConfirmationInput,
-  type SpokenActionEffectClass,
-  type SpokenActionOutcome,
-  type SpokenActionProposal,
-  type VoiceTranscriptSegment,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/voice-action-intent";
+import { selectCommittedVoiceTranscript } from "@oscharko-dev/keiko-contracts/runtime/voice-transcript";
 import { ALL_VOICE_ACTION_FIXTURES } from "./fixtures/index.js";
 import { aggregateVoiceActionQuality, scoreVoiceActionQuality } from "./scorer.js";
 import {
@@ -37,6 +39,18 @@ import {
 // this eval never computes the downstream sha256 (that is Artifact 2's `node:crypto`); the empty digest
 // is the contract-valid "no bound digest" sentinel, and the AC4 staleness proof works on the canonical
 // SEED (a plain string), which is what the digest is derived from.
+//
+// KEIKO-0242: outcome must branch on requiresConfirmation. A confirmation-requiring proposal that has
+// NOT been confirmed can never be `routed` — keiko-server's denyConfirmation reports `denied` in that
+// exact case, and the eval must mirror that governance verdict rather than misclaim `routed` for every
+// non-undefined proposal (which misrepresented six confirmation-required fixtures — voice-mutating,
+// voice-unknown-fail-closed, adversarial-{injection,misrecognition,correction,interruption}).
+function deriveOutcome(proposal: SpokenActionProposal | undefined): SpokenActionOutcome {
+  if (proposal === undefined) return "not-applicable";
+  if (proposal.requiresConfirmation) return "denied";
+  return "routed";
+}
+
 function buildAuditFor(
   proposal: SpokenActionProposal | undefined,
   fixture: VoiceActionEvalFixture,
@@ -44,12 +58,16 @@ function buildAuditFor(
   committedChars: number,
 ): SpokenActionAuditRecord {
   const effectClass: SpokenActionEffectClass = proposal?.effectClass ?? "unknown";
-  const outcome: SpokenActionOutcome = proposal === undefined ? "not-applicable" : "routed";
+  // KEIKO-0242: eval fixtures do not model confirmation; a confirmation-requiring proposal is
+  // therefore never confirmed here, so it maps to `denied` — mirroring keiko-server's
+  // denyConfirmation verdict rather than misclaiming `routed`.
+  const confirmed = false;
+  const outcome = deriveOutcome(proposal);
   return buildSpokenActionAuditRecord({
     effectClass,
     state: proposal?.state ?? "expired",
     confirmationRequired: proposal?.requiresConfirmation ?? false,
-    confirmed: false,
+    confirmed,
     outcome,
     source: fixture.source,
     turnIndex: fixture.turnIndex,
@@ -67,6 +85,14 @@ function deriveStaleness(
   fixture: VoiceActionEvalFixture,
   proposal: SpokenActionProposal,
 ): VoiceActionStalenessTrajectory | undefined {
+  // KEIKO-0629: the two staleness triggers are independently optional fields, not a discriminated
+  // union, so nothing at the type level stops a fixture from declaring both. Fail loudly instead of
+  // silently deriving only the "correction" trajectory and dropping "turn-advance".
+  if (fixture.correctedSegments !== undefined && fixture.turnAdvance === true) {
+    throw new Error(
+      `fixture ${fixture.name} declares both correctedSegments and turnAdvance; at most one staleness trigger is allowed`,
+    );
+  }
   const originalCanonical = canonicalizeSpokenActionConfirmation(proposal.confirmationInput);
   if (fixture.correctedSegments !== undefined) {
     const changed = projectionConfirmationSeed(

@@ -14,7 +14,10 @@ import { join, sep } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import yauzl from "yauzl";
 
+import { extractZipArchiveEntries } from "../lib/zip-archive.mjs";
+
 import {
+  approvedNodeVersion,
   browserOpenCommand,
   latestManualArtifactRoot,
   manualReviewPlan,
@@ -27,6 +30,7 @@ import {
 import {
   findPortableMetadataRedactionFailures,
   PORTABLE_TARGETS,
+  portableTargetByName,
   validatePortablePublishedManifest,
 } from "../portable-runtime.mjs";
 
@@ -39,6 +43,12 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 const SCENARIO_COUNT = 17;
+// Deliberately not the committed approval: a manifest carrying this version can only come from the
+// approvals document the seam supplied, never from a literal restated in the review script.
+const FIXTURE_NODE_VERSION = "26.0.1";
+// The cheapest scenario that still writes a full portable manifest — it skips the payload tree and
+// zips a single hostile entry instead.
+const MANIFEST_ONLY_SCENARIO = "hostile-archive";
 
 const tmpRoots = [];
 
@@ -69,6 +79,44 @@ function zipEntryNames(path) {
       zip.readEntry();
     });
   });
+}
+
+function committedApprovals() {
+  return jsonAt("portable-runtime-approvals.json");
+}
+
+function reviewManifest(review, target, scenario) {
+  const root = tmpReviewRoot();
+  review.prepareScenarioFixture(root, target, scenario);
+  return jsonAt(join(root, "release-assets", `${target}-portable-manifest.json`));
+}
+
+// Derived from the committed approvals document instead of restating its shape, so this fixture
+// cannot keep describing an approvals file that no longer exists. The archive URLs are rewritten
+// with it because the shared validator pins every Node archive URL to the version it approves.
+function approvalsWithNodeVersion(version) {
+  const document = structuredClone(committedApprovals());
+  const previous = document.node.version;
+  document.node.version = version;
+  for (const archive of Object.values(document.node.archives)) {
+    archive.url = archive.url.replaceAll(previous, version);
+  }
+  return document;
+}
+
+// Reloads the review script against a substituted approvals document. The seam is the shared
+// approvals loader, and the fixture is pushed through the real validator, so this can only supply a
+// document the production load path would itself have accepted.
+async function importReviewWithApprovals(document) {
+  vi.doMock("../portable-runtime-approvals.mjs", async (importOriginal) => {
+    const actual = await importOriginal();
+    return {
+      ...actual,
+      loadPortableRuntimeApprovals: () => actual.validatePortableRuntimeApprovals(document),
+    };
+  });
+  vi.resetModules();
+  return import("../portable-manual-review.mjs");
 }
 
 afterEach(() => {
@@ -166,6 +214,69 @@ describe("portable manual review harness", () => {
     );
   });
 
+  it("creates a schema-valid Linux fixture with the production runtime identity", async () => {
+    const root = tmpReviewRoot();
+    prepareScenarioFixture(root, "linux-x64", "happy-update");
+
+    const entries = await zipEntryNames(join(root, "release-assets", "keiko-linux-x64.zip"));
+    const manifest = jsonAt(join(root, "release-assets", "linux-x64-portable-manifest.json"));
+    const supervisor = manifest.nativeHelpers.find(
+      (helper) => helper.name === "keiko-runtime-supervisor",
+    );
+
+    expect(entries).toContain("Keiko/app/package.json");
+    expect(entries).toContain("Keiko/runtime/node/bin/node");
+    expect(entries).toContain("Keiko/Keiko");
+    expect(
+      validatePortablePublishedManifest(manifest, {
+        releaseId: manifest.release.releaseId,
+        assetId: manifest.artifact.assetId,
+      }),
+    ).toEqual([]);
+    expect(manifest.security.verificationChecks).toEqual({ provenanceVerified: true });
+    expect(manifest.runtimeActivation.trustAnchor).toBe("sigstore-qualification-receipt");
+    expect(manifest.runtimeQualification.backend).toBe("linux-namespace-gateway");
+    expect(supervisor).toMatchObject({
+      executablePath: "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js",
+      source: { path: "packages/keiko-sandbox/src" },
+      protocol: { requestMagic: "none", responseMagic: "none" },
+    });
+  });
+
+  it("embeds the Windows Job Object backend in the manual runtime attestation", () => {
+    const root = tmpReviewRoot();
+    prepareScenarioFixture(root, "windows-x64", "happy-update");
+    const extracted = join(root, "extracted");
+
+    extractZipArchiveEntries(join(root, "release-assets", "keiko-windows-x64.zip"), extracted, {
+      requireRegularEntries: true,
+    });
+
+    const attestation = jsonAt(
+      join(extracted, "Keiko", "runtime", "native", "keiko-runtime-attestation.exe"),
+    );
+    expect(attestation.backend).toBe("windows-job-object");
+  });
+
+  it("retains executable modes when the Linux fixture archive is extracted", () => {
+    const root = tmpReviewRoot();
+    prepareScenarioFixture(root, "linux-x64", "happy-update");
+    const extracted = join(root, "extracted");
+
+    extractZipArchiveEntries(join(root, "release-assets", "keiko-linux-x64.zip"), extracted, {
+      requireRegularEntries: true,
+    });
+
+    for (const relativePath of [
+      "runtime/node/bin/node",
+      "Keiko",
+      "support/keiko-support.sh",
+      "runtime/native/keiko-secure-workspace-read",
+    ]) {
+      expect(statSync(join(extracted, "Keiko", relativePath)).mode & 0o111).toBe(0o100);
+    }
+  });
+
   it("generates a valid schema-v2 OpenCode whole-product sidecar manifest", () => {
     const root = tmpReviewRoot();
     prepareScenarioFixture(root, "macos-arm64", "sidecar-present");
@@ -180,12 +291,7 @@ describe("portable manual review harness", () => {
       }),
     ).toEqual([]);
     expect(sidecar.approvalSchemaVersion).toBe(2);
-    expect(sidecar.upstream).toMatchObject({
-      owner: "anomalyco",
-      repository: "opencode",
-      version: "1.17.17",
-      commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
-    });
+    expect(sidecar.upstream).toEqual(committedApprovals().sidecarRuntimes[0].upstream);
     expect(sidecar.protocolSchema.digestInput).toBe("upstream-raw-bytes");
     expect(sidecar.adapterCompatibility.protocolVersion).toBeUndefined();
     expect(sidecar.signing.shippedExecutableTreeSha256).not.toBe(sidecar.executableTreeSha256);
@@ -253,5 +359,61 @@ describe("openBrowserIfRequested", () => {
     const [command, args] = vi.mocked(spawnSync).mock.calls[0];
     expect(command).toBe(browserOpenCommand(process.platform));
     expect(args).toContain("http://127.0.0.1:19830");
+  });
+});
+
+describe("reviewed node runtime", () => {
+  afterEach(() => {
+    vi.doUnmock("../portable-runtime-approvals.mjs");
+    vi.resetModules();
+  });
+
+  it("binds review manifests to the node version the approvals document names", async () => {
+    const committedVersion = committedApprovals().node.version;
+    const review = await importReviewWithApprovals(approvalsWithNodeVersion(FIXTURE_NODE_VERSION));
+
+    const manifest = reviewManifest(review, "macos-arm64", MANIFEST_ONLY_SCENARIO);
+
+    // Guards the de-duplication itself: reintroducing the reviewed node version as a literal in the
+    // review script makes both assertions report the committed 24.x patch instead of this fixture.
+    expect(FIXTURE_NODE_VERSION).not.toBe(committedVersion);
+    expect(manifest.runtime.nodeVersion).toBe(FIXTURE_NODE_VERSION);
+    expect(manifest.releaseImpact.reviewedBinding.nodeRuntimeIdentity).toBe(
+      `node-v${FIXTURE_NODE_VERSION}-${portableTargetByName("macos-arm64").runtimeTarget}`,
+    );
+  });
+
+  it("reviews against the committed approval when nothing is substituted", () => {
+    const root = tmpReviewRoot();
+    prepareScenarioFixture(root, "macos-arm64", MANIFEST_ONLY_SCENARIO);
+    const manifest = jsonAt(join(root, "release-assets", "macos-arm64-portable-manifest.json"));
+
+    expect(manifest.runtime.nodeVersion).toBe(committedApprovals().node.version);
+  });
+});
+
+describe("approvedNodeVersion", () => {
+  it("returns the version the approvals document approved", () => {
+    expect(approvedNodeVersion({ node: { version: "26.0.1" } })).toBe("26.0.1");
+  });
+
+  it("fails closed when the approvals document has no node section", () => {
+    expect(() => approvedNodeVersion({})).toThrow(/approved node version is missing/u);
+  });
+
+  it("fails closed when there is no approvals document at all", () => {
+    expect(() => approvedNodeVersion(undefined)).toThrow(/approved node version is missing/u);
+  });
+
+  it("fails closed on an empty approved version instead of reviewing against nothing", () => {
+    expect(() => approvedNodeVersion({ node: { version: "" } })).toThrow(
+      /approved node version is missing/u,
+    );
+  });
+
+  it("fails closed when the approved version is not a string", () => {
+    expect(() => approvedNodeVersion({ node: { version: 24 } })).toThrow(
+      /approved node version is missing/u,
+    );
   });
 });

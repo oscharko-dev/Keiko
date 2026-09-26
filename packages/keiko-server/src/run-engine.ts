@@ -49,7 +49,10 @@ import {
   type AgentRunGovernanceBinding,
 } from "./agent-run-governance.js";
 import { QueueEventSink } from "./sink.js";
-import { executeVerificationEnforced } from "./editor/verificationExecution.js";
+import {
+  executeVerificationEnforced,
+  probeNetworkIsolation,
+} from "./editor/verificationExecution.js";
 import type { ExecuteVerificationResult } from "./editor/verificationExecution.js";
 import type { AppliableSnapshot, RunRegistry, RunStatus } from "./runs.js";
 import {
@@ -59,6 +62,7 @@ import {
   type EvidencePersistContext,
   type RunIdentity,
 } from "./evidence.js";
+import { contentFreeErrorClass, emitServerDiagnostic } from "./diagnostics-log.js";
 import { createWorkflowMemoryPort } from "./memory-workflow-port.js";
 import { buildGovernedHandoffEvidence } from "./governed-workflow.js";
 import { createServerHarnessToolShaper } from "./harness-tool-shaper.js";
@@ -246,34 +250,76 @@ function cancelWorkflow(controller: AbortController): (reason?: string) => void 
   };
 }
 
+// probeNetworkIsolation spawns no untrusted command, but it IS real filesystem/OS probing that
+// could throw for a workspaceRoot an earlier step already deleted or made unreadable. A governed
+// run's verification step must still get an answer rather than crash the whole dispatch; fail
+// closed (false) so the orchestrator's own fail-closed default applies exactly as if no probe had
+// run at all — never fail open into an unenforced network:"none" step. A failure is still recorded
+// through the server's single redacted diagnostic sink (no cwd, no raw error text — a content-free
+// error class only) so a probe that starts failing is operator-visible, not silently swallowed.
+export function probeNetworkIsolationSafely(cwd: string, runId?: string): boolean {
+  try {
+    return probeNetworkIsolation(cwd).available;
+  } catch (error) {
+    emitServerDiagnostic(undefined, {
+      // Threads the dispatching run's own id (ADR-0173 D5 / g12) when the caller has one in
+      // scope, rather than a disconnected mint, so this probe failure joins the SAME run's other
+      // diagnostics.
+      correlationId: runId ?? randomUUID(),
+      timestamp: new Date().toISOString(),
+      operation: "workflow.network-isolation-probe",
+      source: "run-engine.probeNetworkIsolationSafely",
+      errorClass: contentFreeErrorClass(error),
+      message: "Network isolation probe failed; verification enforcement defaults to fail-closed.",
+    });
+    return false;
+  }
+}
+
 // Starts the underlying run for a workflow request: an AbortController drives cancellation (the
 // workflow honours deps.signal), and the BFF-owned runId is injected as the workflow idSource so the
 // streamed events carry the same runId the registry/SSE key on.
+// Split out of dispatchWorkflow purely to keep that function's line count under the repository
+// limit as the probe-correlation threading grew it; behavior is unchanged from before the split.
+function dispatchWorkflowMemoryDeps(
+  ctx: EngineContext,
+  runId: string,
+): { readonly memoryPort?: ReturnType<typeof createWorkflowMemoryPort> } {
+  if (ctx.memoryVault === undefined || ctx.evidence === undefined) return {};
+  return {
+    memoryPort: createWorkflowMemoryPort({
+      vault: ctx.memoryVault,
+      evidenceStore: ctx.evidence.store,
+      runId,
+      redactString: ctx.memoryAuditRedactString ?? ((input: string): string => input),
+      ...(ctx.memoryCustomerIdentifierMatchers === undefined
+        ? {}
+        : { customerIdentifierMatchers: ctx.memoryCustomerIdentifierMatchers }),
+    }),
+  };
+}
+
 function dispatchWorkflow(ctx: EngineContext, sink: QueueEventSink, runId: string): Dispatched {
   const controller = new AbortController();
   const ports = governedWorkflowPorts(ctx);
+  // Probe THIS host for an enforcing egress backend and hand the answer to the verify stage, the
+  // same probe-then-enforce composition the editor verification path uses (ADR-0043 D8). Threads
+  // this dispatch's own runId (ADR-0173 D5 / g12) into a probe-failure diagnostic.
+  const verificationEnforcedNetworkAvailable = probeNetworkIsolationSafely(
+    workspaceRoot(ctx.request),
+    runId,
+  );
   const commonDeps = {
     model: ports.model,
     ...(ports.spawn === undefined ? {} : { spawn: ports.spawn }),
+    verificationEnforcedNetworkAvailable,
     sink,
     signal: controller.signal,
     idSource: (): string => runId,
     ...(ctx.request.governedHandoff === undefined
       ? {}
       : { workflowHandoff: ctx.request.governedHandoff }),
-    ...(ctx.memoryVault !== undefined && ctx.evidence !== undefined
-      ? {
-          memoryPort: createWorkflowMemoryPort({
-            vault: ctx.memoryVault,
-            evidenceStore: ctx.evidence.store,
-            runId,
-            redactString: ctx.memoryAuditRedactString ?? ((input: string): string => input),
-            ...(ctx.memoryCustomerIdentifierMatchers === undefined
-              ? {}
-              : { customerIdentifierMatchers: ctx.memoryCustomerIdentifierMatchers }),
-          }),
-        }
-      : {}),
+    ...dispatchWorkflowMemoryDeps(ctx, runId),
   };
   if (ctx.request.kind === "unit-tests") {
     const result = generateUnitTests(unitTestInput(ctx.request), commonDeps).then((report) => ({
@@ -317,6 +363,14 @@ function dispatchExplain(
     shaperPort: createServerHarnessToolShaper({
       ...(ctx.toolArtifacts === undefined ? {} : { artifactWriter: ctx.toolArtifacts }),
     }),
+    // 2895 audit KEIKO-0902: no compactionPort here. explain-plan is read-only by construction
+    // (allowsTools/allowsPatch/allowsVerification all false, tasks/explain-plan.ts) and its session
+    // makes exactly one model call from the initial [system, user] seed with no prior assistant
+    // turn — checkModelCallLimits therefore never sees more than that seed, and the compactor's
+    // turns.length < 2 precondition (harness-context-compactor.ts) always declines. A port injected
+    // here can structurally never fire; wiring one anyway would invite a future reader to believe
+    // this path is covered by compaction when it cannot be. If explain-plan ever grows a multi-call
+    // shape, wire the port here then, alongside a test that proves it actually fires.
     ...(reservedRunId === undefined ? {} : { idSource: { newRunId: (): string => reservedRunId } }),
   });
   const result = session.result.then((runResult): DispatchOutcome => ({
@@ -338,11 +392,14 @@ function dispatchExplain(
 }
 
 // Maps a VerificationStatus to the BFF RunStatus. Verify has no "appliable" snapshot — the gates
-// either pass, fail/skip/deny (terminal), or are cancelled. `passed` → completed; `cancelled` →
-// cancelled; every other terminal status (failed/skipped/denied/timed-out/resource-exceeded) is
-// surfaced as `failed` so the registry stays in a known terminal state.
+// either pass, fail/deny (terminal), are skipped as a whole, or are cancelled. `passed` and
+// `skipped` → completed: a report whose every step was skipped is an honest verdict the run
+// reached, not a run that broke (KEIKO-0848; the `run:completed` event still carries
+// `overall=skipped`, and the verified-commit path refuses it as `verification-missing`).
+// `cancelled` → cancelled; every other terminal status (failed/denied/timed-out/
+// resource-exceeded) is surfaced as `failed` so the registry stays in a known terminal state.
 function verifyStatusToRun(status: VerificationReport["overallStatus"]): TerminalStatus {
-  if (status === "passed") {
+  if (status === "passed" || status === "skipped") {
     return "completed";
   }
   if (status === "cancelled") {
@@ -401,7 +458,7 @@ function dispatchVerify(ctx: EngineContext, sink: QueueEventSink, runId: string)
   const fingerprint = workflowFingerprint(ctx.request, ctx.governance);
   const root = workspaceRoot(ctx.request);
   emitVerifyStart(sink, runId, fingerprint, ctx.request.modelId);
-  const result = runVerify(ctx, controller.signal, root).then((report): DispatchOutcome => {
+  const result = runVerify(ctx, controller.signal, root, runId).then((report): DispatchOutcome => {
     emitVerifyComplete(sink, runId, fingerprint, report);
     return {
       status: verifyStatusToRun(report.overallStatus),
@@ -421,6 +478,7 @@ async function runVerify(
   ctx: EngineContext,
   signal: AbortSignal,
   root: string,
+  correlationId: string,
 ): Promise<VerificationReport> {
   const workspace = detectWorkspace(root);
   const catalog = detectScripts(workspace);
@@ -429,7 +487,7 @@ async function runVerify(
     ...(targetFiles === undefined ? {} : { changedFiles: targetFiles }),
   });
   const execute = ctx.verificationExecutor ?? executeVerificationEnforced;
-  const { report } = await execute({ plan, workspace, signal, probeCwd: root });
+  const { report } = await execute({ plan, workspace, signal, probeCwd: root, correlationId });
   return report;
 }
 
@@ -617,6 +675,10 @@ export async function applyRun(
   modelId: string,
   redactReport: (value: unknown) => unknown,
   governance?: AgentRunGovernanceBinding,
+  // The originating run's own id (ADR-0173 D5 / g12), threaded into the re-invoked verify stage's
+  // network-isolation probe so a probe failure joins the SAME run's other diagnostics rather than
+  // a disconnected mint.
+  runId?: string,
 ): Promise<unknown> {
   const input = isRecord(snapshot.payload) ? snapshot.payload : {};
   const limitsOverride = snapshot.limits !== undefined ? { limits: snapshot.limits } : {};
@@ -637,6 +699,10 @@ export async function applyRun(
   const deps = {
     model: executionModel,
     ...(spawn === undefined ? {} : { spawn }),
+    // Apply replays an accepted snapshot through the same verify stage the initial dispatch used
+    // (dispatchWorkflow above); without this, a governed apply's network:"none" steps see no probe
+    // result and are denied even on hosts an enforcing backend IS available on (ADR-0043 D8).
+    verificationEnforcedNetworkAvailable: probeNetworkIsolationSafely(root, runId),
     ...(snapshot.governedHandoff === undefined
       ? {}
       : { workflowHandoff: snapshot.governedHandoff }),

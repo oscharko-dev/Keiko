@@ -8,6 +8,9 @@ export const EN_MESSAGES = {
   "header.openQuickAccess": "Open quick access",
   "rail.primaryNavigation": "Primary workspace navigation",
   "rail.newChat": "New chat",
+  "rail.codingHistory": "Coding History",
+  "window.type.codingHistory.title": "Coding History",
+  "window.type.codingHistory.desc": "Resume coding tasks",
   "rail.chatHistory": "Chat History",
   "rail.memoria": "MemoriaViva",
   "rail.quality": "Quality Intelligence",
@@ -46,6 +49,8 @@ export const EN_MESSAGES = {
     "Move this project to a filesystem with stable file identity before relying on Local History.",
   "editor.localHistoryProtection.historyUnavailable":
     "Save again after Local History is available.",
+  "editor.localHistoryProtection.suppressedSecretDetected":
+    "This save was not checkpointed: the content looks like it contains a secret. Local History recovery is unavailable for this save.",
   "editor.localHistoryProtection.diagnosticReference": "Diagnostic reference: {correlationId}",
   "editor.callHierarchy.title": "Call hierarchy",
   "editor.callHierarchy.incoming": "Incoming calls",
@@ -200,6 +205,7 @@ export const EN_MESSAGES = {
   "rail.settings": "Settings",
   "common.optional": "optional",
   "common.loading": "Loading...",
+  "window.chunkStalled": "This window did not finish loading.",
   "common.cancel": "Cancel",
   "common.retry": "Retry",
   "common.dismissError": "Dismiss error",
@@ -218,8 +224,6 @@ export const EN_MESSAGES = {
   "common.off": "off",
   "common.close": "Close",
   "common.advanced": "advanced",
-  "gatewaySetup.badge.setup": "Model gateway setup",
-  "gatewaySetup.badge.update": "Credential update",
   "gatewaySetup.loading.title": "Preparing model gateway setup",
   "gatewaySetup.loading.description":
     "Loading the local setup controls. No provider request has been started.",
@@ -227,65 +231,10 @@ export const EN_MESSAGES = {
   "gatewaySetup.workflowEligibleModels": "Coding-safe workflow models",
   "gatewaySetup.workflowEligibleModelsPlaceholder":
     "Paste explicitly approved coding model names, one per line",
-  "gatewaySetup.voice.title": "Audio & Digital Voice",
-  "gatewaySetup.voice.description":
-    "Optional models for dictation, live conversation, and spoken answers.",
-  "gatewaySetup.voice.guidance":
-    "Configure only what you need: Dictate requires a speech-to-text deployment. Digital Voice requires a Realtime media deployment and its compatible live-transcription deployment. Read aloud requires a speech-output deployment. Deployment names are provider-specific. To replace an audio endpoint, re-enter a fresh credential and provider locality plus every role that should move; roles you omit stay on their stored connection.",
-  "gatewaySetup.voice.selectedCapabilities":
-    "Selected capabilities: Dictate {dictate} · Digital Voice {digitalVoice} · Read aloud {readAloud}.",
-  "gatewaySetup.voice.dictateDeployment": "Dictate · speech-to-text deployment",
-  "gatewaySetup.voice.realtimeDeployment": "Digital Voice · Realtime deployment",
-  "gatewaySetup.voice.realtimeTranscriptionDeployment":
-    "Digital Voice · live transcription deployment",
-  "gatewaySetup.voice.realtimeTranscriptionDeploymentPlaceholder":
-    "your-realtime-transcription-deployment",
-  "gatewaySetup.voice.realtimeTranscriptionRequiredLabel": "required with Realtime",
-  "gatewaySetup.voice.realtimeTranscriptionRequired":
-    "Enter the compatible live-transcription deployment for this Realtime deployment.",
-  "gatewaySetup.voice.realtimeRequired":
-    "A live-transcription deployment requires an explicit Realtime deployment.",
-  "gatewaySetup.voice.deploymentRequired":
-    "Enter at least one explicit voice deployment: speech-to-text, Realtime with live transcription, or speech output.",
-  "gatewaySetup.voice.endpointMigrationRequired":
-    "Replacing a stored audio endpoint requires a fresh credential, an explicitly selected provider locality, and at least one deployment role to move.",
-  "gatewaySetup.voice.semanticTurnDetection": "Semantic turn detection",
-  "gatewaySetup.voice.semanticTurnDetectionHint":
-    "Enable only when this Realtime deployment explicitly supports semantic VAD. Replacing the deployment resets this capability.",
-  "gatewaySetup.voice.speechOutputDeployment": "Read aloud · speech-output deployment",
-  "gatewaySetup.voice.outputVoice": "Output voice",
-  "gatewaySetup.voice.outputVoiceHint":
-    "required for Read Aloud; use an ID supported by the selected provider",
-  "gatewaySetup.voice.outputVoiceRequired":
-    "An explicit provider voice ID is required when a speech-output deployment is configured or replaced.",
-  "gatewaySetup.voice.endpointUrl": "Audio endpoint URL",
-  "gatewaySetup.voice.preserveExistingHint": "leave blank to keep",
-  "gatewaySetup.voice.endpointReplacePlaceholder":
-    "Replace together with credential, locality, and explicit target roles",
-  "gatewaySetup.voice.credential": "Audio credential",
-  "gatewaySetup.voice.credentialReplacePlaceholder":
-    "Only enter a value to replace the stored audio credential",
-  "gatewaySetup.voice.credentialPlaceholder": "Paste your audio credential",
-  "gatewaySetup.voice.authHeader": "Audio auth header",
-  "gatewaySetup.voice.authHeaderPreservePlaceholder": "Leave blank to keep stored header",
-  "gatewaySetup.voice.timeout": "Audio timeout (ms)",
-  "gatewaySetup.voice.timeoutPreservePlaceholder": "Leave blank to keep stored timeout",
-  "gatewaySetup.voice.storedAria": "Stored audio credentials",
-  "gatewaySetup.voice.audioModels": "Audio models",
-  "gatewaySetup.voice.updateSettings": "Update audio and Digital Voice settings",
-  "gatewaySetup.voice.success.audioAndFigma":
-    "Updated audio and Digital Voice settings and verified Figma access token. Reloading Keiko…",
-  "gatewaySetup.voice.success.gatewayAudioAndFigma":
-    "Updated model gateway, audio and Digital Voice settings, and verified Figma access token. Reloading Keiko…",
-  "gatewaySetup.voice.success.audio": "Updated audio and Digital Voice settings. Reloading Keiko…",
-  "gatewaySetup.voice.success.verifiedAudioAndFigma":
-    "{verified}, updated audio and Digital Voice settings, and verified Figma access token. Reloading Keiko…{skipped}",
-  "gatewaySetup.voice.success.verifiedAudio":
-    "{verified} and updated audio and Digital Voice settings. Reloading Keiko…{skipped}",
-  "mode.group": "Agent mode",
-  "mode.manual.title": "You approve every privileged action",
-  "mode.manual.label": "You",
-  "mode.autonomous.title": "Keiko governs agents per your policy",
+  "gatewaySetup.unusable.unsupported": " Not used (mode declared by the gateway): {models}.",
+  "gatewaySetup.unusable.dropped": " Embedding verification failed, not stored: {models}.",
+  "gatewaySetup.unusable.unverified": " Kept but unverified as embedding models: {models}.",
+  "gatewaySetup.unusable.unverifiedChat": " Kept but unverified as chat models: {models}.",
   // The shell undo stack records panel toggles only — no window move/resize/maximize/close reaches
   // it — so the empty-stack labels name that scope instead of promising window changes.
   "shell.command.undo.target": "Undo: {target}",
@@ -295,8 +244,27 @@ export const EN_MESSAGES = {
   "workspace.selection.none": "No workspace windows selected",
   "workspace.binding.restoreVerificationFailed":
     "The active task workspace failed re-verification. Re-bind it before starting a coding run.",
+  "workspace.binding.provisionFailed":
+    "The task workspace could not be verified and activated. Review the repository and try again.",
+  "workspace.binding.repairOperatorRequired":
+    "This recovery needs an operator first. Inspect the managed worktree, then retry the repair.",
   "workspace.selection.one": "1 workspace window selected",
   "workspace.selection.many": "{count} workspace windows selected",
+  "workspace.clipboard.copied.one": "1 window copied",
+  "workspace.clipboard.copied.many": "{count} windows copied",
+  "workspace.clipboard.cut.one": "1 window cut",
+  "workspace.clipboard.cut.many": "{count} windows cut",
+  "workspace.clipboard.pasted.one": "1 window pasted",
+  "workspace.clipboard.pasted.many": "{count} windows pasted",
+  "workspace.clipboard.skipped.one": "1 selected window skipped (not duplicable)",
+  "workspace.clipboard.skipped.many": "{count} selected windows skipped (not duplicable)",
+  "workspace.clipboard.overflow.one": "1 more window did not fit this copy",
+  "workspace.clipboard.overflow.many": "{count} more windows did not fit this copy",
+  "workspace.clipboard.noSelection": "Select one or more windows first",
+  "workspace.clipboard.nothingToPaste": "Nothing to paste — copy or cut windows first",
+  "workspace.clipboard.workspaceFull": "The workspace has no room for more windows",
+  "workspace.clipboard.noneEligible":
+    "The selected windows can't be duplicated — chat and single-instance windows are excluded",
   "workspace.window.selectedLabel": "{label} — selected",
   "workspace.surface": "Workspace surface",
   "workspace.connectHint": "Click a highlighted window to connect. Esc cancels.",
@@ -357,10 +325,8 @@ export const EN_MESSAGES = {
   "window.type.review.desc": "Review a proposed diff",
   "window.type.agents.title": "Agents",
   "window.type.agents.desc": "Choose a coding agent",
-  "window.type.integ.title": "Integrations",
-  "window.type.integ.desc": "Connect apps",
-  "window.type.keiko.title": "Keiko",
-  "window.type.keiko.desc": "Keiko twin",
+  "window.type.integ.title": "Connector Management",
+  "window.type.integ.desc": "Manage server-owned connectors, scopes, sync, and approvals",
   "window.type.settings.title": "Settings",
   "window.type.settings.desc": "Preferences",
   "window.type.workspaceTrust.title": "Workspace Trust",
@@ -377,14 +343,80 @@ export const EN_MESSAGES = {
   "window.type.automations.desc": "Workflow automations",
   "window.type.mobile.title": "Keiko Mobile",
   "window.type.mobile.desc": "Mobile companion",
+  "mobile.previewNotice": "Preview — no pairing is wired yet",
+  "mobile.subtitle": "Mobile companion — not yet available.",
+  "relationships.tracking.label": "Tracking",
+  "relationships.tracking.evicted.long":
+    "Tracking limit reached — showing the last known lifecycle-derived state only.",
+  "relationships.tracking.evicted.short": "tracking limit reached",
+  "relationships.tracking.evicted.parenthetical":
+    "(tracking limit reached — showing last known lifecycle only)",
+  "relationships.tracking.evicted.title":
+    "Live activity tracking reached its limit for this relationship — showing the last known lifecycle-derived state only.",
   "window.type.inspector.title": "Inspector",
   "window.type.inspector.desc": "Inspect the workspace",
   "window.type.activity.title": "Activity",
   "window.type.activity.desc": "Activity timeline",
+  "activity.timeline.label": "Activity timeline",
+  "activity.empty.title": "No activity yet.",
+  "activity.empty.description": "Start a code task to see its runtime events here.",
+  "activity.actor.workspace": "Workspace",
+  "activity.event.unknown": "Runtime activity",
+  "activity.event.runtimeStarted": "Runtime started",
+  "activity.event.runtimeStopped": "Runtime stopped",
+  "activity.event.runtimeHealth": "Runtime health changed",
+  "activity.event.taskSubmitted": "Task submitted",
+  "activity.event.observationStreamed": "Runtime observation received",
+  "activity.event.permissionRequested": "Approval requested",
+  "activity.event.diffSummarized": "Diff summary recorded",
+  "activity.event.verificationSummarized": "Verification summary recorded",
+  "activity.event.artifactProduced": "Delivery artifact produced",
+  "activity.event.researchPerformed": "Governed research completed",
+  "activity.event.skillInvoked": "Skill invocation completed",
+  "activity.event.childRunStarted": "Child run started",
+  "activity.event.childRunCompleted": "Child run completed",
+  "activity.event.operatorDecision": "Your decision needed",
+  "activity.event.operatorDecisionAccepted": "Your decision was applied",
+  "activity.event.operatorDecisionDenied": "Your decision declined the request",
+  "activity.event.operatorDecisionUnavailable": "The decision could not be taken",
+  "activity.event.operatorDecisionExpired": "The decision window closed",
+  "activity.event.operatorDecisionStopped": "The decision ended with the run",
+  "activity.event.failureRedacted": "Runtime failure recorded",
+  "activity.kind.step": "Step",
+  "activity.kind.approval": "Approval requested",
+  "activity.kind.approved": "Approved",
+  "activity.kind.rejected": "Rejected",
+  "activity.kind.stopped": "Stopped",
+  "activity.kind.open": "Opened",
+  "activity.kind.run": "Run",
+  "activity.kind.delivery": "Delivery",
   "window.type.notifications.title": "Notifications",
   "window.type.notifications.desc": "Review alerts & updates",
+  "notifications.empty": "No notifications yet.",
+  "notifications.previewNotice": "Preview — no notification source is wired yet",
+  "automations.status.preview": "Preview",
+  "plugins.mcp.previewHeader": "Preview — no server wired",
+  "plugins.mcp.rowStatusPreview": "Preview",
+  "voiceDialog.interrupt.action": "Interrupt",
+  "voiceDialog.interrupt.ariaLabel": "Interrupt the assistant",
+  "voiceDialog.interrupt.unavailableHint": "Available only while the assistant is speaking",
+  "chat.history.action.rename": "Rename {title}",
+  "chat.history.action.delete": "Delete {title}",
+  "chat.history.action.deletePermanent": "Delete {title} permanently",
+  "chat.history.action.deleteConfirm": "Confirm permanent delete of {title}",
+  "chat.history.action.save": "Save {title}",
+  "chat.history.action.cancel": "Cancel {title}",
+  "chat.history.action.restore": "Restore {title}",
+  // #2906 round 3: terse, title-free labels for the SAME actions' visible button text (the
+  // aria-labels above stay title-bearing for KEIKO-0452 per-row uniqueness). Visible text must be
+  // localized too, or a German-locale screen-reader user gets a German accessible name with no
+  // German text printed anywhere on the button (WCAG 2.5.3 Label in Name).
+  "chat.history.action.renameLabel": "Rename",
+  "chat.history.action.restoreLabel": "Restore",
+  "chat.history.tab.active": "Active",
+  "chat.history.tab.deleted": "Deleted",
   "window.type.resources.title": "Resources",
-  "window.type.resources.desc": "System resources",
+  "window.type.resources.desc": "Shared assets & references — coming soon.",
   "window.type.connector.title": "Knowledge Pod",
   "window.type.connector.desc": "Pick a Knowledge Pod source",
   "window.type.localKnowledge.title": "Local Knowledge",
@@ -452,6 +484,8 @@ export const EN_MESSAGES = {
   "workspace.connect.connected": "Connected",
   "workspace.connect.connectedWith": "Connected: {label}",
   "palette.description": "Pick a card to add to your workspace",
+  "palette.placeholder": "Preview",
+  "palette.placeholderLabel": "Preview surface — not a working feature yet",
   "newWindow.title": "New {label} window",
   "newWindow.open": "Open {label}",
   "newWindow.empty": "Add a new {label} window to your workspace.",
@@ -509,6 +543,18 @@ export const EN_MESSAGES = {
   "command.redo": "Redo (window and panel changes only)",
   "command.redoLabelled": "Redo: {label}",
   "chat.role.user": "You",
+  // #3591: gateway failures on the desktop chat surfaces (format-error.ts). A slow gateway is not a
+  // broken gateway, and neither text blames the size of the request.
+  "chat.error.gatewayTimeout.title": "Model gateway did not answer in time",
+  "chat.error.gatewayTimeout.message":
+    "The model gateway did not complete the request within Keiko's wait limit. Keiko keeps waiting for minutes on a slow gateway, so this usually means the gateway or the model stalled — not that the request was too large.",
+  "chat.error.gatewayTimeout.remediation":
+    "Retry, or check gateway URL, proxy, and deployment in Settings if it keeps happening.",
+  "chat.error.gatewayOutputExhausted.title": "Model ran out of output budget",
+  "chat.error.gatewayOutputExhausted.message":
+    "The model used its whole output budget before producing an answer, usually on reasoning. Have the gateway declare a larger max_output_tokens for this model, or choose a model with a smaller reasoning share, then retry.",
+  "chat.error.gatewayOutputExhausted.remediation":
+    "Raise the model's max output tokens in Settings, or switch to a model with a smaller reasoning share, then retry.",
   "chat.keikoLogo": "Keiko logo",
   "chat.keikoResponding": "Keiko is responding",
   "chat.copy.copiedStatus": "Answer copied",
@@ -620,10 +666,15 @@ export const EN_MESSAGES = {
     "Your spoken turn is still waiting for a confirmed answer. Retry it before sending another message.",
   "chat.voice.retryPendingTurn": "Retry spoken turn",
   "chat.voice.discardPendingTurn": "Discard spoken turn",
+  "chat.voice.batchRetry": "Try again",
+  "chat.voice.batchUseText": "Continue with this text",
+  "chat.voice.batchFinish": "Finish speaking",
+  "chat.voice.batchMode": "Digital Twin: Speak to interrupt Keiko, or use the Interrupt button.",
   "chat.error.send": "Could not send message.",
   "chat.error.load": "Could not load chat.",
   "chat.error.scopeUpdate": "Unable to update knowledge scope.",
   "chat.error.memoryUpdate": "Unable to update memory.",
+  "chat.error.supportId": "Support ID: {correlationId}",
   "chat.grounding.label": "Grounding",
   "chat.grounding.mode": "Grounding mode",
   "chat.grounding.strategy": "Strategy",
@@ -639,6 +690,8 @@ export const EN_MESSAGES = {
   "chat.grounding.capsule": "Knowledge Pod: {name}",
   "chat.grounding.capsuleSet": "Knowledge Pod Set: {name}",
   "chat.grounding.unavailable": "{label} (unavailable)",
+  "chat.grounding.catalogLoading": "Refreshing available Knowledge Pods…",
+  "chat.grounding.catalogEmpty": "No ready Knowledge Pods or Pod Sets are available.",
   "chat.grounding.sourceLimit":
     "Source limit reached — this chat already has {connectedCount} of {cap} connected sources. Disconnect a source before connecting another.",
   "chat.grounding.readyChatRequired": "Open a ready chat window before connecting a source.",
@@ -651,7 +704,11 @@ export const EN_MESSAGES = {
     "Keiko could not connect that source. Check that it is still available and try again.",
   "chat.grounding.connectKnowledgeFailed":
     "Keiko could not connect that knowledge source. Check that it is still available and try again.",
+  "chat.grounding.connectGitChangeFailed":
+    "Keiko could not connect that Git change. Check that the repository and branches are still available and try again.",
   "chat.memory.panel": "Conversation memory",
+  "chat.memory.enableForChat": "Enable MemoriaViva for this chat",
+  "chat.memory.disableForChat": "Disable MemoriaViva for this chat",
   "chat.memory.included": "{count} memories included",
   "chat.memory.noneIncluded": "No memories included",
   "chat.memory.disclosurePending": "MemoriaViva disclosure appears after the next response.",
@@ -739,6 +796,12 @@ export const EN_MESSAGES = {
   "memoria.cancelEdit": "Cancel edit",
   "memoria.proposalText": "Proposal text",
   "memoria.approveEditedProposal": "Approve edited proposal",
+  "memoria.correctionPredecessor": "Memory being corrected",
+  "memoria.selectCorrectionPredecessor": "Select the memory to supersede",
+  "memoria.correctionPredecessorMissing":
+    "No eligible predecessor remains. Reject and resubmit this as a standalone memory, or restore an accepted memory before approving.",
+  "memoria.correctionPredecessorInvalid":
+    "Correction predecessors could not be verified. Retry before approving.",
   "memoria.reject": "Reject",
   "memoria.rejecting": "Rejecting...",
   "memoria.archiveConflict": "Archive conflict",
@@ -1018,6 +1081,17 @@ export const EN_MESSAGES = {
   "footer.version": "Keiko version {version}",
   "footer.versionLoading": "version loading",
   "footer.versionUnavailable": "version unavailable",
+  "footer.diagnosticsDegraded": "Diagnostics degraded",
+  "footer.diagnosticsUnavailable": "Diagnostics unavailable",
+  "footer.diagnosticsDetail":
+    "Keiko cannot record complete diagnostic evidence: {reasons}. Run keiko status for details.",
+  "footer.diagnosticsReasonCatalogMismatch": "log catalog mismatch",
+  "footer.diagnosticsReasonSinkUnwritable": "log not writable",
+  "footer.diagnosticsReasonStoragePressure": "log storage under pressure",
+  "footer.diagnosticsReasonBudgetExceeded": "log storage budget exceeded",
+  "footer.diagnosticsReasonPortUnwired": "a log port is not connected",
+  "footer.diagnosticsReasonLevelSilent": "logging is set to silent",
+  "footer.diagnosticsReasonStorageCheckFailed": "log storage cannot be checked",
   "footer.windowSingular": "{count} window",
   "footer.windowPlural": "{count} windows",
   "footer.openWindows": "Open windows",
@@ -1097,6 +1171,8 @@ export const EN_MESSAGES = {
   "updates.primary.current": "No update is available. You can check again at any time.",
   "updates.primary.unavailable":
     "Update availability could not be verified. Check again when the registry is reachable.",
+  "updates.primary.claimUnavailable":
+    "Refresh the update check before installing. Keiko needs a new server-approved update claim.",
   "updates.primary.releaseUnavailable":
     "Keiko cannot verify the update download information right now. Keep using this version and check again later.",
   "updates.primary.portableSetupRequired":
@@ -1148,6 +1224,8 @@ export const EN_MESSAGES = {
   "updates.check.manualStillRequired":
     "Manual install is still pending. Follow the approved manual instructions, restart Keiko, then check again.",
   "updates.check.manualInstalled": "Update installed. Keiko is now running {version}.",
+  "updates.reconnecting":
+    "Reconnecting to the local Keiko backend. The last safe update progress is still shown.",
   "updates.action.runRemediation": "Run action",
   "updates.action.runDeferred": "Run now",
   "updates.action.defer": "Defer",
@@ -1279,6 +1357,9 @@ export const EN_MESSAGES = {
   "updates.phase.cancelled": "Update cancelled",
   "select.placeholder": "Select an option",
   "workspace.empty.openWindow": "Open a new window",
+  "workspace.notice.dismiss": "Dismiss workspace notice",
+  "workspace.windowLimitReached":
+    "The workspace already has {limit} open windows. Close a window and try again.",
   "workspace.empty.description": "Empty workspace. Open a window to start working.",
   "workspace.empty.title": "Empty workspace",
   "workspace.empty.subtitle": "Open a window to start working",
@@ -1301,6 +1382,70 @@ export const EN_MESSAGES = {
   "scope.announcement.removed": "Connected scope removed.",
   "scope.announcement.updated.one": "Connected scope updated: 1 source.",
   "scope.announcement.updated.many": "Connected scope updated: {count} sources.",
+  // Issue #3400 (epic #3384) — git-change scope pill (GitChangeScopePill.tsx).
+  "gitChangeScope.status.current": "Current",
+  "gitChangeScope.status.stale": "Stale",
+  "gitChangeScope.status.partial": "Partial",
+  "gitChangeScope.status.fallback": "Fallback",
+  "gitChangeScope.status.blocked": "Blocked",
+  "gitChangeScope.status.failed": "Failed",
+  "gitChangeScope.status.connecting": "Connecting",
+  "gitChangeScope.pending.accessible": "Git change connection pending: {label}",
+  "gitChangeScope.pending.detail": "Preparing Git change context",
+  "gitChangeScope.counts.file": "{count} file changed",
+  "gitChangeScope.counts.files": "{count} files changed",
+  "gitChangeScope.counts.withOmitted": "{shown} of {total} files shown",
+  "gitChangeScope.pill.accessible": "Git change: {label}",
+  "gitChangeScope.refresh.aria": "Refresh {label}",
+  "gitChangeScope.refresh.title": "Refresh comparison",
+  "gitChangeScope.refresh.error": "Unable to refresh the connected Git change.",
+  "gitChangeScope.disconnect.aria": "Disconnect {label} from chat",
+  "gitChangeScope.disconnect.title": "Disconnect {label} from chat",
+  "gitChangeScope.disconnect.error": "Unable to disconnect the connected Git change.",
+  "gitChangeScope.announcement.removed": "Connected Git change removed.",
+  "gitChangeScope.announcement.connected": "Git change connected.",
+  "gitChangeScope.announcement.stale": "Connected Git change is stale; refresh to continue.",
+  "gitChangeScope.blocked.detachedHead": "Blocked: the repository HEAD is detached.",
+  "gitChangeScope.blocked.unbornHead": "Blocked: the repository has no commits yet.",
+  "gitChangeScope.blocked.missingRef": "Blocked: the selected ref could not be resolved.",
+  "gitChangeScope.blocked.identicalRefs": "Blocked: base and head must be different branches.",
+  "gitChangeScope.blocked.noPullRequest":
+    "Blocked: no open pull request was found for this branch.",
+  "gitChangeScope.blocked.ambiguousPullRequest":
+    "Blocked: more than one open pull request matches this branch.",
+  "gitChangeScope.blocked.readerUnauthorized":
+    "Blocked: GitHub read access is not authorized for this repository.",
+  "gitChangeScope.blocked.remoteUnresolved":
+    "Blocked: the repository's remote could not be resolved.",
+  "gitChangeScope.blocked.repositoryUnavailable": "Blocked: the repository is unavailable.",
+  "gitChangeScope.blocked.snapshotUnavailable": "Blocked: the comparison could not be captured.",
+  "gitChangeScope.blocked.snapshotFailed": "Blocked: capturing the comparison failed.",
+  "gitChangeScope.blocked.chatProjectUnavailable": "Blocked: the chat's project is unavailable.",
+  "gitChangeScope.connect.title": "Connect Git change to chat",
+  "gitChangeScope.connect.description":
+    "Connect this repository's comparison to a chat to draft and refine its pull-request description.",
+  "gitChangeScope.connect.chatLabel": "Chat",
+  "gitChangeScope.connect.chatPlaceholder": "Select a chat",
+  "gitChangeScope.connect.modeLabel": "Comparison",
+  "gitChangeScope.connect.modeComparison": "Exact base…head comparison",
+  "gitChangeScope.connect.modePullRequest": "Open pull request for this branch",
+  "gitChangeScope.connect.baseLabel": "Base branch",
+  "gitChangeScope.connect.headLabel": "Head branch",
+  "gitChangeScope.connect.submit": "Connect",
+  "gitChangeScope.connect.cancel": "Cancel",
+  "gitChangeScope.connect.openButton": "Connect to Chat",
+  "gitChangeScope.connect.noChats": "No chats are open for this repository yet.",
+  "gitChangeScope.connect.noBaseBranch":
+    "Choose a different base branch before connecting this Git change.",
+  "gitChangeScope.connect.chatLoadError": "Unable to load chats for this repository.",
+  "gitChangeScope.connect.error": "Unable to connect this Git change to the chat.",
+  "gitChangeScope.description.preview": "Preview",
+  "gitChangeScope.description.previewAria": "Preview description for {label}",
+  "gitChangeScope.description.approve": "Approve",
+  "gitChangeScope.description.approveAria": "Approve description for {label}",
+  "gitChangeScope.description.apply": "Apply to PR",
+  "gitChangeScope.description.applyAria": "Apply description to {label}",
+  "gitChangeScope.description.error": "Unable to complete the description action.",
   "scope.budget.pressure.low": "Low",
   "scope.budget.pressure.moderate": "Moderate",
   "scope.budget.pressure.high": "High",
@@ -1348,25 +1493,51 @@ export const EN_MESSAGES = {
   "taskWorkspace.updatedAt": "Updated {value}",
   "taskWorkspace.recoveryHints": "Recovery hints ({count})",
   "taskWorkspace.operatorActionRequired": " (operator action required)",
+  "taskWorkspace.marker.worktree-missing": "Worktree missing",
+  "taskWorkspace.marker.gitdir-mismatch": "Git pointer mismatch",
+  "taskWorkspace.marker.pointer-stale": "Git pointer missing",
+  "taskWorkspace.marker.identity-schema-retired": "Identity rule retired",
+  "taskWorkspace.marker.identity-unsupported": "Creation time unsupported",
+  "taskWorkspace.marker.head-moved": "HEAD moved",
+  "taskWorkspace.marker.branch-deleted": "Branch deleted",
+  "taskWorkspace.marker.uncommitted-changes": "Uncommitted changes",
+  "taskWorkspace.marker.lock-stale": "Stale lock",
+  "taskWorkspace.marker.path-escape": "Path escapes managed root",
   "taskWorkspace.status.none": "No active task workspace",
   "taskWorkspace.status.active": "Active: {taskId} on {branch} ({lifecycle}, {health})",
-  "taskWorkspace.trigger.noActive": "Task workspace context: no active workspace",
-  "taskWorkspace.trigger.active": "Task workspace context: {taskId}",
+  "taskWorkspace.trigger.noActive": "Task workspaces: no active workspace",
+  "taskWorkspace.trigger.active": "Task workspaces: {taskId}",
   "taskWorkspace.title": "Task workspace",
   "taskWorkspace.panel.aria": "Task workspace context",
   "taskWorkspace.noWorkspaceBound": "No workspace bound",
   "taskWorkspace.action.pause": "Pause",
+  "taskWorkspace.action.resume": "Resume",
   "taskWorkspace.action.prepareHandoff": "Prepare handoff",
   "taskWorkspace.action.clearActive": "Clear active",
+  "taskWorkspace.action.refresh": "Refresh",
   "taskWorkspace.action.active": "Active",
   "taskWorkspace.action.switch": "Switch",
+  "taskWorkspace.action.repair": "Repair",
   "taskWorkspace.empty.title": "No active task workspace",
   "taskWorkspace.empty.openProject": "Open a project before creating a managed task workspace.",
   "taskWorkspace.empty.switchOrCreate":
     "Switch to an existing workspace or create one for this repository.",
   "taskWorkspace.available": "Available workspaces",
   "taskWorkspace.loading": "Loading workspaces…",
+  "taskWorkspace.status.updating": "Updating task workspace…",
+  "taskWorkspace.status.reconciled": "Task workspaces refreshed.",
+  "taskWorkspace.reason.busy": "Another workspace action is in progress.",
+  "taskWorkspace.reason.switchUnavailable":
+    "Only active, paused, handoff-ready, or recovery-required workspaces can be switched to.",
+  "taskWorkspace.reason.pauseUnavailable": "Only an active workspace can be paused.",
+  "taskWorkspace.reason.resumeUnavailable": "Only a paused workspace can be resumed.",
+  "taskWorkspace.reason.handoffUnavailable":
+    "Only active or paused workspaces can prepare a handoff.",
+  "taskWorkspace.reason.handoffDirty":
+    "Commit or stash uncommitted changes before preparing a handoff.",
   "taskWorkspace.noneManaged": "No managed task workspaces yet.",
+  "taskWorkspace.inventoryUnavailable":
+    "The task workspace list could not be read. The active binding above still applies. Use Refresh to try again.",
   "taskWorkspace.list": "Task workspaces",
   "taskWorkspace.create.title": "Create workspace",
   "taskWorkspace.create.taskId": "Task id",
@@ -1386,6 +1557,8 @@ export const EN_MESSAGES = {
     "The native folder dialog is unavailable. Enter the path below.",
   "workspaceContext.selectionFailed":
     "The folder could not be selected. Check the path and try again.",
+  "workspaceContext.overrideClearFailed":
+    "The active task workspace could not be released, so the folder was not changed. Review the task workspace, then try again.",
   "workspaceContext.supportId": "Support ID: {correlationId}",
   "workspaceContext.selecting": "Selecting…",
   "workspaceContext.manual.label": "Or enter a local path",
@@ -1394,6 +1567,9 @@ export const EN_MESSAGES = {
   "editor.taskWorkspaceAccess.checking": "Connecting to the task workspace…",
   "editor.taskWorkspaceAccess.checkingDescription":
     "Keiko is checking this browser's local workspace access.",
+  "editor.taskWorkspaceAccess.unpairedTitle": "Browser session not paired",
+  "editor.taskWorkspaceAccess.unpairedDescription":
+    "The selected project is available, but this browser has no launcher permission for private task-workspace content. Restart Keiko through its launcher.",
   "editor.taskWorkspaceAccess.title": "Task workspace unavailable in this browser",
   "editor.taskWorkspaceAccess.description":
     "Restart Keiko through the launcher, or choose a folder or repository from the workspace context above.",
@@ -1606,6 +1782,10 @@ export const EN_MESSAGES = {
   "atlassianConnectors.approvals.risk": "Risk",
   "atlassianConnectors.approvals.disposition": "Disposition",
   "atlassianConnectors.approvals.reason": "Reason",
+  "atlassianConnectors.approvals.contentPreview": "Content",
+  "atlassianConnectors.approvals.contentPreviewUnavailable":
+    "This action's content could not be safely previewed.",
+  "atlassianConnectors.approvals.contentPreviewCharacterCount": "{count} characters",
   "atlassianConnectors.approvals.approve": "Approve",
   "atlassianConnectors.approvals.approving": "Approving…",
   "atlassianConnectors.approvals.reject": "Reject",
@@ -1657,6 +1837,8 @@ export const EN_MESSAGES = {
     "The authority for this action has expired.",
   "atlassianConnectors.denied.reason.authority-budget-exceeded":
     "The authority budget for this action is exhausted.",
+  "atlassianConnectors.denied.reason.authority-revoked":
+    "The authority for this action was revoked while the run was in flight.",
   "atlassianConnectors.denied.reason.connector-access-denied":
     "Connector access is not permitted for this action.",
   "atlassianConnectors.denied.reason.connector-write-denied":
@@ -1997,195 +2179,14 @@ export const EN_MESSAGES = {
   "reviewWidget.confirmApplySingular": "Confirm apply ({count} file)",
   "reviewWidget.confirmApplyPlural": "Confirm apply ({count} files)",
   "reviewWidget.unexpectedError": "Unexpected error.",
-  "figmaSnapshotWindow.build.cancelNote":
-    "Cancelling stops this window from waiting — the server-side build continues on demand.",
-  "figmaSnapshotWindow.build.detachedNotice":
-    "This window is no longer waiting. The server may still be building the snapshot in the background. You can close this window safely.",
-  "figmaSnapshotWindow.build.reconnect": "Reconnect build",
-  "figmaSnapshotWindow.codegen.generateButton": "Generate code",
-  "figmaSnapshotWindow.codegen.generating": "Generating code…",
-  "figmaSnapshotWindow.codegen.proposalNote": "— proposal only, never auto-applied.",
-  "figmaSnapshotWindow.codegen.reviewableFilePlural": "{count} reviewable files",
-  "figmaSnapshotWindow.codegen.reviewableFileSingular": "{count} reviewable file",
-  "figmaSnapshotWindow.codegen.screenBreakdown":
-    "{rendered} rendered, {structural} structural, {unparseable} omitted as unparseable",
-  "figmaSnapshotWindow.count.screenPlural": "{count} screens",
-  "figmaSnapshotWindow.count.screenSingular": "{count} screen",
-  "figmaSnapshotWindow.dashboard.currentBadge": "Current",
-  "figmaSnapshotWindow.dashboard.deleteConfirmQuestion": "Delete this snapshot?",
-  "figmaSnapshotWindow.dashboard.deleteSnapshotAria": "Delete snapshot {title}",
-  "figmaSnapshotWindow.dashboard.eyebrow": "Snapshot dashboard",
-  "figmaSnapshotWindow.dashboard.hideMetadataAria": "Hide metadata for snapshot {title}",
-  "figmaSnapshotWindow.dashboard.load": "Load",
-  "figmaSnapshotWindow.dashboard.loadSnapshotAria": "Load snapshot {title}",
-  "figmaSnapshotWindow.dashboard.loadingSnapshots": "Loading snapshots…",
-  "figmaSnapshotWindow.dashboard.metadataTitle": "Metadata",
-  "figmaSnapshotWindow.dashboard.noBoardSelectedDetail":
-    "Paste a valid Figma board link or load a stored snapshot to see this board's history.",
-  "figmaSnapshotWindow.dashboard.noBoardSelectedTitle": "No board selected yet",
-  "figmaSnapshotWindow.dashboard.noBoardSnapshotsDetail":
-    "Take the first snapshot for this board to make it available here.",
-  "figmaSnapshotWindow.dashboard.noBoardSnapshotsTitle": "No snapshots stored for this board",
-  "figmaSnapshotWindow.dashboard.noRecentSnapshotsDetail":
-    "Stored Figma snapshots will appear here once the first board capture completes.",
-  "figmaSnapshotWindow.dashboard.noRecentSnapshotsTitle": "No snapshots stored yet",
-  "figmaSnapshotWindow.dashboard.noSkipped": ", no skipped renders",
-  "figmaSnapshotWindow.dashboard.refresh": "Refresh",
-  "figmaSnapshotWindow.dashboard.renameInputAria": "Snapshot name for {title}",
-  "figmaSnapshotWindow.dashboard.renameInputPlaceholder": "Snapshot name",
-  "figmaSnapshotWindow.dashboard.renameSnapshotAria": "Rename snapshot {title}",
-  "figmaSnapshotWindow.dashboard.renameTitle": "Rename",
-  "figmaSnapshotWindow.dashboard.showMetadataAria": "Show metadata for snapshot {title}",
-  "figmaSnapshotWindow.dashboard.skippedCount": ", {count} skipped",
-  "figmaSnapshotWindow.dashboard.tabBoard": "This board",
-  "figmaSnapshotWindow.dashboard.tabRecent": "Recent",
-  "figmaSnapshotWindow.dashboard.tabsAriaLabel": "Snapshot views",
-  "figmaSnapshotWindow.dashboard.title": "Stored snapshots",
-  "figmaSnapshotWindow.empty.note":
-    "The snapshot stores the captured screens and their structure as immutable evidence — connect this window to Quality Intelligence to ground generated tests in the design. Requires a Figma access token configured on the server.",
-  "figmaSnapshotWindow.empty.step1": "In Figma, select the frame or section you want to capture.",
-  "figmaSnapshotWindow.empty.step2":
-    "Copy its link (Copy link to selection) — it contains the node-id.",
-  "figmaSnapshotWindow.empty.step3":
-    "Paste it above, acknowledge the read-only scope, then take the snapshot.",
-  "figmaSnapshotWindow.empty.title": "Capture screens from a Figma board",
-  "figmaSnapshotWindow.error.buildTimeoutDetail":
-    "This window stopped waiting for the snapshot result. The server may still finish the build in the background.",
-  "figmaSnapshotWindow.error.buildTimeoutRemediation":
-    "Reconnect to the same board to keep waiting, or close this window and return later.",
-  "figmaSnapshotWindow.error.buildTimeoutTitle": "Figma snapshot is still running",
-  "figmaSnapshotWindow.error.consentCheckboxRequired":
-    "Tick the read-only acknowledgement checkbox below, then snapshot again.",
-  "figmaSnapshotWindow.error.consentRequiredSuffix":
-    "Tick the acknowledgement checkbox below, then snapshot again.",
-  "figmaSnapshotWindow.error.egressBlocked.caRemediation":
-    "A TLS certificate verification failure blocked the request. Check the CA bundle configuration, then retry. No snapshot was stored.",
-  "figmaSnapshotWindow.error.egressBlocked.networkRemediation":
-    "The outbound network request to Figma failed. Check DNS resolution and network connectivity, then retry. No snapshot was stored.",
-  "figmaSnapshotWindow.error.egressBlocked.proxyRemediation":
-    "Check the configured proxy, NO_PROXY rules, and CA bundle, then retry. No snapshot was stored.",
-  "figmaSnapshotWindow.error.egressBlocked.title": "Figma snapshot blocked by outbound egress",
-  "figmaSnapshotWindow.error.generic.title": "Figma snapshot failed",
-  "figmaSnapshotWindow.error.generic.unknownDetail": "An unexpected error occurred.",
-  "figmaSnapshotWindow.error.openTokenSettings": "Open Figma access token settings",
-  "figmaSnapshotWindow.error.runIdClearedSuffix": "The stored run ID has been cleared.",
-  "figmaSnapshotWindow.error.tokenAttention.remediation":
-    "Open the Figma access token settings to add or rotate the read-only token, then retry. No snapshot was stored.",
-  "figmaSnapshotWindow.error.tokenAttention.title": "Figma access token needs attention",
-  "figmaSnapshotWindow.error.upstreamUnavailable.remediation":
-    "Retry later — no snapshot was stored.",
-  "figmaSnapshotWindow.error.upstreamUnavailable.title": "Figma is currently unavailable",
-  "figmaSnapshotWindow.fact.file": "File",
-  "figmaSnapshotWindow.fact.integrity": "Integrity",
-  "figmaSnapshotWindow.fact.nameUpdated": "Name updated",
-  "figmaSnapshotWindow.fact.node": "Node",
-  "figmaSnapshotWindow.fact.run": "Run",
-  "figmaSnapshotWindow.fact.structural": "Structural",
-  "figmaSnapshotWindow.fact.version": "Version",
-  "figmaSnapshotWindow.form.boardLinkLabel": "Board link",
-  "figmaSnapshotWindow.form.boardLinkPlaceholder": "https://www.figma.com/design/…?node-id=…",
-  "figmaSnapshotWindow.form.building": "Building…",
-  "figmaSnapshotWindow.form.consentPrefix":
-    "I acknowledge the configured Figma PAT is read-only and least-privilege (",
-  "figmaSnapshotWindow.form.consentRequired": "Required before the first snapshot of a board.",
-  "figmaSnapshotWindow.form.consentSuffix": ").",
-  "figmaSnapshotWindow.form.hint":
-    "Paste a Figma board link with a node-id param (section or frame anchor). The access token is resolved server-side — it never reaches this page.",
-  "figmaSnapshotWindow.form.snapshotButton": "Snapshot",
-  "figmaSnapshotWindow.gallery.capturedScreenPlural": "{count} captured and structural screens",
-  "figmaSnapshotWindow.gallery.capturedScreenSingular": "{count} captured and structural screen",
-  "figmaSnapshotWindow.gallery.noScreensCaptured":
-    "No screens were captured from this board section.",
-  "figmaSnapshotWindow.gallery.selectedScreenPlural": "{count} selected screens",
-  "figmaSnapshotWindow.gallery.selectedScreenSingular": "{count} selected screen",
-  "figmaSnapshotWindow.gallery.showMore": "Show more screens",
-  "figmaSnapshotWindow.jsonInspector.ariaLabel": "Scoped JSON for {name}",
-  "figmaSnapshotWindow.jsonInspector.clipboardUnavailable": "Clipboard unavailable",
-  "figmaSnapshotWindow.jsonInspector.copied": "Copied",
-  "figmaSnapshotWindow.jsonInspector.copyFailed": "Copy failed",
-  "figmaSnapshotWindow.jsonInspector.copyJson": "Copy JSON",
-  "figmaSnapshotWindow.jsonInspector.createJsonSourceAria":
-    "Create a standalone JSON source for {name}",
-  "figmaSnapshotWindow.jsonInspector.dragJsonTitle": "Drag JSON for {name} to the workspace",
-  "figmaSnapshotWindow.jsonInspector.kicker": "Stored Screen-IR JSON",
-  "figmaSnapshotWindow.jsonInspector.relatedLinkPlural": "{count} related links",
-  "figmaSnapshotWindow.jsonInspector.relatedLinkSingular": "{count} related link",
-  "figmaSnapshotWindow.jsonInspector.screenJsonAriaLabel": "Screen-IR JSON for {screenId}",
-  "figmaSnapshotWindow.result.captured": "Captured {date}",
-  "figmaSnapshotWindow.result.resnapshotAria": "Re-snapshot this board",
-  "figmaSnapshotWindow.result.resnapshotButton": "Re-snapshot",
-  "figmaSnapshotWindow.result.scopeNote": "QI source scope: {scope}",
-  "figmaSnapshotWindow.result.skippedPlural":
-    "{count} screens could not be rendered and were skipped.",
-  "figmaSnapshotWindow.result.skippedSingular":
-    "{count} screen could not be rendered and were skipped.",
-  "figmaSnapshotWindow.revoke.confirmQuestion": "Really revoke the stored token?",
-  "figmaSnapshotWindow.revoke.confirmYes": "Yes, revoke",
-  "figmaSnapshotWindow.revoke.trigger": "Revoke stored token",
-  "figmaSnapshotWindow.scopes.readScopeDescription":
-    "— read design file structure, node metadata, and rendered images",
-  "figmaSnapshotWindow.scopes.summary": "Required Figma PAT scopes",
-  "figmaSnapshotWindow.scopes.tokenSourcePrefix":
-    "The token is read server-side from the vault, Keiko config, or",
-  "figmaSnapshotWindow.scopes.tokenSourceSuffix":
-    "environment variable. This window never holds or transmits the token.",
-  "figmaSnapshotWindow.screenCard.addToWorkspace": "Add to workspace",
-  "figmaSnapshotWindow.screenCard.addToWorkspaceAria":
-    "Add screen {name} to the workspace as a Quality Intelligence source",
-  "figmaSnapshotWindow.screenCard.alreadyActiveSource":
-    "{name} is already the active scoped source",
-  "figmaSnapshotWindow.screenCard.ariaLabel": "Screen {index}: {name}",
-  "figmaSnapshotWindow.screenCard.capturedPreviewAlt": "Captured preview for {name}",
-  "figmaSnapshotWindow.screenCard.irBadge": "IR",
-  "figmaSnapshotWindow.screenCard.previewAddHint":
-    "Drag screen {name} to the workspace, or click to add it as a Quality Intelligence source",
-  "figmaSnapshotWindow.screenCard.previewAlreadyActive":
-    "{name} preview is already the active scoped source",
-  "figmaSnapshotWindow.screenCard.sourceActive": "Source active",
-  "figmaSnapshotWindow.screenCard.structuralDataOnlyAlt": "Structural data only for {name}",
-  "figmaSnapshotWindow.screenCard.structuralIrOnly": "Structural IR only",
-  "figmaSnapshotWindow.screenCard.structuralIrOnlyWithReason": "Structural IR only ({reason})",
-  "figmaSnapshotWindow.snapshot.defaultName": "Snapshot {date}",
-  "figmaSnapshotWindow.status.buildingProgress": "Building snapshot — fetching screens from Figma…",
-  "figmaSnapshotWindow.status.codeGeneratedPlural":
-    "Code generated — {count} files ready for review.",
-  "figmaSnapshotWindow.status.codeGeneratedSingular":
-    "Code generated — {count} file ready for review.",
-  "figmaSnapshotWindow.status.elapsedSuffix": "{elapsed} elapsed.",
-  "figmaSnapshotWindow.status.largeBoardsNote": "Large boards can take several minutes.",
-  "figmaSnapshotWindow.status.loadingStoredSnapshot": "Loading stored snapshot…",
-  "figmaSnapshotWindow.status.snapshotCompleteAnnouncement": "Snapshot complete — {reductionHint}.",
-  "figmaSnapshotWindow.storedSnapshot.available": "A stored snapshot is available.",
-  "figmaSnapshotWindow.storedSnapshot.loadButton": "Load snapshot",
-  "figmaSnapshotWindow.storedSnapshot.loading": "Loading…",
-  "figmaSnapshotWindow.validation.invalidLink":
-    "This doesn't look like a Figma board link. Use a figma.com design/file link that includes a node-id parameter.",
-  "figmaSnapshotWindow.validation.missingNodeId":
-    "Add a node-id by selecting a frame or section in Figma and copying its link (Copy link to selection).",
-  "figmaSnapshotWindow.version.latest": "Latest",
-  "figmaSnapshotWindow.viewSource.ariaLabel": "Figma view source: {name}",
-  "figmaSnapshotWindow.viewSource.createImageSourceAria":
-    "Create a standalone image source for {name}",
-  "figmaSnapshotWindow.viewSource.dragImageTitle": "Drag image for {name} to the workspace",
-  "figmaSnapshotWindow.viewSource.factCaptured": "Captured",
-  "figmaSnapshotWindow.viewSource.factPreview": "Preview",
-  "figmaSnapshotWindow.viewSource.factScreen": "Screen",
-  "figmaSnapshotWindow.viewSource.factSnapshot": "Snapshot",
-  "figmaSnapshotWindow.viewSource.kicker": "QI view source",
-  "figmaSnapshotWindow.viewSource.structuralIrLabel": "Structural IR",
-  "figmaSnapshotWindow.viewSource.structuralIrWithReason": "Structural IR ({reason})",
-  "figmaSnapshotWindow.viewSourceMode.ariaLabel": "Figma view source {name}",
-  "figmaSnapshotWindow.viewSourceMode.badge": "QI source",
-  "figmaSnapshotWindow.viewSourceMode.eyebrow": "Figma view",
-  "figmaSnapshotWindow.viewSourceMode.inspectJson": "Inspect JSON",
-  "figmaSnapshotWindow.viewSourceMode.loadViewButton": "Load view",
-  "figmaSnapshotWindow.viewSourceMode.loadedAnnouncement": "Figma view loaded — {name}.",
-  "figmaSnapshotWindow.viewSourceMode.loadingJson": "Loading JSON…",
-  "figmaSnapshotWindow.viewSourceMode.loadingPreview": "Loading view preview…",
-  "figmaSnapshotWindow.viewSourceMode.loadingSelectedView": "Loading the selected view…",
-  "figmaSnapshotWindow.viewSourceMode.notLoaded": "Selected view preview not loaded.",
-  "figmaSnapshotWindow.viewSourceMode.screenNotPresent":
-    "The selected screen is not present in this stored snapshot.",
+  "gitClientWindow.changes.stagingScopeHint":
+    "Select files with the checkboxes. Keiko uses only staged files for the commit draft.",
+  "gitClientWindow.connect.stagedDraftHint":
+    "After changes are staged, Keiko shows their structural summary and an eligible commit draft for your review.",
+  "gitClientWindow.diff.regionAriaLabel": "Diff",
+  "gitClientWindow.diff.scopeAriaLabel": "Diff scope",
+  "gitClientWindow.sidebar.resizeAriaLabel": "Resize changes column",
+  "gitClientWindow.toolbar.sync": "Sync",
   "gitClientWindow.sync.aheadSuffix": " (ahead {count})",
   "gitClientWindow.sync.behindSuffix": " (behind {count})",
   "gitClientWindow.sync.outcome": "{label} in {seconds}s{delta}",
@@ -2232,6 +2233,7 @@ export const EN_MESSAGES = {
   "gitClientWindow.sync.hint.retry": "Try again.",
   "gitClientWindow.sync.hint.stageChanges": "Stage the changes first.",
   "gitClientWindow.sync.hint.configureUpstream": "Configure an upstream branch first.",
+  "gitClientWindow.sync.hint.configureSigning": "Configure commit signing first.",
   "gitClientWindow.sync.hint.resolveConflicts": "Pull and resolve the difference first.",
   "gitClientWindow.sync.hint.abortInProgress": "Finish or abort the operation in progress first.",
   "gitClientWindow.sync.hint.requestApproval": "Request approval first.",
@@ -2240,28 +2242,10 @@ export const EN_MESSAGES = {
   "gitClientWindow.sync.hint.waitForProvider": "Wait for the provider to become available.",
   "gitClientWindow.panel.pullRequest": "Pull Request",
   "gitClientWindow.panel.merge": "Merge",
-  "gitClientWindow.action.backToDiff": "Back to diff",
-  "gitClientWindow.history.commitUnavailable":
-    "The requested commit is not available in bounded history.",
-  "gitClientWindow.history.truncated":
-    "Showing the most recent {count} commits; the history is truncated.",
-  "gitClientWindow.history.loadFailed": "Could not load commit history.",
-  "gitClientWindow.history.loadMoreFailed": "Could not load more commits.",
-  "gitClientWindow.history.loadMore": "Load more commits",
-  "gitClientWindow.history.loadingMore": "Loading more commits…",
-  "gitClientWindow.history.retryLoadMore": "Retry loading commits",
-  "gitClientWindow.history.end": "End of history. {count} commits loaded.",
-  "gitClientWindow.history.paginationStatusAria": "History pagination status",
-  "gitClientWindow.panel.pullRequestOpened": "Pull Request panel opened.",
-  "gitClientWindow.panel.mergeOpened": "Merge panel opened.",
-  "gitClientWindow.panel.diffOpened": "Diff panel opened.",
-  "gitClientWindow.repository.reconnectFailed": "Repository reconnection failed: {detail}",
-  "gitClientWindow.repository.workspaceUnavailable":
-    "This repository is not currently connected to a workspace. Connect it again to continue.",
+  "gitClientWindow.action.backToDiff": "Back to changes",
   // Accessible names for the named <section> landmarks the #2721 wave introduced. They were
   // hardcoded English on the role="region" elements these sections replace; a screen reader
   // announces them, so they belong in the catalog like any other user-facing string.
-  "gitClientWindow.history.commitDetailsAria": "Commit details",
   "runtimeHubWidget.auditMetadataAria": "Runtime audit metadata",
   "installBanner.regionAria": "Install Keiko",
   "markdown.codeBlock.regionAria": "{language} code block",
@@ -2297,6 +2281,39 @@ export const EN_MESSAGES = {
   "manualPodRefresh.state.succeeded": "Manual refreshed",
   "manualPodRefresh.state.partial": "Manual refreshed with gaps; some pages are missing",
   "manualPodRefresh.state.failed": "Refresh failed; the previous manual is unchanged",
+  // GovernedPullRequestCard's Description panel (preview -> approve -> apply, epic #3384 #3399).
+  "governedPullRequestCard.description.heading": "Description",
+  "governedPullRequestCard.description.regionAria": "Pull Request description",
+  "governedPullRequestCard.description.state.current": "Applied and confirmed",
+  "governedPullRequestCard.description.state.stale": "Stale — refresh the preview",
+  "governedPullRequestCard.description.state.partial": "Applied — partially generated",
+  "governedPullRequestCard.description.state.fallback": "Applied — generated without the model",
+  "governedPullRequestCard.description.state.blocked": "Blocked — not applied",
+  "governedPullRequestCard.description.state.failed": "Failed — not applied",
+  "governedPullRequestCard.markReadyHint":
+    "To mark this pull request ready for review, use Propose ready on the Coding Workbench journey outcome — it binds the exact revision and re-verifies it before executing.",
+  "governedPullRequestCard.description.previewCaption":
+    "Preview — repository template and human text preserved outside the managed region",
+  "governedPullRequestCard.description.field.repositoryAria": "Description repository (owner/repo)",
+  "governedPullRequestCard.description.field.prNumberAria": "Description pull request number",
+  "governedPullRequestCard.description.field.prNumberHint":
+    "Enter the numeric Pull Request number, for example 1499.",
+  "governedPullRequestCard.description.field.language": "Language",
+  "governedPullRequestCard.description.field.languageAria": "Description language",
+  "governedPullRequestCard.description.action.status": "Refresh status",
+  "governedPullRequestCard.description.action.preview": "Preview description",
+  "governedPullRequestCard.description.action.approve": "Approve",
+  "governedPullRequestCard.description.action.apply": "Apply",
+  "governedPullRequestCard.description.refreshHint.stale":
+    "This preview is stale — the pull request changed since it was generated. Preview again before approving or applying.",
+  "governedPullRequestCard.description.refreshHint.targetChanged":
+    "The repository or Pull Request number changed since the last preview. Preview again before approving or applying.",
+  "repositoryBranchSwitcher.setUpGit": "Set up Git",
+  "repositoryBranchSwitcher.initializeDescription":
+    "Initialize the selected project as a local Git repository with the initial branch main.",
+  "repositoryBranchSwitcher.cancel": "Cancel",
+  "repositoryBranchSwitcher.initializing": "Initializing…",
+  "repositoryBranchSwitcher.initializeRepository": "Initialize repository",
 } as const;
 
 export type MessageKey = keyof typeof EN_MESSAGES;

@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 
+import type {
+  LanguageServiceOperation,
+  ManagedLspEffectiveState,
+  ManagedLspLanguage,
+} from "@oscharko-dev/keiko-contracts";
+import { LANGUAGE_SERVICE_OPERATIONS } from "@oscharko-dev/keiko-contracts/runtime/language-service";
 import {
-  LANGUAGE_SERVICE_OPERATIONS,
   MANAGED_LSP_EFFECTIVE_STATES,
   MANAGED_LSP_LANGUAGES,
-  type LanguageServiceOperation,
-  type ManagedLspEffectiveState,
-  type ManagedLspLanguage,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-activation";
 
 import { HOST_LANGUAGE_PROVIDER_SPECS } from "./hostLanguageProviders.js";
 import { providerConformanceRequests } from "./testing/providerConformanceFixture.js";

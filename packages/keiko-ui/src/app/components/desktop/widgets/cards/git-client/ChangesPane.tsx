@@ -8,13 +8,14 @@ import type {
   GitHistoryResponse,
   GitRepositoryStatusResponse,
 } from "@/lib/types";
+import { useTranslate } from "@/lib/i18n";
 import { Icons } from "../../../Icons";
 import { NATIVE_BLOCK_STYLE } from "../../../native-element-styles";
 import type { GitMutationOutcome } from "./git-client-seam";
 import { MutationOutcome } from "./git-client-ui";
 import { HistoryPane } from "./HistoryPane";
 import {
-  CHANGES_HEADER_STYLE,
+  CHANGES_COUNT_STYLE,
   COMPACT_BTN,
   disabledStyle,
   EMPTY_STATE_STYLE,
@@ -24,9 +25,11 @@ import {
   fileRowStyle,
   LOADING_STATE_STYLE,
   stageBoxStyle,
+  STAGING_SCOPE_HINT_STYLE,
   statusSquareStyle,
   SUBTLE_TEXT_STYLE,
-  SUMMARY_CHECK_STYLE,
+  STAGING_COUNT_STYLE,
+  SUMMARY_ACTIONS_STYLE,
   SUMMARY_STRIP_STYLE,
   TABS_ROW_STYLE,
   tabBadgeStyle,
@@ -278,47 +281,10 @@ function ChangesList({
   readonly stagingOutcome: GitMutationOutcome | null;
   readonly stagingError: string | null;
 }): ReactNode {
-  if (statusError !== null) {
-    return (
-      <p className="rv-empty" role="alert" style={{ padding: 14 }}>
-        {statusError}
-      </p>
-    );
-  }
-  if (statusLoading && status === null) {
-    return (
-      <output className="rv-empty" style={LOADING_STATE_STYLE}>
-        Loading changes…
-      </output>
-    );
-  }
-  if (status === null) {
-    return (
-      <div style={EMPTY_STATE_STYLE} role="status" aria-live="polite">
-        <GitIcon size={20} />
-        <p style={SUBTLE_TEXT_STYLE}>Select a repository to view its changes.</p>
-      </div>
-    );
-  }
-  if (!status.available) {
-    return (
-      <div style={EMPTY_STATE_STYLE} role="status" aria-live="polite">
-        <GitIcon size={20} />
-        <p style={SUBTLE_TEXT_STYLE}>{status.message ?? "This folder is not a Git repository."}</p>
-      </div>
-    );
-  }
-  if (status.detached) {
-    return (
-      <div style={EMPTY_STATE_STYLE} role="alert" aria-live="assertive">
-        <BranchIcon size={20} />
-        <p style={SUBTLE_TEXT_STYLE}>
-          Detached HEAD. Switch to an existing branch or create a branch before committing or
-          syncing.
-        </p>
-      </div>
-    );
-  }
+  const t = useTranslate();
+  const unavailableState = changesListUnavailableState(status, statusLoading, statusError);
+  if (unavailableState !== null) return unavailableState;
+  if (status === null) return null;
 
   const hasChanges = !status.clean && status.changes.length > 0;
   const bulkActionsBlocked = stagingBusy || status.truncated;
@@ -348,35 +314,35 @@ function ChangesList({
 
       {hasChanges ? (
         <div style={SUMMARY_STRIP_STYLE}>
-          <span aria-hidden="true" style={SUMMARY_CHECK_STYLE}>
-            <CheckIcon size={11} />
+          <span style={CHANGES_COUNT_STYLE}>
+            {status.changes.length} {status.changes.length === 1 ? "change" : "changes"}
           </span>
-          <span style={{ fontSize: 12, fontWeight: 600, color: "var(--fg-muted)" }}>
-            {status.stagedCount} of {status.changes.length} files staged
+          {status.stagedCount > 0 ? (
+            <span style={STAGING_COUNT_STYLE}>{status.stagedCount} staged</span>
+          ) : null}
+          <span style={SUMMARY_ACTIONS_STYLE}>
+            <button
+              type="button"
+              style={{ ...COMPACT_BTN, ...disabledStyle(bulkActionsBlocked || !hasUnstaged) }}
+              disabled={bulkActionsBlocked || !hasUnstaged}
+              onClick={onStageAll}
+            >
+              <CheckIcon size={11} /> Stage all
+            </button>
+            <button
+              type="button"
+              style={{ ...COMPACT_BTN, ...disabledStyle(bulkActionsBlocked || !hasStaged) }}
+              disabled={bulkActionsBlocked || !hasStaged}
+              onClick={onUnstageAll}
+            >
+              <ResetIcon size={11} /> Unstage all
+            </button>
           </span>
         </div>
       ) : null}
 
       {hasChanges ? (
-        <div style={CHANGES_HEADER_STYLE}>
-          <span style={{ flex: 1, minWidth: 0 }} />
-          <button
-            type="button"
-            style={{ ...COMPACT_BTN, ...disabledStyle(bulkActionsBlocked || !hasUnstaged) }}
-            disabled={bulkActionsBlocked || !hasUnstaged}
-            onClick={onStageAll}
-          >
-            <CheckIcon size={11} /> Stage all
-          </button>
-          <button
-            type="button"
-            style={{ ...COMPACT_BTN, ...disabledStyle(bulkActionsBlocked || !hasStaged) }}
-            disabled={bulkActionsBlocked || !hasStaged}
-            onClick={onUnstageAll}
-          >
-            <ResetIcon size={11} /> Unstage all
-          </button>
-        </div>
+        <p style={STAGING_SCOPE_HINT_STYLE}>{t("gitClientWindow.changes.stagingScopeHint")}</p>
       ) : null}
 
       {stagingError !== null || stagingOutcome !== null ? (
@@ -428,6 +394,55 @@ function ChangesList({
       </div>
     </div>
   );
+}
+
+function changesListUnavailableState(
+  status: GitRepositoryStatusResponse | null,
+  statusLoading: boolean,
+  statusError: string | null,
+): ReactNode | null {
+  if (statusError !== null) {
+    return (
+      <p className="rv-empty" role="alert" style={{ padding: 14 }}>
+        {statusError}
+      </p>
+    );
+  }
+  if (statusLoading && status === null) {
+    return (
+      <output className="rv-empty" style={LOADING_STATE_STYLE}>
+        Loading changes…
+      </output>
+    );
+  }
+  if (status === null) {
+    return (
+      <div style={EMPTY_STATE_STYLE} role="status" aria-live="polite">
+        <GitIcon size={20} />
+        <p style={SUBTLE_TEXT_STYLE}>Select a repository to view its changes.</p>
+      </div>
+    );
+  }
+  if (!status.available) {
+    return (
+      <div style={EMPTY_STATE_STYLE} role="status" aria-live="polite">
+        <GitIcon size={20} />
+        <p style={SUBTLE_TEXT_STYLE}>{status.message ?? "This folder is not a Git repository."}</p>
+      </div>
+    );
+  }
+  if (status.detached) {
+    return (
+      <div style={EMPTY_STATE_STYLE} role="alert" aria-live="assertive">
+        <BranchIcon size={20} />
+        <p style={SUBTLE_TEXT_STYLE}>
+          Detached HEAD. Switch to an existing branch or create a branch before committing or
+          syncing.
+        </p>
+      </div>
+    );
+  }
+  return null;
 }
 
 const STAGE_INPUT_STYLE: CSSProperties = {
@@ -506,8 +521,8 @@ function ChangeRow({
           onClick={onSelect}
           style={{
             display: "flex",
-            flexDirection: "column",
-            gap: 2,
+            alignItems: "center",
+            gap: 7,
             minWidth: 0,
             flex: 1,
             border: 0,
@@ -517,11 +532,11 @@ function ChangeRow({
             padding: 0,
           }}
         >
+          {dir !== "" ? <span style={FILE_PATH_STYLE}>{dir}</span> : null}
           <span style={FILE_NAME_STYLE}>
             <span className="rv-sr-only">{statusLabel} </span>
             {name}
           </span>
-          {dir !== "" ? <span style={FILE_PATH_STYLE}>{dir}</span> : null}
         </button>
         <span aria-hidden="true" style={statusSquareStyle(statusLetter)}>
           {statusLetter}

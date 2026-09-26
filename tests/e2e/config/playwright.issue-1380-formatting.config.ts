@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { e2eStateDir } from "../support/e2e-state-dir.js";
 
 // Issue #1380 (Epic #1491), ADR-0068 D8 item 4: a packaged-app browser e2e proving the built-in
 // editor language features + deterministic formatting baseline (AC1/AC2/AC4/AC5). This mirrors the
@@ -10,7 +10,7 @@ import { join } from "node:path";
 const root = process.cwd();
 const publicPort = Number(process.env.KEIKO_E2E_UI_PORT ?? "32203");
 const stateId = process.env.GITHUB_RUN_ID ?? `issue-1380-formatting-${String(process.pid)}`;
-const stateDir = process.env.KEIKO_E2E_STATE_DIR ?? join(tmpdir(), "keiko-e2e", stateId);
+const stateDir = e2eStateDir(stateId);
 const fixtureConfigPath = join(root, "tests", "e2e", "fixtures", "keiko.e2e.config.json");
 const runtimeConfigPath = join(stateDir, "keiko.e2e.config.json");
 const prepareRuntimeConfig = [

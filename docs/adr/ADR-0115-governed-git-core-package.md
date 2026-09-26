@@ -45,13 +45,16 @@ enforced by dependency-cruiser rule `adr-0019-direction-2b-git-only-contracts` a
 package-graph allowlist) that owns the shared git core:
 
 1. **One hardened process runner** (`createGitProcessRunner`, `defaultGitProcessRunner`,
-   `defaultGitNetworkProcessRunner`): byte-capped output, wall-clock timeout with SIGTERM→SIGKILL
+   `defaultGitNetworkProcessRunner`): one byte cap shared by stdout and stderr, wall-clock timeout with SIGTERM→SIGKILL
    escalation, spawn-error mapping to exit 127, and a `timedOut` result flag distinct from
    byte-cap truncation.
 2. **Two hardened environments** (`gitEnv`, `networkGitEnv`), both pinning `LC_ALL=C` so every
-   parsed or classified git message is stable English. The network profile keeps only
-   credential-relevant account state (HOME/SSH agent), never inherits caller `GIT_*` overrides,
-   and fails closed on every interactive path (terminal prompt, askpass, host-key TOFU).
+   parsed or classified git message is stable English. The network profile keeps credential-relevant
+   account state only for non-interactive SSH-agent or already-provisioned credential flows, never
+   inherits caller `GIT_*` overrides, and fails closed on every interactive path (terminal prompt,
+   askpass, host-key TOFU). Its runner command-overrides repository-controlled fsmonitor, hooks,
+   SSH-command, credential-helper, pager, fetch/pull alias, external-transport, and recursive-
+   submodule settings while preserving repository data such as remotes, refspecs, and branch tracking.
 3. **Repository membership by git, not by string math** (`resolveGitMembership`): one bounded
    `rev-parse --show-toplevel --show-prefix` invocation returns both the owning repository root
    and the selected folder's prefix inside it — correct for subfolders at any depth, linked

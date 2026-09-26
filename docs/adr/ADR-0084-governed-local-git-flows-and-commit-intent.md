@@ -35,6 +35,17 @@ In scope: new keiko-contracts leaves for commit message policy and commit intent
 
 Out of scope: remote push, PR creation, or merge (#476–#478); hunk-level staging (path-level only); Model Gateway calls; a new evidence schema or a new ledger; breaking-change detection; session correlation beyond what the existing evidence record carries.
 
+**Amendment (Issue #3494, 2026-09-15).** The desktop project header projects the checked-out
+repository branch through the existing read-only branch snapshot and governed create/switch flows;
+a Task Workspace identifier is never presented as a Git branch. A selected non-Git project may be
+initialized only after explicit confirmation through the bounded
+`POST /api/git-delivery/repository/initialize` bootstrap route. That route accepts the server-owned
+`projectId` and the literal initial branch `main`, resolves the path from the project catalog, and
+constructs the fixed `git init --quiet --initial-branch=main` argument vector. It accepts no path,
+remote, credential, or free Git argument, rejects already initialized or unresolved projects, and
+emits body-free correlated activity. Once the repository exists, every branch mutation continues
+to use the governed D1/D5 execution path below.
+
 ### Cross-branch ADR numbering
 
 The governed-git feat branch uses ADR numbers 0058–0062. An independent feat branch (voice digital twin) independently used numbers 0058–0069. These are non-conflicting while both branches are un-merged to `dev`; the numbers are per-branch-local until a feat-to-dev PR is opened. The merge coordinator must verify that the final ADR numbering on `dev` is globally sequential and adjust if needed before merging.
@@ -61,7 +72,7 @@ The `branch-switch` action kind is added to the existing `GitDeliveryActionKind`
 
 **keiko-server** gains two new route groups under `packages/keiko-server/src/gitDelivery/`:
 
-- `localMutationRoutes.ts`: `POST /api/git-delivery/local-branch/create`, `/local-branch/switch`, `/staging/stage`, `/staging/unstage`. Each handler gates on `isGitDeliveryTrusted`, validates the typed envelope (allowed keys, secret-shape scan, unsafe-format-char scan), reads a fresh snapshot via the snapshot reader, calls `runGitMutation`, records evidence via `recordGitDeliveryMutationEvidence`, and returns a content-free outcome. Factory pattern mirrors `createHandleGitDeliveryActionSheet` for testability.
+- `localMutationRoutes.ts`: `POST /api/git-delivery/local-branch/create`, `/local-branch/switch`, `/staging/stage`, `/staging/unstage`. Each handler admits writes only through the active server-owned runtime Authority Envelope, validates the typed envelope (allowed keys, secret-shape scan, unsafe-format-char scan), reads a fresh snapshot via the snapshot reader, calls `runGitMutation`, records evidence via `recordGitDeliveryMutationEvidence`, and returns a content-free outcome.
 - `commitRoutes.ts`: `POST /api/git-delivery/commit/preview` (read-only: snapshot + staged paths → `analyzeGitCommitIntent` + `validateGitCommitMessage` + `evaluateGitPreflight` + `evaluateGitPolicy`; returns a content-free preview object; no mutation) and `POST /api/git-delivery/commit/execute` (message-policy gate first; if violations present, record blocked evidence and return typed violation codes before the kernel runs; else `runGitMutation` → evidence → content-free outcome).
 
 **keiko-ui** gains a `GovernedGitFlowCard` desktop window (`registerWindowRender` type `"governedGitFlow"`) walking the Branch → Staging → Commit composer sequence, calling the new API routes, and rendering intent warnings and message-policy violations as text badges with `aria-live` regions. Inline styles via CSS custom properties only; `globals.css` is not touched.
@@ -143,7 +154,7 @@ This placement ensures the kernel remains a narrow execution primitive that know
 
 - ADR-0080: Governed Git delivery contracts (action kinds, risk taxonomy, lifecycle envelope — extended by one kind here)
 - ADR-0081: Governed Git mutation execution kernel (`runGitMutation`, preflight dispatch, adapter port — extended by one kind here)
-- ADR-0082: Governed Git approval and preview surface (action-sheet BFF pattern reused for preview route; `isGitDeliveryTrusted` gate reused)
+- ADR-0082: Governed Git approval and preview surface (action-sheet BFF pattern reused for preview route)
 - ADR-0083: Governed Git mutation evidence ledger (`recordGitDeliveryMutationEvidence` reused for all five new routes)
 - ADR-0019: Modular Package Architecture (leaf-package rule; dependency direction contracts ← tools ← server; `arch:check` enforcement)
 - ADR-0018: Terminal allowlist (read-only git baseline preserved; `git switch` explicitly NOT added)

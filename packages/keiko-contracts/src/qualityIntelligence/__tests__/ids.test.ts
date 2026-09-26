@@ -4,6 +4,7 @@ import {
   asQualityIntelligenceCoverageMapId,
   asQualityIntelligenceEvidenceAtomId,
   asQualityIntelligenceExportBundleId,
+  asQualityIntelligenceHandoffId,
   asQualityIntelligenceReviewRecordId,
   asQualityIntelligenceRunId,
   asQualityIntelligenceSourceEnvelopeId,
@@ -24,6 +25,8 @@ const constructors: readonly (readonly [string, Constructor])[] = [
   ["SourceEnvelopeId", asQualityIntelligenceSourceEnvelopeId],
   ["EvidenceAtomId", asQualityIntelligenceEvidenceAtomId],
   ["AuditSummaryId", asQualityIntelligenceAuditSummaryId],
+  // KEIKO-0593
+  ["HandoffId", asQualityIntelligenceHandoffId],
 ];
 
 // Control-character literals declared via explicit \u escapes so editors and
@@ -164,10 +167,66 @@ describe("QI id constructors — regression: clean id still accepted", () => {
   }
 });
 
+// KEIKO-0252: branded ids are rendered in the browser (run summaries, evidence refs, candidate
+// lists), and the sibling display-surface guard already rejects these code points — but the id
+// validator checked only C0/C1/DEL controls, which none of them are, and NFKC does not remove them.
+// An id containing U+202E renders as a different id than the one stored; a zero-width character
+// makes two visually identical ids distinct, defeating the visual comparison a reviewer relies on.
+describe("bidi and zero-width rejection", () => {
+  const CONSTRUCTORS = [
+    asQualityIntelligenceRunId,
+    asQualityIntelligenceTestCaseId,
+    asQualityIntelligenceCoverageMapId,
+    asQualityIntelligenceValidationFindingId,
+    asQualityIntelligenceReviewRecordId,
+    asQualityIntelligenceExportBundleId,
+    asQualityIntelligenceSourceEnvelopeId,
+    asQualityIntelligenceEvidenceAtomId,
+    asQualityIntelligenceAuditSummaryId,
+    asQualityIntelligenceHandoffId, // KEIKO-0593
+  ];
+
+  it.each([0x202e, 0x200b, 0x2066, 0x2060, 0x206f, 0x061c, 0xfeff])(
+    "rejects an id containing U+%s in every branded constructor",
+    (codePoint) => {
+      const value = `run${String.fromCodePoint(codePoint)}001`;
+      expect(validateQualityIntelligenceIdString(value, "runId").ok).toBe(false);
+      for (const construct of CONSTRUCTORS) {
+        expect(() => construct(value)).toThrow(TypeError);
+      }
+    },
+  );
+
+  it("names the reason distinctly from the control-character rejection", () => {
+    const result = validateQualityIntelligenceIdString(
+      `run${String.fromCodePoint(0x202e)}001`,
+      "runId",
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe("runId contains invisible or reordering characters");
+  });
+});
+
 describe("Brand sanity", () => {
   it("constructed value is a plain string at runtime", () => {
     const run = asQualityIntelligenceRunId("run-001");
     expect(typeof run).toBe("string");
     expect(JSON.parse(JSON.stringify({ run })) as { run: string }).toEqual({ run: "run-001" });
+  });
+});
+
+// KEIKO-0593: QualityIntelligenceConversationCenterHandoff.id was a bare `string` (no validation on
+// the audit link between a Conversation Center chat and the QI handoff it minted). This is the
+// finding's own named acceptance proof: before the brand + constructor existed, this call failed
+// with "asQualityIntelligenceHandoffId is not a function"; now it must throw TypeError for the
+// documented reason (forbidden path fragment), not silently accept a hostile value.
+describe("asQualityIntelligenceHandoffId (KEIKO-0593)", () => {
+  it("rejects a forbidden path-traversal fragment", () => {
+    expect(() => asQualityIntelligenceHandoffId("../etc/passwd")).toThrow(TypeError);
+  });
+
+  it("accepts a well-formed handoff id and returns it unchanged", () => {
+    expect(asQualityIntelligenceHandoffId("handoff-001")).toBe("handoff-001");
   });
 });

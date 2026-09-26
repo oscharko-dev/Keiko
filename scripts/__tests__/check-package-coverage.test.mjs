@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -6,7 +6,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   CONSTITUTIONAL_COVERAGE_MINIMUM,
   COVERAGE_BASELINE_SCHEMA_VERSION,
+  PACKAGE_COVERAGE_EXCLUDE,
+  PACKAGE_COVERAGE_INCLUDE,
+  UI_COVERAGE_EXCLUDE,
+  UI_COVERAGE_INCLUDE,
   aggregatePackageCoverage,
+  countPackageSourceFiles,
+  listPackageSourceFiles,
   baselineSchemaFailures,
   buildCoverageBaseline,
   buildFileFloors,
@@ -305,6 +311,96 @@ describe("check-package-coverage", () => {
 // silently dropped keiko-sandbox — a measured package protected by no floor. This reality guard fails
 // the instant the baseline and the real workspace drift, so exclusions must be explicit and reviewed
 // rather than accreting silently behind a green gate.
+// Returns a mismatch row, or undefined when the entry is consistent (or carries no comparable
+// numbers). Extracted so the test body stays under the complexity bar rather than raising it.
+function lineConsistencyOf(name, entry) {
+  if (typeof entry !== "object" || entry === null) return undefined;
+  const { totalLines, uncoveredLines, coverage } = entry;
+  const recorded = coverage?.lines;
+  const comparable =
+    typeof totalLines === "number" &&
+    totalLines > 0 &&
+    typeof uncoveredLines === "number" &&
+    typeof recorded === "number";
+  if (!comparable) return undefined;
+  const computed = Math.round(((totalLines - uncoveredLines) / totalLines) * 10_000) / 100;
+  // The writer rounds to 2dp, so anything beyond half a hundredth is real drift, not rounding.
+  if (Math.abs(computed - recorded) <= 0.005) return undefined;
+  return { package: name, recorded, computed, totalLines, uncoveredLines };
+}
+
+// A baseline entry carries BOTH the raw counts and the rounded percentage, and the writer derives
+// all of them from one measurement — so they can only disagree if the file was edited by hand or
+// written in two passes. Nothing checked that, and keiko-tools drifted: it recorded 91.53% while its
+// own totalLines/uncoveredLines computed 91.66%, and a reviewer had to report it TWICE across two
+// rounds because there was no gate to catch it the first time.
+//
+// The percentage is what a human reads in a review; the counts are what the ratchet compares. When
+// they disagree, one of them is lying and nothing says which.
+describe("coverage baseline internal consistency", () => {
+  it("records a line percentage that matches its own totalLines and uncoveredLines", () => {
+    const baseline = JSON.parse(readFileSync("docs/qa/package-coverage-baseline.json", "utf8"));
+    const packages = baseline.packages ?? baseline;
+    const mismatches = Object.entries(packages)
+      .map(([name, entry]) => lineConsistencyOf(name, entry))
+      .filter((row) => row !== undefined);
+    expect(mismatches).toEqual([]);
+  });
+
+  // The committed baseline is consistent today, so the assertion above passes even if
+  // `lineConsistencyOf` returned `undefined` unconditionally — it would prove nothing about the
+  // detector (PR #3355 review, P2). These fixtures exercise the detector directly, with literal
+  // values and no re-derivation of the production formula: every expected number is written out.
+  it.each([
+    // 100 lines, 10 uncovered -> 90.00, recorded as 85.00: real, reviewable drift.
+    [
+      "a mismatched recorded percentage",
+      { totalLines: 100, uncoveredLines: 10, coverage: { lines: 85 } },
+    ],
+    // The production shape this gate was written for: keiko-tools recorded 91.53 while its own
+    // counts computed 91.66.
+    [
+      "the keiko-tools drift this gate exists for",
+      { totalLines: 10_000, uncoveredLines: 834, coverage: { lines: 91.53 } },
+    ],
+  ])("rejects %s", (_label, entry) => {
+    const row = lineConsistencyOf("fixture", entry);
+    expect(row).not.toBeUndefined();
+    expect(row?.package).toBe("fixture");
+  });
+
+  // The other direction, because a detector that flagged everything would make the suite above
+  // vacuous the moment the baseline moved.
+  it.each([
+    [
+      "an exactly consistent entry",
+      { totalLines: 100, uncoveredLines: 10, coverage: { lines: 90 } },
+    ],
+    // 3 of 7 uncovered -> 57.142857…%, which the writer rounds to 57.14: inside the half-hundredth
+    // tolerance, so NOT drift.
+    [
+      "a rounding-boundary entry the writer rounds the same way",
+      { totalLines: 7, uncoveredLines: 3, coverage: { lines: 57.14 } },
+    ],
+    ["an entry carrying no counts", { coverage: { lines: 90 } }],
+    ["an entry carrying no recorded percentage", { totalLines: 100, uncoveredLines: 10 }],
+    ["an empty entry", {}],
+    // totalLines 0 would divide by zero; the guard must decline rather than emit NaN.
+    ["a zero-total entry", { totalLines: 0, uncoveredLines: 0, coverage: { lines: 100 } }],
+  ])("accepts %s", (_label, entry) => {
+    expect(lineConsistencyOf("fixture", entry)).toBeUndefined();
+  });
+
+  // Malformed input must not throw: a gate that crashes on a hand-edited baseline stops reporting.
+  it.each([
+    ["null", null],
+    ["a string", "not-an-object"],
+    ["a number", 42],
+  ])("declines %s without throwing", (_label, entry) => {
+    expect(() => lineConsistencyOf("fixture", entry)).not.toThrow();
+    expect(lineConsistencyOf("fixture", entry)).toBeUndefined();
+  });
+});
 describe("coverage baseline reality guard", () => {
   // Packages intentionally NOT gated by the package-coverage baseline, each with a recorded reason.
   // A package may be added here ONLY with a justification — never to hide a coverage gap.
@@ -332,6 +428,89 @@ describe("coverage baseline reality guard", () => {
     const baseline = JSON.parse(readFileSync("docs/qa/package-coverage-baseline.json", "utf8"));
     expect(baseline.packages["keiko-sandbox"]).toBeDefined();
     expect(typeof baseline.packages["keiko-sandbox"].coverage.lines).toBe("number");
+  });
+
+  // KEIKO-0125: enrollment and a well-formed `files` number are not the same claim as "the baseline
+  // measured this package". `files` comes from the v8 coverage summary, which only ever contains
+  // files a test imported — a source file no test touches is invisible to it. keiko-sandbox recorded
+  // files:6 against 9 real sources, so 3 files sat behind a green gate that had never seen them. The
+  // three assertions above would all have passed throughout. This one compares the recorded count
+  // against a live inventory taken with the coverage run's own include/exclude globs.
+  it("records a file count matching a live source inventory (no partial undercount)", () => {
+    const baseline = JSON.parse(readFileSync("docs/qa/package-coverage-baseline.json", "utf8"));
+    // Filter BEFORE mapping: countPackageSourceFiles walks the package tree, so mapping first would
+    // pay for a full walk of every intentionally-ungated package only to discard the result.
+    const mismatches = Object.entries(baseline.packages)
+      .filter(([name]) => !INTENTIONALLY_UNGATED.has(name))
+      .map(([name, entry]) => ({
+        package: name,
+        recorded: entry.files,
+        live: countPackageSourceFiles(process.cwd(), name),
+      }))
+      .filter(({ recorded, live }) => recorded !== live);
+
+    expect(mismatches).toEqual([]);
+  });
+});
+
+// AGENTS.md §7: a fixture must never restate a formula the code under test owns. The counting
+// helper's include/exclude arrays are a deliberate copy of the coverage run's own globs (a plain
+// `.mjs` script cannot import the TS config without pulling in vitest), so this test imports the
+// real config and pins the two definitions together. If the coverage run's globs change and the
+// helper's copy does not, the live inventory silently starts measuring something else — and the
+// reality guard above would keep passing over a wrong answer.
+describe("coverage source-glob parity", () => {
+  it("counts files with the same include/exclude globs the package coverage run declares", async () => {
+    const config = (await import("../../vitest.coverage.packages.config.ts")).default;
+
+    expect(PACKAGE_COVERAGE_INCLUDE).toEqual(config.test.coverage.include);
+    expect(PACKAGE_COVERAGE_EXCLUDE).toEqual(config.test.coverage.exclude);
+  });
+
+  // keiko-ui is excluded from the package run because its OWN run measures it. Its inventory must
+  // therefore follow that config's globs, or the guard compares a real 248-file package against 0.
+  it("counts keiko-ui with the globs its own coverage run declares", async () => {
+    const config = (await import("../../packages/keiko-ui/vitest.coverage.config.ts")).default;
+
+    expect(UI_COVERAGE_INCLUDE).toEqual(config.test.coverage.include);
+    expect(UI_COVERAGE_EXCLUDE).toEqual(config.test.coverage.exclude);
+  });
+
+  // Following symlinks (so the inventory matches what the coverage run measures) makes a cycle
+  // reachable: a link to an ancestor would recurse until the path or the stack is exhausted, and
+  // two links to one directory would list its files twice. Both are fatal to a gate whose job is to
+  // produce one honest number, so the walk tracks resolved directories.
+  it("terminates on a symlink cycle and counts a repeated target once", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-coverage-symlink-"));
+    try {
+      const src = join(root, "packages", "keiko-probe", "src");
+      mkdirSync(join(src, "nested"), { recursive: true });
+      writeFileSync(join(src, "real.ts"), "export const a = 1;\n");
+      writeFileSync(join(src, "nested", "deep.ts"), "export const b = 2;\n");
+      // Self-link, ancestor-link, and a second link to an already-walked directory.
+      symlinkSync(src, join(src, "self-link"), "dir");
+      symlinkSync(src, join(src, "nested", "ancestor-link"), "dir");
+      symlinkSync(join(src, "nested"), join(src, "nested-again"), "dir");
+
+      const files = listPackageSourceFiles(root, "keiko-probe");
+
+      expect(files).toEqual([
+        "packages/keiko-probe/src/nested/deep.ts",
+        "packages/keiko-probe/src/real.ts",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("excludes tests, __tests__, support files and configs from the live inventory", () => {
+    const files = listPackageSourceFiles(process.cwd(), "keiko-sandbox");
+
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.every((file) => file.startsWith("packages/keiko-sandbox/src/"))).toBe(true);
+    expect(files.some((file) => file.includes(".test."))).toBe(false);
+    expect(files.some((file) => file.includes("/__tests__/"))).toBe(false);
+    expect(files.some((file) => file.endsWith(".config.ts"))).toBe(false);
   });
 });
 
@@ -838,6 +1017,42 @@ describe("runCli", () => {
     expect(report.metrics).toEqual(["lines", "statements", "branches", "functions"]);
     expect(report.results.lines[0].packageName).toBe("keiko-a");
     expect(report.fileFloors).toEqual([]);
+  });
+
+  it("refreshes only measured source counts while preserving every governed floor and metric", async () => {
+    fixture({
+      floors: {
+        "packages/keiko-a/src/a.ts": { governance: "absolute", tolerance: 0, lines: 90 },
+      },
+    });
+    writeJson(root, "packages/keiko-a/src/a.ts", {});
+    writeJson(root, "packages/keiko-a/src/b.ts", {});
+    const before = JSON.parse(readFileSync(join(root, "baseline.json"), "utf8"));
+    const destination = join(root, "inventory-refreshed.json");
+    capture();
+
+    await run("--refresh-source-inventory", "--write-baseline", destination);
+
+    const written = JSON.parse(readFileSync(destination, "utf8"));
+    expect(written).toEqual({
+      ...before,
+      packages: {
+        "keiko-a": { ...before.packages["keiko-a"], files: 2 },
+      },
+    });
+    expect(out).toEqual(["coverage-source-inventory: refreshed 1 package count(s); 1 changed."]);
+    expect(JSON.parse(readFileSync(join(root, "baseline.json"), "utf8"))).toEqual(before);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("refuses an inventory-only refresh when the governed package set is incomplete", async () => {
+    fixture();
+    writeJson(root, "packages/keiko-b/package.json", { name: "@oscharko-dev/keiko-b" });
+    capture();
+
+    await expect(
+      run("--refresh-source-inventory", "--write-baseline", join(root, "inventory-refreshed.json")),
+    ).rejects.toThrow(/package inventory differs from the workspace: missing=1, stale=0/u);
   });
 
   // An enforcement pass that governs nothing must not read as a satisfied one: a dropped --baseline

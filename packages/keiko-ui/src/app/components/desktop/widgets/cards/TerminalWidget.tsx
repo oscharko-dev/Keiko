@@ -105,6 +105,18 @@ function eventDetail(event: TerminalEventEnvelope): string {
   return "";
 }
 
+// KEIKO-0204 — the terminal SSE channel is global (ADR-0018 D7): it carries every concurrent
+// execution's events across every open window, not just this widget's own. Ownership is proven
+// solely by the requestId this widget minted at submit time and the BFF echoes back in the
+// payload; matching on it is the only way to tell "my execution" from "someone else's".
+function isOwnEvent(event: TerminalEventEnvelope, requestId: string | null): boolean {
+  return (
+    requestId !== null &&
+    typeof event.payload.requestId === "string" &&
+    event.payload.requestId === requestId
+  );
+}
+
 function terminalResultAnnouncement(
   result: TerminalExecutionResult | null,
   t: OptionalWidgetTranslate,
@@ -238,36 +250,34 @@ export function TerminalWidget(props: TerminalWidgetProps): ReactNode {
         const parsed = JSON.parse(ev.data) as TerminalEventEnvelope;
         // Only arm Cancel for the execution that echoes the current requestId.
         // The SSE channel is global, so an unrelated execution-started event must be ignored.
-        if (parsed.kind === "execution-started" && runningRef.current) {
-          const payload = parsed.payload;
-          const requestMatches =
-            typeof payload.requestId === "string" &&
-            payload.requestId === pendingRequestIdRef.current;
-          if (requestMatches) {
-            setInFlightExecutionId((current) => current ?? parsed.executionId);
-          }
+        if (
+          parsed.kind === "execution-started" &&
+          runningRef.current &&
+          isOwnEvent(parsed, pendingRequestIdRef.current)
+        ) {
+          setInFlightExecutionId((current) => current ?? parsed.executionId);
         }
         // Clear the captured id when the run ends so the next submit starts clean.
         if (
-          parsed.kind === "execution-completed" ||
-          parsed.kind === "execution-failed" ||
-          parsed.kind === "execution-cancelled"
+          (parsed.kind === "execution-completed" ||
+            parsed.kind === "execution-failed" ||
+            parsed.kind === "execution-cancelled") &&
+          isOwnEvent(parsed, pendingRequestIdRef.current)
         ) {
-          const payload = parsed.payload;
-          const requestMatches =
-            typeof payload.requestId === "string" &&
-            payload.requestId === pendingRequestIdRef.current;
-          if (requestMatches) {
-            setInFlightExecutionId((current) => {
-              if (current === null || current !== parsed.executionId) return current;
-              return null;
-            });
-          }
+          setInFlightExecutionId((current) => {
+            if (current === null || current !== parsed.executionId) return current;
+            return null;
+          });
         }
-        setEvents((current) => {
-          const next = [parsed, ...current];
-          return next.length > MAX_EVENT_LOG ? next.slice(0, MAX_EVENT_LOG) : next;
-        });
+        // KEIKO-0204 — the channel stays global (ADR-0018 D7); a foreign execution's events are
+        // still processed above for Cancel-arming/clearing, but the visible "Recent events" log
+        // is scoped to this widget's own in-flight request so another window's run never shows up.
+        if (isOwnEvent(parsed, pendingRequestIdRef.current)) {
+          setEvents((current) => {
+            const next = [parsed, ...current];
+            return next.length > MAX_EVENT_LOG ? next.slice(0, MAX_EVENT_LOG) : next;
+          });
+        }
       } catch {
         // Ignore unparsable frames; the BFF never emits malformed JSON.
       }

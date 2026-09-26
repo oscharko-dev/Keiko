@@ -34,6 +34,33 @@ describe("local Sonar compatibility preflight", () => {
     );
   }, 45_000);
 
+  // KEIKO-0381: the rule used to test the literal for "." and "_" independently, so it also
+  // condemned an integer-part-only separator — a literal its own message does not describe. The
+  // six files this rule is wired to at severity "error" run under --max-warnings=0, so the first
+  // ordinary `1_500_000.0` written in one of them would have blocked a correct change.
+  it("accepts an integer-part digit separator on a literal that has a fraction", async () => {
+    expect(await lint("const budgetMs = 1_500_000.5;\n")).toEqual([]);
+  }, 45_000);
+
+  it("accepts a digit separator in the exponent", async () => {
+    // `1.0e1_0`'s fraction is a bare `0`; the separator groups the exponent. Flagging it repeated
+    // the original mistake one field over (review finding on #3159).
+    expect(await lint("const scaled = 1.0e1_0;\n")).toEqual([]);
+    expect(await lint("const alsoScaled = 1.5E1_0;\n")).toEqual([]);
+  }, 45_000);
+
+  it("still rejects a fractional separator that also carries an exponent", async () => {
+    expect(await lint("const epsilon = 1.234_5e10;\n")).toContainEqual(
+      expect.objectContaining({ ruleId: "keiko-sonar/no-fractional-numeric-separators" }),
+    );
+  }, 45_000);
+
+  it("still rejects a separator in the fractional part of a grouped literal", async () => {
+    expect(await lint("const ratio = 1_000.000_001;\n")).toContainEqual(
+      expect.objectContaining({ ruleId: "keiko-sonar/no-fractional-numeric-separators" }),
+    );
+  }, 45_000);
+
   it("accepts non-mutating comparator sorting and scientific notation", async () => {
     expect(
       await lint(

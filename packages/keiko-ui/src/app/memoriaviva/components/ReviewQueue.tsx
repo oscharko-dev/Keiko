@@ -9,15 +9,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import Link from "next/link";
-import type { MemoryId, MemoryRecord } from "@oscharko-dev/keiko-contracts";
+import type {
+  AcceptMemoryProposalOptions,
+  MemoryId,
+  MemoryRecord,
+} from "@oscharko-dev/keiko-contracts";
+import { isMemoryRecord } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import {
   acceptMemoryProposal,
   archiveMemory,
+  fetchCorrectionPredecessors,
   fetchMemoryReviewQueue,
   rejectMemoryProposal,
   type MemoryReviewQueueResponse,
 } from "@/lib/memory-api";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { formatError } from "./format-error";
 
 type ReviewAction = "accept" | "reject" | "archive";
@@ -115,13 +122,98 @@ function actionStatusMessage(action: ReviewAction, t: I18nTranslate): string {
 
 interface ReviewRowProps {
   readonly record: MemoryRecord;
+  readonly predecessors: readonly MemoryRecord[] | undefined;
+  readonly predecessorsLoading: boolean;
   readonly busyAction: ReviewAction | null;
   readonly rowError: string | null;
-  readonly onAccept: (record: MemoryRecord, bodyOverride?: string) => void;
+  readonly onAccept: (record: MemoryRecord, options: AcceptMemoryProposalOptions) => void;
   readonly onReject: (record: MemoryRecord) => void;
   readonly onArchive: (record: MemoryRecord) => void;
+  readonly onRequestPredecessors: (record: MemoryRecord) => void;
   readonly onOpenDetail?: ((id: string) => void) | undefined;
   readonly t: I18nTranslate;
+}
+
+type CorrectionPredecessorsById = ReadonlyMap<string, readonly MemoryRecord[]>;
+
+function acceptsOptions(options: AcceptMemoryProposalOptions): boolean {
+  return options.bodyOverride !== undefined || options.predecessorId !== undefined;
+}
+
+function verifiedCorrectionPredecessors(response: unknown): readonly MemoryRecord[] | undefined {
+  if (typeof response !== "object" || response === null || Array.isArray(response))
+    return undefined;
+  const candidates = (response as { readonly candidates?: unknown }).candidates;
+  if (!Array.isArray(candidates) || !candidates.every(isMemoryRecord)) return undefined;
+  return candidates;
+}
+
+interface CorrectionPredecessorDecision {
+  readonly acceptDisabled: boolean;
+  readonly effectiveId: MemoryId | undefined;
+  readonly loadRequired: boolean;
+  readonly selectorCandidates: readonly MemoryRecord[] | undefined;
+}
+
+function correctionPredecessorDecision(
+  record: MemoryRecord,
+  candidates: readonly MemoryRecord[] | undefined,
+  selectedId: MemoryId | undefined,
+  loading: boolean,
+): CorrectionPredecessorDecision {
+  const none = { effectiveId: undefined, selectorCandidates: undefined } as const;
+  if (record.type !== "correction") {
+    return { ...none, acceptDisabled: loading, loadRequired: false };
+  }
+  if (candidates === undefined) {
+    return { ...none, acceptDisabled: loading, loadRequired: true };
+  }
+  if (candidates.length === 0) {
+    return { ...none, acceptDisabled: true, loadRequired: false };
+  }
+  if (candidates.length === 1) {
+    return {
+      ...none,
+      acceptDisabled: loading,
+      effectiveId: candidates[0]?.id,
+      loadRequired: false,
+    };
+  }
+  return {
+    acceptDisabled: loading || selectedId === undefined,
+    effectiveId: selectedId,
+    loadRequired: false,
+    selectorCandidates: candidates,
+  };
+}
+
+function reviewAcceptOptions(
+  editing: boolean,
+  draftBody: string,
+  predecessorId: MemoryId | undefined,
+): AcceptMemoryProposalOptions {
+  return {
+    ...(editing ? { bodyOverride: draftBody } : {}),
+    ...(predecessorId === undefined ? {} : { predecessorId }),
+  };
+}
+
+function acceptOrLoadPredecessors(input: {
+  readonly decision: CorrectionPredecessorDecision;
+  readonly draftBody: string;
+  readonly editing: boolean;
+  readonly onAccept: ReviewRowProps["onAccept"];
+  readonly onRequestPredecessors: ReviewRowProps["onRequestPredecessors"];
+  readonly record: MemoryRecord;
+}): void {
+  if (input.decision.loadRequired) {
+    input.onRequestPredecessors(input.record);
+    return;
+  }
+  input.onAccept(
+    input.record,
+    reviewAcceptOptions(input.editing, input.draftBody, input.decision.effectiveId),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -209,6 +301,42 @@ function RowError({ rowError }: { readonly rowError: string | null }): ReactNode
   );
 }
 
+function CorrectionPredecessorSelector({
+  candidates,
+  selectedId,
+  onSelect,
+  t,
+}: {
+  readonly candidates: readonly MemoryRecord[] | undefined;
+  readonly selectedId: MemoryId | undefined;
+  readonly onSelect: (id: MemoryId | undefined) => void;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (candidates === undefined || candidates.length < 2) return null;
+  return (
+    <label style={{ display: "grid", gap: "var(--space-1)" }}>
+      {t("memoria.correctionPredecessor")}
+      <select
+        className="lk-input"
+        value={selectedId ?? ""}
+        onChange={(event) => {
+          const selected = candidates.find(
+            (candidate) => candidate.id === event.currentTarget.value,
+          );
+          onSelect(selected?.id);
+        }}
+      >
+        <option value="">{t("memoria.selectCorrectionPredecessor")}</option>
+        {candidates.map((candidate) => (
+          <option key={candidate.id} value={candidate.id}>
+            {candidate.body.slice(0, 80)} ({candidate.id})
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // ReviewRowActions
 // ---------------------------------------------------------------------------
@@ -222,6 +350,7 @@ function RowActionButton({
   isBusy,
   busyLabel,
   idleLabel,
+  disabled = false,
   onClick,
 }: {
   readonly variant: "primary" | "ghost";
@@ -229,16 +358,17 @@ function RowActionButton({
   readonly isBusy: boolean;
   readonly busyLabel: string;
   readonly idleLabel: string;
+  readonly disabled?: boolean | undefined;
   readonly onClick: () => void;
 }): ReactNode {
   return (
     <button
       type="button"
       className={`lk-btn lk-btn-${variant}`}
-      aria-disabled={busyAction !== null}
+      aria-disabled={busyAction !== null || disabled}
       aria-busy={isBusy}
       onClick={() => {
-        if (busyAction !== null) return;
+        if (busyAction !== null || disabled) return;
         onClick();
       }}
     >
@@ -256,6 +386,7 @@ function ReviewRowActions({
   onAccept,
   onReject,
   onArchive,
+  acceptDisabled,
   editing,
   onEdit,
   onCancelEdit,
@@ -264,9 +395,10 @@ function ReviewRowActions({
   readonly record: MemoryRecord;
   readonly busyAction: ReviewAction | null;
   readonly labelId: string;
-  readonly onAccept: (record: MemoryRecord) => void;
+  readonly onAccept: () => void;
   readonly onReject: (record: MemoryRecord) => void;
   readonly onArchive: (record: MemoryRecord) => void;
+  readonly acceptDisabled: boolean;
   readonly editing: boolean;
   readonly onEdit: () => void;
   readonly onCancelEdit: () => void;
@@ -285,7 +417,8 @@ function ReviewRowActions({
           isBusy={busyAction === "accept"}
           busyLabel={t("memoria.approving")}
           idleLabel={editing ? t("memoria.approveEditedProposal") : t("memoria.approve")}
-          onClick={() => onAccept(record)}
+          disabled={acceptDisabled}
+          onClick={onAccept}
         />
         <RowActionButton
           variant="ghost"
@@ -354,16 +487,26 @@ function ReviewRowActions({
 
 function ReviewRow({
   record,
+  predecessors,
+  predecessorsLoading,
   busyAction,
   rowError,
   onAccept,
   onReject,
   onArchive,
+  onRequestPredecessors,
   onOpenDetail,
   t,
 }: ReviewRowProps): ReactNode {
   const [editing, setEditing] = useState(false);
   const [draftBody, setDraftBody] = useState(record.body);
+  const [predecessorId, setPredecessorId] = useState<MemoryId | undefined>();
+  const predecessorDecision = correctionPredecessorDecision(
+    record,
+    predecessors,
+    predecessorId,
+    predecessorsLoading,
+  );
   const labelId = `memory-review-body-${record.id}`;
   const editorId = `memory-review-editor-${record.id}`;
   const detailLinkLabel = t("memoria.viewDetailsFor", {
@@ -394,6 +537,12 @@ function ReviewRow({
               {record.body}
             </p>
           )}
+          <CorrectionPredecessorSelector
+            candidates={predecessorDecision.selectorCandidates}
+            selectedId={predecessorId}
+            onSelect={setPredecessorId}
+            t={t}
+          />
           <div className="mc-row-meta">
             <span className="mc-row-type">{typeLabel(record.type, t)}</span>
             <span className="mc-row-scope">{scopeLabel(record.scope.kind, t)}</span>
@@ -426,9 +575,19 @@ function ReviewRow({
           record={record}
           busyAction={busyAction}
           labelId={labelId}
-          onAccept={(row) => onAccept(row, editing ? draftBody : undefined)}
+          onAccept={() => {
+            acceptOrLoadPredecessors({
+              decision: predecessorDecision,
+              draftBody,
+              editing,
+              onAccept,
+              onRequestPredecessors,
+              record,
+            });
+          }}
           onReject={onReject}
           onArchive={onArchive}
+          acceptDisabled={predecessorDecision.acceptDisabled}
           editing={editing}
           onEdit={() => setEditing(true)}
           onCancelEdit={() => {
@@ -444,6 +603,7 @@ function ReviewRow({
 
 interface ReviewQueueProps {
   readonly fetchQueueImpl?: typeof fetchMemoryReviewQueue;
+  readonly fetchCorrectionPredecessorsImpl?: typeof fetchCorrectionPredecessors;
   readonly acceptImpl?: typeof acceptMemoryProposal;
   readonly rejectImpl?: typeof rejectMemoryProposal;
   readonly archiveImpl?: typeof archiveMemory;
@@ -453,6 +613,7 @@ interface ReviewQueueProps {
 
 export function ReviewQueue({
   fetchQueueImpl = fetchMemoryReviewQueue,
+  fetchCorrectionPredecessorsImpl = fetchCorrectionPredecessors,
   acceptImpl = acceptMemoryProposal,
   rejectImpl = rejectMemoryProposal,
   archiveImpl = archiveMemory,
@@ -461,6 +622,13 @@ export function ReviewQueue({
 }: ReviewQueueProps): ReactNode {
   const t = useTranslate();
   const [records, setRecords] = useState<readonly MemoryRecord[]>([]);
+  const [predecessorsById, setPredecessorsById] = useState<CorrectionPredecessorsById>(
+    () => new Map(),
+  );
+  const [predecessorsLoadingById, setPredecessorsLoadingById] = useState<
+    Readonly<Record<string, boolean>>
+  >({});
+  const predecessorRequestsRef = useRef(new Set<string>());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyById, setBusyById] = useState<Partial<Record<string, ReviewAction>>>({});
@@ -482,6 +650,9 @@ export function ReviewQueue({
       setRecords(res.memories);
       setBusyById({});
       setRowErrorsById({});
+      setPredecessorsById(new Map());
+      setPredecessorsLoadingById({});
+      predecessorRequestsRef.current.clear();
     } catch (err) {
       setError(formatError(err));
     } finally {
@@ -492,6 +663,45 @@ export function ReviewQueue({
   useEffect(() => {
     void load();
   }, [load]);
+
+  const requestCorrectionPredecessors = useCallback(
+    async (record: MemoryRecord): Promise<void> => {
+      if (predecessorRequestsRef.current.has(record.id)) return;
+      predecessorRequestsRef.current.add(record.id);
+      setPredecessorsLoadingById((prev) => ({ ...prev, [record.id]: true }));
+      try {
+        const response = await fetchCorrectionPredecessorsImpl(record.id);
+        const candidates = verifiedCorrectionPredecessors(response);
+        if (candidates === undefined) {
+          reportClientDiagnostic(
+            "[keiko] memory correction predecessor response rejected (kind=invalid-response)",
+          );
+          predecessorRequestsRef.current.delete(record.id);
+          setRowErrorsById((prev) => ({
+            ...prev,
+            [record.id]: t("memoria.correctionPredecessorInvalid"),
+          }));
+          return;
+        }
+        setPredecessorsById((prev) => new Map(prev).set(record.id, candidates));
+        setRowErrorsById((prev) => {
+          const next = { ...prev };
+          if (candidates.length === 0) {
+            next[record.id] = t("memoria.correctionPredecessorMissing");
+          } else {
+            delete next[record.id];
+          }
+          return next;
+        });
+      } catch (err) {
+        predecessorRequestsRef.current.delete(record.id);
+        setRowErrorsById((prev) => ({ ...prev, [record.id]: formatError(err) }));
+      } finally {
+        setPredecessorsLoadingById((prev) => ({ ...prev, [record.id]: false }));
+      }
+    },
+    [fetchCorrectionPredecessorsImpl, t],
+  );
 
   const clearRowState = useCallback((id: MemoryId): void => {
     setBusyById((prev) => {
@@ -515,6 +725,12 @@ export function ReviewQueue({
       const neighbor = records[idx + 1] ?? records[idx - 1];
       pendingFocusRef.current = neighbor !== undefined ? neighbor.id : "";
       setRecords((prev) => prev.filter((r) => r.id !== id));
+      setPredecessorsById((prev) => {
+        const next = new Map(prev);
+        next.delete(id);
+        return next;
+      });
+      predecessorRequestsRef.current.delete(id);
       clearRowState(id);
     },
     [records, clearRowState],
@@ -540,7 +756,7 @@ export function ReviewQueue({
     async (
       record: MemoryRecord,
       action: "accept" | "reject" | "archive",
-      bodyOverride?: string,
+      acceptOptions: AcceptMemoryProposalOptions = {},
     ): Promise<void> => {
       const id = record.id as MemoryId;
       setBusyById((prev) => ({ ...prev, [id]: action }));
@@ -552,10 +768,10 @@ export function ReviewQueue({
 
       try {
         if (action === "accept") {
-          if (bodyOverride === undefined) {
+          if (!acceptsOptions(acceptOptions)) {
             await acceptImpl(id);
           } else {
-            await acceptImpl(id, { bodyOverride });
+            await acceptImpl(id, acceptOptions);
           }
         } else if (action === "archive") {
           await archiveImpl(
@@ -643,16 +859,21 @@ export function ReviewQueue({
           <ReviewRow
             key={record.id}
             record={record}
+            predecessors={predecessorsById.get(record.id)}
+            predecessorsLoading={predecessorsLoadingById[record.id] === true}
             busyAction={busyById[record.id] ?? null}
             rowError={rowErrorsById[record.id] ?? null}
-            onAccept={(row, bodyOverride) => {
-              void runRowAction(row, "accept", bodyOverride);
+            onAccept={(row, options) => {
+              void runRowAction(row, "accept", options);
             }}
             onReject={(row) => {
               void runRowAction(row, "reject");
             }}
             onArchive={(row) => {
               void runRowAction(row, "archive");
+            }}
+            onRequestPredecessors={(row) => {
+              void requestCorrectionPredecessors(row);
             }}
             onOpenDetail={onOpenDetail}
             t={t}

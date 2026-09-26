@@ -89,6 +89,22 @@ describe("QiRunCard", () => {
     expect(screen.getByText("Rejected login")).toBeInTheDocument();
   });
 
+  it("shows degraded terminal truth and the persisted model-stage reason in run detail", async () => {
+    const detail: QualityIntelligenceUiRunDetail = {
+      ...makeDetail("qi-run-degraded", [makeCandidate("tc-1", "Baseline case")]),
+      degraded: true,
+      reasonSummary: "qi-judge-unavailable",
+    };
+
+    render(<QiRunCard runId={detail.id} fetchDetailImpl={fetchOk(detail)} />);
+
+    const notice = await screen.findByTestId("qi-run-degraded");
+    expect(notice).toHaveTextContent(/degraded model processing/i);
+    expect(notice).toHaveTextContent("qi-judge-unavailable");
+    expect(screen.getByText("Degraded")).toBeInTheDocument();
+    expect(screen.queryByText("Succeeded")).not.toBeInTheDocument();
+  });
+
   it("requests detail for the runId passed in", async () => {
     const impl = fetchOk(makeDetail("qi-run-zzzz9999", []));
     render(<QiRunCard runId="qi-run-zzzz9999" fetchDetailImpl={impl} />);

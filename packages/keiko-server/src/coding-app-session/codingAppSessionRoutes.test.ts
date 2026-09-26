@@ -13,6 +13,7 @@ import {
 import {
   handleCodingAppSessionChannelSnapshot,
   handleCodingAppSessionChannelStream,
+  handleCodingAppSessionLocalSession,
   handleCodingAppSessionPair,
   handleCodingAppSessionRotate,
   handleCodingAppSessionSignOut,
@@ -21,6 +22,11 @@ import {
 import { createCodingAppSessionChannel, type CodingAppSessionChannel } from "./sessionChannel.js";
 import { APP_SESSION_COOKIE_NAME } from "./sessionCookie.js";
 import { createSessionRegistry } from "./sessionRegistry.js";
+import { createBufferedServerLogSink, type ServerLogEvent } from "../observability/server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 const CANARY = { kind: "probe", body: "handler-canary" } as const;
 
@@ -34,6 +40,7 @@ function fakeReq(cookie?: string): IncomingMessage {
 
 function ctx(cookie?: string): RouteContext {
   return {
+    correlationId: undefined,
     req: fakeReq(cookie),
     res: {} as ServerResponse,
     params: {},
@@ -85,6 +92,61 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
     expect(result.headers).toBeUndefined();
   });
 
+  it("local-session without a composed channel acknowledges without issuing a cookie", () => {
+    const result = handleCodingAppSessionLocalSession(ctx(), deps());
+    expect(result.headers).toBeUndefined();
+  });
+
+  it("local-session with launcher authority issues the app-session cookie", () => {
+    const channel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const setCookie = handleCodingAppSessionLocalSession(ctx(), deps(channel)).headers?.[
+      "Set-Cookie"
+    ];
+
+    expect(setCookie).toHaveLength(11);
+    expect(String(setCookie)).toContain(APP_SESSION_COOKIE_NAME);
+    expect(String(setCookie)).toContain("Path=/api/coding-workbench");
+    expect(channel.sessionCount()).toBe(1);
+  });
+
+  // Reviewer thread (PR #3506): pin the two cookie-value classes at the ROUTE handler.
+  // A forged/malformed cookie must not authenticate — the handler mints a fresh session under the
+  // pairing authority. A valid cookie must not mint anything — the handler leaves the response
+  // header-free and the session count unchanged.
+  it("local-session with a forged cookie value issues a fresh app-session cookie", () => {
+    const channel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const before = channel.sessionCount();
+    const setCookie = handleCodingAppSessionLocalSession(
+      ctx(`${APP_SESSION_COOKIE_NAME}=sess_000000000000000000000000.forged`),
+      deps(channel),
+    ).headers?.["Set-Cookie"];
+
+    expect(setCookie).toHaveLength(11);
+    expect(String(setCookie)).toContain(APP_SESSION_COOKIE_NAME);
+    expect(channel.sessionCount()).toBe(before + 1);
+  });
+
+  it("local-session with a valid cookie stays active and issues no fresh Set-Cookie", () => {
+    const channel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const issued = handleCodingAppSessionLocalSession(ctx(), deps(channel)).headers?.["Set-Cookie"];
+    const cookie = String(issued).split(";")[0] ?? "";
+    const before = channel.sessionCount();
+
+    const result = handleCodingAppSessionLocalSession(ctx(cookie), deps(channel));
+
+    expect(result.headers).toBeUndefined();
+    expect(channel.sessionCount()).toBe(before);
+  });
+
   it("rotate without a composed channel acknowledges without a cookie", () => {
     expect(handleCodingAppSessionRotate(ctx(), deps()).headers).toBeUndefined();
   });
@@ -94,7 +156,8 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
     const setCookie = handleCodingAppSessionRotate(ctx(cookie), deps(channel)).headers?.[
       "Set-Cookie"
     ];
-    expect(setCookie).toHaveLength(10);
+    expect(setCookie).toHaveLength(11);
+    expect(String(setCookie)).toContain("Path=/api/task-workspaces;");
     expect(String(setCookie)).toContain(APP_SESSION_COOKIE_NAME);
     expect(String(setCookie)).toContain("Path=/api/coding-workbench");
     expect(String(setCookie)).toContain("Path=/api/git");
@@ -112,7 +175,8 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
     const setCookie = handleCodingAppSessionSignOut(ctx(cookie), deps(channel)).headers?.[
       "Set-Cookie"
     ];
-    expect(setCookie).toHaveLength(10);
+    expect(setCookie).toHaveLength(11);
+    expect(String(setCookie)).toContain("Path=/api/task-workspaces;");
     expect(String(setCookie)).toContain("Path=/api/editor/local-history");
     expect(String(setCookie)).toContain("Path=/api/runs");
     expect(String(setCookie)).toContain("Path=/api/workspaces");
@@ -134,10 +198,151 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
       destroyed: false,
     } as unknown as ServerResponse;
     handleCodingAppSessionChannelStream(
-      { req: fakeReq(), res, params: {}, url: new URL("http://127.0.0.1/") },
+      {
+        correlationId: undefined,
+        req: fakeReq(),
+        res,
+        params: {},
+        url: new URL("http://127.0.0.1/"),
+      },
       deps(),
     );
     expect(writes[0]).toContain('"content":null');
+  });
+});
+
+describe("app-session lifecycle lines (F65)", () => {
+  function logged(channel: CodingAppSessionChannel): {
+    readonly deps: UiHandlerDeps;
+    readonly events: readonly ServerLogEvent[];
+  } {
+    const activityLog = createBufferedServerLogSink();
+    return {
+      deps: { codingAppSessionChannel: channel, activityLog } as unknown as UiHandlerDeps,
+      events: activityLog.events,
+    };
+  }
+
+  function pairingRequest(body: unknown): RouteContext {
+    const req = Object.assign(Readable.from([Buffer.from(JSON.stringify(body))]), {
+      headers: {},
+      socket: {},
+    });
+    return { ...ctx(), correlationId: "pair-correlation", req: req as unknown as IncomingMessage };
+  }
+
+  it("logs a pairing that issued a session, correlated and body-free", async () => {
+    const channel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+      contentSource: createStaticContentSource(CANARY),
+    });
+    const { deps: logDeps, events } = logged(channel);
+
+    await handleCodingAppSessionPair(pairingRequest(fakePairingRequestBody()), logDeps);
+
+    expect(events).toEqual([
+      {
+        level: "info",
+        category: "http",
+        op: "coding-app-session.paired",
+        correlationId: "pair-correlation",
+        extra: { completeness: "complete", loss: "none" },
+      },
+    ]);
+    expectActivityLogProof(
+      "coding-app-session.paired.request",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+  });
+
+  it("logs only a local-session issue, correlated and body-free", () => {
+    const channel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const { deps: logDeps, events } = logged(channel);
+
+    handleCodingAppSessionLocalSession({ ...ctx(), correlationId: "local-correlation" }, logDeps);
+
+    expect(events).toEqual([
+      {
+        level: "info",
+        category: "http",
+        op: "coding-app-session.local-session.issued",
+        correlationId: "local-correlation",
+        extra: { completeness: "complete", loss: "none" },
+      },
+    ]);
+    expectActivityLogProof(
+      "coding-app-session.local-session.issued.request",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+  });
+
+  it("does not log an already active local session", () => {
+    const channel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const issued = handleCodingAppSessionLocalSession(ctx(), deps(channel)).headers?.["Set-Cookie"];
+    const { deps: logDeps, events } = logged(channel);
+
+    handleCodingAppSessionLocalSession(ctx(String(issued).split(";")[0] ?? ""), logDeps);
+
+    expect(events).toEqual([]);
+    expect(channel.sessionCount()).toBe(1);
+  });
+
+  it("writes no line of its own for a denied pairing; denials stay aggregated (KEIKO-0838)", async () => {
+    const { channel } = pairedChannel();
+    const { deps: logDeps, events } = logged(channel);
+
+    await handleCodingAppSessionPair(pairingRequest({ requestId: "forged" }), logDeps);
+
+    expect(events).toEqual([]);
+  });
+
+  it("logs a rotation and a sign-out", () => {
+    const { channel, cookie } = pairedChannel();
+    const { deps: logDeps, events } = logged(channel);
+
+    const issued = handleCodingAppSessionRotate(ctx(cookie), logDeps).headers?.["Set-Cookie"];
+    // The rotation invalidated the paired cookie, so the sign-out presents the one it issued.
+    handleCodingAppSessionSignOut(ctx(String(issued).split(";")[0] ?? ""), logDeps);
+
+    expect(events.map((event) => event.op)).toEqual([
+      "coding-app-session.rotated",
+      "coding-app-session.signed-out",
+    ]);
+    expectActivityLogProof(
+      "coding-app-session.rotated.request",
+      formatActivityLogProofLine(events[0] ?? {}),
+    );
+    expectActivityLogProof(
+      "coding-app-session.signed-out.request",
+      formatActivityLogProofLine(events[1] ?? {}),
+    );
+  });
+
+  // PR #3452 review: the log never shows a sign-out that did not happen. An absent or unknown
+  // cookie, a repeated sign-out from a stale tab and an unconfigured channel revoke nothing.
+  it("logs a sign-out only when it revoked a session", () => {
+    const { channel, cookie } = pairedChannel();
+    const { deps: logDeps, events } = logged(channel);
+
+    handleCodingAppSessionSignOut(ctx(), logDeps);
+    handleCodingAppSessionSignOut(ctx(`${APP_SESSION_COOKIE_NAME}=sess_unknown.token`), logDeps);
+    handleCodingAppSessionSignOut(ctx(cookie), logDeps);
+    handleCodingAppSessionSignOut(ctx(cookie), logDeps);
+    const unconfigured = createBufferedServerLogSink();
+    handleCodingAppSessionSignOut(ctx(cookie), {
+      activityLog: unconfigured,
+    } as unknown as UiHandlerDeps);
+
+    expect(events.map((event) => event.op)).toEqual(["coding-app-session.signed-out"]);
+    expect(unconfigured.events).toEqual([]);
+    expect(channel.sessionCount()).toBe(0);
   });
 });
 

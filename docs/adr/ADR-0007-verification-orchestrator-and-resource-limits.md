@@ -23,7 +23,9 @@ create a second spawn implementation. This is a hard constraint: changes to `src
 `src/harness/**`, `src/workspace/**`, or `src/gateway/**` are not required for verification itself.
 
 **Resource limits must be honest.** Wall-time and output-size are genuinely enforced by #6
-(`SandboxPolicy.defaultTimeoutMs` and `maxOutputBytes`). Memory is best-effort and Linux-only.
+(`SandboxPolicy.defaultTimeoutMs` and `maxOutputBytes`). A requested memory ceiling is enforced
+only when the complete spawned process tree can be sampled and terminated; otherwise the step is
+refused before spawn.
 Network is documented-not-OS-enforced in Wave 1, exactly as ADR-0006 D2 Dimension 4 states. The
 layer records all four dimensions on every result with an honest `enforced` flag rather than
 claiming guarantees it does not have. Overclaiming enforcement in a regulated context is a
@@ -79,7 +81,7 @@ Per-command limits map to the #6 boundary:
 |---|---|---|
 | `wall-time` | `runCommand` `timeoutMs` (← step `limits.wallTimeMs`) | enforced — #6 SIGTERM→SIGKILL |
 | `output-size` | `SandboxPolicy.maxOutputBytes` (← step `limits.maxOutputBytes`) | enforced — #6 kills on flood, sets `truncated` |
-| `memory` | `ResourceMonitor` + `AbortController` (D3) | best-effort: enforced only on Linux with a ceiling set |
+| `memory` | `ResourceMonitor` + `AbortController` (D3) | enforced only with complete process-tree sampling; otherwise fail closed |
 | `network` | `SandboxPolicy.network` (← step `limits.network`, default `"none"`) | NOT OS-enforced (ADR-0006 D2 Dim. 4) |
 
 Every `VerificationResult.appliedLimits` records all four dimensions, always, with an honest
@@ -114,15 +116,13 @@ finally { stop?.(); }
 reject, denied-before-spawn (where `stop` is never set and `stop?.()` is a no-op), and a throwing
 classify. There is no path on which the interval leaks.
 
-`ResourceMonitor` is a seam: `interface ResourceMonitor { watch(pid: number | undefined, maxBytes:
-number | undefined, onBreach: () => void): () => void }`. `nodeResourceMonitor` polls
-`/proc/<pid>/status` (`VmRSS` kB, page-size-independent) on Linux at a 250 ms `unref`'d interval
-and calls `onBreach` once when RSS exceeds `maxBytes`. `/proc/<pid>/status` is a system path — NOT
-workspace content — so it is read with raw `node:fs` (read-only, bounded, no secrets), not through
-`WorkspaceFs`. On non-Linux, or when `maxBytes` is undefined, `watch` returns a documented no-op
-unwatch and the dimension is recorded `enforced:false`. Tests inject a fake monitor that fires
-`onBreach` deterministically; the real `/proc` sampler has a focused unit test that is skipped when
-`process.platform !== "linux"` or `/proc` is absent.
+`ResourceMonitor` is a seam: it attests whether it can enforce complete process-tree memory and
+provides `watch(pid, maxBytes, onBreach)`. `nodeResourceMonitor` recursively follows Linux
+`/proc/<pid>/task/<pid>/children`, aggregates every live descendant's `VmRSS` (kB,
+page-size-independent), terminates descendants before the root on breach, then calls `onBreach`.
+Those are system paths — NOT workspace content — so they are read with raw `node:fs` (read-only,
+bounded, no secrets), not through `WorkspaceFs`. If that complete-tree capability is unavailable,
+a requested `maxMemoryBytes` is denied before spawning and `appliedLimits.memory.enforced` is false.
 
 ### D4 — Missing scripts become a visible `skipped` step, never a silent omission
 
@@ -183,11 +183,10 @@ verification layer's ability to run detected project gates.
 
 ### Negative (honest Wave-1 limitations)
 
-- **Memory enforcement is best-effort and Linux-only.** On macOS and Windows, or when no ceiling is
-  set, the memory dimension is `enforced:false`. A runaway test process is bounded by wall-time and
-  output-size, not by RSS, on those platforms. The `/proc` sampler also samples at 250 ms, so a
-  process that allocates and exits within one interval can momentarily exceed the ceiling
-  undetected. This is documented, not papered over.
+- **Memory ceilings require Linux process-tree visibility.** On a host without it, requesting
+  `maxMemoryBytes` denies the step rather than running an unenforced budget. Sampling remains
+  periodic, so a process can momentarily exceed a ceiling before the next sample; once observed,
+  the monitor terminates the complete discovered tree and the report is `resource-exceeded`.
 - **Network is not OS-isolated.** Inherited from ADR-0006 D2 Dimension 4: a verification command
   (for example, a repository test that opens a socket) can make outbound connections. The
   mitigation is the #6 env allowlist (no credential reaches the child) and command allowlist, not OS

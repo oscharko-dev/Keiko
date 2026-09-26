@@ -4,7 +4,7 @@
 // instanceof Error / CodedHttpError with the concrete subclass name.
 
 import { describe, expect, it } from "vitest";
-import { CodedHttpError } from "@oscharko-dev/keiko-contracts";
+import { CodedHttpError } from "@oscharko-dev/keiko-contracts/runtime/http-error";
 import {
   COMMAND_RUNNER_ERROR_CODES,
   CommandRunnerError,

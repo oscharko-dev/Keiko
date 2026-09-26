@@ -7,9 +7,6 @@
  * structural and injectable so lifecycle, pressure, and diagnostics are testable without Monaco.
  */
 
-export type EditorModelDisposalReason =
-  "count-budget" | "byte-budget" | "root-disposed" | "shutdown" | "identity-reused";
-
 export interface RetainedEditorUri {
   toString(): string;
 }
@@ -20,6 +17,58 @@ export interface RetainedEditorModel {
   setValue?(text: string): void;
   dispose(): void;
   isDisposed?(): boolean;
+  // Undo-preserving programmatic writes (#3070): the registry replaces retained content through
+  // the edit-operations API so the model's undo history survives; `setValue` (which clears that
+  // history) remains only the fallback for models without it.
+  getFullModelRange?(): RetainedEditorModelRange;
+  pushEditOperations?(
+    beforeCursorState: null,
+    edits: { readonly range: RetainedEditorModelRange; readonly text: string }[],
+    cursorStateComputer: () => null,
+  ): unknown;
+  pushStackElement?(): void;
+}
+
+export interface RetainedEditorModelRange {
+  readonly startLineNumber: number;
+  readonly startColumn: number;
+  readonly endLineNumber: number;
+  readonly endColumn: number;
+}
+
+// The minimal structural surface an undo-preserving whole-model write needs. Both the retained
+// registry models and the live editor's `getModel()` view satisfy it, so the controlled value
+// sync and the registry share one implementation.
+export interface UndoPreservingWritableModel {
+  getValue(): string;
+  setValue?(text: string): void;
+  getFullModelRange?(): RetainedEditorModelRange;
+  pushEditOperations?(
+    beforeCursorState: null,
+    edits: { readonly range: RetainedEditorModelRange; readonly text: string }[],
+    cursorStateComputer: () => null,
+  ): unknown;
+  pushStackElement?(): void;
+}
+
+/**
+ * Replace a model's content while preserving its undo history: one undo-stop pair around one
+ * whole-model edit operation, so a single keyboard undo returns to the pre-write buffer
+ * (#1394 pin, #3070). `setValue` — which clears the undo history — remains only the fallback
+ * for models without the edit-operations API.
+ */
+export function writeRetainedEditorModelValue(
+  model: UndoPreservingWritableModel,
+  text: string,
+): void {
+  const fullRange = model.getFullModelRange?.();
+  if (fullRange !== undefined && model.pushEditOperations !== undefined) {
+    model.pushStackElement?.();
+    model.pushEditOperations(null, [{ range: fullRange, text }], () => null);
+    model.pushStackElement?.();
+  } else {
+    model.setValue?.(text);
+  }
 }
 
 export interface RetainedEditorModelNamespace {
@@ -106,7 +155,6 @@ interface RegistryEntry {
   degraded: boolean;
   protection: EditorModelProtection;
   disposed: boolean;
-  disposalReason: EditorModelDisposalReason | null;
 }
 
 const DEFAULT_COUNT_BUDGET = 16;
@@ -253,21 +301,17 @@ export class EditorModelRegistry {
     this.enforceBudgets();
   }
 
-  disposeRoot(
-    rootKey: string,
-    reason: EditorModelDisposalReason = "root-disposed",
-    force = false,
-  ): void {
+  disposeRoot(rootKey: string, force = false): void {
     for (const entry of this.entries.values()) {
       if (entry.rootKey === rootKey && (force || !protectedEntry(entry))) {
-        this.disposeEntry(entry, reason);
+        this.disposeEntry(entry);
       }
     }
   }
 
-  disposeAll(reason: EditorModelDisposalReason = "shutdown"): void {
+  disposeAll(): void {
     for (const entry of this.entries.values()) {
-      if (entry.attachmentCount === 0) this.disposeEntry(entry, reason);
+      if (entry.attachmentCount === 0) this.disposeEntry(entry);
     }
   }
 
@@ -310,7 +354,7 @@ export class EditorModelRegistry {
     }
     const model =
       namespaceModel ?? input.namespace.createModel(input.text, input.language, input.uri);
-    if (model.getValue() !== input.text) model.setValue?.(input.text);
+    if (model.getValue() !== input.text) writeRetainedEditorModelValue(model, input.text);
     const entry = this.createEntry(identity, input, model);
     this.entries.set(identity, entry);
     return entry;
@@ -334,7 +378,6 @@ export class EditorModelRegistry {
       degraded: input.degraded,
       protection: input.protection,
       disposed: false,
-      disposalReason: null,
     };
   }
 
@@ -343,7 +386,7 @@ export class EditorModelRegistry {
       (entry) => entry.identity !== identity && entry.uriString === uriString,
     );
     if (conflicts.some(protectedEntry)) throw new EditorModelOwnershipError();
-    for (const conflict of conflicts) this.disposeEntry(conflict, "identity-reused");
+    for (const conflict of conflicts) this.disposeEntry(conflict);
   }
 
   private entryForProtectionUpdate(
@@ -364,7 +407,11 @@ export class EditorModelRegistry {
       !preserveDirtyBuffer &&
       entry.model.getValue() !== input.text
     ) {
-      entry.model.setValue?.(input.text);
+      // Re-attach with newer host content (e.g. the editor remounting after an accepted agent
+      // review, #3070): the retained model's undo history is the whole point of retention, so
+      // the catch-up write must stay undoable — `setValue` here silently discarded the stack
+      // and a keyboard undo after the accept did nothing.
+      writeRetainedEditorModelValue(entry.model, input.text);
     }
   }
 
@@ -434,16 +481,13 @@ export class EditorModelRegistry {
         .filter((entry) => !protectedEntry(entry))
         .sort(compareEvictionCandidates)[0];
       if (candidate === undefined) return;
-      const reason =
-        this.liveEntries().length > this.options.countBudget ? "count-budget" : "byte-budget";
-      this.disposeEntry(candidate, reason);
+      this.disposeEntry(candidate);
     }
   }
 
-  private disposeEntry(entry: RegistryEntry, reason: EditorModelDisposalReason): void {
+  private disposeEntry(entry: RegistryEntry): void {
     if (entry.disposed) return;
     entry.disposed = true;
-    entry.disposalReason = reason;
     this.entries.delete(entry.identity);
     if (!modelDisposed(entry.model)) entry.model.dispose();
   }
@@ -478,22 +522,16 @@ export function configureEditorModelRegistry(options: Partial<EditorModelRegistr
 // Releases every currently unattached (zero attachment count) model owned by `rootKey`. Call this
 // when a workspace root is closed/replaced so retained-but-inactive models do not linger until an
 // unrelated budget eviction happens to reclaim them.
-export function disposeEditorModelRegistryRoot(
-  rootKey: string,
-  reason: EditorModelDisposalReason = "root-disposed",
-  force = false,
-): void {
-  sharedRegistry.disposeRoot(rootKey, reason, force);
+export function disposeEditorModelRegistryRoot(rootKey: string, force = false): void {
+  sharedRegistry.disposeRoot(rootKey, force);
 }
 
 // Releases every currently unattached model regardless of root at final editor-window shutdown.
 // Root switches use `disposeEditorModelRegistryRoot` so sibling workspace ownership remains intact.
-export function disposeAllUnattachedEditorModels(
-  reason: EditorModelDisposalReason = "root-disposed",
-): void {
-  sharedRegistry.disposeAll(reason);
+export function disposeAllUnattachedEditorModels(): void {
+  sharedRegistry.disposeAll();
 }
 
 export function resetEditorModelRegistryForTests(): void {
-  sharedRegistry.disposeAll("shutdown");
+  sharedRegistry.disposeAll();
 }

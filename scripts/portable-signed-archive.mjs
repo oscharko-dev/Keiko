@@ -1,10 +1,17 @@
-import { createHash } from "node:crypto";
-import { Buffer } from "node:buffer";
-import { lstatSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, posix, relative, resolve } from "node:path";
 
-import { hashDirectoryTree, portableTargetByName, sha256File } from "./portable-runtime.mjs";
+import {
+  hashDirectoryTree,
+  portableTargetByName,
+  sha256File,
+  windowsGenerationBindingValidationFailures,
+  WINDOWS_GENERATION_STAGING_RELATIVE_PATH,
+  WINDOWS_PORTABLE_MANIFEST_SCHEMA_VERSION,
+} from "./portable-runtime.mjs";
 import { writeRuntimeActivationManifest } from "./runtime-activation-manifest.mjs";
+import { withCyclonedxSerialNumber } from "./lib/cyclonedx-serial-number.mjs";
+import { sha256 } from "./lib/digest.mjs";
 
 export class PortableSignedArchiveError extends Error {}
 
@@ -12,21 +19,38 @@ function fail(message) {
   throw new PortableSignedArchiveError(`portable-signed-archive: ${message}`);
 }
 
-function sha256Text(text) {
-  return createHash("sha256").update(Buffer.from(text, "utf8")).digest("hex");
-}
-
 function portablePath(root, path) {
   return relative(root, path).replaceAll("\\", "/");
 }
 
-export function portableResourceRoot(stageRoot, platformTarget) {
+export function portableResourceRoot(stageRoot, platformTarget, manifest) {
   const target = portableTargetByName(platformTarget);
   if (target === undefined) fail("manifest target is unsupported");
   const payloadRoot = join(stageRoot, "payload", "Keiko");
-  return target.nodePlatform === "darwin"
-    ? join(payloadRoot, "Keiko.app", "Contents", "Resources")
-    : payloadRoot;
+  if (target.nodePlatform === "darwin") {
+    return join(payloadRoot, "Keiko.app", "Contents", "Resources");
+  }
+  const generationRoot = windowsGenerationResourceRoot(payloadRoot, manifest);
+  if (generationRoot !== undefined) return generationRoot;
+  const stagingRoot = join(payloadRoot, ...WINDOWS_GENERATION_STAGING_RELATIVE_PATH.split("/"));
+  return existsSync(stagingRoot) ? stagingRoot : payloadRoot;
+}
+
+function windowsGenerationResourceRoot(payloadRoot, manifest) {
+  const generationRoot = manifest?.windowsGeneration?.resourceRoot;
+  if (typeof generationRoot === "string") {
+    if (
+      manifest.schemaVersion !== WINDOWS_PORTABLE_MANIFEST_SCHEMA_VERSION ||
+      windowsGenerationBindingValidationFailures(manifest.windowsGeneration).length > 0
+    ) {
+      fail("Windows generation binding is invalid");
+    }
+    return containedResourcePath(payloadRoot, generationRoot);
+  }
+  if (manifest?.schemaVersion === WINDOWS_PORTABLE_MANIFEST_SCHEMA_VERSION) {
+    fail("Windows generation binding is invalid");
+  }
+  return undefined;
 }
 
 function treeSize(root) {
@@ -82,7 +106,7 @@ function rebindNativeHelper(stageRoot, helper, resourceRoot) {
   if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
     fail("native helper is not a regular single-link file");
   }
-  helper.shippedSha256 = sha256Bytes(readFileSync(executable));
+  helper.shippedSha256 = sha256(readFileSync(executable));
   helper.sizeBytes = entry.size;
   const sbomPath = join(stageRoot, "evidence", "sbom.cdx.json");
   let sbom;
@@ -96,7 +120,7 @@ function rebindNativeHelper(stageRoot, helper, resourceRoot) {
   );
   if (matches.length !== 1) fail("native helper CycloneDX component is missing or ambiguous");
   matches[0].hashes = [{ alg: "SHA-256", content: helper.shippedSha256 }];
-  writeFileSync(sbomPath, `${JSON.stringify(sbom, null, 2)}\n`);
+  writeFileSync(sbomPath, `${JSON.stringify(withCyclonedxSerialNumber(sbom), null, 2)}\n`);
 }
 
 function rebindNativeAddon(stageRoot, manifest, resourceRoot) {
@@ -110,7 +134,7 @@ function rebindNativeAddon(stageRoot, manifest, resourceRoot) {
   if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
     fail("native addon is not a regular single-link file");
   }
-  addon.shippedSha256 = sha256Bytes(readFileSync(executable));
+  addon.shippedSha256 = sha256(readFileSync(executable));
   addon.sizeBytes = entry.size;
   const sbomPath = join(stageRoot, "evidence", "sbom.cdx.json");
   let sbom;
@@ -124,11 +148,7 @@ function rebindNativeAddon(stageRoot, manifest, resourceRoot) {
   );
   if (matches.length !== 1) fail("native addon CycloneDX component is missing or ambiguous");
   matches[0].hashes = [{ alg: "SHA-256", content: addon.shippedSha256 }];
-  writeFileSync(sbomPath, `${JSON.stringify(sbom, null, 2)}\n`);
-}
-
-function sha256Bytes(bytes) {
-  return createHash("sha256").update(bytes).digest("hex");
+  writeFileSync(sbomPath, `${JSON.stringify(withCyclonedxSerialNumber(sbom), null, 2)}\n`);
 }
 
 function rebindSidecarExecutable(sidecar, sidecarRoot, resourceRoot) {
@@ -140,8 +160,8 @@ function rebindSidecarExecutable(sidecar, sidecarRoot, resourceRoot) {
   if (executableRelativePath.startsWith("../") || posix.isAbsolute(executableRelativePath)) {
     fail("sidecar executable escapes its payload root");
   }
-  const shippedExecutableSha256 = sha256Bytes(readFileSync(executablePath));
-  const shippedExecutableTreeSha256 = sha256Text(
+  const shippedExecutableSha256 = sha256(readFileSync(executablePath));
+  const shippedExecutableTreeSha256 = sha256(
     `${executableRelativePath}\0${shippedExecutableSha256}\0`,
   );
   rewriteSidecarSbom(sidecar, resourceRoot, shippedExecutableSha256);
@@ -163,7 +183,7 @@ function rewriteSidecarSbom(sidecar, resourceRoot, shippedExecutableSha256) {
   assertSidecarSbomExecutableHash(component, shippedExecutableSha256);
   const text = `${JSON.stringify(sbom, null, 2)}\n`;
   writeFileSync(sbomPath, text);
-  sidecar.sbomEvidence.sha256 = sha256Text(text);
+  sidecar.sbomEvidence.sha256 = sha256(text);
 }
 
 function validatedSidecarSbomComponent(sbom, sidecar) {
@@ -219,7 +239,7 @@ function assertSidecarSbomExecutableHash(component, expectedSha256) {
 }
 
 export function rebindSignedPayload(stageRoot, manifest, platformTarget) {
-  const resourceRoot = portableResourceRoot(stageRoot, platformTarget);
+  const resourceRoot = portableResourceRoot(stageRoot, platformTarget, manifest);
   rebindSidecars(manifest, resourceRoot, true);
   rebindNativeHelpers(stageRoot, manifest, resourceRoot);
   rebindNativeAddon(stageRoot, manifest, resourceRoot);
@@ -251,6 +271,9 @@ function rebindReviewedBinding(manifest, archiveSha256) {
   if (manifest.runtimeQualification !== undefined) {
     binding.runtimeQualification = globalThis.structuredClone(manifest.runtimeQualification);
   }
+  if (manifest.windowsGeneration !== undefined) {
+    binding.windowsGeneration = globalThis.structuredClone(manifest.windowsGeneration);
+  }
 }
 
 export async function rebindExistingSignedArchive(
@@ -265,7 +288,7 @@ export async function rebindExistingSignedArchive(
   const provenanceText = rebindProvenance(stageRoot, manifest, archiveSha256);
   manifest.artifact.sha256 = archiveSha256;
   manifest.artifact.sizeBytes = statSync(archivePath).size;
-  manifest.provenance.provenanceStatementSha256 = sha256Text(provenanceText);
+  manifest.provenance.provenanceStatementSha256 = sha256(provenanceText);
   rebindReviewedBinding(manifest, archiveSha256);
   writeFileSync(
     join(stageRoot, "evidence", "SHA256SUMS.txt"),
@@ -278,7 +301,7 @@ function rebindPayloadForArchive(stageRoot, manifest, platformTarget, options) {
     if (platformTarget === "windows-x64") {
       rebindSignedPayload(stageRoot, manifest, platformTarget);
     } else {
-      const resourceRoot = portableResourceRoot(stageRoot, platformTarget);
+      const resourceRoot = portableResourceRoot(stageRoot, platformTarget, manifest);
       rebindSidecars(manifest, resourceRoot, false);
       manifest.provenance.packagedAppTreeSha256 = hashDirectoryTree(
         containedResourcePath(resourceRoot, "app"),
@@ -311,6 +334,9 @@ function rebindProvenance(stageRoot, manifest, archiveSha256) {
       path: manifest.runtimeQualification.path,
       sha256: manifest.runtimeQualification.sha256,
     };
+  }
+  if (manifest.windowsGeneration !== undefined) {
+    provenance.windowsGeneration = globalThis.structuredClone(manifest.windowsGeneration);
   }
   const provenanceText = `${JSON.stringify(provenance)}\n`;
   writeFileSync(provenancePath, provenanceText);

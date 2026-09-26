@@ -5,14 +5,14 @@
 
 import { describe, expect, it } from "vitest";
 
-import {
-  estimateTokens,
-  validateContextCompactionRecord,
-  type ContextAssumption,
-  type ContextCompactionRecord,
-  type ContextPreservedFact,
-  type ContextProvenanceRef,
+import type {
+  ContextAssumption,
+  ContextCompactionRecord,
+  ContextPreservedFact,
+  ContextProvenanceRef,
 } from "@oscharko-dev/keiko-contracts";
+import { estimateTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { validateContextCompactionRecord } from "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation";
 
 import { allocateContext, type ContextLaneInput } from "./allocator.js";
 import { DEFAULT_CONTEXT_BUDGET } from "./defaults.js";
@@ -100,6 +100,7 @@ describe("buildCompactionRecords — accounting", () => {
     expect(records).toHaveLength(1);
     const record = firstRecord(records);
     expect(record.laneId).toBe("repo-evidence");
+    expect(record.reason).toBe("drop-lowest-score");
     expect(record.itemsBefore).toBe(3);
     expect(record.itemsAfter).toBe(2);
     const unitTokens = estimateTokens(bulk("z ", 200));

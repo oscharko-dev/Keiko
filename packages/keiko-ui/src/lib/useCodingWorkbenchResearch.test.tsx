@@ -9,11 +9,23 @@ import {
   useCodingWorkbenchResearch,
   type UseCodingWorkbenchResearchInput,
 } from "./useCodingWorkbenchResearch";
+import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import {
+  redeemCodingAppSessionPairingNavigation,
+  type CodingAppSessionPairingSeams,
+} from "./coding-app-session-client";
+import { ApiError } from "./api";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
+import {
+  fanOutClientDiagnostic,
+  resetClientDiagnosticPostStateForTests,
+} from "./install-client-diagnostics";
 
 const getResearchMock = vi.hoisted(() => vi.fn());
 const pairingSettledMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./coding-app-session-client", () => ({
+vi.mock("./coding-app-session-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./coding-app-session-client")>()),
   codingAppSessionPairingSettled: pairingSettledMock,
 }));
 
@@ -94,10 +106,40 @@ describe("useCodingWorkbenchResearch", () => {
     expect(getResearchMock.mock.calls[0]?.[0]).toBe("run-1");
   });
 
+  // Workbench audit, 2026-09-03: before `retry`, a transient failure while a network-egress approval
+  // was open left the operator stuck on "unavailable" forever — nothing else re-triggers a fetch
+  // while runId/revision/permissionRequestId all stay the same during that one decision.
+  it("re-reads on demand via retry() without any input changing", async () => {
+    getResearchMock.mockRejectedValueOnce(new Error("transient"));
+    getResearchMock.mockResolvedValueOnce(active());
+
+    const { result } = renderHook(() => useCodingWorkbenchResearch(RUN));
+    await waitFor(() => {
+      expect(result.current.status).toBe("unavailable");
+    });
+    expect(getResearchMock).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      result.current.retry();
+    });
+    expect(result.current.status).toBe("loading");
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("ready");
+    });
+    expect(result.current.ask).toEqual(PENDING);
+    expect(getResearchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("stays idle with no run", () => {
     const withoutRun = renderHook(() => useCodingWorkbenchResearch({ ...RUN, runId: undefined }));
 
-    expect(withoutRun.result.current).toEqual({ status: "idle", ask: null, grant: null });
+    expect(withoutRun.result.current).toEqual({
+      status: "idle",
+      ask: null,
+      grant: null,
+      retry: expect.any(Function),
+    });
     expect(getResearchMock).not.toHaveBeenCalled();
   });
 
@@ -113,6 +155,50 @@ describe("useCodingWorkbenchResearch", () => {
     expect(result.current.grant).toBeNull();
   });
 
+  // #3381 review: the channel read and the runtime snapshot advance independently, so a read
+  // issued while the card was deciding P1 can be answered with the P2 ask the server has moved on
+  // to. Published under P1's id it renders P2's host and request line beside P1's approve/deny
+  // controls — the input never changed, so the hook's own input scoping cannot see it.
+  it("reports unavailable when the channel answers with a different request's ask", async () => {
+    getResearchMock.mockResolvedValue({
+      session: "active",
+      pending: { ...PENDING, requestId: "research-approval-2", host: "other.example.org" },
+      grant: GRANT,
+    });
+
+    const { result } = renderHook(() => useCodingWorkbenchResearch(RUN));
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("unavailable");
+    });
+    // The grant travels in the same payload as the mismatched ask, so it is no more trustworthy
+    // evidence for this decision than the ask is.
+    expect(result.current.ask).toBeNull();
+    expect(result.current.grant).toBeNull();
+  });
+
+  it("reports unavailable when a retry answers with a newer request's ask", async () => {
+    getResearchMock.mockResolvedValueOnce(active());
+    getResearchMock.mockResolvedValueOnce({
+      session: "active",
+      pending: { ...PENDING, requestId: "research-approval-3" },
+    });
+
+    const { result } = renderHook(() => useCodingWorkbenchResearch(RUN));
+    await waitFor(() => {
+      expect(result.current.ask).toEqual(PENDING);
+    });
+
+    act(() => {
+      result.current.retry();
+    });
+
+    await waitFor(() => {
+      expect(result.current.status).toBe("unavailable");
+    });
+    expect(result.current.ask).toBeNull();
+  });
+
   it("reports unavailable when the read fails, so the panel never implies there is no destination", async () => {
     getResearchMock.mockRejectedValue(new Error("network"));
 
@@ -123,7 +209,49 @@ describe("useCodingWorkbenchResearch", () => {
     });
     // The whole state must clear: a retained ask would leave a stale destination on screen while
     // the panel claims the read failed.
-    expect(result.current).toEqual({ status: "unavailable", ask: null, grant: null });
+    expect(result.current).toEqual({
+      status: "unavailable",
+      ask: null,
+      grant: null,
+      retry: expect.any(Function),
+    });
+  });
+
+  // Wave 5 follow-up (epic #3233) — the fatal-flaw fix: a real caught `ApiError` must carry its
+  // correlation id all the way onto the `POST /api/diagnostics/client` wire body, through
+  // `reportClientDiagnostic`'s structured second argument and `install-client-diagnostics.ts`'s
+  // transport, not just through a mock standing in for either. Installing the REAL transport (not a
+  // spy on `reportClientDiagnostic`) is what makes this end-to-end: it fails if the wiring line in
+  // `useCodingWorkbenchResearch.ts`'s catch block is ever removed, same as it would fail if
+  // `clientDiagnosticPostBody` stopped forwarding a valid id.
+  describe("correlationId wiring to the diagnostic ingest POST", () => {
+    afterEach(() => {
+      resetClientDiagnosticWriter();
+      resetClientDiagnosticPostStateForTests();
+      vi.unstubAllGlobals();
+    });
+
+    it("carries the failed request's correlationId onto the diagnostic ingest POST body", async () => {
+      const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+      vi.stubGlobal("fetch", fetchMock);
+      setClientDiagnosticWriter(fanOutClientDiagnostic);
+      const failure = new ApiError("INTERNAL", "research channel unavailable", 502);
+      failure.correlationId = "req-research-000001";
+      getResearchMock.mockRejectedValue(failure);
+
+      const { result } = renderHook(() => useCodingWorkbenchResearch(RUN));
+
+      await waitFor(() => {
+        expect(result.current.status).toBe("unavailable");
+      });
+      await waitFor(() => {
+        expect(fetchMock).toHaveBeenCalled();
+      });
+      const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(path).toBe("/api/diagnostics/client");
+      const body = JSON.parse(init.body as string) as Record<string, unknown>;
+      expect(body["correlationId"]).toBe("req-research-000001");
+    });
   });
 
   it("re-reads when a new ask or runtime revision replaces current research truth", async () => {
@@ -142,7 +270,12 @@ describe("useCodingWorkbenchResearch", () => {
     getResearchMock.mockReturnValue(replacement.promise);
     rerender({ ...RUN, revision: 5, permissionRequestId: "research-approval-2" });
 
-    expect(result.current).toEqual({ status: "loading", ask: null, grant: null });
+    expect(result.current).toEqual({
+      status: "loading",
+      ask: null,
+      grant: null,
+      retry: expect.any(Function),
+    });
     await act(async () => {
       replacement.resolve({
         session: "active",
@@ -180,14 +313,24 @@ describe("useCodingWorkbenchResearch", () => {
     });
 
     rerender({ ...RUN, runId: undefined });
-    expect(result.current).toEqual({ status: "idle", ask: null, grant: null });
+    expect(result.current).toEqual({
+      status: "idle",
+      ask: null,
+      grant: null,
+      retry: expect.any(Function),
+    });
     expect(observed?.aborted).toBe(true);
 
     await act(async () => {
       inFlight.resolve(active());
       await inFlight.promise;
     });
-    expect(result.current).toEqual({ status: "idle", ask: null, grant: null });
+    expect(result.current).toEqual({
+      status: "idle",
+      ask: null,
+      grant: null,
+      retry: expect.any(Function),
+    });
   });
 
   it("does not start a read when pairing settles after the run disappears", async () => {
@@ -208,7 +351,12 @@ describe("useCodingWorkbenchResearch", () => {
       await pairing.promise;
     });
 
-    expect(result.current).toEqual({ status: "idle", ask: null, grant: null });
+    expect(result.current).toEqual({
+      status: "idle",
+      ask: null,
+      grant: null,
+      retry: expect.any(Function),
+    });
     expect(getResearchMock).not.toHaveBeenCalled();
   });
 
@@ -242,7 +390,12 @@ describe("useCodingWorkbenchResearch", () => {
       await vi.advanceTimersByTimeAsync(1_000);
     });
     expect(getResearchMock).toHaveBeenCalledTimes(3);
-    expect(result.current).toEqual({ status: "ready", ask: null, grant: null });
+    expect(result.current).toEqual({
+      status: "ready",
+      ask: null,
+      grant: null,
+      retry: expect.any(Function),
+    });
     await act(async () => {
       afterGrantExpiry.resolve({ session: "active" });
       await afterGrantExpiry.promise;
@@ -265,8 +418,43 @@ describe("useCodingWorkbenchResearch", () => {
     const { result } = renderHook(() => useCodingWorkbenchResearch(RUN));
     await flushResearchRead();
 
-    expect(result.current).toEqual({ status: "ready", ask: null, grant: null });
+    expect(result.current).toEqual({
+      status: "ready",
+      ask: null,
+      grant: null,
+      retry: expect.any(Function),
+    });
     await vi.advanceTimersByTimeAsync(10_000);
     expect(getResearchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// A launcher re-pair that arrives without a page load (F65): a fragment, and a pair endpoint that
+// acknowledges it.
+const REPAIR_SEAMS: CodingAppSessionPairingSeams = {
+  readFragment: (): string =>
+    encodeCodingAppSessionPairingFragment({
+      requestId: "req_re-pair",
+      issuedAtMs: 1,
+      claim: "e".repeat(64),
+    }),
+  stripFragment: (): void => undefined,
+  postPairing: (): Promise<unknown> => Promise.resolve({ schemaVersion: "1" }),
+};
+
+describe("useCodingWorkbenchResearch after a re-pair without a page load (F65)", () => {
+  it("reads the research channel again", async () => {
+    vi.useRealTimers();
+    pairingSettledMock.mockResolvedValue(true);
+    getResearchMock.mockResolvedValue(active());
+    renderHook(() => useCodingWorkbenchResearch(RUN));
+    await waitFor(() => expect(getResearchMock).toHaveBeenCalled());
+    const before = getResearchMock.mock.calls.length;
+
+    await act(async () => {
+      await redeemCodingAppSessionPairingNavigation(REPAIR_SEAMS);
+    });
+
+    await waitFor(() => expect(getResearchMock.mock.calls.length).toBeGreaterThan(before));
   });
 });

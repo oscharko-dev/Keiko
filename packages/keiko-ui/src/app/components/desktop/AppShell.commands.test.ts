@@ -24,6 +24,7 @@ import {
 import type { AppWindow, Connection } from "./windows/types";
 import type { WorkspaceApi } from "./hooks/useWorkspace.types";
 import { DEFAULT_LOCALE, translate, type I18nTranslate } from "@/lib/i18n";
+import { cutResult } from "../../../test-utils/workspace-api-fixture";
 
 // The command labels are English here because "en" is the locale under test, not because the builder
 // hardcodes English: `buildAppShellCommands` REQUIRES a translate function, so a caller that
@@ -35,14 +36,16 @@ function fakeApi(): WorkspaceApi {
     add: vi.fn(() => null),
     openEditorFile: vi.fn(() => ({ ok: false as const, message: "Unable to open editor." })),
     toggleTool: vi.fn(),
+    activateWindow: vi.fn(),
     focus: vi.fn(),
     currentSelection: vi.fn(() => ({ focusedWindowId: null, selectedWindowIds: [] })),
     replaceSelection: vi.fn(),
     toggleWindowSelection: vi.fn(),
     clearSelection: vi.fn(),
     moveSelectedWindowsBy: vi.fn(() => ({ dx: 0, dy: 0 })),
-    copySelectedWindows: vi.fn(() => false),
-    pasteCopiedWindows: vi.fn(() => false),
+    copySelectedWindows: vi.fn(() => ({ captured: 0, skipped: 0, overflow: 0 })),
+    cutSelectedWindows: vi.fn(() => cutResult({ captured: 0, skipped: 0, overflow: 0 })),
+    pasteCopiedWindows: vi.fn(() => ({ pasted: 0, limitReached: false })),
     close: vi.fn(),
     minimize: vi.fn(),
     restore: vi.fn(),
@@ -393,7 +396,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
   // uiux-fix F008 C222 — settings, quality and relationships are registered tool windows
   // with LeftRail buttons but were missing from TOOL_TYPES, making them unreachable from the
   // command palette. Pin the visible singleton tools here.
-  it("includes Open commands for MemoriaViva, settings, local knowledge, Figma Snapshot, quality and relationships", () => {
+  it("includes Open commands for MemoriaViva, settings, connector management, local knowledge, Figma Snapshot, quality and relationships", () => {
     const commands = buildAppShellCommands(
       fakeApi(),
       vi.fn(),
@@ -407,6 +410,7 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
     expect(ids.has("open-memoria")).toBe(true);
     expect(ids.has("open-settings")).toBe(true);
     expect(ids.has("open-editor-settings")).toBe(true);
+    expect(ids.has("open-integ")).toBe(true);
     expect(ids.has("open-localKnowledge")).toBe(true);
     expect(ids.has("open-figma")).toBe(true);
     expect(ids.has("open-quality")).toBe(true);
@@ -425,14 +429,6 @@ describe("buildAppShellCommands — command palette contract (epic #518 #526 #52
     {
       title: "does not expose the hidden Project surface through commands",
       commandId: "open-project",
-    },
-    {
-      title: "does not expose the hidden Keiko Digital Twin surface through commands",
-      commandId: "open-keiko",
-    },
-    {
-      title: "does not expose the hidden Integrations surface through create commands",
-      commandId: "new-integ",
     },
     {
       title: "does not expose the hidden Browser surface through create commands",

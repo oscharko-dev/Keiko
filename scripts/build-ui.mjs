@@ -1,9 +1,9 @@
-// UI packaging step (ADR-0011 D6, ADR-0021 bundled-product contract). Invokes the workspace build
+// UI packaging step (ADR-0011 D6, ADR-0021 vendored-product contract). Invokes the workspace build
 // of @oscharko-dev/keiko-ui, produces the static export, copies it into `dist/ui/static/`, and
 // writes `dist/ui/csp-hashes.json` — the inline-script SHA-256 hashes the BFF folds into
-// `script-src`. The static-export tree IS the bundled UI runtime artifact carried by the packed
-// root product; the keiko-ui workspace package itself is intentionally NOT listed in
-// bundleDependencies because consumers never resolve `@oscharko-dev/keiko-ui` at runtime.
+// `script-src`. The static-export tree IS the UI runtime artifact carried by the packed root
+// product; the keiko-ui workspace package itself is intentionally excluded from runtime vendoring
+// because consumers never resolve `@oscharko-dev/keiko-ui` at runtime.
 //
 // `extractInlineScriptHashes` is imported through the @oscharko-dev/keiko-server package barrel
 // (the BFF that the static export composes with at runtime). Pure Node ESM.

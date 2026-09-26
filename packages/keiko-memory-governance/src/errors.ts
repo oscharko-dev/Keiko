@@ -16,7 +16,8 @@ export type GovernanceErrorCode =
   | "idempotent-noop"
   | "unsupported-selector"
   | "invalid-selector-input"
-  | "memory-not-eligible";
+  | "memory-not-eligible"
+  | "destructive-acknowledgement-required";
 
 export class GovernanceError extends RedactingError {
   public readonly code: GovernanceErrorCode;

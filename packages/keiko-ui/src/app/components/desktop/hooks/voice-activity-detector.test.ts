@@ -87,6 +87,7 @@ describe("createBrowserVoiceActivityDetector", () => {
     const detector = createBrowserVoiceActivityDetector(T);
     const onEvent = vi.fn();
     const monitor = detector.start({} as unknown as MediaStream, onEvent);
+    expect(monitor.available).toBe(false);
     expect(onEvent).not.toHaveBeenCalled();
     expect(() => monitor.stop()).not.toThrow();
   });
@@ -105,8 +106,33 @@ describe("createBrowserVoiceActivityDetector", () => {
 
     const monitor = detector.start({} as unknown as MediaStream, onEvent);
 
+    expect(monitor.available).toBe(false);
     expect(onEvent).not.toHaveBeenCalled();
     expect(close).toHaveBeenCalledTimes(1);
     expect(() => monitor.stop()).not.toThrow();
+  });
+  it("allows silent renewal only while the analysis context is running", () => {
+    let state = "running";
+    class TestAudioContext {
+      get state(): string {
+        return state;
+      }
+      createMediaStreamSource(): { connect: () => void; disconnect: () => void } {
+        return { connect: (): void => {}, disconnect: (): void => {} };
+      }
+      createAnalyser(): { fftSize: number; getFloatTimeDomainData: () => void } {
+        return { fftSize: 0, getFloatTimeDomainData: (): void => {} };
+      }
+      async close(): Promise<void> {
+        state = "closed";
+      }
+    }
+    vi.stubGlobal("AudioContext", TestAudioContext);
+    const monitor = createBrowserVoiceActivityDetector(T).start({} as MediaStream, vi.fn());
+    expect(monitor.available).toBe(true);
+    state = "suspended";
+    expect(monitor.available).toBe(false);
+    monitor.stop();
+    expect(monitor.available).toBe(false);
   });
 });

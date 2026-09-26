@@ -7,18 +7,20 @@
 // indexing, checkpoint, and lifecycle a folder source already uses. No second store, no parallel
 // retrieval path. Byte retrieval is injected (`ManualCrawlFetcher`, ADR-0019 trust-9).
 
+import type {
+  EmbeddingModelIdentity,
+  HtmlManualSource,
+  KnowledgeCapsuleId,
+  KnowledgePodModelUsePolicy,
+  KnowledgePodSummary,
+  KnowledgeSourceId,
+} from "@oscharko-dev/keiko-contracts";
 import {
   htmlManualSourceFingerprintTag,
   htmlManualSourceKindTag,
   htmlManualReachableFilesScope,
-  standardPodModelUsePolicy,
-  type EmbeddingModelIdentity,
-  type HtmlManualSource,
-  type KnowledgeCapsuleId,
-  type KnowledgePodModelUsePolicy,
-  type KnowledgePodSummary,
-  type KnowledgeSourceId,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/html-manual-source";
+import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
 
 import { randomUUID } from "node:crypto";
@@ -47,6 +49,7 @@ import type { AuditEventSink } from "./privacy/index.js";
 import type { ParserRegistry } from "./parsers/index.js";
 import { addSourceToCapsule } from "./source-lifecycle.js";
 import type { KnowledgeStore } from "./store.js";
+import type { KnowledgeLogSink } from "./knowledge-log.js";
 
 // Absolute synthetic root the crawled pages are mounted under for indexing. It never touches disk —
 // the in-memory page fs serves the bytes — but is a safe absolute path so the walker's containment
@@ -69,6 +72,7 @@ export interface CreateHtmlManualPodDeps {
   readonly now?: () => number;
   readonly idSource?: () => string;
   readonly auditSink?: AuditEventSink;
+  readonly logSink?: KnowledgeLogSink | undefined;
   readonly onCrawlEvent?: (event: ManualCrawlEvent) => void;
   readonly onIndexEvent?: (event: IndexingEvent) => void;
 }
@@ -189,6 +193,7 @@ function runManualIndexing(
     embeddingAdapter: deps.embeddingAdapter,
     store: deps.store,
     ...(deps.auditSink !== undefined ? { auditSink: deps.auditSink } : {}),
+    ...(deps.logSink !== undefined ? { logSink: deps.logSink } : {}),
     ...(deps.signal !== undefined ? { signal: deps.signal } : {}),
     ...(deps.now !== undefined ? { now: deps.now } : {}),
     ...(deps.idSource !== undefined ? { idSource: deps.idSource } : {}),
@@ -197,9 +202,12 @@ function runManualIndexing(
 }
 
 // Create a local Knowledge Pod from an approved HTML manual: crawl → index reachable pages → build a
-// redacted pod summary. The pod is created even when the crawl is empty (it is reported as a
-// degraded pod with safe counts), so failures surface through lifecycle state rather than an
-// exception.
+// redacted pod summary. The pod is created even when the crawl is empty (it is left in its
+// create-time "draft" readiness with safe/zero counts, since nothing transitions the capsule
+// out of "draft" for a zero-page crawl — attachManualSource returns null and skips indexing;
+// capsuleReadiness in knowledge-pods.ts returns lifecycleState verbatim for every state
+// except "ready" and "deleting"). Failures surface through lifecycle state rather than an
+// exception (#2906 KEIKO-0644).
 export async function createHtmlManualPod(
   deps: CreateHtmlManualPodDeps,
   source: HtmlManualSource,

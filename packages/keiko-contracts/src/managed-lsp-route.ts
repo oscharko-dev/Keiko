@@ -25,6 +25,7 @@ import {
   type ManagedLspRestartField,
   type ManagedLspRuntimeConfiguration,
 } from "./managed-lsp-runtime.js";
+import { parseSafely } from "./managed-lsp-parse-safely.js";
 
 const MAX_ROOT_CHARS = 4_096;
 const MAX_MANAGER_ID_CHARS = 256;
@@ -177,18 +178,6 @@ function hasExactLanguageCoverage(
 
 function invalid<T>(message: string): ManagedLspRouteParseResult<T> {
   return { ok: false, errors: [message] };
-}
-
-function parseSafely<T>(
-  parser: () => ManagedLspRouteParseResult<T>,
-): ManagedLspRouteParseResult<T> {
-  try {
-    return parser();
-  } catch (error: unknown) {
-    return invalid(
-      `payload could not be inspected: ${error instanceof Error ? error.name : "unknown"}`,
-    );
-  }
 }
 
 function parseRevisionEtagParts(value: unknown): ManagedLspRevisionEtagParts | undefined {

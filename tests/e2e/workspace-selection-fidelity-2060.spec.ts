@@ -12,7 +12,6 @@ const REPO_ROOT = resolve(process.cwd());
 const EVIDENCE_DIR = resolve(REPO_ROOT, "docs", "design-system", "evidence", "2060");
 const PLAYWRIGHT_PLAN_COMMAND =
   "npx playwright test --config tests/e2e/config/playwright.issue-2060-workspace-selection.config.ts --project=chromium";
-const UI_RECEIPT_COMMAND = `.keiko-scripts/ui-verify-receipt.sh 2060 -- ${PLAYWRIGHT_PLAN_COMMAND}`;
 
 const WINDOW_IDS = ["issue-2060-project", "issue-2060-plugins", "issue-2060-automations"] as const;
 const SELECTION_VISUAL_SETTLE_TIMEOUT_MS = 500;
@@ -395,11 +394,10 @@ function a11yProof(captures: readonly CaptureRecord[], cssProof: JsonObject): Js
 
 function manifest(captures: readonly CaptureRecord[], generatedAt: string): JsonObject {
   return {
-    issue: "#2060",
-    epic: "#2055",
+    issue: 2060,
+    epic: 2055,
     generatedAt,
     command: "KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run test:e2e:workspace-selection-2060",
-    receiptCommand: UI_RECEIPT_COMMAND,
     playwrightCommand: PLAYWRIGHT_PLAN_COMMAND,
     artifacts: [...SCREENSHOT_ARTIFACTS, ...JSON_ARTIFACTS],
     notes: [
@@ -408,6 +406,18 @@ function manifest(captures: readonly CaptureRecord[], generatedAt: string): Json
       "The behavior proof for Files-window marquee/group-drag/clipboard lives in workspace-multi-selection-2055.spec.ts.",
     ],
     captureCount: captures.length,
+    // Seven-boolean redactionBoundary shape, matching the sibling 1990/2253 manifests (KEIKO-0960).
+    // Deterministic assertions, accessibility counts, hashes, and visible product copy only —
+    // never a customer repo file, secret, private path, raw diff, model prompt/output, or token.
+    redactionBoundary: {
+      customerRepositoryFilesIncluded: false,
+      secretsIncluded: false,
+      privatePathsIncluded: false,
+      rawDiffsIncluded: false,
+      rawModelPromptsIncluded: false,
+      rawModelOutputsIncluded: false,
+      tokensIncluded: false,
+    },
   };
 }
 

@@ -88,6 +88,13 @@ const SUMMARISERS: {
   "browser:session-closed": (e) => `session=${e.sessionId} reason=${e.reason}`,
   "browser:trust-warning": (e) => `session=${e.sessionId} warning=${e.warning}`,
   "browser:error": (e) => `session=${e.sessionId} code=${e.code}`,
+  "tool:shaping:degraded": (e) => `tool=${e.toolName} id=${e.toolCallId} reason=${e.reason}`,
+  // Body-free by construction: an index into the sink list and a closed reason. The throw value
+  // that caused the quarantine is deliberately never carried (KEIKO-0205).
+  "sink:degraded": (e) => `sinkIndex=${String(e.sinkIndex)} reason=${e.reason}`,
+  // KEIKO-0726 (#3323): counts and byte totals only — never message content.
+  "context:compacted": (e) =>
+    `dropped=${String(e.messagesDropped)} bytesBefore=${String(e.bytesBefore)} bytesAfter=${String(e.bytesAfter)}`,
 };
 
 function summarise(event: HarnessEvent): string {

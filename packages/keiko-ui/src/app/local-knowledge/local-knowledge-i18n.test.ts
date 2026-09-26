@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { UNSUPPORTED_DOCUMENT_GUIDANCE_CODES } from "@oscharko-dev/keiko-contracts";
+import { UNSUPPORTED_DOCUMENT_GUIDANCE_CODES } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-records";
 
 import { translateLocalKnowledge, unsupportedGuidanceText } from "./local-knowledge-i18n";
 

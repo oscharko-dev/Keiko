@@ -7,7 +7,7 @@ import type {
   PdfCitationPreviewOrigin,
   PdfCitationPreviewStatusState,
 } from "@oscharko-dev/keiko-contracts";
-import { normalizePdfCitationPreviewMarkerIndex } from "@oscharko-dev/keiko-contracts";
+import { normalizePdfCitationPreviewMarkerIndex } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-preview";
 import { fetchPdfCitationPreviewStatus, openPdfCitationPreviewSession } from "@/lib/api";
 import type { GroundedAnswer, LocalKnowledgeEvidenceCitation } from "@/lib/types";
 import type { WorkspaceApi } from "./useWorkspace.types";

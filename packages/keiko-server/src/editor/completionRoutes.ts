@@ -16,36 +16,42 @@
 // prompt hash, never the prompt, the buffer, or any retrieved excerpt. The browser never reaches the
 // Model Gateway, retrieval, or any provider directly (Acceptance Criterion 5).
 
+import type {
+  CodingContextPack,
+  CodingContextRequest,
+  CompletionDegradeReason,
+  CompletionInteractionMode,
+  CompletionModelSelection,
+  EditorCompletionItemOrigin,
+  EditorCompletionSource,
+  EditorCompletionWireItem,
+  EditorCompletionWireRequest,
+  EditorCompletionWireResponse,
+  LanguageCompletionItem,
+  LanguageCompletionResult,
+  LanguageServiceLimits,
+  LanguageServiceRequest,
+  UsageMetadata,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_CONTEXT_SCHEMA_VERSION,
   CODING_CONTEXT_BUDGETS,
-  DEFAULT_LANGUAGE_SERVICE_LIMITS,
-  EDITOR_COMPLETION_SCHEMA_VERSION,
-  isValidScopePath,
-  parseEditorCompletionRequest,
-  stripUnsafeFormatChars,
   toCodingContextWirePack,
-  type CodingContextPack,
-  type CodingContextRequest,
-  type CompletionDegradeReason,
-  type CompletionInteractionMode,
-  type CompletionModelSelection,
-  type EditorCompletionItemOrigin,
-  type EditorCompletionSource,
-  type EditorCompletionWireItem,
-  type EditorCompletionWireRequest,
-  type EditorCompletionWireResponse,
-  type LanguageCompletionItem,
-  type LanguageCompletionResult,
-  type LanguageServiceLimits,
-  type LanguageServiceRequest,
-  type UsageMetadata,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-context";
+import { DEFAULT_LANGUAGE_SERVICE_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/language-service";
+import {
+  EDITOR_COMPLETION_SCHEMA_VERSION,
+  parseEditorCompletionRequest,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-completion";
+import { isValidScopePath } from "@oscharko-dev/keiko-contracts/runtime/connected-context";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import { selectCompletionModel } from "@oscharko-dev/keiko-model-gateway";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import { currentGateway, currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
 import { readJsonObject, resolveRequestRoot, runFilesHandler } from "../files.js";
+import { MODEL_AS_YOU_TYPE_TIMEOUT_MS } from "./asYouTypeTimeout.js";
 import { assembleCodingContext } from "./codingContext.js";
 import { recordCodingContextEvidence } from "./codingContextEvidence.js";
 import { recordEditorCompletionModelEvidence } from "./completionModelEvidence.js";
@@ -81,7 +87,8 @@ export const COMPLETION_LANGUAGE_SERVICE_LIMITS = {
   ...DEFAULT_LANGUAGE_SERVICE_LIMITS,
   deadlineMs: 500,
 } as const;
-const MODEL_AS_YOU_TYPE_TIMEOUT_MS = 750;
+// KEIKO-0667: MODEL_AS_YOU_TYPE_TIMEOUT_MS now lives in ./asYouTypeTimeout.js, shared with
+// inlineCompletionRoutes.ts, so a change to the number cannot silently split the two routes.
 
 /** Builds the chat function for the elected model. Injectable so tests avoid a live model call. */
 export type CompletionChatFactory = (config: GatewayConfig, modelId: string) => ModelChatFn;
@@ -99,7 +106,10 @@ export interface EditorCompletionRouteOptions {
 }
 
 // Default chat seam: route the elected model through the Model Gateway, server-side only.
-function defaultChatFactoryFor(deps: UiHandlerDeps): CompletionChatFactory {
+function defaultChatFactoryFor(
+  deps: UiHandlerDeps,
+  correlationId: string | undefined,
+): CompletionChatFactory {
   return (_config, modelId): ModelChatFn => {
     const gateway = currentGateway(deps);
     if (gateway === undefined) throw new TypeError("Model gateway is unavailable.");
@@ -111,6 +121,7 @@ function defaultChatFactoryFor(deps: UiHandlerDeps): CompletionChatFactory {
           { role: "user", content: chatRequest.user },
         ],
         cancellationSignal: chatSignal,
+        logContext: { correlationId },
       });
       return { content: response.content, usage: response.usage };
     };
@@ -146,6 +157,7 @@ interface ModelTierOutcome {
 interface ElectedModelContext {
   readonly request: EditorCompletionWireRequest;
   readonly realRoot: string;
+  readonly fs: WorkspaceFs;
   readonly signal: AbortSignal;
   readonly deps: UiHandlerDeps;
   readonly selection: CompletionModelSelection;
@@ -154,6 +166,7 @@ interface ElectedModelContext {
   readonly config: GatewayConfig;
   readonly tokenBudget: EditorModelTokenBudget;
   readonly nowMs: number;
+  readonly correlationId: string | undefined;
 }
 
 const DETERMINISTIC_OUTCOME = (
@@ -195,6 +208,7 @@ function invalidChangedFiles(message: string): RouteResult {
 
 function sanitizeChangedFiles(
   realRoot: string,
+  fs: WorkspaceFs,
   changedFiles: readonly string[] | undefined,
 ): readonly string[] | RouteResult | undefined {
   if (changedFiles === undefined) {
@@ -212,7 +226,7 @@ function sanitizeChangedFiles(
         `context.changedFiles contains an invalid workspace-relative path: ${changed}`,
       );
     }
-    resolveOverlayPath(realRoot, changed);
+    resolveOverlayPath(realRoot, changed, fs);
   }
   return deduped.length > 0 ? deduped : undefined;
 }
@@ -220,8 +234,9 @@ function sanitizeChangedFiles(
 function sanitizeRequestContext(
   request: EditorCompletionWireRequest,
   realRoot: string,
+  fs: WorkspaceFs,
 ): EditorCompletionWireRequest | RouteResult {
-  const changedFiles = sanitizeChangedFiles(realRoot, request.context?.changedFiles);
+  const changedFiles = sanitizeChangedFiles(realRoot, fs, request.context?.changedFiles);
   if (isRouteResult(changedFiles)) {
     return changedFiles;
   }
@@ -365,9 +380,13 @@ async function runElectedModel(ctx: ElectedModelContext): Promise<ModelTierOutco
   const pack = await assembleCodingContext(buildContextRequest(ctx.request), {
     deps: ctx.deps,
     realRoot: ctx.realRoot,
+    fs: ctx.fs,
     signal: ctx.signal,
     nowMs: ctx.nowMs,
     budgetBytes: effectiveContextBudgetBytes(ctx.request),
+    // The git context calls the git routes in-process; without the id their failure lines are
+    // orphaned under UNKNOWN_CORRELATION_ID (AGENTS.md §8 Rule 1).
+    correlationId: ctx.correlationId,
   });
   recordCodingContextEvidence(
     ctx.deps.evidenceStore,
@@ -402,15 +421,23 @@ async function runElectedModel(ctx: ElectedModelContext): Promise<ModelTierOutco
 
 // Decides whether the gated model tier runs for this request and, if so, runs it. The cost ceiling
 // (#1206) and the aligned-FIM guardrail (#1210) are enforced by `selectCompletionModel`.
-async function runModelTier(
-  request: EditorCompletionWireRequest,
-  realRoot: string,
-  signal: AbortSignal,
-  deps: UiHandlerDeps,
-  chatFactory: CompletionChatFactory,
-  tokenBudget: EditorModelTokenBudget,
-  now: () => number,
-): Promise<ModelTierOutcome> {
+// One options object rather than a positional list: the correlation id the git context needs is an
+// eighth input, and eight positionals both trip Sonar's parameter ceiling and make the call site
+// unreadable at a glance.
+interface ModelTierInputs {
+  readonly request: EditorCompletionWireRequest;
+  readonly realRoot: string;
+  readonly fs: WorkspaceFs;
+  readonly signal: AbortSignal;
+  readonly deps: UiHandlerDeps;
+  readonly chatFactory: CompletionChatFactory;
+  readonly tokenBudget: EditorModelTokenBudget;
+  readonly now: () => number;
+  readonly correlationId: string | undefined;
+}
+
+async function runModelTier(inputs: ModelTierInputs): Promise<ModelTierOutcome> {
+  const { request, realRoot, fs, signal, deps, chatFactory, tokenBudget, now } = inputs;
   const config = currentGatewayConfig(deps);
   if (config === undefined) {
     return DETERMINISTIC_OUTCOME("deterministic", "no-infilling-model", undefined, undefined);
@@ -434,6 +461,7 @@ async function runModelTier(
     const outcome = await runElectedModel({
       request,
       realRoot,
+      fs,
       signal: modelSignal(selection, signal),
       deps,
       selection,
@@ -442,6 +470,7 @@ async function runModelTier(
       config,
       tokenBudget,
       nowMs: now(),
+      correlationId: inputs.correlationId,
     });
     return outcome;
   } catch {
@@ -570,6 +599,7 @@ async function runDeterministicCompletion(input: {
   readonly request: EditorCompletionWireRequest;
   readonly deps: UiHandlerDeps;
   readonly realRoot: string;
+  readonly fs: WorkspaceFs;
   readonly overlayAbsolutePath: string;
   readonly signal: AbortSignal;
   readonly limits?: LanguageServiceLimits | undefined;
@@ -587,6 +617,7 @@ async function runDeterministicCompletion(input: {
     input.realRoot,
     input.overlayAbsolutePath,
     input.signal,
+    input.fs,
     {
       limits: input.limits ?? COMPLETION_LANGUAGE_SERVICE_LIMITS,
       now: input.now,
@@ -622,8 +653,9 @@ export async function handleEditorCompletion(
   const request = parsed.value;
   return runFilesHandler(async () => {
     const root = await resolveRequestRoot(ctx, deps, request.root);
-    const overlayAbsolutePath = resolveOverlayPath(root.realRoot, request.document.path);
-    const sanitizedRequest = sanitizeRequestContext(request, root.realRoot);
+    const { canonicalRoot, fs } = root.access;
+    const overlayAbsolutePath = resolveOverlayPath(canonicalRoot, request.document.path, fs);
+    const sanitizedRequest = sanitizeRequestContext(request, canonicalRoot, fs);
     if (isRouteResult(sanitizedRequest)) {
       return sanitizedRequest;
     }
@@ -633,7 +665,8 @@ export async function handleEditorCompletion(
     const deterministic = await runDeterministicCompletion({
       request: sanitizedRequest,
       deps,
-      realRoot: root.realRoot,
+      realRoot: canonicalRoot,
+      fs,
       overlayAbsolutePath,
       signal,
       limits: options.languageServiceLimits,
@@ -644,15 +677,17 @@ export async function handleEditorCompletion(
     }
 
     // Tier 2: gated model-assisted completion.
-    const model = await runModelTier(
-      sanitizedRequest,
-      root.realRoot,
+    const model = await runModelTier({
+      request: sanitizedRequest,
+      realRoot: canonicalRoot,
+      fs,
       signal,
       deps,
-      options.chatFactory ?? defaultChatFactoryFor(deps),
-      options.tokenBudget ?? sharedEditorModelTokenBudget,
-      options.now ?? Date.now,
-    );
+      chatFactory: options.chatFactory ?? defaultChatFactoryFor(deps, ctx.correlationId),
+      tokenBudget: options.tokenBudget ?? sharedEditorModelTokenBudget,
+      now: options.now ?? Date.now,
+      correlationId: ctx.correlationId,
+    });
 
     return { status: 200, body: deps.redactor(buildWireResponse(deterministic, model)) };
   });

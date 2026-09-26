@@ -255,8 +255,12 @@ if [[ "${analysis_scope}" == "${changed_scope}" ]]; then
     "-Dsonar.test.inclusions=${test_inclusions:-${empty_test_inclusion}}"
   )
 fi
-KEIKO_LOCAL_SONAR_TOKEN="${token}" "${compose[@]}" run --rm scanner \
+# SonarQube is already started and host-verified above. Do not let `compose run` reconcile the
+# dependency again: a recreation between the readiness check and scanner startup disconnects the
+# scanner from the exact server instance whose token it carries.
+KEIKO_LOCAL_SONAR_TOKEN="${token}" "${compose[@]}" run --rm --no-deps scanner \
   "${scanner_args[@]}" \
+  -Dsonar.javascript.node.maxspace=4608 \
   -Dsonar.projectKey="${project}" \
   -Dsonar.projectName="Keiko (local pre-push scan)" \
   -Dsonar.scm.disabled=true \

@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net481</TargetFramework>
+    <OutputType>Library</OutputType>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest-all</AnalysisLevel>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Deterministic>true</Deterministic>
+    <LangVersion>5</LangVersion>
+    <!-- The shipped verifier is compiled as C# 5 for Windows PowerShell 5.1. Nullable-reference
+         context is therefore intentionally absent; all current analyzers still run at latest-all. -->
+    <DisableImplicitFrameworkReferences>true</DisableImplicitFrameworkReferences>
+    <NoStdLib>true</NoStdLib>
+    <AutomaticallyUseReferenceAssemblyPackages>false</AutomaticallyUseReferenceAssemblyPackages>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <NuGetLockFilePath>windows-authenticode-verifier.packages.lock.json</NuGetLockFilePath>
+  </PropertyGroup>
+  <Target Name="RequireReviewedFrameworkReferences" BeforeTargets="PrepareForBuild">
+    <Error Condition="'$(KeikoFrameworkReferencePath)' == ''"
+           Text="KeikoFrameworkReferencePath must name the reviewed .NET Framework 4.8.1 reference directory." />
+  </Target>
+  <ItemGroup>
+    <Reference Include="mscorlib" HintPath="$(KeikoFrameworkReferencePath)\mscorlib.dll" Private="false" />
+    <Reference Include="System" HintPath="$(KeikoFrameworkReferencePath)\System.dll" Private="false" />
+    <Reference Include="System.Core" HintPath="$(KeikoFrameworkReferencePath)\System.Core.dll" Private="false" />
+    <Reference Include="System.Security" HintPath="$(KeikoFrameworkReferencePath)\System.Security.dll" Private="false" />
+    <Compile Include="../../packages/keiko-server/src/coding-runtime/windows-portable-authenticode-verifier.cs"
+             Link="windows-portable-authenticode-verifier.cs" />
+  </ItemGroup>
+</Project>

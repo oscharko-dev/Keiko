@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
@@ -12,10 +11,15 @@ import {
 } from "./runtime-activation-manifest.mjs";
 import {
   inventoriesMatch,
-  inventoryWindowsPortablePeFiles,
+  inventoryWindowsPortableCorePeFiles,
   readWindowsPortablePeInventory,
 } from "./windows-portable-signing.mjs";
 import { assertWindowsProductionVerificationInput } from "./windows-portable-verification-input.mjs";
+import { sha256File } from "./lib/digest.mjs";
+import { writeQualificationEvidenceReceipt } from "./lib/qualification-evidence-receipt.mjs";
+import { portableResourceRoot } from "./portable-signed-archive.mjs";
+
+export { writeQualificationEvidenceReceipt };
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const COMMIT = /^[a-f0-9]{40}$/u;
@@ -25,10 +29,6 @@ export class WindowsRuntimeQualificationError extends Error {}
 
 function fail(message) {
   throw new WindowsRuntimeQualificationError(`windows-runtime-qualification: ${message}`);
-}
-
-function sha256(path) {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
 function readJson(path, label) {
@@ -97,9 +97,13 @@ function activationIdentityIsValid(activation, sourceCommitSha) {
       "runtime",
       "security",
       "nativeHelpers",
+      "nativeAddons",
       "sidecarRuntimes",
       "releaseImpact",
     ]) &&
+    // exactKeys only proves the key is present. Without this an activation manifest could
+    // declare nativeAddons: null or an object and still receive a qualification receipt.
+    Array.isArray(activation.nativeAddons) &&
     activation.schemaVersion === 1 &&
     activation.suiteVersion === RUNTIME_QUALIFICATION_SUITE &&
     activation.platformTarget === WINDOWS_TARGET &&
@@ -144,7 +148,7 @@ function componentDigest(resourceRoot, helper, inventory) {
     entry.isSymbolicLink() ||
     entry.nlink !== 1 ||
     entry.size !== helper.sizeBytes ||
-    sha256(path) !== helper.shippedSha256 ||
+    sha256File(path) !== helper.shippedSha256 ||
     inventoryEntry.sha256 !== helper.shippedSha256
   ) {
     fail("activation helper bytes are invalid");
@@ -154,14 +158,14 @@ function componentDigest(resourceRoot, helper, inventory) {
 
 function authenticatedQualificationInputs(input, activation) {
   const expectedInventory = readWindowsPortablePeInventory(input.expectedInventoryPath);
-  const actualInventory = inventoryWindowsPortablePeFiles(input.resourceRoot);
+  const actualInventory = inventoryWindowsPortableCorePeFiles(input.resourceRoot);
   const verification = assertWindowsProductionVerificationInput(
     input.verificationInputPath,
     activation,
   );
   if (
     !inventoriesMatch(expectedInventory, actualInventory) ||
-    sha256(input.expectedInventoryPath) !== verification.peInventorySha256
+    sha256File(input.expectedInventoryPath) !== verification.peInventorySha256
   ) {
     fail("authenticated PE inventory no longer matches the qualified payload");
   }
@@ -193,7 +197,7 @@ export function qualificationReceiptFor(input) {
     suiteVersion: RUNTIME_QUALIFICATION_SUITE,
     platformTarget: WINDOWS_TARGET,
     sourceCommitSha: input.sourceCommitSha,
-    activationManifestSha256: sha256(input.activationPath),
+    activationManifestSha256: sha256File(input.activationPath),
     supervisorSha256: componentDigest(
       input.resourceRoot,
       supervisor,
@@ -230,6 +234,26 @@ function required(options, name) {
   return value;
 }
 
+// #3390 audit F8: mirrors qualify-macos-runtime-release.mjs's evidence bridge -- translates this
+// script's own real qualification receipt into the `<scenarioId>.receipt.json` + `.artifact` pair
+// the #3390 checker and manifest producer already read, so a real, passing Windows qualification
+// becomes evidence with no separate step. While #2198/#2951 remain open this mode is never invoked
+// for the packaged-reference scenario; its manifest row carries the descriptor's own closed
+// `blocked` reason instead -- never a fabricated receipt. The writer itself is shared with
+// qualify-macos-runtime-release.mjs via scripts/lib/qualification-evidence-receipt.mjs; see the
+// `import`/`export` above.
+
+function maybeWriteQualificationEvidence(options, receipt) {
+  const receiptsDir = options["qualification-receipts"];
+  if (receiptsDir === undefined) return;
+  writeQualificationEvidenceReceipt({
+    receiptsDir: resolve(receiptsDir),
+    scenarioId: required(options, "scenario-id"),
+    receipt,
+    recordedAt: new Date().toISOString(),
+  });
+}
+
 export function qualifyWindowsRuntimeRelease(
   options,
   { platform = process.platform, spawnSyncImpl = spawnSync } = {},
@@ -238,7 +262,11 @@ export function qualifyWindowsRuntimeRelease(
   const stageRoot = resolve(required(options, "stage-root"));
   const sourceCommitSha = required(options, "source-commit-sha");
   if (!COMMIT.test(sourceCommitSha)) fail("source commit is invalid");
-  const resourceRoot = join(stageRoot, "payload", "Keiko");
+  const manifest = readJson(
+    join(stageRoot, "manifest", "portable-manifest.json"),
+    "portable manifest",
+  );
+  const resourceRoot = portableResourceRoot(stageRoot, WINDOWS_TARGET, manifest);
   const helper = join(resourceRoot, "runtime", "native", "keiko-runtime-supervisor.exe");
   const result = spawnSyncImpl(
     process.execPath,
@@ -264,6 +292,7 @@ export function qualifyWindowsRuntimeRelease(
   const output = resolve(required(options, "output"));
   if (dirname(output) === output) fail("output path is invalid");
   writeFileSync(output, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
+  maybeWriteQualificationEvidence(options, receipt);
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(import.meta.filename)) {

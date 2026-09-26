@@ -2,13 +2,17 @@
 // vault and a fake ModelPort — no network, no real model.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
 import type { NormalizedResponse } from "@oscharko-dev/keiko-contracts";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
-import type { GatewayConfig, GatewayRequest } from "@oscharko-dev/keiko-model-gateway";
+import type {
+  GatewayCallRequest,
+  GatewayConfig,
+  GatewayRequest,
+} from "@oscharko-dev/keiko-model-gateway";
 import type {
   ConversationId,
   MemoryRecord,
@@ -28,7 +32,7 @@ import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 const ATLAS_FACTS = JSON.stringify([
   {
     source: "user",
-    body: "The user is building a fintech app called Atlas.",
+    body: "I'm building a fintech app called Atlas.",
     type: "fact",
     confidence: 0.7,
     scope: "project",
@@ -44,7 +48,7 @@ const ATLAS_FACTS = JSON.stringify([
   },
   {
     source: "user",
-    body: "The user's team is in Berlin.",
+    body: "My team is in Berlin.",
     type: "fact",
     confidence: 0.6,
     scope: "user",
@@ -142,7 +146,7 @@ afterEach(() => {
 });
 
 function makeVault(): MemoryVaultStore {
-  const dir = mkdtempSync(join(tmpdir(), "keiko-salience-"));
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-salience-"));
   tmpDirs.push(dir);
   const vault = createMemoryVault({ memoryDir: dir, redactString: (s) => s });
   activeVaults.push(vault);
@@ -164,7 +168,7 @@ function makeDeps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
 }
 
 function context(): ConversationMemoryRuntimeContext {
-  const path = mkdtempSync(join(tmpdir(), "keiko-salience-proj-"));
+  const path = mkdtempSync(join(realpathSync(tmpdir()), "keiko-salience-proj-"));
   tmpDirs.push(path);
   return {
     userId: "local-operator" as UserId,
@@ -174,7 +178,8 @@ function context(): ConversationMemoryRuntimeContext {
   };
 }
 
-const USER_TEXT = "I'm building a fintech app called Atlas in Rust, my team is in Berlin";
+const USER_TEXT =
+  "I'm building a fintech app called Atlas. Atlas is written in Rust. My team is in Berlin.";
 
 function salienceConfig(
   modelId: string,
@@ -315,7 +320,14 @@ describe("captureSalientFromTurn", () => {
       expect(diagnostics.record).toHaveBeenCalledWith(
         expect.objectContaining({
           errorClass: "SalienceCaptureDropped",
-          message: "voice salience capture skipped: background queue full (32/32)",
+          // Issue #3245: `message` is now the fixed closed-vocabulary condition label; the
+          // surface/pending-count detail (previously composed into free text here) moved to `code`.
+          message: "salience-capture-dropped-queue-full",
+          code: "surface=voice pending=32/32",
+          // ADR-0173 D5 / g12: this informational diagnostic used to mint its own disconnected
+          // `randomUUID()` instead of reusing the turn-scoped id the caller already resolved
+          // (`"assistant-dropped"`, the correlationId argument below). Fails before the fix.
+          correlationId: "assistant-dropped",
         }),
       );
 
@@ -353,6 +365,75 @@ describe("captureSalientFromTurn", () => {
     expect(actions).toHaveLength(3);
     expect(actions.every((a) => a.kind === "candidate")).toBe(true);
     expect(countMemories(vault, ctx)).toBe(3);
+  });
+
+  // ADR-0173 D5 / g12: the capture-summary diagnostic used to mint its own disconnected
+  // `randomUUID()` instead of the turn-scoped id `captureSalientFromTurn` already resolved, so a
+  // successful turn's summary line could never be joined to that same turn's other diagnostics.
+  // Fails before the fix (the summary's correlationId would be an unrelated fresh UUID).
+  it("carries the turn's correlation id on the capture summary diagnostic", async () => {
+    const vault = makeVault();
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const deps = makeDeps({ memoryVault: vault, diagnostics });
+
+    const actions = await captureSalientFromTurn(
+      deps,
+      { content: USER_TEXT, memory: { enabled: true } },
+      context(),
+      "gpt-test",
+      "Sounds like a great project!",
+      "desktop",
+      "assistant-summary-turn",
+    );
+
+    expect(actions.length).toBeGreaterThan(0);
+    expect(diagnostics.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        errorClass: "SalienceCaptureSummary",
+        correlationId: "assistant-summary-turn",
+      }),
+    );
+  });
+
+  // ADR-0173 D5: the same turn-scoped correlation id must also reach the salience model.call's
+  // GatewayCallRequest.logContext, not only the diagnostic above, so a gateway retry line for this
+  // extraction joins the turn's trail.
+  it("stamps the turn's correlation id into the salience model gateway call's logContext", async () => {
+    const vault = makeVault();
+    const seenRequests: GatewayCallRequest[] = [];
+    const recordingModel: ModelPort = {
+      call(request): Promise<NormalizedResponse> {
+        seenRequests.push(request);
+        return Promise.resolve({
+          modelId: request.modelId,
+          content: ATLAS_FACTS,
+          finishReason: "stop",
+          toolCalls: [],
+          structuredOutput: null,
+          usage: {
+            requestId: "salience-logcontext-test",
+            promptTokens: 7,
+            completionTokens: 3,
+            latencyMs: 11,
+            costClass: "high",
+          },
+        });
+      },
+    };
+    const deps = makeDeps({ memoryVault: vault, modelPortFactory: () => recordingModel });
+
+    await captureSalientFromTurn(
+      deps,
+      { content: USER_TEXT, memory: { enabled: true } },
+      context(),
+      "gpt-test",
+      "Sounds like a great project!",
+      "desktop",
+      "assistant-logcontext-turn",
+    );
+
+    expect(seenRequests.length).toBeGreaterThan(0);
+    expect(seenRequests[0]?.logContext?.correlationId).toBe("assistant-logcontext-turn");
   });
 
   it("keeps a failed model response body out of operator diagnostics", async () => {
@@ -399,7 +480,7 @@ describe("captureSalientFromTurn", () => {
           JSON.stringify([
             {
               source: "user",
-              body: "Der Nutzer heißt Oliver.",
+              body: "Hallo Keiko, ich bin Oliver.",
               type: "identity",
               confidence: 0.9,
               scope: "user",
@@ -418,7 +499,7 @@ describe("captureSalientFromTurn", () => {
     );
     expect(actions).toHaveLength(1);
     const records = readMemories(vault, ctx);
-    expect(records[0]?.body).toBe("Der Nutzer heißt Oliver.");
+    expect(records[0]?.body).toBe("Hallo Keiko, ich bin Oliver.");
   });
 
   it("uses json_schema responseFormat only when the configured model supports it", async () => {
@@ -747,6 +828,40 @@ describe("captureSalientFromTurn", () => {
     expect(countMemories(vault, ctx)).toBe(0);
   });
 
+  // Regression: the extraction diagnostic's `code` used to be a hand-composed, space-joined
+  // string (`model=<id> responseFormat=<bool> kind=<kind> <detail>`) whose safety depended on
+  // log-redaction.ts's generic space-count heuristic, and — after the #3245 relocation — still
+  // carried the configured model id verbatim, against this file's own convention (a model id is
+  // recorded once by `gateway.config.resolved`; a diagnostic never repeats it). Fails before the
+  // fix (the model id is on `code`); passes after (colon-joined, zero spaces, no model id).
+  it("never puts the model id or a space-bearing value onto the salience extraction diagnostic", async () => {
+    const vault = makeVault();
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const deps = makeDeps({
+      memoryVault: vault,
+      modelPortFactory: () => fakeModel("I could not find anything durable to remember."),
+      diagnostics,
+    });
+    const ctx = context();
+
+    await captureSalientFromTurn(
+      deps,
+      { content: USER_TEXT, memory: { enabled: true } },
+      ctx,
+      "gpt-4o",
+      "ok",
+    );
+
+    const diagnosticCall = diagnostics.record.mock.calls.find(
+      ([entry]) => entry.message === "salience-extraction-diagnostic",
+    );
+    expect(diagnosticCall).toBeDefined();
+    const entry = diagnosticCall?.[0];
+    expect(entry?.code).toBe("responseFormat=false:kind=parse-or-empty-output:rawItemCount=0");
+    expect(JSON.stringify(entry)).not.toContain("gpt-4o");
+    expect(entry?.code).not.toMatch(/ /);
+  });
+
   it("dedups a salient candidate against an already-stored body", async () => {
     const vault = makeVault();
     const deps = makeDeps({ memoryVault: vault });
@@ -756,7 +871,7 @@ describe("captureSalientFromTurn", () => {
       schemaVersion: "1",
       scope: { kind: "project", projectId: ctx.projectId },
       type: "semantic-fact",
-      body: "The user is building a fintech app called Atlas.",
+      body: "I'm building a fintech app called Atlas.",
       tags: [],
       provenance: {
         sourceKind: "system-default",
@@ -790,7 +905,7 @@ describe("captureSalientFromTurn", () => {
       schemaVersion: "1",
       scope: { kind: "project", projectId: ctx.projectId },
       type: "semantic-fact",
-      body: "The user is building a fintech app called Atlas.",
+      body: "I'm building a fintech app called Atlas.",
       tags: [],
       provenance: {
         sourceKind: "system-default",
@@ -823,7 +938,7 @@ describe("captureSalientFromTurn", () => {
           JSON.stringify([
             {
               source: "user",
-              body: "The user's private support email is developer@example.com.",
+              body: "My private support email is developer@example.com.",
               type: "fact",
               confidence: 0.8,
               scope: "user",
@@ -835,7 +950,7 @@ describe("captureSalientFromTurn", () => {
     const ctx = context();
     const actions = await captureSalientFromTurn(
       deps,
-      { content: "I prefer issue triage on Monday mornings.", memory: { enabled: true } },
+      { content: "My private support email is developer@example.com.", memory: { enabled: true } },
       ctx,
       "gpt-test",
       "ok",
@@ -850,7 +965,7 @@ describe("captureSalientFromTurn", () => {
     expect(records).toHaveLength(1);
     expect(records[0]?.status).toBe("proposed");
     expect(records[0]?.provenance.sensitivity).toBe("confidential");
-    expect(records[0]?.body).toBe("The user's private support email is developer@example.com.");
+    expect(records[0]?.body).toBe("My private support email is developer@example.com.");
   });
 
   it("isPersistableMemoryCandidate guard persists non-restricted sensitive and public candidates", async () => {
@@ -865,7 +980,7 @@ describe("captureSalientFromTurn", () => {
           JSON.stringify([
             {
               source: "user",
-              body: "The user's contact email is private@example.com.",
+              body: "My contact email is private@example.com.",
               type: "fact",
               confidence: 0.7,
               scope: "user",
@@ -873,7 +988,7 @@ describe("captureSalientFromTurn", () => {
             },
             {
               source: "user",
-              body: "The user works in the payments domain.",
+              body: "I work in the payments domain.",
               type: "fact",
               confidence: 0.7,
               scope: "user",
@@ -885,10 +1000,8 @@ describe("captureSalientFromTurn", () => {
     const ctx = context();
     const actions = await captureSalientFromTurn(
       deps,
-      // User text is safe (no email/secret) so the egress guard passes; the model response
-      // contains one sensitive item (email → confidential) and one public item.
       {
-        content: "I work in the payments domain and have a contact address.",
+        content: "My contact email is private@example.com. I work in the payments domain.",
         memory: { enabled: true },
       },
       ctx,
@@ -905,7 +1018,7 @@ describe("captureSalientFromTurn", () => {
     });
     expect(candidates[1]).toMatchObject({
       kind: "candidate",
-      body: "The user works in the payments domain.",
+      body: "I work in the payments domain.",
       requiresApproval: false,
     });
     expect(countMemories(vault, ctx)).toBe(2);
@@ -920,7 +1033,7 @@ describe("captureSalientFromTurn", () => {
           JSON.stringify([
             {
               source: "user",
-              body: "Die Telefonnummer des Nutzers ist +49 30 1234567.",
+              body: "Meine Telefonnummer ist +49 30 1234567.",
               type: "fact",
               confidence: 0.7,
               scope: "user",
@@ -928,7 +1041,7 @@ describe("captureSalientFromTurn", () => {
             },
             {
               source: "user",
-              body: "Der Nutzer bevorzugt Vitest.",
+              body: "Ich bevorzuge Vitest.",
               type: "preference",
               confidence: 0.8,
               scope: "user",
@@ -941,7 +1054,7 @@ describe("captureSalientFromTurn", () => {
     const actions = await captureSalientFromTurn(
       deps,
       {
-        content: "Meine Telefonnummer ist +49 30 1234567 und ich bevorzuge Vitest.",
+        content: "Meine Telefonnummer ist +49 30 1234567. Ich bevorzuge Vitest.",
         memory: { enabled: true },
       },
       ctx,
@@ -956,7 +1069,7 @@ describe("captureSalientFromTurn", () => {
     });
     expect(actions[1]).toMatchObject({
       kind: "candidate",
-      body: "Der Nutzer bevorzugt Vitest.",
+      body: "Ich bevorzuge Vitest.",
       requiresApproval: false,
     });
     expect(countMemories(vault, ctx)).toBe(2);

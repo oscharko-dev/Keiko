@@ -13,15 +13,27 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
-import {
-  DEFAULT_CONTEXT_PROFILE,
-  standardPodModelUsePolicy,
-  type KnowledgeCapsuleId,
-  type KnowledgeSourceId,
+import type { WorkspaceFs, WorkspaceInfo, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
+import type {
+  KnowledgeCapsuleId,
+  KnowledgeSourceId,
+  MemoryAuditEvent,
+  MemoryId,
+  MemoryRecord,
+  MemoryUserId,
 } from "@oscharko-dev/keiko-contracts";
+import { ATLASSIAN_CONNECTOR_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
+import { composeCodingContextConnectors } from "./coding-context/codingContextRoutes.js";
+import { gitHubCodeContextPortFor } from "./coding-context/githubIssueReaderAuthorization.js";
+import { deriveRepositoryId } from "./task-workspace/naming.js";
+import { resolveAtlassianActionApprovalRegistry } from "./atlassian/actionApprovals.js";
+import { resolveAtlassianSyncJobRegistry } from "./atlassian/syncService.js";
+import { closeFileServerLogSinks, createFileServerLogSink } from "./observability/server-log.js";
 import {
   addSourceToCapsule,
   createCapsule,
@@ -34,6 +46,7 @@ import {
 import type {
   GatewayConfig,
   ModelCapability,
+  ModelProviderConfig,
   OpenAIEmbeddingAdapter,
   OpenAIEmbeddingOutcome,
   OpenAIEmbeddingRequest,
@@ -41,22 +54,36 @@ import type {
 import {
   buildRedactor,
   buildUiHandlerDeps,
+  createLiveCodingChildModelPortFactory,
   createOperatorProvisioningQualification,
   currentGatewayEgressConfig,
   currentRedactionSecrets,
+  disposeRuntimeServicesRecorded,
   ensureManagedTaskWorkspaceIdentity,
-  redactEvidenceString,
   reconcileTaskWorkspacesAtStartup,
+  redactEvidenceString,
+  updateCandidateGate,
+  TeardownFaults,
   type UiHandlerDeps,
 } from "./deps.js";
-import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
-import type { WorkspaceReconciliationService } from "./task-workspace/types.js";
 import {
-  TASK_WORKSPACE_SCHEMA_VERSION,
-  type WorkspaceInstance,
-  type WorkspaceReconciliationReport,
+  DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  type ServerDiagnosticRecord,
+  type ServerDiagnosticSink,
+} from "./diagnostics-log.js";
+import type { WorkspaceReconciliationService } from "./task-workspace/types.js";
+import { currentOpenSseStreamCount } from "./sse-write.js";
+import { createWorkspaceWatchService } from "./editor/watch/workspaceWatchService.js";
+import type {
+  WorkspaceInstance,
+  WorkspaceReconciliationReport,
 } from "@oscharko-dev/keiko-contracts";
-import { parseGatewayConfig } from "@oscharko-dev/keiko-model-gateway";
+import { TASK_WORKSPACE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
+import {
+  parseGatewayConfig,
+  toolCallingConfigurationFingerprint,
+} from "@oscharko-dev/keiko-model-gateway";
+import type { ServerLogEvent } from "./observability/index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { DatabaseSync } from "node:sqlite";
 import { buildCspHeader } from "./csp.js";
@@ -66,7 +93,20 @@ import type { DapProductionProvisioning } from "./editor/dap/dapProductionServic
 import type { ManagedLspControlService } from "./editor/lsp/managedLspControl.js";
 import { createWorkspaceScriptTrustService } from "./workspace-script-trust.js";
 import { buildBinding } from "./task-workspace/binding.js";
+import { assertManagedRootOwned } from "./task-workspace/managed-root.js";
+import { inspectManagedGitdirIdentity } from "./task-workspace/gitdir-identity.js";
 import type { WorkspaceProvisioningService } from "./task-workspace/types.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import type { RuntimeShutdownCleanup } from "./deps-activity.js";
+import { resolvePrDescriptionApplicationServiceForContext } from "./gitDelivery/prDescriptionRoutes.js";
+import { createUpdateRemediationManager } from "./update-remediation.js";
+import { createUpdateLocalStateManager } from "./update-local-state.js";
 
 const tmpDirs: string[] = [];
 
@@ -91,6 +131,87 @@ function tmp(prefix: string): string {
   const d = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   tmpDirs.push(d);
   return d;
+}
+
+function snapshotWorkspace(): WorkspaceInfo {
+  const root = tmp("snapshot-composition-");
+  const git = (...args: string[]): void => {
+    execFileSync("git", ["-c", "commit.gpgsign=false", ...args], {
+      cwd: root,
+      stdio: "ignore",
+      env: {
+        PATH: process.env.PATH,
+        HOME: "/nonexistent",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+      },
+    });
+  };
+  git("init", "-q", "-b", "main");
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "fixture@example.invalid");
+  writeFileSync(join(root, "source.txt"), "transient snapshot content\n");
+  git("add", "source.txt");
+  git("commit", "-qm", "base");
+  git("checkout", "-qb", "feature");
+  writeFileSync(join(root, "source.txt"), "changed transient snapshot content\n");
+  git("commit", "-qam", "change");
+  return {
+    root,
+    selectedRoot: root,
+    name: undefined,
+    version: undefined,
+    testFramework: "unknown",
+    sourceDirs: [],
+    testDirs: [],
+    languages: [],
+    ignoreLines: [],
+  };
+}
+
+function isolatedMemoryEnv(env: Readonly<Record<string, string>> = {}): Record<string, string> {
+  return { ...env, KEIKO_MEMORY_DIR: tmp("deps-memory-") };
+}
+
+function memoryAuditFixture(): MemoryRecord {
+  return {
+    id: "memory-audit-restart" as MemoryId,
+    schemaVersion: "1",
+    scope: { kind: "user", userId: "memory-audit-user" as MemoryUserId },
+    type: "preference",
+    body: "Restart audit fixture.",
+    provenance: {
+      sourceKind: "explicit-user-instruction",
+      capturedAt: 1_750_000_000_000,
+      confidence: 0.9,
+      sensitivity: "public",
+    },
+    validity: { validFrom: 1_750_000_000_000 },
+    status: "proposed",
+    pinned: false,
+    tags: [],
+    createdAt: 1_750_000_000_000,
+    updatedAt: 1_750_000_000_000,
+  };
+}
+
+function requiredMemoryVault(deps: UiHandlerDeps): NonNullable<UiHandlerDeps["memoryVault"]> {
+  if (deps.memoryVault === undefined) {
+    throw new TypeError("Expected production memory vault wiring.");
+  }
+  return deps.memoryVault;
+}
+
+function memoryAuditEvents(deps: UiHandlerDeps): readonly MemoryAuditEvent[] {
+  const runId = deps.evidenceStore.list().find((value) => value.startsWith("memory-audit-"));
+  if (runId === undefined) {
+    throw new TypeError("Expected memory audit evidence.");
+  }
+  const json = deps.evidenceStore.get(runId);
+  if (json === undefined) {
+    throw new TypeError("Expected readable memory audit evidence.");
+  }
+  return JSON.parse(json) as MemoryAuditEvent[];
 }
 
 function operatorDapDocument(): Record<string, unknown> {
@@ -119,6 +240,89 @@ function operatorDapDocument(): Record<string, unknown> {
     },
   };
 }
+
+describe("portable updater startup recovery composition", () => {
+  it.each([
+    ["corrupt", "{broken"],
+    ["incompatible", JSON.stringify({ schemaVersion: 999 })],
+  ])("surfaces %s runtime state through the non-throwing recovery port", async (_kind, raw) => {
+    const stateDir = tmp("keiko-update-recovery-composition-");
+    mkdirSync(join(stateDir, "updates"), { recursive: true });
+    writeFileSync(join(stateDir, "updates", "runtime-state.json"), raw, "utf8");
+
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("keiko-update-recovery-evidence-"),
+      env: { KEIKO_STATE_DIR: stateDir },
+      store: createInMemoryUiStore(),
+    });
+    try {
+      const recovery = deps.updateStartupRecovery;
+      expect(recovery).toBeDefined();
+      await expect(
+        recovery?.reconcile({
+          phase: "pre-listen",
+          current: {
+            pid: process.pid,
+            launchId: "ab".repeat(16),
+            host: "127.0.0.1",
+            port: 1983,
+            version: "0.3.17",
+          },
+        }),
+      ).resolves.toMatchObject({ status: "recovery-required", reason: _kind });
+    } finally {
+      await deps.dispose?.();
+    }
+  });
+});
+
+describe("update candidate remediation gate", () => {
+  it("blocks an immutable candidate while migration review is required", () => {
+    const stateDir = tmp("keiko-update-candidate-gate-");
+    const remediation = createUpdateRemediationManager({
+      localState: createUpdateLocalStateManager({ stateDir }),
+    });
+    const gate = updateCandidateGate(remediation);
+
+    expect(() => {
+      gate(
+        {
+          schemaVersion: "1",
+          candidateId: "candidate-reviewed",
+          currentVersion: "0.3.17",
+          targetVersion: "0.3.18",
+          channel: "stable",
+          install: {
+            packageName: "@oscharko-dev/keiko",
+            installKind: "package-manager",
+            packageManager: "npm",
+            installIdentitySha256: "a".repeat(64),
+          },
+          release: { source: "github-release", tag: "v0.3.18" },
+          releaseImpactDigest: "b".repeat(64),
+          issuedAt: "2026-09-10T12:00:00.000Z",
+          expiresAt: "2026-09-10T12:10:00.000Z",
+        },
+        {
+          stateImpact: [
+            {
+              store: "config",
+              description: "Configuration migration requires review.",
+              remediation: "migration-required",
+              userActionRequired: true,
+            },
+          ],
+        },
+      );
+    }).toThrow(
+      expect.objectContaining({
+        code: "UPDATE_REMEDIATION_REQUIRED",
+        status: 409,
+      }),
+    );
+  });
+});
 
 function qualifiedOperatorDapDocument(): {
   readonly document: Record<string, unknown>;
@@ -198,7 +402,17 @@ function realWorkspaceFs(): WorkspaceFs {
   };
 }
 
-function managedWorkspaceInstance(repositoryRoot: string, managedRoot: string): WorkspaceInstance {
+function managedWorkspaceInstance(
+  repositoryRoot: string,
+  managedRoot: string,
+  // #3347 managed-worktree identity: resolveManagedWorkspaceRootAccess re-proves a real Git
+  // linked-worktree pointer instead of trusting a path shape, so a caller that actually reaches
+  // that resolver (verificationRunner.discover, provisioning.provision) must construct a genuine
+  // `git worktree add` linkage and pass its real inspectManagedGitdirIdentity() result here. The
+  // placeholder default keeps the other two callers below unchanged -- they exercise
+  // ensureManagedTaskWorkspaceIdentity/workspaceScriptTrust directly and never validate this field.
+  gitdirIdentity = "gitdir-identity",
+): WorkspaceInstance {
   return {
     schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
     workspaceId: "workspace-1",
@@ -208,7 +422,7 @@ function managedWorkspaceInstance(repositoryRoot: string, managedRoot: string): 
     baseBranch: "dev",
     taskBranch: "keiko/task/coding-workbench-dev",
     managedWorktreePath: managedRoot,
-    gitdirIdentity: "gitdir-identity",
+    gitdirIdentity,
     lifecycleState: "active",
     health: "healthy",
     lock: null,
@@ -322,6 +536,18 @@ function codingCapability(modelId: string): ModelCapability {
   };
 }
 
+function verifiedCodingCapability(provider: ModelProviderConfig): ModelCapability {
+  return {
+    ...codingCapability(provider.modelId),
+    toolCallingVerification: {
+      status: "verified",
+      checkedAt: new Date().toISOString(),
+      probe: "gateway-tool-calling-v1",
+      configurationFingerprint: toolCallingConfigurationFingerprint(provider),
+    },
+  };
+}
+
 function gatewayConfigWithCapabilities(
   capabilities: readonly ReturnType<typeof chatCapability>[],
 ): string {
@@ -390,6 +616,48 @@ describe("buildRedactor", () => {
 });
 
 describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
+  it("keeps snapshot content scoped to one live server composition and discards it on disposal", async () => {
+    const workspace = snapshotWorkspace();
+    const stateA = tmp("snapshot-state-a-");
+    const stateB = tmp("snapshot-state-b-");
+    const depsA = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: join(stateA, "evidence"),
+      env: {},
+      uiDbPath: join(stateA, "keiko-ui.db"),
+    });
+    const depsB = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: join(stateB, "evidence"),
+      env: {},
+      uiDbPath: join(stateB, "keiko-ui.db"),
+    });
+    const a = depsA.gitChangeSnapshotService;
+    const b = depsB.gitChangeSnapshotService;
+    try {
+      if (a === undefined || b === undefined) throw new Error("snapshot service not composed");
+      const input = {
+        workspace,
+        baseRef: "main",
+        headRef: "feature",
+        accessScope: {},
+        correlationId: "snapshot-composition",
+      };
+      const first = await a.capture(input);
+      const second = await b.capture(input);
+      if (first.reference === undefined || second.reference === undefined)
+        throw new Error("snapshot capture failed");
+      expect(a.read(first.reference, input.accessScope, input.correlationId)).toBeDefined();
+      expect(b.read(first.reference, input.accessScope, input.correlationId)).toBeUndefined();
+      await depsA.dispose?.();
+      expect(a.read(first.reference, input.accessScope, input.correlationId)).toBeUndefined();
+      expect(b.read(second.reference, input.accessScope, input.correlationId)).toBeDefined();
+    } finally {
+      await depsA.dispose?.();
+      await depsB.dispose?.();
+    }
+  });
+
   it("uses the injected store unchanged when supplied", () => {
     const store = createInMemoryUiStore();
     const evidenceDir = tmp("ev-");
@@ -401,6 +669,264 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     });
     expect(deps.store).toBe(store);
     expect(deps.managedLspControl).toBeDefined();
+    expect(deps.voiceRecapContentAttestations).toBeDefined();
+  }, 15000);
+
+  // AGENTS.md §8 Rule 2, learned the hard way (run 9, 2026-09-10): when this process goes away, the
+  // activity log used to show only what a shutdown LEAVES BEHIND — streams closing, an aborted
+  // gateway call, a run settling as "cancelled" — and nothing saying a shutdown had begun. The cause
+  // lived in the dev runner's console, which a customer does not have. These two lines bracket the
+  // teardown under one correlation id and say what was live when it started.
+  it("brackets its own teardown with body-free shutdown evidence", async (): Promise<void> => {
+    const records: ServerLogEvent[] = [];
+    const stateDir = tmp("shutdown-evidence-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("shutdown-evidence-ev-"),
+      env: {},
+      uiDbPath: join(stateDir, "keiko-ui.db"),
+      activityLog: { write: (event: ServerLogEvent): void => void records.push(event) },
+    });
+
+    // The module-level counter is whatever other suites left open; the line must carry exactly it.
+    const openStreamsAtTeardown = currentOpenSseStreamCount();
+    await deps.dispose?.();
+
+    const shutdown = records.filter((event) => event.op === "server.runtime.shutdown");
+    expect(shutdown).toHaveLength(2);
+    expect(shutdown[0]).toMatchObject({
+      level: "warn",
+      category: "process",
+      extra: {
+        state: "started",
+        activeRunCount: 0,
+        openSseStreamCount: openStreamsAtTeardown,
+        completeness: "complete",
+        loss: "none",
+      },
+    });
+    expect(shutdown[1]).toMatchObject({
+      level: "info",
+      category: "process",
+      extra: {
+        state: "completed",
+        // What the teardown achieved, not "the call did not throw": this composition has a control
+        // plane with no live run, so its shutdown ends cleanly (owner review, PR #3452).
+        runtimeShutdown: "ended",
+        // The cleanup's own disposition rides on the same line, so a rejecting cleanup can never
+        // leave only the `started` half behind (CodeRabbit review, 2026-09-10).
+        cleanup: "completed",
+        durationMs: expect.any(Number) as unknown,
+        completeness: "complete",
+        loss: "none",
+      },
+    });
+    // One id joins the pair, so `keiko support analyze --correlation-id <id>` reads the teardown.
+    expect(shutdown[0]?.correlationId).toBe(shutdown[1]?.correlationId);
+    expect(shutdown[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(JSON.stringify(shutdown)).not.toContain(stateDir);
+  }, 15000);
+
+  // A process that owns its Activity Log (keiko ui, the dev BFF) wrote these shutdown lines after its
+  // own close, so it exited with an active segment the next start recovered as an orphan, on every
+  // restart of a live dev session. With the option set, dispose seals the segment as its last step.
+  it("seals the Activity Log after the shutdown lines when the process owns it", async (): Promise<void> => {
+    const stateDir = tmp("shutdown-seal-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("shutdown-seal-ev-"),
+      env: {},
+      uiDbPath: join(stateDir, "keiko-ui.db"),
+      activityLog: createFileServerLogSink(stateDir),
+      closeActivityLogOnDispose: true,
+    });
+
+    await deps.dispose?.();
+
+    const names = readdirSync(join(stateDir, "logs"));
+    expect(names.filter((name) => name.endsWith(".active.jsonl"))).toEqual([]);
+    const segments = names.filter((name) => name.startsWith("activity-"));
+    expect(segments).toHaveLength(1);
+    const lines = readFileSync(join(stateDir, "logs", segments[0] ?? ""), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(lines.filter((line) => line.op === "server.runtime.shutdown")).toHaveLength(2);
+    expect(lines.at(-1)).toMatchObject({ op: "activity-log.segment.sealed", sealReason: "close" });
+  }, 15000);
+
+  it("leaves the Activity Log open for a caller that builds and disposes deps repeatedly", async (): Promise<void> => {
+    const stateDir = tmp("shutdown-open-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("shutdown-open-ev-"),
+      env: {},
+      uiDbPath: join(stateDir, "keiko-ui.db"),
+      activityLog: createFileServerLogSink(stateDir),
+    });
+    try {
+      await deps.dispose?.();
+
+      const active = readdirSync(join(stateDir, "logs")).filter((name) =>
+        name.endsWith(".active.jsonl"),
+      );
+      expect(active).toHaveLength(1);
+    } finally {
+      closeFileServerLogSinks();
+    }
+  }, 15000);
+
+  // Owner review, PR #3452: the teardown's cleanup can fail on its own. Both branches of that failure
+  // go through the helper the dispose closure runs in its `finally`, reproduced here in the same
+  // shape: the faulted cleanup is recorded with its full body-free description either way, an earlier
+  // failure is never masked, and the cleanup's own error surfaces when nothing else was failing.
+  it("keeps the earlier failure when the cleanup also faults, and records why it faulted", async (): Promise<void> => {
+    const records: RuntimeShutdownCleanup[] = [];
+    const earlier = new Error("orchestrator shutdown failed");
+    const cleanupError = new Error("cleanup failed", { cause: new TypeError("inner") });
+    const teardown = async (): Promise<void> => {
+      try {
+        throw earlier;
+      } finally {
+        await disposeRuntimeServicesRecorded(
+          () => Promise.reject(cleanupError),
+          (cleanup): void => void records.push(cleanup),
+          true,
+        );
+      }
+    };
+
+    await expect(teardown()).rejects.toBe(earlier);
+    expect(records).toEqual([
+      expect.objectContaining({
+        cleanup: "faulted",
+        errorClass: "Error",
+        causeChain: ["TypeError"],
+      }),
+    ]);
+  });
+
+  it("surfaces the cleanup's own error when the shutdown itself succeeded", async (): Promise<void> => {
+    const records: RuntimeShutdownCleanup[] = [];
+    const cleanupError = new Error("cleanup failed");
+
+    await expect(
+      disposeRuntimeServicesRecorded(
+        () => Promise.reject(cleanupError),
+        (cleanup): void => void records.push(cleanup),
+        false,
+      ),
+    ).rejects.toBe(cleanupError);
+    expect(records).toEqual([expect.objectContaining({ cleanup: "faulted", errorClass: "Error" })]);
+  });
+
+  // Owner review, PR #3452: the two lines above exercise `recordRuntimeShutdown`'s warn-level
+  // branch only through `disposeRuntimeServicesRecorded` called directly with a hand-rolled
+  // record callback -- the level-selection branch inside `recordRuntimeShutdown` itself was never
+  // driven through the composed `dispose()` a real process actually calls. This drives a teardown
+  // step (`gitChangeSnapshotService.close`) that genuinely throws through `buildUiHandlerDeps`'s
+  // own composed dispose(), so the warn level is proven from the seam a customer's process uses.
+  it("marks the completion line a warning when a composed teardown step actually faults", async (): Promise<void> => {
+    const records: ServerLogEvent[] = [];
+    const stateDir = tmp("shutdown-fault-evidence-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("shutdown-fault-evidence-ev-"),
+      env: {},
+      uiDbPath: join(stateDir, "keiko-ui.db"),
+      activityLog: { write: (event: ServerLogEvent): void => void records.push(event) },
+    });
+    if (deps.gitChangeSnapshotService === undefined) {
+      throw new Error("snapshot service not composed");
+    }
+    const closeFailure = new Error("snapshot service close failed");
+    const close = vi.spyOn(deps.gitChangeSnapshotService, "close").mockImplementation(() => {
+      throw closeFailure;
+    });
+
+    let caught: unknown;
+    try {
+      await deps.dispose?.();
+    } catch (error) {
+      caught = error;
+    } finally {
+      close.mockRestore();
+    }
+
+    expect(caught).toBe(closeFailure);
+    // Every later step still ran although the first one threw: the shared node:sqlite handle, which
+    // the last step closes, is closed (CodeRabbit review, PR #3452).
+    expect(() => {
+      deps.store.listProjects();
+    }).toThrow();
+    const shutdown = records.filter((event) => event.op === "server.runtime.shutdown");
+    expect(shutdown).toHaveLength(2);
+    expect(shutdown[1]).toMatchObject({
+      level: "warn",
+      category: "process",
+      extra: {
+        state: "completed",
+        cleanup: "faulted",
+        errorClass: "Error",
+        failedStepCount: 1,
+        failedStepErrorClasses: ["Error"],
+      },
+    });
+  }, 15000);
+
+  // Owner review, PR #3452: when several steps fail, every failure survives in step order, the first
+  // one leads the completion line, and the line names how many steps failed and their classes. One
+  // failing step cannot tell "keep the first" from "keep the last"; two with different classes can.
+  it("keeps every failed teardown step, the first one leading, when several steps fault", async (): Promise<void> => {
+    const records: ServerLogEvent[] = [];
+    const stateDir = tmp("shutdown-faults-evidence-");
+    const workspaceWatchService = createWorkspaceWatchService();
+    const watchFailure = new TypeError("watch service dispose failed");
+    vi.spyOn(workspaceWatchService, "disposeAll").mockImplementation(() => {
+      throw watchFailure;
+    });
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("shutdown-faults-evidence-ev-"),
+      env: {},
+      uiDbPath: join(stateDir, "keiko-ui.db"),
+      workspaceWatchService,
+      activityLog: { write: (event: ServerLogEvent): void => void records.push(event) },
+    });
+    if (deps.gitChangeSnapshotService === undefined) {
+      throw new Error("snapshot service not composed");
+    }
+    const closeFailure = new Error("snapshot service close failed");
+    const close = vi.spyOn(deps.gitChangeSnapshotService, "close").mockImplementation(() => {
+      throw closeFailure;
+    });
+
+    let caught: unknown;
+    try {
+      await deps.dispose?.();
+    } catch (error) {
+      caught = error;
+    } finally {
+      close.mockRestore();
+    }
+
+    expect(caught).toBeInstanceOf(TeardownFaults);
+    expect((caught as TeardownFaults).errors as unknown[]).toEqual([closeFailure, watchFailure]);
+    // The steps after both failures still ran: the SQLite handle the last step closes is closed.
+    expect(() => {
+      deps.store.listProjects();
+    }).toThrow();
+    const completed = records.filter((event) => event.op === "server.runtime.shutdown")[1];
+    expect(completed).toMatchObject({
+      level: "warn",
+      extra: {
+        state: "completed",
+        cleanup: "faulted",
+        errorClass: "Error",
+        failedStepCount: 2,
+        failedStepErrorClasses: ["Error", "TypeError"],
+      },
+    });
   }, 15000);
 
   it("materializes the managed root before content-bearing routes classify ordinary roots", async (): Promise<void> => {
@@ -421,14 +947,45 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
   });
 
   it("gives a managed worktree its own exact trust identity from the selected root grant", async () => {
-    const stateDir = tmp("managed-root-identity-");
+    // Production-shaped: `~/.keiko/ui/keiko-ui.db` puts the managed root below `.keiko`, a segment
+    // the user-workspace deny list refuses as a workspace root. The derivation used to re-admit the
+    // worktree through those rules and every trusted-repository bind on a default installation
+    // failed PROVISIONING_FAILED (2026-09-10); a tmp root without the segment could not see it.
+    const stateDir = join(tmp("managed-root-identity-"), ".keiko", "ui");
+    mkdirSync(stateDir, { recursive: true });
     const repositoryRoot = tmp("managed-root-source-");
     const managedRoot = join(stateDir, "task-workspaces", "repo-1", "workspace-1");
-    mkdirSync(managedRoot, { recursive: true });
+    // This test reaches deps.verificationRunner.discover(managedRoot) below, which resolves
+    // through resolveManagedWorkspaceRootAccess and therefore genuinely re-proves a Git linked
+    // worktree pointer (#3347) -- a plain mkdir no longer admits, so build a real one.
+    // assertManagedRootOwned must run BEFORE anything else touches "task-workspaces": a plain
+    // recursive mkdir for the repo-1 subdirectory below would otherwise create it first with the
+    // process umask's default mode, so buildUiHandlerDeps' own materializedManagedRoot call later
+    // finds it "already exists" and never applies the 0700 mode + ownership marker this check needs.
+    assertManagedRootOwned(join(stateDir, "task-workspaces"));
+    execFileSync("git", ["init", "-q"], { cwd: repositoryRoot });
+    execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: repositoryRoot });
+    execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: repositoryRoot });
     const packageManifest = JSON.stringify({ name: "shared" });
     writeFileSync(join(repositoryRoot, "package.json"), packageManifest);
+    execFileSync("git", ["add", "package.json"], { cwd: repositoryRoot });
+    execFileSync("git", ["commit", "-qm", "fixture"], { cwd: repositoryRoot });
+    mkdirSync(join(stateDir, "task-workspaces", "repo-1"), { recursive: true });
+    execFileSync(
+      "git",
+      ["worktree", "add", "-q", "-b", "keiko/task/coding-workbench-dev", managedRoot, "HEAD"],
+      { cwd: repositoryRoot },
+    );
     writeFileSync(join(managedRoot, "package.json"), packageManifest);
-    const instance = managedWorkspaceInstance(repositoryRoot, managedRoot);
+    const gitdirInspection = inspectManagedGitdirIdentity(managedRoot, repositoryRoot);
+    if (gitdirInspection === undefined) {
+      throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
+    }
+    const instance = managedWorkspaceInstance(
+      repositoryRoot,
+      managedRoot,
+      gitdirInspection.identity,
+    );
     const store = createInMemoryUiStore();
     const deps = buildUiHandlerDeps({
       configPath: undefined,
@@ -489,6 +1046,140 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     }
   });
 
+  // Fresh-installation run (2026-09-10): a repository bound through the Coding Workbench was never a
+  // registered project, so script trust could not be resolved for it at all, the Workspace Trust
+  // panel had no row for it, and every verification inside its task workspace was refused with no
+  // surface able to offer the grant. Registration is what makes it a trust SUBJECT; it is not a
+  // grant, and the repository stays restricted until the operator decides.
+  it("registers the bound repository as a restricted trust subject and logs it once", () => {
+    const repositoryRoot = tmp("managed-root-register-source-");
+    const managedRoot = tmp("managed-root-register-target-");
+    const manifest = JSON.stringify({ name: "shared" });
+    writeFileSync(join(repositoryRoot, "package.json"), manifest);
+    writeFileSync(join(managedRoot, "package.json"), manifest);
+    const instance = managedWorkspaceInstance(repositoryRoot, managedRoot);
+    const store = createInMemoryUiStore();
+    const workspaceScriptTrust = createWorkspaceScriptTrustService({ store });
+    const events: ServerLogEvent[] = [];
+    const activityLog = { write: (event: ServerLogEvent): void => void events.push(event) };
+
+    try {
+      expect(store.listProjects().some((project) => project.path === repositoryRoot)).toBe(false);
+
+      ensureManagedTaskWorkspaceIdentity({
+        uiStore: store,
+        workspaceScriptTrust,
+        instance,
+        correlationId: "provision-correlation-1",
+        activityLog,
+      });
+
+      expect(store.listProjects().some((project) => project.path === repositoryRoot)).toBe(true);
+      // Registered, never granted: the operator's decision is still outstanding, and the worktree
+      // inherits nothing from a repository that carries no grant.
+      expect(workspaceScriptTrust.trustLevelForRoot(repositoryRoot)).toBe("restricted");
+      expect(workspaceScriptTrust.status(repositoryRoot)).toMatchObject({ trust: "restricted" });
+      expect(
+        store.readWorkspaceTrustRecord(requiredManifestRootRef(store, managedRoot)),
+      ).toBeUndefined();
+      expect(events).toEqual([
+        expect.objectContaining({
+          op: "task-workspace.repository.registered",
+          correlationId: "provision-correlation-1",
+          extra: {
+            repositoryId: instance.repositoryId,
+            granted: false,
+            completeness: "complete",
+            loss: "none",
+          },
+        }),
+      ]);
+      // The operator grants the repository through the existing surface; the next exposure derives.
+      workspaceScriptTrust.grant(repositoryRoot);
+      ensureManagedTaskWorkspaceIdentity({
+        uiStore: store,
+        workspaceScriptTrust,
+        instance,
+        activityLog,
+      });
+      expect(workspaceScriptTrust.status(managedRoot)).toMatchObject({
+        trust: "trusted",
+        reason: "derived-from-trusted-root",
+      });
+      // Idempotent: the second exposure re-registers nothing and emits no second line.
+      expect(events).toHaveLength(1);
+      expect(JSON.stringify(events)).not.toContain(repositoryRoot);
+    } finally {
+      store.close();
+    }
+  });
+
+  // PR #3452 review: the exclusion branch had no coverage anywhere, and it approximated
+  // `assertUiDbOutsideProject` instead of asking it. Both cells of the canonical rule are pinned
+  // here, against the SAME helper every other project-registration site uses.
+  it.each([
+    [
+      "refuses a repository that would expose the UI database",
+      (repositoryRoot: string): string => join(repositoryRoot, "state", "keiko-ui.db"),
+      false,
+    ],
+    [
+      "registers a self-hosted repository whose database sits in its runtime state root",
+      (repositoryRoot: string): string =>
+        join(repositoryRoot, ".keiko", "dev", "ui", "keiko-ui.db"),
+      true,
+    ],
+    [
+      "registers a repository whose database lives outside it",
+      (): string => join(tmpdir(), "keiko-elsewhere", "keiko-ui.db"),
+      true,
+    ],
+  ])("%s", (_label, dbPathFor, registered) => {
+    const repositoryRoot = tmp("managed-root-uidb-source-");
+    const managedRoot = tmp("managed-root-uidb-target-");
+    const manifest = JSON.stringify({ name: "shared" });
+    writeFileSync(join(repositoryRoot, "package.json"), manifest);
+    writeFileSync(join(managedRoot, "package.json"), manifest);
+    const instance = managedWorkspaceInstance(repositoryRoot, managedRoot);
+    const store = createInMemoryUiStore();
+    const workspaceScriptTrust = createWorkspaceScriptTrustService({ store });
+    const events: ServerLogEvent[] = [];
+
+    try {
+      ensureManagedTaskWorkspaceIdentity({
+        uiStore: store,
+        workspaceScriptTrust,
+        instance,
+        uiDbPath: dbPathFor(repositoryRoot),
+        activityLog: { write: (event: ServerLogEvent): void => void events.push(event) },
+      });
+
+      expect(store.listProjects().some((project) => project.path === repositoryRoot)).toBe(
+        registered,
+      );
+      // A refusal is recorded too, never silent: it names why the repository stayed unregistered
+      // and so why its verification is refused (CodeRabbit review, PR #3452).
+      expect(events).toEqual([
+        registered
+          ? expect.objectContaining({ op: "task-workspace.repository.registered" })
+          : expect.objectContaining({
+              op: "task-workspace.repository.registration-refused",
+              level: "warn",
+              extra: {
+                repositoryId: instance.repositoryId,
+                reason: "ui-database-inside-repository",
+                completeness: "complete",
+                loss: "none",
+              },
+            }),
+      ]);
+      // The worktree's own identity is registered either way: the repository decision never gates it.
+      expect(store.listProjects().some((project) => project.path === managedRoot)).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
+
   it("does not infer managed trust from a registered root without a human selection grant", () => {
     const repositoryRoot = tmp("managed-root-untrusted-source-");
     const managedRoot = tmp("managed-root-untrusted-target-");
@@ -500,12 +1191,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
 
     try {
       store.createProject(repositoryRoot);
-      ensureManagedTaskWorkspaceIdentity({
-        uiStore: store,
-        workspaceScriptTrust,
-        instance,
-        initializeTrust: true,
-      });
+      ensureManagedTaskWorkspaceIdentity({ uiStore: store, workspaceScriptTrust, instance });
 
       const managedRootRef = requiredManifestRootRef(store, managedRoot);
       expect(store.readWorkspaceTrustRecord(managedRootRef)).toBeUndefined();
@@ -531,17 +1217,84 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     try {
       store.createProject(repositoryRoot);
       workspaceScriptTrust.grant(repositoryRoot);
-      ensureManagedTaskWorkspaceIdentity({
-        uiStore: store,
-        workspaceScriptTrust,
-        instance,
-        initializeTrust: true,
-      });
+      ensureManagedTaskWorkspaceIdentity({ uiStore: store, workspaceScriptTrust, instance });
 
       expect(workspaceScriptTrust.status(managedRoot)).toMatchObject({
         projectId: managedRoot,
         trust: "restricted",
         reason: "state-unavailable",
+      });
+    } finally {
+      store.close();
+    }
+  });
+
+  // #3382/L-3 — the fix, and the two guards the retired `initializeTrust` flag stood for. The flag
+  // let ONLY an explicit provision derive the worktree's record, so a worktree registered while its
+  // repository carried no grant stayed restricted for the rest of its life: activate and
+  // `ensureIdentity` re-registered the identity and skipped trust for good, and the editor's
+  // restricted-mode level for that worktree root could never follow a grant given afterwards.
+  // Relocated here from provisioning.test.ts's `[true, true, false]` assertion, which pinned the
+  // flag rather than the invariant.
+  it("derives managed trust on a later call once the repository grant arrives", () => {
+    const repositoryRoot = tmp("managed-root-late-grant-source-");
+    const managedRoot = tmp("managed-root-late-grant-target-");
+    const manifest = JSON.stringify({ name: "shared" });
+    writeFileSync(join(repositoryRoot, "package.json"), manifest);
+    writeFileSync(join(managedRoot, "package.json"), manifest);
+    const instance = managedWorkspaceInstance(repositoryRoot, managedRoot);
+    const store = createInMemoryUiStore();
+    const workspaceScriptTrust = createWorkspaceScriptTrustService({ store });
+
+    try {
+      store.createProject(repositoryRoot);
+      // First exposure: the repository is not granted yet, so nothing is derived.
+      ensureManagedTaskWorkspaceIdentity({ uiStore: store, workspaceScriptTrust, instance });
+      expect(
+        store.readWorkspaceTrustRecord(requiredManifestRootRef(store, managedRoot)),
+      ).toBeUndefined();
+
+      workspaceScriptTrust.grant(repositoryRoot);
+      // A later exposure (activate / ensureIdentity) now derives from the standing grant.
+      ensureManagedTaskWorkspaceIdentity({ uiStore: store, workspaceScriptTrust, instance });
+
+      expect(workspaceScriptTrust.status(managedRoot)).toMatchObject({
+        projectId: managedRoot,
+        trust: "trusted",
+        reason: "derived-from-trusted-root",
+      });
+      expect(workspaceScriptTrust.trustLevelForRoot(managedRoot)).toBe("trusted");
+    } finally {
+      store.close();
+    }
+  });
+
+  // The second guard, and the reason running the derivation on every exposure still never RENEWS
+  // execution trust: a restricted record is authoritative evidence of revocation or drift, and no
+  // later identity call may overwrite it — not even while the repository stays trusted.
+  it("never overwrites an existing restricted record on a later call", () => {
+    const repositoryRoot = tmp("managed-root-revoked-source-");
+    const managedRoot = tmp("managed-root-revoked-target-");
+    const manifest = JSON.stringify({ name: "shared" });
+    writeFileSync(join(repositoryRoot, "package.json"), manifest);
+    writeFileSync(join(managedRoot, "package.json"), manifest);
+    const instance = managedWorkspaceInstance(repositoryRoot, managedRoot);
+    const store = createInMemoryUiStore();
+    const workspaceScriptTrust = createWorkspaceScriptTrustService({ store });
+
+    try {
+      store.createProject(repositoryRoot);
+      workspaceScriptTrust.grant(repositoryRoot);
+      ensureManagedTaskWorkspaceIdentity({ uiStore: store, workspaceScriptTrust, instance });
+      expect(workspaceScriptTrust.trustLevelForRoot(managedRoot)).toBe("trusted");
+
+      expect(workspaceScriptTrust.revoke(managedRoot)).toEqual({ trusted: false });
+      ensureManagedTaskWorkspaceIdentity({ uiStore: store, workspaceScriptTrust, instance });
+
+      expect(workspaceScriptTrust.status(managedRoot)).toMatchObject({
+        projectId: managedRoot,
+        trust: "restricted",
+        reason: "human-revocation",
       });
     } finally {
       store.close();
@@ -908,6 +1661,195 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     void deps.dispose?.();
   });
 
+  // Review repair (#3399/#3400 production-wiring, description-production-wiring item): the
+  // description authority minted for the composed production runtime must reach BOTH of its
+  // production consumers -- prDescriptionRoutes.ts under `gitDeliveryDescriptionAuthority` and
+  // chat-handlers.ts's git-change turn admission under `gitChangeDescriptionAuthorityPort` (read
+  // via that module's documented optional-cast seam). Before this fix, `assembleUiHandlerDeps`
+  // exposed only the first field, so a real `buildUiHandlerDeps()` composition left
+  // `gitChangeDescriptionAuthorityPort` permanently `undefined` and every Chat turn on a
+  // git-change-connected chat denied closed regardless of any live authority record.
+  it("threads the SAME minted description authority onto both its production consumer field names", () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-runtime-description-authority-"),
+      env: {},
+      uiDbPath: join(tmp("ui-runtime-description-authority-"), "keiko-ui.db"),
+      codingRuntimeStartConfirmationConsumer: { consume: () => undefined },
+      codingRuntimeProductionPorts: {
+        backend: {
+          createRun: (): never => {
+            throw new Error("backend must not be reached");
+          },
+        },
+        secureWorkspaceTextRead: {
+          readText: () => Promise.resolve({ ok: false, reason: "denied" }),
+        },
+        editorAgentClient: {
+          action: () => Promise.reject(new Error("editor must not be reached")),
+        },
+      },
+    });
+
+    expect(deps.codingRuntimeHostQualified).toBe(true);
+    expect(deps.gitDeliveryDescriptionAuthority).toBeDefined();
+    expect(deps.gitChangeDescriptionAuthorityPort).toBeDefined();
+    expect(deps.gitChangeDescriptionAuthorityPort).toBe(deps.gitDeliveryDescriptionAuthority);
+    void deps.dispose?.();
+  });
+
+  // Final-audit F4 (#3400 Chat-connected git-change): `deps.mintDescriptionAuthority` must reach
+  // production composition too, or gitChangeRoutes.ts's connect flow has no mint capability to call
+  // and every Chat turn on a connected chat denies closed regardless of the read port above being
+  // wired. Proven end to end: mint a scope through the composed function, then read it back
+  // through the composed read port under the SAME key.
+  it("threads a real mint capability onto deps.mintDescriptionAuthority (F4)", () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-runtime-description-authority-mint-"),
+      env: {},
+      uiDbPath: join(tmp("ui-runtime-description-authority-mint-"), "keiko-ui.db"),
+      codingRuntimeStartConfirmationConsumer: { consume: () => undefined },
+      codingRuntimeProductionPorts: {
+        backend: {
+          createRun: (): never => {
+            throw new Error("backend must not be reached");
+          },
+        },
+        secureWorkspaceTextRead: {
+          readText: () => Promise.resolve({ ok: false, reason: "denied" }),
+        },
+        editorAgentClient: {
+          action: () => Promise.reject(new Error("editor must not be reached")),
+        },
+      },
+    });
+
+    expect(deps.mintDescriptionAuthority).toBeDefined();
+    expect(deps.gitChangeDescriptionAuthorityPort).toBeDefined();
+    const scope = {
+      remoteDigest: "a".repeat(64),
+      pr: { baseRef: "main", headRef: "feature/x" },
+      snapshotDigest: "b".repeat(64),
+    };
+    const nowIso = new Date().toISOString();
+    deps.mintDescriptionAuthority?.({
+      scope,
+      requestedMode: "governed-assist",
+      nowIso,
+      correlationId: "description-test",
+    });
+    expect(deps.gitChangeDescriptionAuthorityPort?.current(scope, nowIso)).toBeDefined();
+    void deps.dispose?.();
+  });
+
+  // Final-audit F7, relocated to the actual shared resolver after the dead global service was
+  // removed: both a background Workbench producer and HTTP review/approve/apply must receive the
+  // same stateful service from the exact composed deps identity.
+  it("resolves one shared PrDescriptionApplicationService from the composed deps identity (F7)", () => {
+    const store = createInMemoryUiStore();
+    const evidenceDir = tmp("ev-pr-description-service-");
+    const root = tmp("pr-description-project-");
+    store.createProject(root);
+    const deps = buildUiHandlerDeps({
+      // A fake env-only Gateway profile — never a real network target — so
+      // `createProductionPrDescriptionGeneration` composes a real generation deps object over a
+      // real (but unreachable) Gateway instance, exactly like production would for a configured
+      // deployment.
+      configPath: join(evidenceDir, "missing-keiko.config.json"),
+      evidenceDir,
+      env: {
+        KEIKO_MODEL_EXAMPLE_CHAT_MODEL_BASE_URL: "https://models.example.invalid/openai/v1",
+        KEIKO_MODEL_EXAMPLE_CHAT_MODEL_API_KEY: "fake-test-key",
+      },
+      store,
+    });
+
+    expect(deps.prDescriptionGeneration).toBeDefined();
+    const workspace: WorkspaceInfo = {
+      root,
+      selectedRoot: root,
+      name: undefined,
+      version: undefined,
+      testFramework: "unknown",
+      sourceDirs: [],
+      testDirs: [],
+      languages: [],
+      ignoreLines: [],
+    };
+    const accessScope = {};
+    const context = (): {
+      readonly workspace: WorkspaceInfo;
+      readonly repository: string;
+      readonly prNumber: number;
+      readonly accessScope: object;
+      readonly authorityDigest: string;
+      readonly correlationId: string;
+      readonly stillAuthorized: () => boolean;
+    } => ({
+      workspace,
+      repository: "octo/repo",
+      prNumber: 17,
+      accessScope,
+      authorityDigest: "a".repeat(64),
+      correlationId: "description-test",
+      stillAuthorized: (): boolean => true,
+    });
+    const request = { projectId: root, ownerAndRepo: "octo/repo", prNumber: 17 };
+    const first = resolvePrDescriptionApplicationServiceForContext(deps, request, context);
+    const repeated = resolvePrDescriptionApplicationServiceForContext(deps, request, context);
+    expect(first.ok).toBe(true);
+    expect(repeated.ok).toBe(true);
+    if (!first.ok || !repeated.ok) throw new Error("expected shared description service");
+    expect(repeated.service).toBe(first.service);
+
+    void deps.dispose?.();
+    store.close();
+  });
+
+  it("leaves the shared description service unavailable when no model profile is configured (F7)", () => {
+    const store = createInMemoryUiStore();
+    const root = tmp("pr-description-unavailable-project-");
+    store.createProject(root);
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-pr-description-service-unavailable-"),
+      env: {},
+      store,
+    });
+
+    expect(deps.prDescriptionGeneration).toBeUndefined();
+    const workspace: WorkspaceInfo = {
+      root,
+      selectedRoot: root,
+      name: undefined,
+      version: undefined,
+      testFramework: "unknown",
+      sourceDirs: [],
+      testDirs: [],
+      languages: [],
+      ignoreLines: [],
+    };
+    const accessScope = {};
+    const result = resolvePrDescriptionApplicationServiceForContext(
+      deps,
+      { projectId: root, ownerAndRepo: "octo/repo", prNumber: 17 },
+      () => ({
+        workspace,
+        repository: "octo/repo",
+        prNumber: 17,
+        accessScope,
+        authorityDigest: "a".repeat(64),
+        correlationId: "description-test",
+        stillAuthorized: (): boolean => true,
+      }),
+    );
+    expect(result.ok).toBe(false);
+
+    void deps.dispose?.();
+    store.close();
+  });
+
   it("wires production Local Knowledge encryption for heading metadata and retrieval citations", async () => {
     const uiDir = tmp("ui-lk-");
     const evidenceDir = tmp("ev-lk-");
@@ -1001,7 +1943,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     }
   });
 
-  it("seeds the launch project into the UI store as the preferred project", () => {
+  it("seeds an ambient launch directory without inferring package-script trust", async () => {
     const projectDir = tmp("launch-project-");
     const evidenceDir = tmp("ev-launch-");
     const dbPath = join(projectDir, ".keiko", "ui", "keiko-ui.db");
@@ -1015,21 +1957,50 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
 
     expect(deps.preferredProjectPath).toBe(projectDir);
     expect(deps.store.listProjects().map((project) => project.path)).toEqual([projectDir]);
-    deps.store.close();
-    deps.memoryVault?.close();
+    expect(deps.workspaceScriptTrust?.trustLevelForRoot(projectDir)).toBe("restricted");
+    // Use the typed process-lifetime disposal contract instead of touching individual owned
+    // resources; `dispose` closes the shared sqlite handle that backs the store and the vault
+    // together (deps.ts PersistenceBundle.dispose).
+    await deps.dispose?.();
   });
 
-  it("composes the connected-context GitHub port for the launch project", async () => {
+  it("grants package-script trust for an explicitly launcher-selected initial project", async () => {
+    const projectDir = tmp("launcher-selected-project-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-launcher-selected-"),
+      env: {},
+      uiDbPath: join(projectDir, ".keiko", "ui", "keiko-ui.db"),
+      initialProjectPath: projectDir,
+      initialProjectTrustSource: "explicit-launcher-selection",
+    });
+
+    expect(deps.preferredProjectPath).toBe(projectDir);
+    expect(deps.workspaceScriptTrust?.trustLevelForRoot(projectDir)).toBe("trusted");
+    await deps.dispose?.();
+  });
+
+  // Relocated, not dropped. This asserted that assembly composes a GitHub port for the launch
+  // project — the very snapshot that made the port a start-up fact: it won over the per-request
+  // port whenever Keiko started with a project, so the grant was evaluated for the repository the
+  // caller was working in while `gh` stayed confined to the launch directory. Production now
+  // composes none, and the invariant that survives is the one that always mattered: a GitHub port
+  // must be reachable for the repository actually being read.
+  it("composes no launch-time GitHub port, and reaches one for the working repository", async () => {
     const projectDir = tmp("coding-context-project-");
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("coding-context-evidence-"),
-      env: { GITHUB_CONNECTOR_AUTHORIZED: "true" },
+      env: isolatedMemoryEnv(),
       initialProjectPath: projectDir,
+      uiDbPath: join(tmp("coding-context-ui-"), "keiko-ui.db"),
     });
 
     try {
-      expect(deps.codingContextGitHubPort).toBeDefined();
+      expect(deps.codingContextGitHubPort).toBeUndefined();
+      expect(gitHubCodeContextPortFor(projectDir, {})).toBeDefined();
+      // A repository the caller never names still yields no port.
+      expect(gitHubCodeContextPortFor(undefined, {})).toBeUndefined();
     } finally {
       await deps.dispose?.();
     }
@@ -1046,63 +2017,97 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     writeGhStub(injectedBin, "injected");
     writeGhStub(ambientBin, "ambient");
     vi.stubEnv("PATH", ambientBin);
-    const deps = buildUiHandlerDeps({
-      configPath: undefined,
-      evidenceDir: tmp("coding-context-env-evidence-"),
-      env: {
-        GITHUB_CONNECTOR_AUTHORIZED: "true",
-        GH_TOKEN: "test-injected-token",
-        HOME: tmp("coding-context-env-home-"),
-        PATH: injectedBin,
-      },
-      initialProjectPath: tmp("coding-context-env-project-"),
+    // The port is now built per request rather than at assembly, so the environment invariant is
+    // asserted on the factory both composition sites call: the composed environment wins over the
+    // ambient PATH, which is what keeps a stray `gh` on the operator's machine out of the read path.
+    const port = gitHubCodeContextPortFor(tmp("coding-context-env-project-"), {
+      GH_TOKEN: "test-injected-token",
+      HOME: tmp("coding-context-env-home-"),
+      PATH: injectedBin,
     });
 
-    try {
-      await expect(
-        deps.codingContextGitHubPort?.readJson(["api", "repos/example/project/issues/1"]),
-      ).resolves.toEqual({ source: "injected" });
-    } finally {
-      await deps.dispose?.();
-    }
+    await expect(port?.readJson(["api", "repos/example/project/issues/1"])).resolves.toEqual({
+      source: "injected",
+    });
   });
 
-  it("does not compose the connected-context GitHub port without authorization", async () => {
+  // #3385 relocated this pin rather than dropping it. Its invariant is "an unauthorized deployment
+  // cannot read GitHub", and that invariant now lives one layer down: the port is composed
+  // unconditionally because it is an inert `gh api /repos/...` invoker, and the authorization is a
+  // repository-scoped, server-persisted grant re-read on every composition. Asserting the port is
+  // absent would no longer test the invariant; asserting the composed connector config denies the
+  // read does, end to end through the real deps graph.
+  it("denies the GitHub connector for a launch project with no stored authorization", async () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("coding-context-disabled-evidence-"),
-      env: { GITHUB_CONNECTOR_AUTHORIZED: "false" },
+      env: isolatedMemoryEnv(),
       initialProjectPath: tmp("coding-context-disabled-project-"),
+      uiDbPath: join(tmp("coding-context-disabled-ui-"), "keiko-ui.db"),
     });
 
     try {
-      expect(deps.codingContextGitHubPort).toBeUndefined();
+      expect(composeCodingContextConnectors(deps).connectorConfig).toMatchObject({
+        github_connector_authorized: false,
+      });
     } finally {
       await deps.dispose?.();
     }
   });
 
-  it("keeps startup available when optional Jira connector configuration is invalid", async () => {
+  it("admits the GitHub connector only for the exact repository that was authorized", async () => {
+    const projectDir = tmp("coding-context-scoped-project-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("coding-context-scoped-evidence-"),
+      env: isolatedMemoryEnv(),
+      initialProjectPath: projectDir,
+      uiDbPath: join(tmp("coding-context-scoped-ui-"), "keiko-ui.db"),
+    });
+
+    try {
+      // A grant for a DIFFERENT repository must not authorize this one.
+      deps.store.updateGitHubIssueReaderAuthorization(
+        deriveRepositoryId(tmp("coding-context-other-project-")),
+        true,
+        0,
+      );
+      expect(composeCodingContextConnectors(deps).connectorConfig).toMatchObject({
+        github_connector_authorized: false,
+      });
+
+      deps.store.updateGitHubIssueReaderAuthorization(deriveRepositoryId(projectDir), true, 0);
+      expect(composeCodingContextConnectors(deps).connectorConfig).toMatchObject({
+        github_connector_authorized: true,
+      });
+
+      // Revoking takes effect on the next read, with no restart.
+      deps.store.updateGitHubIssueReaderAuthorization(deriveRepositoryId(projectDir), false, 1);
+      expect(composeCodingContextConnectors(deps).connectorConfig).toMatchObject({
+        github_connector_authorized: false,
+      });
+    } finally {
+      await deps.dispose?.();
+    }
+  });
+
+  it("ignores retired Jira env fallback fields and keeps the custody port available", async () => {
     const diagnostics: ServerDiagnosticRecord[] = [];
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("coding-context-invalid-jira-evidence-"),
-      env: {
+      env: isolatedMemoryEnv({
         KEIKO_JIRA_BASE_URL: "http://invalid.example.com",
         KEIKO_JIRA_EMAIL: "operator@example.com",
         KEIKO_JIRA_API_TOKEN: "secret-token",
-      },
+      }),
       diagnostics: { record: (record) => diagnostics.push(record) },
+      uiDbPath: join(tmp("coding-context-jira-ui-"), "keiko-ui.db"),
     });
 
     try {
-      expect(deps.codingContextJiraPort).toBeUndefined();
-      expect(diagnostics).toContainEqual(
-        expect.objectContaining({ source: "deps.codingContextJiraPort" }),
-      );
-      expect(JSON.stringify(diagnostics)).not.toContain("secret-token");
-      expect(JSON.stringify(diagnostics)).not.toContain("invalid.example.com");
-      expect(JSON.stringify(diagnostics)).not.toContain("operator@example.com");
+      expect(deps.codingContextJiraPort).toBeDefined();
+      expect(diagnostics).toEqual([]);
     } finally {
       await deps.dispose?.();
     }
@@ -1139,6 +2144,211 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     deps.store.close();
     deps.memoryVault?.close();
   });
+
+  it("uses one valid correlation for production bootstrap store and memory events", async () => {
+    const stateDir = tmp("bootstrap-correlation-state-");
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "info" }));
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("bootstrap-correlation-evidence-"),
+      uiDbPath: join(stateDir, "keiko-ui.db"),
+      env: {
+        KEIKO_MEMORY_DIR: join(stateDir, "memory"),
+        KEIKO_MEMORY_KEY: Buffer.alloc(32, 7).toString("base64"),
+      },
+    });
+
+    try {
+      const bootstrapOps = new Set([
+        "store.journey-outcomes.migration",
+        "store.opened",
+        "memory-vault.store.opened",
+        "memory.audit.state-cache.seeded",
+      ]);
+      const bootstrapEvents = activityLog.events.filter((event) => bootstrapOps.has(event.op));
+      expect(bootstrapEvents.map((event) => event.op)).toEqual([
+        "store.journey-outcomes.migration",
+        "store.opened",
+        "memory-vault.store.opened",
+        "memory.audit.state-cache.seeded",
+      ]);
+      const correlationIds = new Set(bootstrapEvents.map((event) => event.correlationId));
+      expect([...correlationIds]).toEqual([expect.stringMatching(/^[0-9a-f-]{36}$/u) as unknown]);
+      expect(correlationIds.has(UNKNOWN_CORRELATION_ID)).toBe(false);
+    } finally {
+      await deps.dispose?.();
+      resetServerLogger();
+    }
+  });
+
+  it("seeds memory audit transition state before the first post-restart mutation (#3189)", () => {
+    const memoryDir = tmp("memory-audit-restart-");
+    const evidenceDir = tmp("memory-audit-restart-evidence-");
+    const fixture = memoryAuditFixture();
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "info" }));
+    const first = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { KEIKO_MEMORY_DIR: memoryDir },
+      store: createInMemoryUiStore(),
+    });
+
+    try {
+      requiredMemoryVault(first).insertMemory(fixture);
+    } finally {
+      first.store.close();
+      first.memoryVault?.close();
+    }
+
+    const restarted = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir,
+      env: { KEIKO_MEMORY_DIR: memoryDir },
+      store: createInMemoryUiStore(),
+    });
+    try {
+      const vault = requiredMemoryVault(restarted);
+      vault.updateMemory(fixture.id, { status: "archived" }, fixture.updatedAt + 1);
+      vault.updateMemory(fixture.id, { tags: ["metadata-change"] }, fixture.updatedAt + 2);
+
+      expect(memoryAuditEvents(restarted).map((event) => event.kind)).toEqual([
+        "memory:proposed",
+        "memory:archived",
+        "memory:updated",
+      ]);
+    } finally {
+      restarted.store.close();
+      restarted.memoryVault?.close();
+      resetServerLogger();
+    }
+
+    expect(activityLog.events).toContainEqual(
+      expect.objectContaining({
+        category: "memory",
+        op: "memory.audit.state-cache.seeded",
+        correlationId: expect.stringMatching(/^[0-9a-f-]{36}$/u) as unknown,
+        extra: { recordCount: 1, completeness: "complete", loss: "none" },
+      }),
+    );
+    expect(
+      activityLog.events.some(
+        (event) =>
+          event.op === "memory.audit.state-cache.seeded" &&
+          event.correlationId === UNKNOWN_CORRELATION_ID,
+      ),
+    ).toBe(false);
+  });
+
+  // Wave 4a (epic #3233 §8): a UiStoreSchemaVersionError previously crashed startup as a bare,
+  // undiagnosed exception. Fail-closed is still correct here — this binary genuinely cannot open a
+  // newer schema — but the crash must be diagnosable, mirroring every other composition-root
+  // boundary in this module (see "diagnoses why the managed workspace boundary..." above).
+  it("diagnoses why the UI store could not be opened, and still fails closed", () => {
+    const stateDir = tmp("ui-store-open-diagnostic-");
+    const uiDbPath = join(stateDir, "keiko-ui.db");
+    const seed = new DatabaseSync(uiDbPath);
+    seed.exec("PRAGMA journal_mode = WAL");
+    seed.exec("PRAGMA user_version = 9999");
+    seed.close();
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = {
+      record: (entry) => {
+        records.push(entry);
+      },
+    };
+
+    expect(() =>
+      buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: tmp("ui-store-open-diagnostic-evidence-"),
+        env: {},
+        uiDbPath,
+        diagnostics,
+      }),
+    ).toThrow(/newer than this binary supports/);
+
+    expect(records).toHaveLength(1);
+    expect(records[0]?.source).toBe("deps.composePersistence");
+    expect(records[0]?.operation).toBe("server.composition");
+    expect(records[0]?.message).toBe(DEFAULT_SERVER_DIAGNOSTIC_SUMMARY);
+    expect(records[0]?.correlationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+    // Content-free: the state directory path never enters the record.
+    expect(JSON.stringify(records)).not.toContain(stateDir);
+  });
+});
+
+// #3347 P1: the production-composed workspaceRootAccessResolver's ordinary-root catch used to
+// collapse a denied root and a merely missing/unreadable one to the same bare `undefined`, losing
+// the correlated workspace.root.denied activity-log line for the denied case AND leaving every
+// caller unable to tell a policy refusal from a not-found. These tests exercise the REAL
+// buildUiHandlerDeps-composed resolver (never a hand-rolled fake) end to end: a denied root must
+// stay refused with the "denied" decision AND emit the correlated, body-free denial event; a
+// genuinely missing root must stay refused with the distinct "unresolved" decision and no denial
+// event. The decision is what terminal.ts maps onto 403 CWD_DENIED vs 404 PROJECT_NOT_FOUND, so a
+// regression here would be invisible at every route that depends on it.
+describe("buildUiHandlerDeps — workspaceRootAccessResolver denial logging (#3347 P1)", () => {
+  it("logs a correlated workspace.root.denied event for a denied ordinary root", () => {
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "debug" }));
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-denied-root-"),
+      env: {},
+      store: createInMemoryUiStore(),
+    });
+    // A denied path SEGMENT (".aws") refuses at the lexical check inside
+    // resolveExistingAllowedWorkspaceRealRoot before any real filesystem read, so the directory
+    // need not exist on disk (same fixture shape as grounded-orchestrator.denied-root-log.test.ts).
+    const deniedRoot = join(tmp("denied-root-parent-"), ".aws", "workspace");
+    const correlationId = "deps-denied-root-000001";
+
+    let access: ReturnType<NonNullable<UiHandlerDeps["workspaceRootAccessResolver"]>> | undefined;
+    try {
+      access = deps.workspaceRootAccessResolver?.(deniedRoot, correlationId);
+    } finally {
+      deps.store.close();
+      resetServerLogger();
+    }
+
+    expect(access).toEqual({ decision: "denied" });
+    const denialEvents = activityLog.events.filter((event) => event.op === "workspace.root.denied");
+    expect(denialEvents).toHaveLength(1);
+    expect(denialEvents[0]).toMatchObject({
+      level: "warn",
+      category: "security",
+      correlationId,
+      errorKind: "permission-denied",
+      extra: { decision: "denied", failureKind: "WORKSPACE_PATH_DENIED" },
+    });
+    // Body-free: the denied path itself never enters the logged event.
+    expect(JSON.stringify(denialEvents[0])).not.toContain(deniedRoot);
+  });
+
+  it("refuses a genuinely missing ordinary root without misreporting it as a denial", () => {
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "debug" }));
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-missing-root-"),
+      env: {},
+      store: createInMemoryUiStore(),
+    });
+    const missingRoot = join(tmp("missing-root-parent-"), "does-not-exist");
+    const correlationId = "deps-missing-root-000001";
+
+    let access: ReturnType<NonNullable<UiHandlerDeps["workspaceRootAccessResolver"]>> | undefined;
+    try {
+      access = deps.workspaceRootAccessResolver?.(missingRoot, correlationId);
+    } finally {
+      deps.store.close();
+      resetServerLogger();
+    }
+
+    expect(access).toEqual({ decision: "unresolved" });
+    expect(activityLog.events.some((event) => event.op === "workspace.root.denied")).toBe(false);
+  });
 });
 
 describe("buildUiHandlerDeps — coding-sidecar model-source wiring", () => {
@@ -1154,7 +2364,10 @@ describe("buildUiHandlerDeps — coding-sidecar model-source wiring", () => {
     expect(deps.codingWorkbenchEvidenceStore).not.toBe(deps.evidenceStore);
   });
 
-  it("creates a server-owned autonomous delivery approval store by default", () => {
+  // #2958 (KEIKO-0115/KEIKO-0135): the autonomous-delivery approval store this used to assert was
+  // deleted with its unmounted route group. The deployment ceiling outlives it and must still fail
+  // closed to undefined, which the mounted readers translate to `governed-assist`.
+  it("leaves the autonomous delivery deployment ceiling unset when nothing configures one", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("ev-autonomous-store-"),
@@ -1162,27 +2375,26 @@ describe("buildUiHandlerDeps — coding-sidecar model-source wiring", () => {
       store: createInMemoryUiStore(),
     });
 
-    expect(deps.autonomousDeliveryApprovalStore).toBeDefined();
     expect(deps.autonomousDeliveryDeploymentCeiling).toBeUndefined();
+    expect("autonomousDeliveryApprovalStore" in deps).toBe(false);
   });
 
   it("derives the OpenAI API-key-through-gateway model source from the selected coding-safe provider", () => {
     const configPath = join(tmp("ev-sidecar-openai-"), "keiko.config.json");
+    const provider: ModelProviderConfig = {
+      modelId: "gpt-4.1-mini",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "fake-test-key",
+      timeoutMs: 30000,
+      maxRetries: 2,
+      retryBaseDelayMs: 500,
+    };
     writeFileSync(
       configPath,
       JSON.stringify({
-        providers: [
-          {
-            modelId: "gpt-4.1-mini",
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: "fake-test-key",
-            timeoutMs: 30000,
-            maxRetries: 2,
-            retryBaseDelayMs: 500,
-          },
-        ],
+        providers: [provider],
         circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
-        capabilities: [codingCapability("gpt-4.1-mini")],
+        capabilities: [verifiedCodingCapability(provider)],
       }),
       "utf8",
     );
@@ -1206,25 +2418,65 @@ describe("buildUiHandlerDeps — coding-sidecar model-source wiring", () => {
 
     expect(deps.codingSidecarGatewayModelSourceResolver?.()).toBe("keiko-model-gateway");
 
+    const provider: ModelProviderConfig = {
+      modelId: "gpt-4.1-mini",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: "fake-test-key",
+      timeoutMs: 30000,
+      maxRetries: 2,
+      retryBaseDelayMs: 500,
+    };
     deps.gatewayConfig?.set(
       parseGatewayConfig({
-        providers: [
-          {
-            modelId: "gpt-4.1-mini",
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: "fake-test-key",
-            timeoutMs: 30000,
-            maxRetries: 2,
-            retryBaseDelayMs: 500,
-          },
-        ],
+        providers: [provider],
         circuitBreaker: { failureThreshold: 5, cooldownMs: 30000, halfOpenProbes: 2 },
-        capabilities: [codingCapability("gpt-4.1-mini")],
+        capabilities: [verifiedCodingCapability(provider)],
       }),
       true,
     );
 
     expect(deps.codingSidecarGatewayModelSourceResolver?.()).toBe("openai-api-key-through-gateway");
+  });
+
+  it("stops resolving a removed child model while another gateway provider remains", () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-child-model-generation-"),
+      env: {},
+      store: createInMemoryUiStore(),
+    });
+    const removed: ModelProviderConfig = {
+      modelId: "removed-coding-model",
+      baseUrl: "https://removed.example.invalid/v1",
+      apiKey: "fake-removed-key",
+      timeoutMs: 30_000,
+      maxRetries: 2,
+      retryBaseDelayMs: 500,
+    };
+    const retained: ModelProviderConfig = {
+      ...removed,
+      modelId: "retained-coding-model",
+      baseUrl: "https://retained.example.invalid/v1",
+      apiKey: "fake-retained-key",
+    };
+    const gatewayConfig = (providers: readonly ModelProviderConfig[]): GatewayConfig =>
+      parseGatewayConfig({
+        providers,
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: providers.map(verifiedCodingCapability),
+      });
+
+    const runtimeConfig = deps.gatewayConfig;
+    if (runtimeConfig === undefined) throw new Error("expected runtime gateway config");
+    const childModelPortFactory = createLiveCodingChildModelPortFactory(
+      runtimeConfig,
+      deps.modelPortFactory,
+    );
+    runtimeConfig.set(gatewayConfig([removed, retained]), true);
+    expect(childModelPortFactory(removed.modelId)).toBeDefined();
+    runtimeConfig.set(gatewayConfig([retained]), true);
+    expect(childModelPortFactory(removed.modelId)).toBeUndefined();
+    expect(childModelPortFactory(retained.modelId)).toBeDefined();
   });
 });
 
@@ -1709,57 +2961,94 @@ describe("reconcileTaskWorkspacesAtStartup", () => {
     }).not.toThrow();
   });
 
-  it("does not throw when reconcile() rejects (failure is silent)", async () => {
-    const rejection = Promise.reject(new Error("reconciliation IO failed"));
+  it("does not throw when reconcile() rejects and records a body-free diagnostic", async () => {
+    const failure = new Error("sensitive reconciliation IO path");
+    failure.stack =
+      "Error: sensitive reconciliation IO path\n    at reconcile (file:///app/packages/keiko-server/dist/task-workspace/reconciliation.js:12:4)";
+    const rejection = Promise.reject(failure);
     const service = fakeReconciliationService(() => rejection);
+    const records: ServerDiagnosticRecord[] = [];
 
     const unhandled = vi.fn();
     process.on("unhandledRejection", unhandled);
 
     expect(() => {
-      reconcileTaskWorkspacesAtStartup(service);
+      reconcileTaskWorkspacesAtStartup(
+        service,
+        { record: (record) => records.push(record) },
+        "bootstrap-parent-correlation-1",
+      );
     }).not.toThrow();
 
     // Flush microtasks so the `.catch` on the detached promise has a chance to settle before
     // asserting no unhandled rejection leaked to the process.
     await rejection.catch(() => undefined);
-    await Promise.resolve();
+    await new Promise<void>((resolve) => setImmediate(resolve));
 
     process.off("unhandledRejection", unhandled);
     expect(unhandled).not.toHaveBeenCalled();
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      correlationId: expect.stringMatching(/^[0-9a-f-]{36}$/u) as unknown,
+      parentCorrelationId: "bootstrap-parent-correlation-1",
+      errorClass: "Error",
+      frames: ["packages/keiko-server/dist/task-workspace/reconciliation.js:12:4"],
+      message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+      operation: "task-workspace.reconcile.startup",
+      source: "task-workspace.bootstrap",
+    });
+    expect(JSON.stringify(records)).not.toContain("sensitive");
   });
 
-  it("does not throw if reconcile() itself throws synchronously (construction must never fail)", () => {
+  it("records a synchronous reconcile throw without failing construction", async () => {
     // A non-conforming implementation (e.g. a test double, or a degraded environment) could throw
     // synchronously instead of returning a rejected Promise. Startup construction must still
-    // degrade silently — the persisted classification simply stays untouched until the next pass.
+    // remain available — the persisted classification stays untouched until the next pass.
     const service = fakeReconciliationService(() => {
       throw new Error("synchronous reconciliation failure");
     });
+    const records: ServerDiagnosticRecord[] = [];
 
     expect(() => {
-      reconcileTaskWorkspacesAtStartup(service);
+      reconcileTaskWorkspacesAtStartup(
+        service,
+        { record: (record) => records.push(record) },
+        "bootstrap-parent-correlation-1",
+      );
     }).not.toThrow();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      correlationId: expect.stringMatching(/^[0-9a-f-]{36}$/u) as unknown,
+      parentCorrelationId: "bootstrap-parent-correlation-1",
+      errorClass: "Error",
+      operation: "task-workspace.reconcile.startup",
+    });
+    expect(JSON.stringify(records)).not.toContain("synchronous reconciliation failure");
   });
 
   it("does not throw when reconcile() resolves normally", async () => {
-    let called = false;
+    let received: readonly unknown[] = [];
     const report: WorkspaceReconciliationReport = {
       schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
       generatedAt: new Date(0).toISOString(),
       entries: [],
       activeRestoration: { kind: "none" },
     };
-    const service = fakeReconciliationService(() => {
-      called = true;
+    const service = fakeReconciliationService((...args) => {
+      received = args;
       return Promise.resolve(report);
     });
 
     expect(() => {
-      reconcileTaskWorkspacesAtStartup(service);
+      reconcileTaskWorkspacesAtStartup(service, undefined, "bootstrap-parent-correlation-1");
     }).not.toThrow();
     await Promise.resolve();
-    expect(called).toBe(true);
+    expect(received).toEqual([
+      undefined,
+      expect.stringMatching(/^[0-9a-f-]{36}$/u) as unknown,
+      "bootstrap-parent-correlation-1",
+    ]);
   });
 });
 
@@ -1775,7 +3064,10 @@ describe("buildUiHandlerDeps — coding-runtime ceiling and unavailable reason (
     return buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("ev-ceiling-"),
-      env,
+      // A prepared npm runtime package may be present beside this checkout after a staged
+      // qualification run. Pin the absent CLI entry so this test always exercises the
+      // platform-unqualified branch, independently of local install artifacts.
+      env: { KEIKO_CLI_BIN_PATH: join(tmp("missing-cli-entry-"), "entry.js"), ...env },
       uiDbPath: join(tmp("ceiling-state-"), "keiko-ui.db"),
       ...(ceilingOption === undefined ? {} : { codingRuntimeDeploymentCeiling: ceilingOption }),
     });
@@ -1939,6 +3231,180 @@ describe("buildUiHandlerDeps — workspace-trust revocation stops managed langua
       expect(lsp.restricted).toEqual([canonicalRoot]);
     } finally {
       await deps.dispose?.();
+    }
+  }, 15000);
+});
+
+describe("buildUiHandlerDeps — Atlassian registry isolation (KEIKO-0565, PR #3289 review)", () => {
+  it("keeps two independently composed deps graphs from sharing approvals, sync jobs, or activity", async () => {
+    const depsA = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("atlassian-isolation-a-"),
+      env: {},
+      store: createInMemoryUiStore(),
+    });
+    const depsB = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("atlassian-isolation-b-"),
+      env: {},
+      store: createInMemoryUiStore(),
+    });
+    try {
+      // The composition root already builds two distinct instances per graph...
+      expect(depsA.atlassianActionApprovalRegistry).toBeDefined();
+      expect(depsA.atlassianActionApprovalRegistry).not.toBe(depsB.atlassianActionApprovalRegistry);
+      expect(depsA.atlassianSyncJobRegistry).toBeDefined();
+      expect(depsA.atlassianSyncJobRegistry).not.toBe(depsB.atlassianSyncJobRegistry);
+
+      // ...and THE regression assertion: the resolver every real consumer (syncRoutes.ts,
+      // writeActionRoutes.ts, actionActivity.ts, syncService.ts) actually calls at runtime must
+      // pick each graph's OWN instance, never the process-wide module singleton — that mismatch
+      // (consumers bypassing these already-isolated fields) was the actual KEIKO-0565 gap.
+      expect(resolveAtlassianActionApprovalRegistry(depsA)).toBe(
+        depsA.atlassianActionApprovalRegistry,
+      );
+      expect(resolveAtlassianSyncJobRegistry(depsA)).toBe(depsA.atlassianSyncJobRegistry);
+
+      // Create an approval through depsA's resolved registry only; depsB's must not see it.
+      const created = resolveAtlassianActionApprovalRegistry(depsA).create({
+        approval: {
+          schemaVersion: "1",
+          approvalId: "apr_isolation-test",
+          connectorId: "jira:isolation-test",
+          provider: "jira",
+          actionType: "add-issue-comment",
+          actionClass: "connector-write",
+          requiredScope: "issue-tracker.write",
+          risk: "low",
+          reviewReason: "deterministic-risk-approval-required",
+          correlationId: "req_isolation-test",
+          requestedAt: 1,
+          expiresAt: Number.MAX_SAFE_INTEGER,
+        },
+        authority: {
+          runId: "run-isolation-test",
+          envelopeDigest: "digest-isolation-test",
+          workspaceRoot: "/repo",
+        },
+        authRef: "atlassian:jira:isolation-test",
+        payload: {
+          kind: "write-action",
+          action: { type: "add-issue-comment", issueKey: "PROJ-1", commentText: "isolation" },
+        },
+      });
+      expect(created.ok).toBe(true);
+      expect(resolveAtlassianActionApprovalRegistry(depsA).listPending()).toHaveLength(1);
+      expect(resolveAtlassianActionApprovalRegistry(depsB).listPending()).toHaveLength(0);
+
+      // Record a sync-activity entry through depsA's resolved registry only; depsB's must not
+      // see it either — the same registry backs both jobs and the activity ring.
+      resolveAtlassianSyncJobRegistry(depsA).recordActivity({
+        schemaVersion: ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
+        activityId: "act_isolation-test",
+        occurredAt: Date.now(),
+        connectorId: "jira:isolation-test",
+        provider: "jira",
+        actionType: "add-issue-comment",
+        actionClass: "connector-write",
+        disposition: "allowed",
+        outcome: "succeeded",
+        correlationId: "req_isolation-test",
+        durationMs: 0,
+      });
+      expect(
+        resolveAtlassianSyncJobRegistry(depsA).listActivity("jira:isolation-test"),
+      ).toHaveLength(1);
+      expect(
+        resolveAtlassianSyncJobRegistry(depsB).listActivity("jira:isolation-test"),
+      ).toHaveLength(0);
+    } finally {
+      await depsA.dispose?.();
+      await depsB.dispose?.();
+    }
+  }, 15000);
+});
+
+// Regression: #2906 round 2. createUiHandlerDispose never reset either graph-owned Atlassian
+// registry: a pending approval or recorded activity written on a graph SURVIVED that graph's own
+// dispose() call, indistinguishable from live state. Pins that dispose() actually clears both
+// registries on the graph it belongs to, and that a SEPARATE, still-active graph is unaffected
+// either way -- writes made on A never land on B, whether A is later disposed or not.
+describe("buildUiHandlerDeps — Atlassian registry disposal (#2906 round 2)", () => {
+  it("dispose() clears graph A's pending approvals and sync activity without touching graph B", async () => {
+    const depsA = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("atlassian-dispose-a-"),
+      env: {},
+      store: createInMemoryUiStore(),
+    });
+    const depsB = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("atlassian-dispose-b-"),
+      env: {},
+      store: createInMemoryUiStore(),
+    });
+    try {
+      const created = resolveAtlassianActionApprovalRegistry(depsA).create({
+        approval: {
+          schemaVersion: "1",
+          approvalId: "apr_dispose-test",
+          connectorId: "jira:dispose-test",
+          provider: "jira",
+          actionType: "add-issue-comment",
+          actionClass: "connector-write",
+          requiredScope: "issue-tracker.write",
+          risk: "low",
+          reviewReason: "deterministic-risk-approval-required",
+          correlationId: "req_dispose-test",
+          requestedAt: 1,
+          expiresAt: Number.MAX_SAFE_INTEGER,
+        },
+        authority: {
+          runId: "run-dispose-test",
+          envelopeDigest: "digest-dispose-test",
+          workspaceRoot: "/repo",
+        },
+        authRef: "atlassian:jira:dispose-test",
+        payload: {
+          kind: "write-action",
+          action: { type: "add-issue-comment", issueKey: "PROJ-1", commentText: "dispose" },
+        },
+      });
+      expect(created.ok).toBe(true);
+      resolveAtlassianSyncJobRegistry(depsA).recordActivity({
+        schemaVersion: ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
+        activityId: "act_dispose-test",
+        occurredAt: Date.now(),
+        connectorId: "jira:dispose-test",
+        provider: "jira",
+        actionType: "add-issue-comment",
+        actionClass: "connector-write",
+        disposition: "allowed",
+        outcome: "succeeded",
+        correlationId: "req_dispose-test",
+        durationMs: 0,
+      });
+      expect(resolveAtlassianActionApprovalRegistry(depsA).listPending()).toHaveLength(1);
+      expect(resolveAtlassianSyncJobRegistry(depsA).listActivity("jira:dispose-test")).toHaveLength(
+        1,
+      );
+
+      // Disposing graph A must clear ITS OWN registries -- before the fix, createUiHandlerDispose
+      // never called reset(), so both the pending approval and the recorded activity survived
+      // disposal, indistinguishable from a live graph.
+      await depsA.dispose?.();
+      expect(resolveAtlassianActionApprovalRegistry(depsA).listPending()).toHaveLength(0);
+      expect(resolveAtlassianSyncJobRegistry(depsA).listActivity("jira:dispose-test")).toHaveLength(
+        0,
+      );
+
+      // Graph B was never touched: no write from A ever landed there, disposing A notwithstanding.
+      expect(resolveAtlassianActionApprovalRegistry(depsB).listPending()).toHaveLength(0);
+      expect(resolveAtlassianSyncJobRegistry(depsB).listActivity("jira:dispose-test")).toHaveLength(
+        0,
+      );
+    } finally {
+      await depsB.dispose?.();
     }
   }, 15000);
 });

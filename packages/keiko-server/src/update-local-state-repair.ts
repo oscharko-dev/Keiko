@@ -1,6 +1,10 @@
 import { chmodSync, statSync } from "node:fs";
 import type { UpdateStateStore } from "@oscharko-dev/keiko-contracts";
-import { CATEGORY_STORE, type StateScan } from "./update-local-state-scan.js";
+import {
+  CATEGORY_STORE,
+  incompleteScanWarning,
+  type StateScan,
+} from "./update-local-state-scan.js";
 
 export interface UpdateLocalStateRepairResult {
   readonly status: "completed" | "manual-review-required" | "not-applicable";
@@ -42,6 +46,18 @@ function blockedRepairResult(): UpdateLocalStateRepairResult {
   };
 }
 
+function incompleteRepairResult(scan: StateScan): UpdateLocalStateRepairResult {
+  return {
+    status: "manual-review-required",
+    repairedArtifactCount: 0,
+    retainedEntryCount: 0,
+    warnings: [
+      incompleteScanWarning(scan) ??
+        "Runtime state scan did not complete; no permission repair was attempted.",
+    ],
+  };
+}
+
 function retainedForRequestedStores(
   scan: StateScan,
   requested: ReadonlySet<UpdateStateStore>,
@@ -75,6 +91,7 @@ export function repairStateStores(
 ): UpdateLocalStateRepairResult {
   if (stores.length === 0) return emptyRepairResult();
   const requested = new Set(stores);
+  if (scan.completion === "incomplete") return incompleteRepairResult(scan);
   if (scan.status !== "directory") return blockedRepairResult();
   const retained = retainedForRequestedStores(scan, requested);
   const repairedArtifactCount = repairNodeModes(scan, requested);

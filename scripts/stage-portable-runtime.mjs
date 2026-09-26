@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, posix, relative, resolve } from "node:path";
+import { basename, dirname, join, posix, relative, resolve, sep } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 
 import {
@@ -28,17 +28,30 @@ import {
   isSafePortableRelativePath,
   portableTargetByName,
   PORTABLE_TARGET_NAMES,
+  reviewedStagingEntryMatches,
+  WINDOWS_GENERATION_STAGING_RELATIVE_PATH,
   portableVerificationSummaryForManifest,
   sha256File,
+  validatePortableEvaluationManifest,
   validatePortableStagingManifest,
   verifySha256File,
 } from "./portable-runtime.mjs";
-import { writeZipArchiveFromDirectory } from "./lib/zip-archive.mjs";
 import {
-  USEARCH_RUNTIME_MANIFEST,
+  extractZipArchiveEntries,
+  readZipArchiveEntryNames,
+  writeZipArchiveFromDirectory,
+} from "./lib/zip-archive.mjs";
+import {
+  resolveWindowsMsvcEnv as resolveWindowsMsvcEnvironment,
+  windowsToolFromPath as windowsMsvcToolFromPath,
+} from "./lib/windows-msvc.mjs";
+import {
+  usearchRuntimeApproval,
   usearchRuntimeTargetKey,
 } from "../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
 import { writeRuntimeActivationManifest } from "./runtime-activation-manifest.mjs";
+import { withCyclonedxSerialNumber } from "./lib/cyclonedx-serial-number.mjs";
+import { sha256 } from "./lib/digest.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
@@ -87,13 +100,6 @@ const REQUIRED_APP_SURFACE_FILES = Object.freeze([
   "NOTICE",
 ]);
 const TAR_LINK_POLICY_SKIP_SAFE = "skip-safe";
-const PORTABLE_RELEASE_IMPACT_CONTRACT = Object.freeze({
-  issue: 1948,
-  parentEpic: 1942,
-  programEpic: 1944,
-  stagingOnly: true,
-  targets: Object.freeze(["windows-x64", "macos-arm64", "macos-x64"]),
-});
 
 function fail(message) {
   console.error(`portable-stage failed: ${message}`);
@@ -105,6 +111,8 @@ function parseArgs(argv) {
     appleTeamId: undefined,
     commitSha: process.env.GITHUB_SHA,
     dryRun: false,
+    evaluation: false,
+    release: false,
     launcherBinary: undefined,
     nodeArchive: undefined,
     nodeArchiveUrl: undefined,
@@ -118,6 +126,7 @@ function parseArgs(argv) {
     target: undefined,
     workflowRunAttempt: Number(process.env.GITHUB_RUN_ATTEMPT ?? 0),
     workflowRunId: Number(process.env.GITHUB_RUN_ID ?? 0),
+    windowsGenerationProduction: false,
   };
   let index = 0;
   while (index < argv.length) {
@@ -129,6 +138,12 @@ function parseArgs(argv) {
   validateNodeRuntimeOptions(options);
   validateReleaseOptions(options);
   validateAppleTeamIdentifierOption(options, target);
+  if (
+    options.windowsGenerationProduction &&
+    (target.platformTarget !== "windows-x64" || options.evaluation)
+  ) {
+    fail("--windows-generation-production requires non-evaluation windows-x64 staging");
+  }
   if (options.nodeArchive !== undefined) {
     assertNodeArchiveIdentity(options.nodeArchive, target, options.nodeVersion);
   }
@@ -139,6 +154,22 @@ function applyArg(argv, index, options) {
   const arg = argv[index];
   if (arg === "--dry-run") {
     options.dryRun = true;
+    return index;
+  }
+  // Bare opt-in flag, deliberately outside the `fields` map below (every entry there consumes a
+  // value). This is the ONLY way to produce the unsigned evaluation lane; there is no environment
+  // variable and no default that can set it.
+  if (arg === "--evaluation-build") {
+    options.evaluation = true;
+    return index;
+  }
+  if (arg === "--release-build") {
+    options.evaluation = true;
+    options.release = true;
+    return index;
+  }
+  if (arg === "--windows-generation-production") {
+    options.windowsGenerationProduction = true;
     return index;
   }
   if (arg === "--sidecar-runtime-spec") {
@@ -241,12 +272,14 @@ function validateWorkflowIdentityOptions(options) {
   }
 }
 
-function normalizeSidecarRuntimeSpecs(specs, target) {
+function normalizeSidecarRuntimeSpecs(specs, target, evaluation) {
   const names = new Set();
-  return specs.map((spec, index) => normalizeSidecarRuntimeSpec(spec, target, names, index));
+  return specs.map((spec, index) =>
+    normalizeSidecarRuntimeSpec(spec, target, names, index, evaluation),
+  );
 }
 
-function normalizeSidecarRuntimeSpec(spec, target, names, index) {
+function normalizeSidecarRuntimeSpec(spec, target, names, index, evaluation) {
   if (!isRecord(spec)) fail(`sidecar spec ${String(index + 1)} must be an object`);
   requireExactSpecKeys(spec, [
     "approvalSchemaVersion",
@@ -283,6 +316,7 @@ function normalizeSidecarRuntimeSpec(spec, target, names, index) {
     payloadSha256,
     files,
     sourceRoot,
+    evaluation,
   );
   validateSidecarMetadata(metadata);
   return { ...metadata, sourceRoot };
@@ -298,7 +332,15 @@ function normalizeSidecarName(spec, names) {
   return name;
 }
 
-function sidecarMetadataForSpec(spec, target, payloadRootPath, payloadSha256, files, sourceRoot) {
+function sidecarMetadataForSpec(
+  spec,
+  target,
+  payloadRootPath,
+  payloadSha256,
+  files,
+  sourceRoot,
+  evaluation,
+) {
   const paths = sidecarPathsForSpec(spec, payloadRootPath, files);
   const provenance = sidecarProvenanceForSpec(spec, target);
   const executable = sidecarExecutableForSpec(spec, sourceRoot, paths.executableSourcePath);
@@ -315,7 +357,7 @@ function sidecarMetadataForSpec(spec, target, payloadRootPath, payloadSha256, fi
     payloadSha256,
     sizeBytes: sidecarTreeSize(files),
     ...evidence,
-    signing: sidecarStagingSigning(target, executable),
+    signing: sidecarStagingSigning(target, executable, evaluation),
   };
 }
 
@@ -368,7 +410,7 @@ function sidecarExecutableForSpec(spec, sourceRoot, executableSourcePath) {
   if (actualExecutableTreeSha256 !== executableTreeSha256) {
     fail("sidecar executable tree digest does not match independent approval");
   }
-  const executableSha256 = sha256Bytes(
+  const executableSha256 = sha256(
     readFileSync(resolveSidecarSourcePath(sourceRoot, executableSourcePath)),
   );
   return { executableTreeAlgorithm, executableTreeSha256, executableSha256 };
@@ -433,7 +475,7 @@ function sidecarAdapterCompatibility(spec) {
   );
   return {
     adapterName: requiredSpecLiteral(adapter, "adapterName", "keiko-coding-sidecar"),
-    adapterVersion: requiredSpecLiteral(adapter, "adapterVersion", "1"),
+    adapterVersion: requiredSpecLiteral(adapter, "adapterVersion", "2"),
     transport: requiredSpecLiteral(adapter, "transport", "http-sse"),
   };
 }
@@ -506,10 +548,10 @@ function sidecarArchive(spec, upstream, platformTarget) {
   requireExactRecordKeys(archive, ["platformTarget", "url", "sizeBytes", "sha256"], "archive");
   requiredSpecLiteral(archive, "platformTarget", platformTarget);
   const url = requiredSpecHttpsUrl(archive, "url");
-  const parsed = new URL(url);
-  const expectedPrefix = `/${upstream.owner}/${upstream.repository}/releases/download/${upstream.tag}/`;
-  if (parsed.hostname !== "github.com" || !parsed.pathname.startsWith(expectedPrefix)) {
-    fail("sidecar archive URL must bind the approved upstream repository and tag");
+  const target = portableTargetByName(platformTarget);
+  const expectedUrl = `https://opencode.ai/files/bin/${upstream.version}/${target?.sidecarArchiveName}`;
+  if (url !== expectedUrl) {
+    fail("sidecar archive URL must bind the OpenCode release version and platform archive");
   }
   return {
     platformTarget,
@@ -604,7 +646,7 @@ function sidecarDistributionMatches(reference, archive) {
 
 function hashExecutableTree(sourceRoot, executableRelativePath) {
   const executable = resolveSidecarSourcePath(sourceRoot, executableRelativePath);
-  const digest = sha256Bytes(readFileSync(executable));
+  const digest = sha256(readFileSync(executable));
   return createHash("sha256").update(`${executableRelativePath}\0${digest}\0`).digest("hex");
 }
 
@@ -617,15 +659,37 @@ function sidecarPlatformTarget(spec, target) {
 function sidecarEvidence(sourceRoot, sourcePath, payloadPath) {
   return {
     path: payloadPath,
-    sha256: sha256Bytes(readFileSync(resolveSidecarSourcePath(sourceRoot, sourcePath))),
+    sha256: sha256(readFileSync(resolveSidecarSourcePath(sourceRoot, sourcePath))),
   };
 }
 
-function sidecarStagingSigning(target, executable) {
+/**
+ * The one place this producer names a pre-signing lane. `--evaluation-build` is the only way to
+ * reach the evaluation triple; without it every writer emits the unchanged staging triple. Neither
+ * lane may ever assert a platform proof — `signatureVerified`, `notarizationVerified` and every
+ * entry of `createPortableVerificationChecks(..., false)` stay hard-coded false on both.
+ */
+function stageVerificationLane(evaluation) {
+  return evaluation
+    ? {
+        verificationPolicy: "evaluation",
+        verificationStatus: "evaluation-unqualified",
+        verificationReasonCodes: ["evaluation-artifact", "evaluation-unsigned-allowed"],
+      }
+    : {
+        verificationPolicy: "staging",
+        verificationStatus: "unverified-staging",
+        verificationReasonCodes: ["staging-unverified"],
+      };
+}
+
+function nativeHelperStagingStatus(evaluation) {
+  return evaluation ? "evaluation-unqualified" : "unverified-staging";
+}
+
+function sidecarStagingSigning(target, executable, evaluation) {
   return {
-    verificationPolicy: "staging",
-    verificationStatus: "unverified-staging",
-    verificationReasonCodes: ["staging-unverified"],
+    ...stageVerificationLane(evaluation),
     signatureKind: target.signatureKind,
     signatureVerified: false,
     notarizationRequired: target.nodePlatform === "darwin",
@@ -775,10 +839,6 @@ function requiredSpecPositiveInteger(spec, key) {
 
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function sha256Bytes(buffer) {
-  return createHash("sha256").update(buffer).digest("hex");
 }
 
 function run(cmd, args, options = {}) {
@@ -958,7 +1018,12 @@ function normalizeArchiveEntry(entry) {
     return "";
   }
   const parts = normalized.split("/");
-  if (parts.some((part) => part.length === 0 || part === "." || part === "..")) return "";
+  // A `:` anywhere in a component is an NTFS alternate-stream (or drive) designator on the
+  // Windows consumer of these archives — never a portable file name. Refuse, don't reinterpret.
+  if (
+    parts.some((part) => part.length === 0 || part === "." || part === ".." || part.includes(":"))
+  )
+    return "";
   return normalized;
 }
 
@@ -998,23 +1063,36 @@ function assertTarSymlinkTargetSafe(entry, line, expectedRoot) {
 }
 
 export function createPortableZipAdapter(platform = process.platform, commandRunner = run) {
-  return platform === "win32"
-    ? createSevenZipAdapter(commandRunner)
-    : createInfoZipAdapter(commandRunner);
+  return platform === "win32" ? createNodeZipAdapter() : createInfoZipAdapter(commandRunner);
 }
 
-function createSevenZipAdapter(commandRunner) {
+function createNodeZipAdapter() {
+  // requireRegularEntries carries the fail-closed contract the retired 7z adapter proved with
+  // its own entry-type records: a Windows runtime archive may contain only regular files, so a
+  // symlink/device/FIFO entry refuses the archive instead of materializing as a plain file.
+  // containmentRoot keeps followed symlinks inside the staged tree — a link resolving outside
+  // it must never embed foreign workspace bytes into a release archive.
   return {
     list(archivePath) {
-      const result = commandRunner("7z", ["l", "-slt", "-ba", archivePath]);
-      return parseSevenZipEntries(result.stdout);
+      // Metadata-only: a listing must never inflate entry bodies, so a hostile declared
+      // expansion cannot cost memory before the containment check has even seen the names.
+      return readZipArchiveEntryNames(archivePath, { requireRegularEntries: true });
     },
     extract(archivePath, extractRoot) {
-      commandRunner("7z", ["x", "-y", `-o${extractRoot}`, archivePath]);
+      extractZipArchiveEntries(archivePath, extractRoot, { requireRegularEntries: true });
     },
     create(sourceRoot, entryName, archivePath) {
-      commandRunner("7z", ["a", "-tzip", "-mx=9", archivePath, entryName], {
-        cwd: sourceRoot,
+      const treeRoot = join(sourceRoot, entryName);
+      const resolvedTree = resolve(treeRoot);
+      const resolvedSource = resolve(sourceRoot);
+      if (resolvedTree !== resolvedSource && !resolvedTree.startsWith(resolvedSource + sep)) {
+        fail(`portable ZIP entry name escapes the staging root: ${entryName}`);
+      }
+      writeZipArchiveFromDirectory(treeRoot, archivePath, {
+        rootName: entryName,
+        followSymlinks: true,
+        containmentRoot: treeRoot,
+        requireRegularEntries: true,
       });
     },
   };
@@ -1046,62 +1124,6 @@ function assertInfoZipEntryTypesSafe(archivePath, commandRunner) {
     if (type === "d" || type === "-") continue;
     throw new Error("archive contains unsupported special-file entries");
   }
-}
-
-function parseSevenZipEntries(output) {
-  const records = sevenZipTechnicalRecords(output).filter((record) => "Folder" in record);
-  if (records.length === 0) throw new Error("7z did not report ZIP entries");
-  for (const record of records) assertSevenZipEntrySafe(record);
-  return records.map((record) => record.Path);
-}
-
-function sevenZipTechnicalRecords(output) {
-  return output
-    .split(/\r?\n\s*\r?\n/u)
-    .map(sevenZipTechnicalRecord)
-    .filter((record) => typeof record.Path === "string" && record.Path.length > 0);
-}
-
-function sevenZipTechnicalRecord(block) {
-  const record = {};
-  for (const line of block.split(/\r?\n/u)) {
-    const separator = line.indexOf(" = ");
-    if (separator <= 0) continue;
-    record[line.slice(0, separator)] = line.slice(separator + 3);
-  }
-  return record;
-}
-
-function assertSevenZipEntrySafe(record) {
-  const folder = record.Folder;
-  const unixType = sevenZipUnixEntryType(record.Attributes);
-  if (
-    (folder !== "+" && folder !== "-") ||
-    record.Encrypted === "+" ||
-    sevenZipTypeUnsupported(unixType) ||
-    sevenZipHasLinkMetadata(record) ||
-    sevenZipFolderTypeMismatch(folder, unixType)
-  ) {
-    throw new Error("archive contains unsupported special-file entries");
-  }
-}
-
-function sevenZipUnixEntryType(attributes) {
-  if (typeof attributes !== "string") return undefined;
-  return /(?:^|\s)([dlbcps-])[rwxStTs-]{9}(?:\s|$)/u.exec(attributes)?.[1];
-}
-
-function sevenZipTypeUnsupported(unixType) {
-  return unixType !== undefined && unixType !== "-" && unixType !== "d";
-}
-
-function sevenZipHasLinkMetadata(record) {
-  return "Symbolic Link" in record || "Hard Link" in record || "Alternate Stream" in record;
-}
-
-function sevenZipFolderTypeMismatch(folder, unixType) {
-  if (folder === "+") return unixType !== undefined && unixType !== "d";
-  return folder === "-" && unixType === "d";
 }
 
 function copySafeTreeContents(sourceRoot, destinationRoot) {
@@ -1216,11 +1238,13 @@ function ensureRuntimeNotice(runtimeRoot, archive) {
   );
 }
 
-function payloadResourceRoot(target, payloadRoot) {
+function payloadResourceRoot(target, payloadRoot, options) {
   if (target.nodePlatform === "darwin") {
     return join(payloadRoot, "Keiko.app", "Contents", "Resources");
   }
-  return payloadRoot;
+  return options.windowsGenerationProduction
+    ? join(payloadRoot, ...WINDOWS_GENERATION_STAGING_RELATIVE_PATH.split("/"))
+    : payloadRoot;
 }
 
 function payloadSupportRoot(payloadRoot) {
@@ -1406,7 +1430,7 @@ function nativeAddonSbomComponent(addon) {
 }
 
 function sbomForManifest(manifest) {
-  return {
+  return withCyclonedxSerialNumber({
     bomFormat: "CycloneDX",
     specVersion: "1.6",
     version: 1,
@@ -1414,18 +1438,19 @@ function sbomForManifest(manifest) {
       ...manifest.nativeHelpers.map(nativeHelperSbomComponent),
       ...(manifest.nativeAddons ?? []).map(nativeAddonSbomComponent),
     ],
-  };
+  });
 }
 
-function thirdPartyNotices() {
+function thirdPartyNotices(manifest) {
+  const addon = manifest.nativeAddons[0];
   return [
     "Portable runtime notices are assembled by the release pipeline.",
     "",
-    `USearch ${USEARCH_RUNTIME_MANIFEST.version}`,
+    `USearch ${addon.version}`,
     "Copyright Unum Cloud and contributors.",
     "Licensed under Apache-2.0.",
     "The complete upstream license is included at runtime/licenses/usearch/LICENSE.",
-    `Source: ${USEARCH_RUNTIME_MANIFEST.tarballUrl}`,
+    `Source: ${addon.source.tarballUrl}`,
     "",
   ].join("\n");
 }
@@ -1441,7 +1466,7 @@ function writeEvidence(stageRoot, manifest, provenanceStatement) {
     join(evidenceRoot, "sbom.cdx.json"),
     JSON.stringify(sbomForManifest(manifest), null, 2) + "\n",
   );
-  writeFileSync(join(evidenceRoot, "third-party-notices.txt"), thirdPartyNotices());
+  writeFileSync(join(evidenceRoot, "third-party-notices.txt"), thirdPartyNotices(manifest));
   writeFileSync(
     join(evidenceRoot, "signing-verification.json"),
     JSON.stringify(portableVerificationSummaryForManifest(manifest), null, 2) + "\n",
@@ -1503,10 +1528,6 @@ function provenanceStatementFor(
   );
 }
 
-function sha256Text(text) {
-  return createHash("sha256").update(text).digest("hex");
-}
-
 function createZipArchive(payloadContainer, assetName, outRoot) {
   const assetPath = join(outRoot, assetName);
   writeZipArchiveFromDirectory(join(payloadContainer, "Keiko"), assetPath, {
@@ -1519,10 +1540,12 @@ function createZipArchive(payloadContainer, assetName, outRoot) {
 
 function launcherPath(target, stageRoot) {
   if (target.primaryLauncher === "Keiko.exe") return join(stageRoot, "Keiko.exe");
+  if (target.primaryLauncher === "Keiko") return join(stageRoot, "Keiko");
   return join(stageRoot, "Keiko.app", "Contents", "MacOS", "Keiko");
 }
 
 function stageLauncher(target, stageRoot, resourceRoot, options, hooks) {
+  if (options.windowsGenerationProduction) return;
   const path = launcherPath(target, stageRoot);
   mkdirSync(dirname(path), { recursive: true });
   (hooks.buildPrimaryLauncher ?? buildNativeLauncher)(target, path, options);
@@ -1566,15 +1589,16 @@ function stageSecureReadHelper(target, resourceRoot, options, hooks) {
 function provisionedUsearchRuntime(target) {
   const targetKey = usearchRuntimeTargetKey(target.nodePlatform, target.nodeArchitecture);
   if (targetKey === undefined) fail("USearch has no approved runtime for the portable target");
-  const approved = USEARCH_RUNTIME_MANIFEST.targets[targetKey];
-  const provisionedRoot = join(repoRoot, ".usearch", USEARCH_RUNTIME_MANIFEST.version, targetKey);
+  const approved = usearchRuntimeApproval(targetKey);
+  if (approved === undefined) fail("USearch has no approved runtime for the portable target");
+  const provisionedRoot = join(repoRoot, ".usearch", approved.version, targetKey);
   const sourceBinary = join(provisionedRoot, "usearch.node");
   const sourceLicense = join(provisionedRoot, "LICENSE");
   if (
     !existsSync(sourceBinary) ||
     !existsSync(sourceLicense) ||
-    sha256Bytes(readFileSync(sourceBinary)) !== approved.binarySha256 ||
-    sha256Bytes(readFileSync(sourceLicense)) !== USEARCH_RUNTIME_MANIFEST.licenseSha256
+    sha256(readFileSync(sourceBinary)) !== approved.binarySha256 ||
+    sha256(readFileSync(sourceLicense)) !== approved.licenseSha256
   ) {
     fail("USearch runtime is absent or failed its pinned digest");
   }
@@ -1602,11 +1626,16 @@ function failUsearchStaging(onFailure, message) {
 export function stageUsearchAddon(
   target,
   resourceRoot,
-  { copyFile = copyFileSync, onFailure = fail, resolveRuntime = provisionedUsearchRuntime } = {},
+  {
+    copyFile = copyFileSync,
+    onFailure = fail,
+    resolveRuntime = provisionedUsearchRuntime,
+    evaluation = false,
+  } = {},
 ) {
   const runtime = resolveRuntime(target);
   const staged = stageUsearchFiles(resourceRoot, runtime, copyFile);
-  const shippedSha256 = sha256Bytes(readFileSync(staged.destination));
+  const shippedSha256 = sha256(readFileSync(staged.destination));
   if (shippedSha256 !== runtime.approved.binarySha256) {
     return failUsearchStaging(
       onFailure,
@@ -1617,25 +1646,25 @@ export function stageUsearchAddon(
     {
       name: "usearch",
       kind: "node-native-addon",
-      version: USEARCH_RUNTIME_MANIFEST.version,
+      version: runtime.approved.version,
       platformTarget: target.platformTarget,
       architecture: target.nodeArchitecture,
       executablePath: staged.executablePath,
       licensePath: staged.licensePath,
       source: {
-        commitSha: USEARCH_RUNTIME_MANIFEST.sourceCommit,
-        tarballUrl: USEARCH_RUNTIME_MANIFEST.tarballUrl,
-        tarballSha256: USEARCH_RUNTIME_MANIFEST.tarballSha256,
+        commitSha: runtime.approved.sourceCommit,
+        tarballUrl: runtime.approved.tarballUrl,
+        tarballSha256: runtime.approved.tarballSha256,
         binarySha256: runtime.approved.binarySha256,
-        licenseSha256: USEARCH_RUNTIME_MANIFEST.licenseSha256,
+        licenseSha256: runtime.approved.licenseSha256,
       },
       unsignedSha256: runtime.approved.binarySha256,
       shippedSha256,
       sizeBytes: lstatSync(staged.destination).size,
-      sbomBomRef: `pkg:npm/usearch@${USEARCH_RUNTIME_MANIFEST.version}?platform=${target.platformTarget}`,
+      sbomBomRef: `pkg:npm/usearch@${runtime.approved.version}?platform=${target.platformTarget}`,
       signing: {
         signatureKind: target.signatureKind,
-        verificationStatus: "unverified-staging",
+        verificationStatus: nativeHelperStagingStatus(evaluation),
         signatureVerified: false,
         notarizationRequired: target.nodePlatform === "darwin",
         notarizationVerified: false,
@@ -1653,6 +1682,12 @@ function buildSecureReadHelper(target, destination) {
 }
 
 function runtimeSupervisorSource(target) {
+  if (target.nodePlatform === "linux") {
+    return {
+      path: "packages/keiko-sandbox/src",
+      root: join(repoRoot, "packages", "keiko-sandbox", "src"),
+    };
+  }
   const platform = target.nodePlatform === "win32" ? "windows" : "macos";
   return {
     path: `native/runtime-supervisor/${platform}`,
@@ -1661,6 +1696,9 @@ function runtimeSupervisorSource(target) {
 }
 
 function runtimeSupervisorExecutablePath(target) {
+  if (target.nodePlatform === "linux") {
+    return "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
+  }
   return `runtime/native/${RUNTIME_SUPERVISOR_NAME}${target.nodePlatform === "win32" ? ".exe" : ""}`;
 }
 
@@ -1668,7 +1706,9 @@ function stageRuntimeSupervisor(target, resourceRoot, options, hooks) {
   const executablePath = runtimeSupervisorExecutablePath(target);
   const destination = join(resourceRoot, ...executablePath.split("/"));
   mkdirSync(dirname(destination), { recursive: true });
-  (hooks.buildRuntimeSupervisor ?? buildRuntimeSupervisor)(target, destination);
+  if (target.nodePlatform !== "linux") {
+    (hooks.buildRuntimeSupervisor ?? buildRuntimeSupervisor)(target, destination);
+  }
   const entry = existsSync(destination) ? lstatSync(destination) : undefined;
   if (entry === undefined || !entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
     fail("runtime supervisor build did not produce the fixed executable");
@@ -1682,7 +1722,10 @@ function stageRuntimeSupervisor(target, resourceRoot, options, hooks) {
     kind: "runtime-process-supervisor",
     name: RUNTIME_SUPERVISOR_NAME,
     options,
-    protocol: { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" },
+    protocol:
+      target.nodePlatform === "linux"
+        ? { schemaVersion: 1, requestMagic: "none", responseMagic: "none" }
+        : { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" },
     sourcePath: source.path,
     sourceRoot: source.root,
     target,
@@ -1744,7 +1787,7 @@ function nativeHelperMetadata(input) {
     sbomBomRef: `pkg:generic/${input.name}@${rootPackage.version}?platform=${input.target.platformTarget}`,
     signing: {
       signatureKind: input.target.signatureKind,
-      verificationStatus: "unverified-staging",
+      verificationStatus: nativeHelperStagingStatus(input.options.evaluation === true),
       signatureVerified: false,
       notarizationRequired: input.target.nodePlatform === "darwin",
       notarizationVerified: false,
@@ -1784,6 +1827,10 @@ function buildNativeLauncher(target, destination, options) {
   }
   if (target.nodePlatform === "win32" && process.platform === "win32") {
     compileWindowsLauncher(target, destination);
+    return;
+  }
+  if (target.nodePlatform === "linux" && process.platform === "linux") {
+    compileLinuxLauncher(target, destination);
     return;
   }
   fail(
@@ -1829,28 +1876,101 @@ function compileMacLauncher(target, destination) {
   ]);
 }
 
-function compileWindowsLauncher(target, destination) {
+function compileLinuxLauncher(target, destination) {
+  run("cc", [
+    "-std=c11",
+    "-Os",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-D_GNU_SOURCE",
+    `-D${nativeLauncherTargetDefine(target)}`,
+    nativeLauncherSource(),
+    "-o",
+    destination,
+  ]);
+}
+
+// MSVC toolchain resolution lives in scripts/lib/windows-msvc.mjs — the ONE home shared with
+// the secure-workspace-read, runtime-supervisor, and runtime-attestation builders (#3084).
+// These wrappers keep this script's fail-closed exit semantics and its public surface.
+export function resolveWindowsMsvcEnv(baseEnv = process.env) {
+  try {
+    return resolveWindowsMsvcEnvironment(baseEnv);
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function windowsToolFromPath(envPath, tool) {
+  try {
+    return windowsMsvcToolFromPath(envPath, tool);
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
+function compileWindowsLauncher(target, destination, generationId) {
   requireWindowsLauncherIconSource();
+  const env = resolveWindowsMsvcEnv();
   const tempRoot = mkdtempSync(join(tmpdir(), "keiko-windows-launcher-resource-"));
   try {
     const resourcePath = join(tempRoot, "keiko-portable-launcher.res");
-    run("rc", ["/nologo", `/fo${resourcePath}`, windowsLauncherResourceSource()]);
-    run("cl", [
-      "/nologo",
-      "/O2",
-      "/DUNICODE",
-      "/D_UNICODE",
-      `/D${nativeLauncherTargetDefine(target)}`,
-      `/Fe:${destination}`,
-      nativeLauncherSource(),
-      resourcePath,
-      "/link",
-      "/SUBSYSTEM:WINDOWS",
-      "/ENTRY:wmainCRTStartup",
-    ]);
+    // /Fo keeps the intermediate object out of the checkout (same fix as compileSetupBootstrap in
+    // build-windows-portable-setup.mjs, review 3887051433).
+    const objectPath = join(tempRoot, "keiko-portable-launcher.obj");
+    run(
+      windowsToolFromPath(env.PATH, "rc.exe"),
+      ["/nologo", `/fo${resourcePath}`, windowsLauncherResourceSource()],
+      { env },
+    );
+    run(
+      windowsToolFromPath(env.PATH, "cl.exe"),
+      [
+        "/nologo",
+        "/O2",
+        // Static CRT: no VC runtime redistributable dependency, and no plantable CRT DLL among the
+        // implicit imports the loader resolves from the application directory before wmain runs.
+        "/MT",
+        "/DUNICODE",
+        "/D_UNICODE",
+        `/D${nativeLauncherTargetDefine(target)}`,
+        ...(generationId === undefined ? [] : [`/DKEIKO_PORTABLE_GENERATION_ID="${generationId}"`]),
+        `/Fo:${objectPath}`,
+        `/Fe:${destination}`,
+        nativeLauncherSource(),
+        resourcePath,
+        "/link",
+        "/SUBSYSTEM:WINDOWS",
+        "/ENTRY:wmainCRTStartup",
+        // LOAD_LIBRARY_SEARCH_SYSTEM32 for statically-linked imports — the DLL-plant gap that a
+        // runtime SetDefaultDllDirectories call cannot cover, because the loader has already
+        // resolved them. Same rationale as compileSetupBootstrap in build-windows-portable-setup.mjs.
+        "/DEPENDENTLOADFLAG:0x800",
+      ],
+      { env },
+    );
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
+}
+
+export function buildWindowsGenerationLauncher(
+  destination,
+  generationId,
+  { compile = compileWindowsLauncher } = {},
+) {
+  if (!/^[a-f0-9]{64}$/u.test(generationId)) fail("Windows generation ID is invalid");
+  const target = portableTargetByName("windows-x64");
+  if (target === undefined) fail("Windows portable target is unavailable");
+  mkdirSync(dirname(destination), { recursive: true });
+  compile(target, destination, generationId);
+  const entry = existsSync(destination) ? lstatSync(destination) : undefined;
+  if (entry === undefined || !entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
+    fail("Windows generation launcher build did not produce the fixed executable");
+  }
+  chmodLauncher(destination);
+  return destination;
 }
 
 function requireWindowsLauncherIconSource() {
@@ -1879,26 +1999,28 @@ function stageSupportLauncher(target, stageRoot) {
     return;
   }
   const scriptPath = join(supportRoot, "keiko-support.sh");
+  const primaryLauncher =
+    target.nodePlatform === "linux" ? "../Keiko" : "../Keiko.app/Contents/MacOS/Keiko";
   writeFileSync(
     scriptPath,
     [
       "#!/bin/sh",
       'SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)',
-      'exec "$SCRIPT_DIR/../Keiko.app/Contents/MacOS/Keiko" "$@"',
+      `exec "$SCRIPT_DIR/${primaryLauncher}" "$@"`,
       "",
     ].join("\n"),
   );
   chmodLauncher(scriptPath);
 }
 
-function stageSetupManifest(target, resourceRoot) {
+function stageSetupManifest(target, resourceRoot, windowsGeneration) {
   const manifestRoot = join(resourceRoot, ".portable");
   mkdirSync(manifestRoot, { recursive: true });
   writeFileSync(
     join(manifestRoot, "setup-manifest.json"),
     JSON.stringify(
       {
-        schemaVersion: 1,
+        schemaVersion: windowsGeneration === undefined ? 1 : 2,
         platformTarget: target.platformTarget,
         packageName: rootPackage.name,
         packageVersion: rootPackage.version,
@@ -1909,11 +2031,19 @@ function stageSetupManifest(target, resourceRoot) {
           nodePlatform: target.nodePlatform,
           nodeArchitecture: target.nodeArchitecture,
         },
+        ...(windowsGeneration === undefined ? {} : { windowsGeneration }),
       },
       null,
       2,
     ) + "\n",
   );
+}
+
+export function stageWindowsPortableRootFiles(payloadRoot, windowsGeneration) {
+  const target = portableTargetByName("windows-x64");
+  if (target === undefined) fail("Windows portable target is unavailable");
+  stageSetupManifest(target, payloadRoot, cloneJson(windowsGeneration));
+  stageSupportLauncher(target, payloadRoot);
 }
 
 function macInfoPlist(target) {
@@ -1963,7 +2093,7 @@ function manifestRelease(options) {
   };
 }
 
-function manifestArtifact(options, target, digests) {
+function manifestArtifact(_options, target, digests) {
   return {
     platformTarget: target.platformTarget,
     assetId: STAGING_ASSET_ID_UNAVAILABLE,
@@ -2026,11 +2156,9 @@ function manifestStateExclusion() {
   };
 }
 
-function manifestSecurity(target) {
+function manifestSecurity(target, evaluation) {
   return {
-    verificationPolicy: "staging",
-    verificationStatus: "unverified-staging",
-    verificationReasonCodes: ["staging-unverified"],
+    ...stageVerificationLane(evaluation),
     signatureKind: target.signatureKind,
     signatureVerified: false,
     notarizationRequired: target.nodePlatform === "darwin",
@@ -2100,7 +2228,7 @@ function manifestReleaseImpact(input) {
   };
 }
 
-function manifestUpdateEligibility() {
+function manifestUpdateEligibility(release) {
   return {
     stableOnly: true,
     rollbackSupported: false,
@@ -2109,13 +2237,14 @@ function manifestUpdateEligibility() {
       managedRootAttested: true,
       artifactShaVerified: true,
       platformSignatureLocallyVerified: false,
+      ...(release ? { releaseTrustRequired: true } : {}),
       manifestReleaseImpactBound: true,
       sameVolumeCrashSafePromotionAvailable: true,
       relaunchVersionVerificationAvailable: true,
     },
     manualOnlyWhen: [
       "managed-root-cannot-be-attested",
-      "signature-or-notarization-cannot-be-verified",
+      release ? "release-trust-cannot-be-verified" : "signature-or-notarization-cannot-be-verified",
       "crash-safe-promotion-unavailable",
       "admin-or-organization-managed-root",
       "prerelease-beta-downgrade-or-rollback",
@@ -2133,7 +2262,7 @@ function manifestFor(
 ) {
   const assetSha = digests.assetSha256;
   const nodeIdentity = `node-v${options.nodeVersion}-${target.runtimeTarget}`;
-  const security = manifestSecurity(target);
+  const security = manifestSecurity(target, options.evaluation === true);
   const releaseImpactEntry = reviewedReleaseImpactEntry(options);
   const manifest = {
     schemaVersion: 1,
@@ -2164,7 +2293,7 @@ function manifestFor(
       nativeHelpers,
       nativeAddons,
     }),
-    updateEligibility: manifestUpdateEligibility(),
+    updateEligibility: manifestUpdateEligibility(options.release === true),
   };
   if (sidecarRuntimes.length > 0) manifest.sidecarRuntimes = sidecarRuntimes;
   return manifest;
@@ -2190,37 +2319,16 @@ function reviewedReleaseImpactEntry(options) {
 }
 
 function releaseImpactEntryMatches(entry, options) {
-  return (
-    entry.packageName === rootPackage.name &&
-    entry.packageVersion === rootPackage.version &&
-    entry.releaseTag === options.releaseTag &&
-    entry.review?.status === "reviewed" &&
-    entry.review?.humanApproved === true &&
-    portableRuntimeContractMatches(entry.portableRuntimeArtifactContract)
-  );
-}
-
-function portableRuntimeContractMatches(contract) {
-  return (
-    contract !== null &&
-    typeof contract === "object" &&
-    contract.issue === PORTABLE_RELEASE_IMPACT_CONTRACT.issue &&
-    contract.parentEpic === PORTABLE_RELEASE_IMPACT_CONTRACT.parentEpic &&
-    contract.programEpic === PORTABLE_RELEASE_IMPACT_CONTRACT.programEpic &&
-    contract.stagingOnly === PORTABLE_RELEASE_IMPACT_CONTRACT.stagingOnly &&
-    sameStringSet(contract.targets, PORTABLE_RELEASE_IMPACT_CONTRACT.targets)
-  );
-}
-
-function sameStringSet(actual, expected) {
-  if (!Array.isArray(actual) || actual.length !== expected.length) return false;
-  const actualSet = new Set(actual);
-  return actualSet.size === expected.length && expected.every((value) => actualSet.has(value));
+  return reviewedStagingEntryMatches(entry, rootPackage, options.releaseTag, options.target);
 }
 
 export async function assemblePortableStage(options, hooks = {}) {
   const target = portableTargetByName(options.target);
-  const sidecarSpecs = normalizeSidecarRuntimeSpecs(options.sidecarRuntimeSpecs ?? [], target);
+  const sidecarSpecs = normalizeSidecarRuntimeSpecs(
+    options.sidecarRuntimeSpecs ?? [],
+    target,
+    options.evaluation === true,
+  );
   const tmp = mkdtempSync(join(tmpdir(), "keiko-portable-stage-"));
   const paths = portableStagePaths(tmp, target, options);
   rmSync(paths.finalRoot, { recursive: true, force: true });
@@ -2243,7 +2351,7 @@ function portableStagePaths(tmp, target, options) {
     finalRoot: resolve(options.outDir, target.platformTarget),
     payloadContainer,
     payloadRoot,
-    resourceRoot: payloadResourceRoot(target, payloadRoot),
+    resourceRoot: payloadResourceRoot(target, payloadRoot, options),
     stageRoot,
   };
 }
@@ -2261,7 +2369,9 @@ async function assembleStageRoot(options, hooks, target, sidecarSpecs, paths) {
     stageSecureReadHelper(target, paths.resourceRoot, options, hooks),
     stageRuntimeSupervisor(target, paths.resourceRoot, options, hooks),
   ];
-  const nativeAddons = (hooks.stageUsearchAddon ?? stageUsearchAddon)(target, paths.resourceRoot);
+  const nativeAddons = (hooks.stageUsearchAddon ?? stageUsearchAddon)(target, paths.resourceRoot, {
+    evaluation: options.evaluation === true,
+  });
   const sidecarRuntimes = stageSidecarRuntimes(sidecarSpecs, paths.resourceRoot);
   const staged = {
     nodeArchiveSha256,
@@ -2270,12 +2380,20 @@ async function assembleStageRoot(options, hooks, target, sidecarSpecs, paths) {
     nativeAddons,
   };
   const firstPass = await manifestInputFor(options, target, paths, tarball, staged);
-  writeRuntimeActivationManifest(paths.resourceRoot, firstPass.manifest);
+  const firstActivation = writeRuntimeActivationManifest(paths.resourceRoot, firstPass.manifest);
+  sealMacosAppBundle(target, paths.payloadRoot, hooks);
   const manifestInput = await manifestInputFor(options, target, paths, tarball, staged);
-  writeRuntimeActivationManifest(paths.resourceRoot, manifestInput.manifest);
+  const finalActivation = writeRuntimeActivationManifest(
+    paths.resourceRoot,
+    manifestInput.manifest,
+  );
+  if (target.nodePlatform === "darwin" && firstActivation.sha256 !== finalActivation.sha256) {
+    fail("runtime activation manifest changed after the app bundle was sealed");
+  }
+  verifyMacosAppBundleSeal(target, paths.payloadRoot, hooks);
   writeEvidence(paths.stageRoot, manifestInput.manifest, manifestInput.provenanceStatement);
   writeManifest(paths.stageRoot, manifestInput.manifest);
-  validateGeneratedManifest(manifestInput.manifest);
+  validateGeneratedManifest(manifestInput.manifest, options.evaluation === true);
   return { manifest: manifestInput.manifest, tarball };
 }
 
@@ -2290,7 +2408,7 @@ async function manifestInputFor(options, target, paths, tarball, staged) {
     staged.nativeHelpers,
     staged.nativeAddons,
   );
-  const provenanceSha256 = sha256Text(provenanceStatement);
+  const provenanceSha256 = sha256(provenanceStatement);
   return {
     manifest: manifestFor(
       options,
@@ -2311,8 +2429,76 @@ async function manifestInputFor(options, target, paths, tarball, staged) {
   };
 }
 
-function validateGeneratedManifest(manifest) {
-  const failures = validatePortableStagingManifest(manifest);
+/**
+ * Seals the assembled macOS app bundle with an ad-hoc code signature. Every Mach-O inside the
+ * bundle is already individually signed (linker ad-hoc at minimum), but Gatekeeper judges the
+ * BUNDLE: a bundle whose main executable carries a signature while the bundle has no resource
+ * seal is reported as "damaged", and macOS then offers no "Open Anyway" approval path at all —
+ * the one journey an unsigned evaluation download depends on (ADR-0163 D9). The ad-hoc seal
+ * asserts no author; it makes the bundle internally consistent so the platform can offer its
+ * normal unidentified-developer approval. The Developer ID lane later replaces this seal with
+ * the real one (`codesign --force` in run-macos-portable-signing.sh), so sealing here is safe
+ * for every lane. The seal must cover the final runtime-activation manifest, so it runs after
+ * that write and before the shipped ZIP is created.
+ */
+function sealMacosAppBundle(target, payloadRoot, hooks) {
+  if (target.nodePlatform !== "darwin") return;
+  const appRoot = join(payloadRoot, "Keiko.app");
+  if (hooks.sealMacosAppBundle !== undefined) {
+    hooks.sealMacosAppBundle(appRoot);
+    return;
+  }
+  requireDarwinBuilder(target, "sealing");
+  // Inside-out, nested code first. The arm64 linker ad-hoc signs every Mach-O at link time, but
+  // the x86_64 one does not, and codesign refuses to seal a bundle over unsigned subcomponents —
+  // measured on macos-15-intel: "code object is not signed at all — In subcomponent:
+  // …/KeikoSystemExtensionManager". Signing these two here is digest-safe: they are bound by the
+  // outer seal and the install-time identity, both computed after this step, and NOT by the
+  // nativeHelpers digests, which cover only the supervisor executable staged under Resources.
+  run("/usr/bin/codesign", [
+    "--force",
+    "--sign",
+    "-",
+    join(appRoot, "Contents", "Library", "SystemExtensions", MACOS_SYSTEM_EXTENSION_ID),
+  ]);
+  run("/usr/bin/codesign", [
+    "--force",
+    "--sign",
+    "-",
+    join(appRoot, "Contents", "MacOS", "KeikoSystemExtensionManager"),
+  ]);
+  run("/usr/bin/codesign", ["--force", "--sign", "-", appRoot]);
+}
+
+/**
+ * The platform's own verifier is the fail-closed assert that nothing mutated the bundle after the
+ * seal: a divergent activation rewrite, a stray staging write, or a broken nested signature all
+ * fail `--verify --deep --strict`, and a bundle that fails it here would have shown the beta.0
+ * "damaged" dead end on the first customer double-click.
+ */
+function verifyMacosAppBundleSeal(target, payloadRoot, hooks) {
+  if (target.nodePlatform !== "darwin") return;
+  const appRoot = join(payloadRoot, "Keiko.app");
+  if (hooks.verifyMacosAppBundleSeal !== undefined) {
+    hooks.verifyMacosAppBundleSeal(appRoot);
+    return;
+  }
+  requireDarwinBuilder(target, "seal verification");
+  run("/usr/bin/codesign", ["--verify", "--deep", "--strict", appRoot]);
+}
+
+function requireDarwinBuilder(target, step) {
+  if (process.platform !== "darwin") {
+    fail(
+      `${step} for ${target.platformTarget} requires a native darwin builder or an injected hook`,
+    );
+  }
+}
+
+function validateGeneratedManifest(manifest, evaluation) {
+  const failures = evaluation
+    ? validatePortableEvaluationManifest(manifest)
+    : validatePortableStagingManifest(manifest);
   if (failures.length > 0) fail(`generated manifest is invalid:\n  - ${failures.join("\n  - ")}`);
 }
 

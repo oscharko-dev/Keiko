@@ -1,16 +1,71 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
 
 const root = resolve(import.meta.dirname, "..", "..");
 const mutation = readFileSync(resolve(root, ".github/workflows/mutation-security.yml"), "utf8");
 const ci = readFileSync(resolve(root, ".github/workflows/ci.yml"), "utf8");
+const nightlyPerfEvidence = readFileSync(
+  resolve(root, ".github/workflows/nightly-perf-evidence.yml"),
+  "utf8",
+);
+const visualRegression = readFileSync(
+  resolve(root, "docs/design-system/visual-regression.md"),
+  "utf8",
+);
+const ciWorkflow = parse(ci, { maxAliasCount: 0 });
+const mutationWorkflow = parse(mutation, { maxAliasCount: 0 });
+const nightlyPerfEvidenceWorkflow = parse(nightlyPerfEvidence, { maxAliasCount: 0 });
 const mutationScope = readFileSync(resolve(root, "scripts/check-mutation-scope.mjs"), "utf8");
 const localSonar = readFileSync(resolve(root, "docker/gates/run-sonar.sh"), "utf8");
 const localSonarCompose = readFileSync(resolve(root, "docker/gates/sonar-compose.yml"), "utf8");
 const packageJson = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
+const devDispatchCoverageJobs = new Set([
+  "coverage-packages",
+  "coverage-ui",
+  "coverage-scripts",
+  "coverage-sonar",
+]);
+
+function runCiAggregate(overrides = {}) {
+  const aggregateStep = ciWorkflow.jobs.ci.steps.find(
+    (step) => step.name === "Aggregate required CI results fail closed",
+  );
+  return spawnSync("bash", ["-euo", "pipefail", "-c", aggregateStep.run], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      BUILD_SCAN_SBOM_SMOKE_RESULT: "success",
+      CHANGE_SCOPE_RESULT: "success",
+      CORE_QUALITY_RESULT: "success",
+      COVERAGE_SONAR_RESULT: "success",
+      CROSS_PLATFORM_RESULT: "success",
+      DOCUMENTATION_ONLY: "false",
+      EDITOR_FAST_PR: "false",
+      NODE_26_COMPATIBILITY_RESULT: "success",
+      PROTECTED_BRANCH_RESULT: "success",
+      SECRET_SCAN_RESULT: "success",
+      SEMANTIC_DUPLICATION_RESULT: "success",
+      UI_RESULT: "success",
+      VERIFIED_TREE_RESULT: "success",
+      ...overrides,
+    },
+  });
+}
 
 describe("dev quality workflows", () => {
+  it("reruns CI for metadata edits without displacing code-head evidence", () => {
+    expect(ciWorkflow.on.pull_request.types).toContain("edited");
+    expect(ciWorkflow.concurrency.group).toBe(
+      "ci-${{ github.event_name == 'pull_request' && format('pr-{0}-{1}', github.event.pull_request.number, github.event.action == 'edited' && 'metadata' || 'code-head') || github.run_id }}",
+    );
+    expect(ciWorkflow.concurrency["cancel-in-progress"]).toBe(
+      "${{ github.event_name == 'pull_request' }}",
+    );
+  });
+
   it("runs full mutation on a daily or explicit bounded lane, never on the PR critical path", () => {
     expect(mutation).not.toContain("pull_request:");
     expect(mutation).toContain('cron: "17 2 * * *"');
@@ -22,20 +77,57 @@ describe("dev quality workflows", () => {
     expect(mutation).toContain('node-version: "24.18.0"');
     expect(mutation).toContain("node scripts/check-runtime-toolchain.mjs --exact");
     expect(mutation).toContain("npm run test:mutation:security");
+    expect(mutation).toContain("second-order mutation proof");
+    expect(mutation).not.toContain("release-blocking");
     expect(mutation).not.toContain("check-mutation-scope.mjs");
-    expect(mutation).not.toContain("continue-on-error: true");
-    expect(packageJson.scripts["test:mutation:security"]).toContain(
-      "npm run test:mutation:debug-launch-security",
+    // KEIKO-0588: the mutation step now runs with continue-on-error so a failure files a
+    // tracking issue (mirrors nightly-perf-evidence.yml). The lane must STILL fail — assert
+    // the companion `Fail the lane after reporting` step exists and fires on the same outcome.
+    expect(mutation).toContain("continue-on-error: true");
+    expect(mutation).toMatch(/Fail the lane after reporting/u);
+    expect(mutation).toMatch(/steps\.mutation\.outcome == 'failure'/u);
+    expect(packageJson.scripts["test:mutation:security"]).toBe(
+      "node scripts/run-security-mutation-suite.mjs",
+    );
+    expect(packageJson.scripts["check:mutation:debug-launch"]).toContain("--strict");
+    expect(packageJson.scripts["check:mutation:debug-launch"]).toContain("--minimum-score 100");
+    expect(packageJson.scripts["test:mutation:debug-launch-security"]).toContain(
+      "stryker.debug-launch.security.conf.json",
     );
 
-    const install = mutation.indexOf("npm ci --ignore-scripts");
-    const buildPackages = mutation.indexOf("npm run build:packages");
-    const mutationRun = mutation.indexOf("npm run test:mutation:security");
-    expect(buildPackages).toBeGreaterThan(install);
-    expect(buildPackages).toBeLessThan(mutationRun);
     expect(mutationScope).toContain('"--diff-filter=ACMR"');
     expect(mutationScope).toContain('"packages/keiko-server/src/editor/dap/"');
     expect(mutationScope).toContain('"packages/keiko-server/src/editor/processHardening.ts"');
+  });
+
+  it("wires mutation failure reporting and the terminal failure to the measured suite", () => {
+    const steps = mutationWorkflow.jobs["mutation-quality-gate"].steps;
+    const installAt = steps.findIndex((step) => step.run === "npm ci --ignore-scripts");
+    const buildAt = steps.findIndex((step) => step.run === "npm run build:packages");
+    const mutationAt = steps.findIndex((step) => step.id === "mutation");
+    const reportAt = steps.findIndex(
+      (step) => step.name === "Report mutation failure as a tracking issue",
+    );
+    const failureAt = steps.findIndex((step) => step.name === "Fail the lane after reporting");
+    const mutationStep = steps[mutationAt];
+    const reportStep = steps[reportAt];
+    const failureStep = steps[failureAt];
+
+    expect(installAt).toBeGreaterThan(-1);
+    expect(buildAt).toBeGreaterThan(installAt);
+    expect(mutationAt).toBeGreaterThan(buildAt);
+    expect(reportAt).toBeGreaterThan(mutationAt);
+    expect(failureAt).toBeGreaterThan(reportAt);
+    expect(mutationStep).toMatchObject({
+      id: "mutation",
+      name: "Run security mutation suite",
+      run: "npm run test:mutation:security",
+    });
+    expect(mutationStep["continue-on-error"]).toBe(true);
+    expect(reportStep.if).toBe("${{ steps.mutation.outcome == 'failure' }}");
+    expect(reportStep.run).toContain("gh issue");
+    expect(failureStep.if).toBe(reportStep.if);
+    expect(failureStep.run).toContain("exit 1");
   });
 
   it("checks out complete history before validating immutable editor evidence", () => {
@@ -48,8 +140,41 @@ describe("dev quality workflows", () => {
     expect(uiJob).toContain("npm run check:perf-evidence:editor");
   });
 
+  it("checks both committed performance documents nightly without running a hosted measurement", () => {
+    expect(nightlyPerfEvidence).toContain("npm run --silent check:perf-evidence --");
+    expect(nightlyPerfEvidence).not.toContain("check:perf-evidence:editor --");
+    expect(nightlyPerfEvidence).toContain("performance-evidence-drift:");
+    expect(nightlyPerfEvidence).toContain("d12-drift:");
+    expect(nightlyPerfEvidence).toContain("Performance evidence versus");
+  });
+
+  // #3453: the native coding-runtime evidence harness imports a validator from the BUILT contracts
+  // package, and this lane installed with `--ignore-scripts` and never built. The step died on
+  // ERR_MODULE_NOT_FOUND before checking anything, and the lane filed its generic "evidence drift"
+  // issue for what was actually a missing build -- three nights running. Order is the assertion:
+  // a build that ran after the check would be just as useless as none.
+  it("builds the packages its evidence harness imports before checking them", () => {
+    const steps = nightlyPerfEvidenceWorkflow.jobs["detect-drift"].steps;
+    const installAt = steps.findIndex((step) => step.run === "npm ci --ignore-scripts");
+    const buildAt = steps.findIndex((step) => step.run === "npm run build:packages");
+    const codingDriftAt = steps.findIndex((step) => step.id === "coding-drift");
+
+    expect(installAt).toBeGreaterThanOrEqual(0);
+    expect(codingDriftAt).toBeGreaterThanOrEqual(0);
+    expect(buildAt).toBeGreaterThan(installAt);
+    expect(codingDriftAt).toBeGreaterThan(buildAt);
+  });
+
+  it("does not represent migration-era design equivalence evidence as a standing gate", () => {
+    expect(visualRegression).toContain("All twelve browser equivalence harnesses");
+    expect(visualRegression).toContain("not standing CI or pull-request gates");
+  });
+
   it("keeps functional UI checks blocking and moves hosted performance to post-merge evidence", () => {
     const uiJob = ci.match(/ {2}ui:\n[\s\S]*$/u)?.[0];
+    const evidenceStep = uiJob?.match(
+      /- name: Build internal packages[\s\S]*?(?=\n\s+- name: Security audit UI dependencies)/u,
+    )?.[0];
     const performanceStep = uiJob?.match(
       /- name: Refresh workspace performance evidence\n[\s\S]*?(?=\n\s+- name: Performance evidence freshness)/u,
     )?.[0];
@@ -73,12 +198,19 @@ describe("dev quality workflows", () => {
     expect(performanceStep).not.toContain("rm -f docs/release/1209-perf-evidence.json");
     expect(performanceStep).toContain("rm -f docs/release/1580-workspace-perf-evidence.json");
     expect(performanceStep).toContain("npm run test:e2e:workspace-perf");
-    expect(performanceStep).toContain("immutable D12 baseline/candidate comparison");
-    expect(performanceStep).toContain("Validate immutable editor D12 performance evidence");
-    expect(performanceStep).toContain(
+    expect(evidenceStep).toContain("Validate tool-catalog performance evidence");
+    expect(evidenceStep).toContain("npm run check:tool-catalog-performance");
+    expect(evidenceStep).toContain("Validate immutable editor D12 performance evidence");
+    expect(evidenceStep).toContain(
       "if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}",
     );
-    expect(performanceStep).toContain("npm run check:perf-evidence:editor");
+    expect(evidenceStep).toContain("npm run check:perf-evidence:editor");
+    expect(evidenceStep).toContain("Validate workspace performance evidence freshness");
+    expect(evidenceStep).toContain("npm run check:perf-evidence:workspace");
+    expect(evidenceStep).toContain("Validate coding runtime performance evidence");
+    expect(uiJob.indexOf("Validate tool-catalog performance evidence")).toBeLessThan(
+      uiJob.indexOf("Install Playwright browser"),
+    );
     expect(freshnessStep).toContain(
       "if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}",
     );
@@ -103,12 +235,73 @@ describe("dev quality workflows", () => {
     expect(ci).toContain("SONAR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}");
     expect(ci).toContain("Verify changed production sources are mapped into LCOV");
     expect(ci).toContain(
-      "ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.ref }}",
+      "ref: ${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}",
     );
     expect(ci).toContain("Verify manual analysis is bound to remote dev");
     expect(ci).toContain('expected="$(git rev-parse refs/remotes/origin/dev)"');
     expect(ci).toContain("SONAR_HEAD_SHA: ${{ steps.sonar-head.outputs.sha }}");
     expect(ci).toContain("node scripts/check-sonar-main-quality-gate.mjs");
+  });
+
+  it("binds every full-tree quality lane to the same immutable merge candidate", () => {
+    const candidateJobs = [
+      "core-quality",
+      "coverage-packages",
+      "coverage-ui",
+      "coverage-scripts",
+      "coverage-sonar",
+      "build-scan-sbom-smoke",
+      "cross-platform-smoke",
+      "ui",
+    ];
+
+    for (const jobName of candidateJobs) {
+      const job = ciWorkflow.jobs[jobName];
+      const steps = job.steps;
+      const checkoutAt = steps.findIndex((step) => step.uses?.startsWith("actions/checkout@"));
+      const setupNodeAt = steps.findIndex((step) => step.uses?.startsWith("actions/setup-node@"));
+      const candidateCheckAt = steps.findIndex(
+        (step) => step.name === "Verify pull-request merge candidate consistency",
+      );
+      const checkout = steps[checkoutAt];
+      const candidateCheck = steps[candidateCheckAt];
+
+      expect(job["timeout-minutes"], `${jobName} must have a bounded timeout`).toBeGreaterThan(0);
+      expect(checkout, `${jobName} checkout must exist`).toBeDefined();
+      expect(checkout.with.ref, `${jobName} must pin the run revision`).toBe(
+        devDispatchCoverageJobs.has(jobName)
+          ? "${{ github.event_name == 'workflow_dispatch' && 'dev' || github.sha }}"
+          : "${{ github.sha }}",
+      );
+      expect(candidateCheck, `${jobName} must verify its candidate`).toMatchObject({
+        if: "${{ github.event_name == 'pull_request' }}",
+        env: {
+          KEIKO_CANDIDATE_BASE_SHA: "${{ github.event.pull_request.base.sha }}",
+          KEIKO_CANDIDATE_HEAD_SHA: "${{ github.event.pull_request.head.sha }}",
+        },
+        run: "node scripts/check-ci-merge-candidate.mjs",
+      });
+      expect(setupNodeAt, `${jobName} must set up the trusted action runtime`).toBeGreaterThan(
+        checkoutAt,
+      );
+      expect(
+        candidateCheckAt,
+        `${jobName} must verify before another action or candidate command runs`,
+      ).toBe(setupNodeAt + 1);
+      expect(steps.some((step) => step.name === "Verify candidate tree remains immutable")).toBe(
+        false,
+      );
+    }
+
+    const sonarEvidence = ciWorkflow.jobs["coverage-sonar"].steps.find(
+      (step) => step.name === "Verify Sonar full-analysis evidence",
+    );
+    expect(sonarEvidence).toMatchObject({
+      if: "${{ always() && steps.sonar-scan.outcome != 'skipped' }}",
+      run: 'node scripts/check-sonar-analysis-log.mjs --log "$RUNNER_TEMP/sonar-scanner.log" --require-full-analysis',
+    });
+    expect(ci).not.toContain("oscharko-dev/Keiko/.github/actions/verify-");
+    expect(ciWorkflow.jobs["coverage-sonar"]["timeout-minutes"]).toBe(50);
   });
 
   it("isolates local Sonar state by repository and selectable loopback port", () => {
@@ -127,6 +320,7 @@ describe("dev quality workflows", () => {
     expect(localSonar).toContain('git -C "${repo_root}" ls-files -z --others --exclude-standard');
     expect(localSonar).toContain("--needs-full-scan");
     expect(localSonar).not.toContain("-Dsonar.javascript.node.maxspace=4096");
+    expect(localSonar).toContain("-Dsonar.javascript.node.maxspace=4608");
     expect(localSonar).toContain("--partition-inclusions");
     expect(localSonar).toContain(
       '"-Dsonar.inclusions=${source_inclusions:-${empty_source_inclusion}}"',
@@ -141,7 +335,10 @@ describe("dev quality workflows", () => {
       'empty_test_inclusion=".keiko/local-sonar-empty-test-${checkout_id}"',
     );
     expect(localSonar).not.toContain('"-Dsonar.test.inclusions=${inclusions}"');
+    expect(localSonar).toContain('"${compose[@]}" run --rm --no-deps scanner');
+    expect(localSonar).not.toContain('"${compose[@]}" run --rm scanner');
     expect(localSonarCompose).toContain('"127.0.0.1:${KEIKO_LOCAL_SONAR_PORT:-9234}:9000"');
+    expect(localSonarCompose).toContain('SONAR_SCANNER_OPTS: "-Xmx768m"');
     expect(packageJson.scripts["gates:sonar:stop"]).toBe("./docker/gates/run-sonar.sh --stop");
   });
 
@@ -174,17 +371,41 @@ describe("dev quality workflows", () => {
     // Pin the analysis revision to the pull-request head so the merge-ref checkout does not trip the
     // SonarCloud "detected as changed but without having changed lines" SCM warning.
     expect(ci).toContain('-Dsonar.scm.revision="${SONAR_HEAD_SHA}"');
+    expect(ci).toContain("-Dsonar.analysisCache.enabled=false");
+    expect(ci).toContain("-Dsonar.sensor.cache.enable=false");
     expect(ci).toContain(
       "SONAR_HEAD_SHA: ${{ github.event.pull_request.head.sha || steps.sonar-head.outputs.sha || github.sha }}",
     );
     expect(ci).toContain('tee "$RUNNER_TEMP/sonar-scanner.log"');
     expect(ci).toContain("scanner_status=${PIPESTATUS[0]}");
-    expect(ci).toContain(
-      'node scripts/check-sonar-analysis-log.mjs --log "$RUNNER_TEMP/sonar-scanner.log"',
-    );
     expect(ci).toContain('exit "$scanner_status"');
-    expect(ci).toContain('if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]');
+    expect(ci).toContain("node scripts/check-sonar-analysis-log.mjs");
+    expect(ci).toContain('--log "$RUNNER_TEMP/sonar-scanner.log"');
+    expect(ci).toContain("--require-full-analysis");
+    expect(ci).not.toContain("SONAR_SCANNER_STATUS:");
     expect(ci).toContain("if: ${{ always() && github.event_name == 'workflow_dispatch' }}");
+  });
+
+  // A SonarCloud outage answered the report upload with "503 Service Temporarily Unavailable",
+  // while the retry allowlist matched only the adjacent-word "Service Unavailable". The loop broke
+  // and a vendor outage failed the whole dev lane closed - the exact class ADR-0139 D6 exists to
+  // absorb. Pin the BEHAVIOUR against the wording that actually took dev down, not its spelling.
+  it("retries the vendor 503 wording that failed dev closed, and never a quality-gate verdict", () => {
+    const allowlist = /if ! grep -qE "([^"]+)" "\$RUNNER_TEMP\/sonar-scanner\.log"/u.exec(ci)?.[1];
+    expect(typeof allowlist).toBe("string");
+    const retryable = new RegExp(allowlist, "u");
+
+    expect(
+      retryable.test(
+        "Failed to upload report - HTTP code 503: 503 Service Temporarily Unavailable",
+      ),
+    ).toBe(true);
+    expect(retryable.test("503 Service Unavailable")).toBe(true);
+    expect(retryable.test("ERROR: Quality Gate check timeout exceeded")).toBe(true);
+
+    // A genuine verdict must never be retried into a green run.
+    expect(retryable.test("QUALITY GATE STATUS: FAILED")).toBe(false);
+    expect(retryable.test("You are not authorized to run analysis")).toBe(false);
   });
 
   // Issue #2704 / ADR-0157 moved the three coverage suites into their own jobs, so `coverage-sonar`
@@ -203,10 +424,28 @@ describe("dev quality workflows", () => {
       .map((line) => line.replace(/^ {6}- /u, "").trim())
       .filter(Boolean)
       .sort();
-    expect(declaredNeeds).toEqual(["coverage-packages", "coverage-scripts", "coverage-ui"]);
+    // ADR-0178 adds `verified-tree`, and the invariant this pin protects is unchanged: Sonar still
+    // queues behind nothing but its own three coverage suites. `verified-tree` is not a gate — it is
+    // the ~20-second resolver that answers whether this exact tree was already proven, and the job
+    // cannot read `needs.verified-tree.outputs` without declaring it. Set equality is kept so the
+    // NEXT addition still has to be justified here rather than slipping through.
+    expect(declaredNeeds).toEqual([
+      "coverage-packages",
+      "coverage-scripts",
+      "coverage-ui",
+      "verified-tree",
+    ]);
     // always() plus an explicit per-suite success check: failure, cancelled AND skipped must all
     // turn this context red, so a silently skipped shard can never pass it with a suite unexecuted.
-    expect(coverageJob).toContain("if: ${{ always() }}");
+    // ADR-0178: `always()` is unchanged and still load-bearing — a failed, cancelled or skipped
+    // shard must turn this context red. The reuse guard is pinned alongside it, exactly, so that
+    // neither the `always()` nor the guard can be altered without failing here.
+    // ADR-0178 D1 amendment (2026-09-25): on a push to `dev` the analysis runs even for a proven
+    // tree, so SonarCloud's branch history keeps moving. The clause is pinned exactly together with
+    // `always()` and the guard, so none of the three can be altered without failing here.
+    expect(coverageJob).toContain(
+      "if: ${{ always() && (needs.verified-tree.outputs.tree-verified != 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/dev')) }}",
+    );
     expect(coverageJob).toContain('if [ "${entry#*:}" != "success" ]');
     expect(coverageJob).toContain("needs.coverage-packages.result");
     expect(coverageJob).toContain("needs.coverage-scripts.result");
@@ -227,16 +466,37 @@ describe("dev quality workflows", () => {
 
   // The live isolation proof the coverage run depends on moved with the suites. Asserting it on all
   // three jobs is stricter than the single assertion it replaces.
+  // KEIKO-1020: the identical `Install sandbox isolation backend (bubblewrap)` + AppArmor-relax
+  // block that was previously inlined 7 times was extracted into
+  // `.github/actions/setup-sandbox-isolation`. The invariant this test pins is unchanged:
+  // every coverage suite job must call for the sandbox backend before running its coverage
+  // command; the assertion targets the composite-action invocation rather than the inline shell.
   it("gives every coverage suite job a real bubblewrap isolation backend", () => {
     // Sliced to the NEXT top-level job key rather than to a named follower, so reordering jobs in
     // ci.yml cannot silently change what each iteration asserts.
     for (const job of ["coverage-packages", "coverage-ui", "coverage-scripts"]) {
       const block = ci.match(new RegExp(` {2}${job}:\\n[\\s\\S]*?(?=\\n {2}\\S)`, "u"))?.[0];
+      const steps = ciWorkflow.jobs[job].steps;
+      const sandboxAt = steps.findIndex(
+        (step) => step.uses === "./.github/actions/setup-sandbox-isolation",
+      );
+      const provisionAt = steps.findIndex((step) => step.run === "npm run provision:usearch");
+      const measureAt = steps.findIndex((step) => step.run?.startsWith("npm run test:coverage:"));
       expect(block, `${job} job block must exist`).toBeDefined();
-      expect(block).toContain("Install sandbox isolation backend (bubblewrap)");
-      expect(block).toContain("kernel.apparmor_restrict_unprivileged_userns=0");
+      expect(block).toContain("uses: ./.github/actions/setup-sandbox-isolation");
       expect(block).toContain("npm run provision:usearch");
+      expect(sandboxAt).toBeGreaterThan(-1);
+      expect(provisionAt).toBeGreaterThan(sandboxAt);
+      expect(measureAt).toBeGreaterThan(provisionAt);
     }
+    // The composite action itself must still install bubblewrap AND relax AppArmor — this pin
+    // moved from the caller to the callee, and losing it defeats the whole isolation proof.
+    const compositeAction = readFileSync(
+      resolve(root, ".github/actions/setup-sandbox-isolation/action.yml"),
+      "utf8",
+    );
+    expect(compositeAction).toContain("sudo apt-get install -y bubblewrap");
+    expect(compositeAction).toContain("kernel.apparmor_restrict_unprivileged_userns=0");
   });
 
   it("aggregates required CI fail closed", () => {
@@ -247,20 +507,122 @@ describe("dev quality workflows", () => {
     expect(aggregateJob, "ci aggregate job block must exist").toBeDefined();
     expect(aggregateJob).toContain("if: ${{ always() }}");
     expect(aggregateJob).toContain("- core-quality");
+    expect(aggregateJob).toContain("- build-scan-sbom-smoke");
     expect(aggregateJob).toContain("- coverage-sonar");
     expect(aggregateJob).toContain("- cross-platform-smoke");
+    expect(aggregateJob).toContain("- node-26-compatibility");
+    expect(aggregateJob).toContain("- ui");
+    expect(aggregateJob).toContain("BUILD_SCAN_SBOM_SMOKE_RESULT");
+    expect(aggregateJob).toContain("CHANGE_SCOPE_RESULT");
     expect(aggregateJob).toContain("CROSS_PLATFORM_RESULT");
+    expect(aggregateJob).toContain("EDITOR_FAST_PR");
+    expect(aggregateJob).toContain("NODE_26_COMPATIBILITY_RESULT");
+    expect(aggregateJob).toContain("UI_RESULT");
     expect(aggregateJob).toContain('if [ "$result" != "success" ]');
   });
 
+  it("allows the build skip only for editor fast-path pull requests", () => {
+    const editor = runCiAggregate({
+      BUILD_SCAN_SBOM_SMOKE_RESULT: "skipped",
+      EDITOR_FAST_PR: "true",
+    });
+    const nonEditor = runCiAggregate({
+      BUILD_SCAN_SBOM_SMOKE_RESULT: "skipped",
+      EDITOR_FAST_PR: "false",
+    });
+
+    expect(editor.status).toBe(0);
+    expect(editor.stdout).toContain("editor fast-path PR");
+    expect(nonEditor.status).not.toBe(0);
+    expect(nonEditor.stdout).toContain("skipped outside an editor fast-path PR");
+  });
+
+  it("fails the aggregate when change-scope does not succeed", () => {
+    const result = runCiAggregate({ CHANGE_SCOPE_RESULT: "failure" });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toContain("Required CI dependency did not succeed: failure");
+  });
+
+  it("omits the Windows matrix leg only for positively scoped non-Windows changes", () => {
+    const osExpression = String(ciWorkflow.jobs["cross-platform-smoke"].strategy.matrix.os);
+
+    expect(osExpression).toBe("${{ fromJSON(needs.change-scope.outputs.cross-platform-os) }}");
+    expect(ciWorkflow.jobs["change-scope"].outputs["cross-platform-os"]).toBe(
+      "${{ steps.classify.outputs.cross-platform-os }}",
+    );
+  });
+
+  it.each(["failure", "skipped", "cancelled", "", "unknown"])(
+    "fails the aggregate when the UI result is %s",
+    (uiResult) => {
+      const result = runCiAggregate({ UI_RESULT: uiResult });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stdout).toContain(`Required CI dependency did not succeed: ${uiResult}`);
+    },
+  );
+
+  it("retries transient npm audit service failures without weakening advisory enforcement", () => {
+    const rootAudit = ciWorkflow.jobs["build-scan-sbom-smoke"].steps.find(
+      (step) => step.name === "Security audit (high and above)",
+    );
+    const uiAudit = ciWorkflow.jobs.ui.steps.find(
+      (step) => step.name === "Security audit UI dependencies (moderate and above)",
+    );
+
+    expect(rootAudit.run).toBe(
+      "node scripts/run-npm-audit-with-retry.mjs --audit-level=high --omit=dev",
+    );
+    expect(uiAudit.run).toBe(
+      "node scripts/run-npm-audit-with-retry.mjs --audit-level=moderate --omit=dev --workspace=@oscharko-dev/keiko-ui",
+    );
+    expect(ci).not.toMatch(/^\s*run: npm audit\b/mu);
+  });
+
   it("runs native compensation on its owning platforms and aggregates it fail closed", () => {
-    const crossPlatform = ci.match(/ {2}cross-platform-smoke:\n[\s\S]*?(?=\n {2}ui:\n)/u)?.[0];
+    const crossPlatform = ci.match(
+      / {2}cross-platform-smoke:\n[\s\S]*?(?=\n {2}node-26-compatibility:\n)/u,
+    )?.[0];
     expect(crossPlatform).toBeDefined();
+    expect(crossPlatform).toContain("fromJSON(needs.change-scope.outputs.cross-platform-os)");
     expect(crossPlatform).toContain(
       "actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68",
     );
     expect(crossPlatform).toContain("npm run check:native:macos");
     expect(crossPlatform).toContain("npm run check:native:windows");
+    // #3350: the command-spawn wrapper smoke needs no MSVC, so it runs before the compiler config.
+    const cmdSpawnSmoke = ciWorkflow.jobs["cross-platform-smoke"].steps.find(
+      (step) => step.name === "Smoke the Windows command spawn wrapper",
+    );
+    expect(cmdSpawnSmoke, "command spawn wrapper smoke step must exist").toBeDefined();
+    expect(cmdSpawnSmoke.if).toBe("runner.os == 'Windows'");
+    expect(cmdSpawnSmoke.run).toContain("node scripts/__tests__/windows-cmd-spawn-smoke.mjs");
+    // A step-level `continue-on-error: true` soft-fails the step while the job (and therefore
+    // the cross-platform matrix result in the `ci` aggregate) still reports success,
+    // defeating the fail-closed aggregation the .if/.run pins above assume. Neither smoke step
+    // carries it today; this pin catches the one edit that would silently disarm them.
+    expect(cmdSpawnSmoke["continue-on-error"]).toBeUndefined();
+    // #2992: the setup bootstrap smoke compiles the C stub, so it MUST run after MSVC is configured.
+    const setupSteps = ciWorkflow.jobs["cross-platform-smoke"].steps;
+    const setupBootstrapSmoke = setupSteps.find(
+      (step) => step.name === "Smoke the Windows setup bootstrap",
+    );
+    expect(setupBootstrapSmoke, "setup bootstrap smoke step must exist").toBeDefined();
+    expect(setupBootstrapSmoke.if).toBe("runner.os == 'Windows'");
+    expect(setupBootstrapSmoke.run).toContain(
+      "node scripts/__tests__/windows-setup-bootstrap-smoke.mjs",
+    );
+    // Same fail-closed reasoning as the command-spawn smoke step above.
+    expect(setupBootstrapSmoke["continue-on-error"]).toBeUndefined();
+    const msvcIndex = setupSteps.findIndex(
+      (step) => step.name === "Configure MSVC for native quality analysis",
+    );
+    const setupSmokeIndex = setupSteps.findIndex(
+      (step) => step.name === "Smoke the Windows setup bootstrap",
+    );
+    expect(msvcIndex).toBeGreaterThanOrEqual(0);
+    expect(setupSmokeIndex).toBeGreaterThan(msvcIndex);
     expect(crossPlatform).toContain("Configure MSVC for native quality analysis");
     expect(crossPlatform).toContain('Join-Path $env:RUNNER_TEMP "keiko-vcvars-env.cmd"');
     expect(crossPlatform).toContain("$environment = & cmd.exe /d /c $vcvarsWrapper");
@@ -268,6 +630,22 @@ describe("dev quality workflows", () => {
     expect(crossPlatform).not.toContain(
       "github.event_name == 'pull_request' && github.base_ref == 'feat/keiko-editor'",
     );
+  });
+
+  it("runs the Git executable reparse regression on the required Windows host", () => {
+    const steps = ciWorkflow.jobs["cross-platform-smoke"].steps;
+    const buildIndex = steps.findIndex((step) => step.name === "Build");
+    const regressionIndex = steps.findIndex(
+      (step) => step.name === "Verify Git executable Windows reparse containment",
+    );
+    const regression = steps[regressionIndex];
+
+    expect(regression, "Windows Git reparse regression step must exist").toBeDefined();
+    expect(regression.if).toBe("runner.os == 'Windows'");
+    expect(regression.run).toBe("node scripts/__tests__/windows-git-reparse-smoke.mjs");
+    expect(regression["continue-on-error"]).toBeUndefined();
+    expect(buildIndex).toBeGreaterThanOrEqual(0);
+    expect(regressionIndex).toBeGreaterThan(buildIndex);
   });
 
   it("contains no privileged pull-request trigger", () => {

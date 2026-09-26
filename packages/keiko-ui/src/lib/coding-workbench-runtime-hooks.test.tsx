@@ -1,12 +1,12 @@
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  CODING_WORKBENCH_SCHEMA_VERSION,
-  type CodingWorkbenchCodexAuthSetupPlan,
-  type CodingWorkbenchCodexSubscriptionProfile,
-  type CodingWorkbenchRuntimeSnapshot,
-  type CodingWorkbenchSidecarGatewayResult,
+import type {
+  CodingWorkbenchCodexAuthSetupPlan,
+  CodingWorkbenchCodexSubscriptionProfile,
+  CodingWorkbenchRuntimeSnapshot,
+  CodingWorkbenchSidecarGatewayResult,
 } from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   fetchCodingWorkbenchCodexSubscriptionProfile,
   fetchCodingWorkbenchSidecarGatewayProfile,
@@ -29,6 +29,7 @@ import {
 import {
   useCodingWorkbenchRuntimeMutations,
   useCodingWorkbenchRuntimeResources,
+  CODING_WORKBENCH_VERIFYING_REFRESH_MS,
 } from "./coding-workbench-runtime-hooks";
 
 vi.mock("./coding-workbench-provider-api", async (importOriginal) => {
@@ -122,11 +123,12 @@ beforeEach(() => {
 function renderResources(state: CodingWorkbenchRuntimeState): {
   readonly resources: ReturnType<typeof useCodingWorkbenchRuntimeResources>;
   readonly dispatch: ReturnType<typeof vi.fn>;
+  readonly unmount: () => void;
 } {
   const dispatch = vi.fn();
   const stateRef = { current: state };
   const view = renderHook(() => useCodingWorkbenchRuntimeResources(stateRef, dispatch));
-  return { resources: view.result.current, dispatch };
+  return { resources: view.result.current, dispatch, unmount: view.unmount };
 }
 
 describe("useCodingWorkbenchRuntimeResources profile refresh", () => {
@@ -201,7 +203,12 @@ describe("useCodingWorkbenchRuntimeResources source refresh", () => {
       status: "available",
     } as CodingWorkbenchSidecarGatewayResult);
     const { resources, dispatch } = renderResources(runtimeState());
+    // The server may renew a model's proofs during this read, so the picker's catalog is re-read.
+    const catalogRefresh = vi.fn();
+    window.addEventListener("keiko:gateway-model-catalog-refresh-requested", catalogRefresh);
     await act(() => resources.refreshSource());
+    window.removeEventListener("keiko:gateway-model-catalog-refresh-requested", catalogRefresh);
+    expect(catalogRefresh).toHaveBeenCalledTimes(1);
     expect(dispatch).toHaveBeenCalledWith({ kind: "profile-empty" });
     expect(dispatch).toHaveBeenCalledWith({
       kind: "source-set",
@@ -212,6 +219,114 @@ describe("useCodingWorkbenchRuntimeResources source refresh", () => {
         available: true,
       },
     });
+  });
+
+  // #3591 (1.1.7): while the server is still verifying the elected model against a slow gateway
+  // it answers `model-verification-pending`; the Workbench reads again after the pause instead
+  // of leaving a refusal that the next read would have lifted.
+  it("re-reads the managed gateway source while verification is pending", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile)
+        .mockResolvedValueOnce({
+          status: "unavailable",
+          reason: "model-verification-pending",
+        } as CodingWorkbenchSidecarGatewayResult)
+        .mockResolvedValueOnce({ status: "available" } as CodingWorkbenchSidecarGatewayResult);
+      const { resources, dispatch } = renderResources(runtimeState());
+      await act(() => resources.refreshSource());
+      expect(fetchCodingWorkbenchSidecarGatewayProfile).toHaveBeenCalledTimes(1);
+      expect(dispatch).toHaveBeenCalledWith({
+        kind: "source-set",
+        source: expect.objectContaining({
+          available: false,
+          unavailableReason: "model-verification-pending",
+        }),
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CODING_WORKBENCH_VERIFYING_REFRESH_MS);
+      });
+      expect(fetchCodingWorkbenchSidecarGatewayProfile).toHaveBeenCalledTimes(2);
+      expect(dispatch).toHaveBeenLastCalledWith({
+        kind: "source-set",
+        source: expect.objectContaining({ available: true }),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A closed Workbench must not keep reading the profile every ten seconds until the page closes.
+  it("stops the verification re-read when the Workbench unmounts", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mockResolvedValue({
+        status: "unavailable",
+        reason: "model-verification-pending",
+      } as CodingWorkbenchSidecarGatewayResult);
+      const { resources, unmount } = renderResources(runtimeState());
+      await act(() => resources.refreshSource());
+      expect(fetchCodingWorkbenchSidecarGatewayProfile).toHaveBeenCalledTimes(1);
+      unmount();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CODING_WORKBENCH_VERIFYING_REFRESH_MS * 3);
+      });
+      expect(fetchCodingWorkbenchSidecarGatewayProfile).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The Workbench can close while the profile read is still in flight: the read that lands must
+  // neither dispatch into the unmounted hook nor schedule a re-read (#3591 review).
+  it("ignores a profile read that lands after the Workbench unmounted", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      let release: (profile: CodingWorkbenchSidecarGatewayResult) => void = () => undefined;
+      vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = resolve;
+          }),
+      );
+      const { resources, dispatch, unmount } = renderResources(runtimeState());
+      let inFlight: Promise<void> = Promise.resolve();
+      act(() => {
+        inFlight = resources.refreshSource();
+      });
+      unmount();
+      dispatch.mockClear();
+      await act(async () => {
+        release({
+          status: "unavailable",
+          reason: "model-verification-pending",
+        } as CodingWorkbenchSidecarGatewayResult);
+        await inFlight;
+        await vi.advanceTimersByTimeAsync(CODING_WORKBENCH_VERIFYING_REFRESH_MS * 3);
+      });
+      expect(dispatch).not.toHaveBeenCalledWith(expect.objectContaining({ kind: "source-set" }));
+      expect(fetchCodingWorkbenchSidecarGatewayProfile).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not schedule a re-read when the source settled", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      vi.mocked(fetchCodingWorkbenchSidecarGatewayProfile).mockResolvedValue({
+        status: "unavailable",
+        reason: "model-context-window-insufficient",
+      } as CodingWorkbenchSidecarGatewayResult);
+      const { resources } = renderResources(runtimeState());
+      await act(() => resources.refreshSource());
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(CODING_WORKBENCH_VERIFYING_REFRESH_MS * 3);
+      });
+      expect(fetchCodingWorkbenchSidecarGatewayProfile).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("projects a disconnected subscription source with its reason", async () => {
@@ -380,7 +495,9 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
   it("starts a run and installs the server truth", async () => {
     vi.mocked(startCodingWorkbenchRuntime).mockResolvedValue(snapshot({ state: "starting" }));
     const { mutations, dispatch } = renderMutations(readyRunState(null, { canStart: true }));
-    await act(() => mutations.start("write the failing test first"));
+    await act(() =>
+      mutations.start("write the failing test first", { projectMemoryEnabled: true }),
+    );
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "mutation-start", mutation: "start" }),
     );
@@ -393,7 +510,7 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
 
   it("reports a mutation failure when the readiness gate rejects the start", async () => {
     const { mutations, dispatch } = renderMutations(readyRunState(null, { canStart: false }));
-    await act(() => mutations.start("blocked"));
+    await act(() => mutations.start("blocked", { projectMemoryEnabled: true }));
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "mutation-failed",

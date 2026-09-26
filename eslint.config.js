@@ -17,10 +17,21 @@ const sonarCompatibilityPlugin = {
       create(context) {
         return {
           Literal(node) {
+            if (typeof node.value !== "number") return;
             const source = context.sourceCode.getText(node);
-            if (typeof node.value === "number" && source.includes(".") && source.includes("_")) {
-              context.report({ messageId: "forbidden", node });
-            }
+            // KEIKO-0381: the separator must be IN the fractional part. Testing the
+            // whole literal for "." and "_" independently also condemns `1_000_000.5`, where the
+            // underscores only group the integer part — a legitimate literal the message
+            // ("...in a fractional numeric literal") does not even describe.
+            const fractionStart = source.indexOf(".");
+            if (fractionStart === -1) return;
+            // The exponent is not the fractional part either: `1.0e1_0` groups digits in the
+            // EXPONENT and its fraction is a bare `0`. Flagging it repeated the original mistake
+            // one field over — the message would name a fractional separator that is not there
+            // (review finding on #3159). Cut at the exponent marker before testing.
+            const fraction = source.slice(fractionStart + 1).split(/[eE]/u)[0];
+            if (!fraction.includes("_")) return;
+            context.report({ messageId: "forbidden", node });
           },
         };
       },
@@ -53,6 +64,11 @@ export default defineConfig(
       "dist/**",
       "**/dist/**",
       "coverage/**",
+      // Playwright output (.gitignore line "test-results/"): trace-viewer resource bundles under
+      // test-results/.playwright-artifacts-*/traces/resources/*.js are minified browser code with no
+      // source maps. Left in the lint set, one local e2e run followed by `npm run lint` reported
+      // thousands of no-undef / return-type / complexity findings that belong to no source file.
+      "test-results/**",
       "node_modules/**",
       "packages/keiko-ui/**",
       "ui/**",
@@ -91,7 +107,23 @@ export default defineConfig(
     rules: {
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/explicit-function-return-type": "error",
-      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
+      // The underscore prefix is this repository's "deliberately unused" marker, and it was only
+      // honoured for arguments: every other position needed a `void x;` statement to stay quiet.
+      // typescript-eslint 8.69.0 started reporting those as meaningless, which is correct — they
+      // discard nothing. State the convention once here instead, in every position the codebase
+      // uses it, and a rest-destructure that exists to omit a key needs no marker at all.
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        {
+          args: "all",
+          argsIgnorePattern: "^_",
+          caughtErrors: "all",
+          caughtErrorsIgnorePattern: "^_",
+          destructuredArrayIgnorePattern: "^_",
+          ignoreRestSiblings: true,
+          varsIgnorePattern: "^_",
+        },
+      ],
       complexity: ["error", 10],
       "max-lines-per-function": ["error", { max: 50, skipBlankLines: true, skipComments: true }],
       "no-console": "warn",
@@ -123,10 +155,26 @@ export default defineConfig(
   // it() cases. Covers both TypeScript suites and the .mjs harnesses for the Node build/gate scripts
   // (e.g. scripts/__tests__/*.test.mjs, which test the .mjs supply-chain and package-surface gates).
   {
-    files: ["**/*.test.ts", "**/*.test.tsx", "**/*.test.mjs"],
+    files: ["**/*.test.ts", "**/*.test.tsx", "**/*.test.mjs", "**/*.spec.ts", "**/*.spec.tsx"],
     rules: { "max-lines-per-function": "off" },
   },
+  // KEIKO-0761 shipped the exemption above, which makes any `// eslint-disable-next-line
+  // max-lines-per-function` comment inside a spec file dead — ESLint reports each as unused
+  // and the --max-warnings=0 lint fails. Removing those comments from
+  // `tests/e2e/editor-performance.spec.ts` is prohibited: the file is a member of
+  // `D12_MEASUREMENT_TOOLCHAIN_PATHS` (scripts/d12-measurement-toolchain.mjs), and any byte
+  // change requires a full Linux reference-environment re-measurement (ADR-0156 D6).
+  // Silencing the `unused-disable` report here keeps both invariants intact.
+  {
+    files: ["tests/e2e/editor-performance.spec.ts", "tests/e2e/editor-debugging-2348.spec.ts"],
+    linterOptions: { reportUnusedDisableDirectives: "off" },
+  },
   { files: ["**/*.{js,cjs}"], ...tseslint.configs.disableTypeChecked },
+  // The design-system pages are legacy static-HTML measurement fixtures whose JS runs feature
+  // detection under try/catch to survive being loaded in a browser that lacks the API. An empty
+  // catch there is a deliberate probe-and-continue, not a swallowed error — the alternative would
+  // wrap every measurement in an availability preamble. Product runtime code is out of scope of
+  // this override and remains subject to the repository-wide "no silent failures" rule.
   {
     files: ["design-system/**/*.js"],
     languageOptions: {
@@ -155,11 +203,14 @@ export default defineConfig(
       },
     },
   },
-  // Build tooling under scripts/ is Node ESM outside the TypeScript program: disable type-aware
-  // rules and permit console output (these scripts report build progress on stdout).
-  { files: ["scripts/**/*.mjs"], ...tseslint.configs.disableTypeChecked },
+  // Build and GitHub Action tooling is Node ESM outside the TypeScript program: disable type-aware
+  // rules and permit console output (these scripts report gate progress on stdout).
   {
-    files: ["scripts/**/*.mjs"],
+    files: ["scripts/**/*.mjs", ".github/actions/**/main.mjs"],
+    ...tseslint.configs.disableTypeChecked,
+  },
+  {
+    files: ["scripts/**/*.mjs", ".github/actions/**/main.mjs"],
     languageOptions: {
       // structuredClone is a Node built-in since 17 and the repository floor is 24; declare it the
       // same way this config declares every other runtime global it relies on.

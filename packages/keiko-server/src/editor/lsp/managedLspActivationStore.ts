@@ -2,17 +2,17 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
-import {
-  MANAGED_LSP_LANGUAGES,
-  parseManagedLspEvidence,
-  parseManagedLspRuntimeConfiguration,
-  type ManagedLspEvidence,
-  type ManagedLspActivationReasonCode,
-  type ManagedLspEffectiveState,
-  type ManagedLspLanguage,
-  type ManagedLspRuntimeConfiguration,
-  type ManagedLspWorkspaceActivationSetting,
+import type {
+  ManagedLspEvidence,
+  ManagedLspActivationReasonCode,
+  ManagedLspEffectiveState,
+  ManagedLspLanguage,
+  ManagedLspRuntimeConfiguration,
+  ManagedLspWorkspaceActivationSetting,
 } from "@oscharko-dev/keiko-contracts";
+import { MANAGED_LSP_LANGUAGES } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-activation";
+import { parseManagedLspEvidence } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-evidence";
+import { parseManagedLspRuntimeConfiguration } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-runtime";
 import { containsPath } from "@oscharko-dev/keiko-git";
 
 import { assertNoSymlinkedPathSegments, savePrivateJson } from "../../private-json.js";

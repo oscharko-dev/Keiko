@@ -21,6 +21,7 @@ import {
   asString,
   atlassianApiEndpointsFor,
   atlassianApiUrl,
+  type AtlassianApiEndpoints,
 } from "./atlassian-sync-classify.js";
 import {
   executeAtlassianWriteRequest,
@@ -106,8 +107,20 @@ function failureOf(outcome: AtlassianWriteHttpOutcome): AtlassianWriteActionFail
   };
 }
 
+// KEIKO-0916: same caching rationale as jira-write-actions.ts's issueUrl — deps.baseUrl is
+// immutable across the many write-action calls one connector session makes, and the pure
+// structural validator inside atlassianApiEndpointsFor makes caching its result for an identical,
+// already-validated baseUrl semantically equivalent to re-validating it.
+const confluenceEndpointsCache = new Map<string, AtlassianApiEndpoints>();
+
 function pagesUrl(deps: ConfluenceWriteActionDeps, relative: string): string {
-  return atlassianApiUrl(atlassianApiEndpointsFor(deps.baseUrl, CONFLUENCE_API_ROOT), relative);
+  const { baseUrl } = deps;
+  let endpoints = confluenceEndpointsCache.get(baseUrl);
+  if (endpoints === undefined) {
+    endpoints = atlassianApiEndpointsFor(baseUrl, CONFLUENCE_API_ROOT);
+    confluenceEndpointsCache.set(baseUrl, endpoints);
+  }
+  return atlassianApiUrl(endpoints, relative);
 }
 
 function storageBody(xhtml: string): Record<string, unknown> {

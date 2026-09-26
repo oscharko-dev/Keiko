@@ -79,20 +79,42 @@ Accessibility expectations for any surface using these primitives:
 
 ## Product surface mapping
 
-| Product surface                       | File                                              | Consumes                                     |
-| ------------------------------------- | ------------------------------------------------- | -------------------------------------------- |
-| Grounded citation chip                | `GroundedAnswer.tsx` (`.grounded-citation`)       | `--ai-source-surface` / `--ai-source-border` |
-| Chat thinking dots                    | `ChatWindow.tsx` (`.chat-typing`)                 | `--ai-thinking-indicator`                    |
-| Streaming caret                       | `ChatWindow.tsx` (`.ai-stream-cursor`)            | `--ai-streaming-cursor`                      |
-| Agent-run tool / result / input cards | `AgentRunWidget.tsx` (`.arun-*`)                  | `--ai-tool-surface`                          |
-| Agent-run live spinner / dot          | `AgentRunWidget.tsx` (`.arun-spin`, `.arun .dot`) | `--ai-streaming-cursor`                      |
-| Agent hypothesis confidence           | `AgentRunWidget.tsx` (`.ai-conf`)                 | `--ai-confidence-*`                          |
-| Editor ghost text                     | `theme.ts` (`editorGhostText.foreground`)         | `--ed-agent-ghost`                           |
-| Editor agent primitives               | `editor-agent-1296.spec.ts` evidence scene        | `--ed-agent-*` + `.ai-permit` / `.ai-danger` |
+| Product surface                             | File                                                                                    | Consumes                                                                                                                                                                                      |
+| ------------------------------------------- | --------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Grounded citation chip                      | `GroundedAnswer.tsx` (`.grounded-citation`)                                             | `--ai-source-surface` / `--ai-source-border`                                                                                                                                                  |
+| Chat thinking dots                          | `ChatWindow.tsx` (`.chat-typing`)                                                       | `--ai-thinking-indicator`                                                                                                                                                                     |
+| Streaming caret                             | `ChatWindow.tsx` (`.ai-stream-cursor`)                                                  | `--ai-streaming-cursor`                                                                                                                                                                       |
+| Agent-run tool / result / input cards       | `AgentRunWidget.tsx` (`.arun-*`)                                                        | `--ai-tool-surface`                                                                                                                                                                           |
+| Agent-run live spinner / dot                | `AgentRunWidget.tsx` (`.arun-spin`, `.arun .dot`)                                       | `--ai-streaming-cursor`                                                                                                                                                                       |
+| Agent hypothesis confidence                 | `AgentRunWidget.tsx` (`.ai-conf`)                                                       | `--ai-confidence-*`                                                                                                                                                                           |
+| Editor ghost text                           | `theme.ts` (`editorGhostText.foreground`)                                               | `--ed-agent-ghost`                                                                                                                                                                            |
+| Editor agent primitives                     | `editor-agent-1296.spec.ts` evidence scene                                              | `--ed-agent-*` + `.ai-permit` / `.ai-danger`                                                                                                                                                  |
+| Coding Workbench tool-call card             | `CodingWorkbenchTimeline.tsx` (`.toolCard`)                                             | `--ai-tool-surface` / `--ai-tool-border`                                                                                                                                                      |
+| Coding Workbench run-lifecycle stop control | `CodingWorkbenchWindow.tsx` (`RuntimeControls`, `.buttonDanger`)                        | Canonical `.ai-stop` formula — `color-mix(in oklch, var(--feedback-danger) 42%, transparent)` border, 12% hover fill; no dedicated `--ai-stop-*` token exists                                 |
+| Coding Workbench permission request         | `CodingWorkbenchWindow.tsx` (`PermissionPrompt`, `ChangesetReviewPanel`, `.permission`) | `--ai-permission-surface` / `--ai-permission-border`                                                                                                                                          |
+| Coding Workbench destructive confirmation   | `CodingWorkbenchWindow.tsx` (`RecoveryPanel`, `.recovery`)                              | Canonical `.ai-danger` formula — `color-mix(in oklch, var(--feedback-danger) 45%, transparent)` border, 7% mix with `--surface-primary` background; no dedicated `--ai-danger-*` token exists |
+| Coding Workbench source citations           | —                                                                                       | Not applicable — the Workbench has no grounding/RAG output; its "source" wording names the model/runtime provider, never a retrieved citation                                                 |
+| Coding Workbench confidence                 | —                                                                                       | Not applicable — its trust model is fact-bound (commit SHAs, evidence ids, check counts), never probabilistic                                                                                 |
 
 The streaming caret and the confidence signal are presentation-only additions over data the product
 already produces (`sendStatus === "streaming"`, `hypothesis.confidence`); a non-level confidence string
 keeps its plain key/value row (behaviour-preserving).
+
+The Coding Workbench (window-type surface row in
+[`fidelity-matrix.md`](fidelity-matrix.md) line 67; evidence in
+[`evidence/1990/`](evidence/1990/README.md), [`evidence/1991/`](evidence/1991/README.md),
+[`evidence/1992/`](evidence/1992/README.md), [`evidence/1994/`](evidence/1994/README.md),
+[`evidence/2253/`](evidence/2253/README.md), and [`evidence/2257/`](evidence/2257/README.md)) rendered
+its tool-call and permission surfaces with its own `--border-subtle` / `--feedback-warning` formulas
+even though the computed result already matched `--ai-tool-surface` / `--ai-permission-surface`
+byte-for-byte; it now consumes those component tokens directly instead of a parallel formula. Its
+destructive-confirmation (`RecoveryPanel`) and run-lifecycle stop control (`RuntimeControls`) surfaces
+match the canonical `.ai-danger` and `.ai-stop` formulas in `design-system/keiko-ai.css` verbatim: the
+component-token table above has no `--ai-danger-*` or `--ai-stop-*` entry, so the exact canonical
+`color-mix` formula is reused rather than inventing a new one or adding a token to `globals.css`.
+Source citations and confidence are genuinely absent from this surface, not merely unstyled: the
+Workbench has no grounding/RAG output and its trust model is fact-bound rather than probabilistic, so
+neither family applies here.
 
 ## Issue #1405 live authority wiring
 
@@ -100,11 +122,11 @@ Issue #1405 wires the previously token-backed authority primitives into bounded 
 without widening BFF authority. Browser evidence and the acceptance ledger live under
 [`docs/design-system/evidence/1405/`](evidence/1405/README.md).
 
-| Surface                         | Live behaviour                                                                    | Authority boundary                                                                       | Evidence                                                               |
-| ------------------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| Agent permission request        | `AgentGateCard` renders `.ai-permit` scope rows and approve/reject buttons.       | The card only resumes an already queued action; it does not mint new BFF routes.         | `AgentGateCard.test.tsx`; `human-loop-1405.spec.ts`                    |
-| Sensitive memory forget action  | Chat memory forget uses `.ai-danger` and requires typing `FORGET` before send.    | The existing memory-forget API still requires `userAcknowledgedDestructive: true`.       | `ChatWindow.test.tsx`; `memory-handlers.ts`; `human-loop-1405.spec.ts` |
-| Chat regenerate latest response | Latest ungrounded assistant turn exposes `.ai-controls`; in-flight state cancels. | The BFF replays through Model Gateway, preserves message id, and rejects grounded chats. | `desktop-chat-handlers.test.ts`; `api.test.ts`; `ChatWindow.test.tsx`  |
+| Surface                         | Live behaviour                                                                    | Authority boundary                                                                       | Evidence                                                                                                                                                                                                                             |
+| ------------------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Agent permission request        | `AgentGateCard` renders `.ai-permit` scope rows and approve/reject buttons.       | The card only resumes an already queued action; it does not mint new BFF routes.         | `AgentGateCard.test.tsx` (live markup: alertdialog wiring and both scope rows' copy); `human-loop-1405.spec.ts` (design-token and contrast resolution for a hand-authored replica of this markup — it does not render the component) |
+| Sensitive memory forget action  | Chat memory forget uses `.ai-danger` and requires typing `FORGET` before send.    | The existing memory-forget API still requires `userAcknowledgedDestructive: true`.       | `ChatWindow.test.tsx`; `memory-handlers.ts`; `human-loop-1405.spec.ts`                                                                                                                                                               |
+| Chat regenerate latest response | Latest ungrounded assistant turn exposes `.ai-controls`; in-flight state cancels. | The BFF replays through Model Gateway, preserves message id, and rejects grounded chats. | `desktop-chat-handlers.test.ts`; `api.test.ts`; `ChatWindow.test.tsx`                                                                                                                                                                |
 
 Regeneration is intentionally limited to the latest ungrounded assistant turn. Grounded answers keep
 their citations and evidence immutable; callers receive `NOT_APPLIABLE` instead of silently dropping

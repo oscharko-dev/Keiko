@@ -13,18 +13,18 @@
 //
 // Determinism: pure. No IO, clock, or randomness. Identical inputs always yield an identical scorecard.
 
-import {
-  clampUnit,
-  estimateTokens,
-  PROMPT_CRITIC_DIMENSIONS,
-  PROMPT_ENHANCER_SCHEMA_VERSION,
-  type EnhancedPrompt,
-  type PromptCandidateScorecard,
-  type PromptCriticDimension,
-  type PromptCriticDimensionScore,
-  type PromptEnhancementProfileId,
-  type PromptTaskAnalysis,
+import type {
+  EnhancedPrompt,
+  PromptCandidateScorecard,
+  PromptCriticDimension,
+  PromptCriticDimensionScore,
+  PromptEnhancementProfileId,
+  PromptTaskAnalysis,
 } from "@oscharko-dev/keiko-contracts";
+import { clampUnit } from "@oscharko-dev/keiko-contracts/runtime/numeric";
+import { estimateTokens } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { PROMPT_CRITIC_DIMENSIONS } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-critic";
+import { PROMPT_ENHANCER_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
 import type { PromptEnhancementPlan } from "./planner.js";
 import { renderEnhancedPromptText } from "./rendering.js";
 
@@ -45,6 +45,22 @@ const REFERENCE_INSTRUCTION_TOKENS = 800;
 // Token-efficiency never collapses fully to zero for a well-formed prompt; this floor keeps the
 // dimension a graded signal rather than a cliff for the most verbose profile.
 const TOKEN_EFFICIENCY_FLOOR = 0.2;
+
+// Grounded-task readiness threshold: the minimum number of grounding rules a grounded prompt must
+// carry for `scoreGroundingReadiness` to award full credit. Exported so downstream consumers
+// (evaluations, tests) derive the threshold from the producer rather than restating the literal —
+// the #2643 fixture-parity rule applies to constants too.
+export const GROUNDING_READINESS_MIN_RULES = 3;
+
+// KEIKO-0770: single source of truth for the "output controllability" quality criterion. The
+// generator writes OUTPUT_CONTROLLABILITY_CRITERION verbatim into EnhancedPrompt.qualityCriteria;
+// both scoreOutputControllability (below) and the evaluator's scoreFormatAdherence match on the
+// PREFIX so an intentFrame-supplied full-detail criterion sharing the same subject still counts.
+// Before this constant existed, three files independently duplicated the literal "Output
+// controllability" prefix; a wording change would silently break both scoring paths at once.
+export const OUTPUT_CONTROLLABILITY_CRITERION_PREFIX = "Output controllability";
+export const OUTPUT_CONTROLLABILITY_CRITERION =
+  `${OUTPUT_CONTROLLABILITY_CRITERION_PREFIX}: the response conforms exactly to the required format.` as const;
 
 // Weighted aggregate. Safety carries the most weight (it is the floor candidate generation must never
 // relax, AC5); completeness is next; the remaining quality dimensions are balanced. Sums to 1.0.
@@ -169,7 +185,7 @@ function scoreGroundingReadiness(prompt: EnhancedPrompt): DimensionAssessment {
     plan.sourcePriority.length > 0,
     plan.directives.includes("treat-retrieved-content-as-untrusted"),
     plan.directives.includes("stay-within-evidence"),
-    prompt.groundingRules.length >= 3,
+    prompt.groundingRules.length >= GROUNDING_READINESS_MIN_RULES,
   ];
   const satisfied = checks.filter(Boolean).length;
   return {
@@ -205,7 +221,7 @@ function scoreSafety(prompt: EnhancedPrompt, plan: PromptEnhancementPlan): Dimen
 function scoreOutputControllability(prompt: EnhancedPrompt): DimensionAssessment {
   const schema = prompt.outputSchema;
   const hasControllabilityCriterion = prompt.qualityCriteria.some((criterion) =>
-    criterion.startsWith("Output controllability"),
+    criterion.startsWith(OUTPUT_CONTROLLABILITY_CRITERION_PREFIX),
   );
   const checks: readonly boolean[] = [
     schema.structured,

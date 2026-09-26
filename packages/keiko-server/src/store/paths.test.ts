@@ -1,7 +1,7 @@
 // ADR-0013 D4 — resolveUiDbPath precedence: explicit → KEIKO_UI_DATA_DIR/keiko-ui.db → ~/.keiko/keiko-ui.db.
 
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
 import { assertUiDbOutsideProject, resolveUiDbPath, UiStoreError } from "./index.js";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -15,7 +15,9 @@ afterEach(() => {
 });
 
 function makeTempDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "keiko-paths-"));
+  // Realpath the tmpdir to avoid tripping the (correct) walk-every-ancestor symlink guard on
+  // macOS, where /var (and /tmp) are legitimate system-level symlinks. On Linux this is a no-op.
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-paths-"));
   cleanup.push(dir);
   return dir;
 }
@@ -93,6 +95,25 @@ describe("resolveUiDbPath", () => {
   it("rejects a KEIKO_UI_DATA_DIR value containing NUL bytes (CWE-22 parity)", () => {
     expectCode(
       () => resolveUiDbPath(undefined, { KEIKO_UI_DATA_DIR: "/tmp/legit\0/etc" }),
+      "INVALID_REQUEST",
+    );
+  });
+
+  // Regression pin (audit KEIKO-0478): hasSymlinkAncestor used to `return` unconditionally at the
+  // FIRST existing ancestor and stopped walking. If a real subdirectory has been pre-created inside
+  // a symlinked target, the walk for /link/child/grandchild saw /link/child (already existing as a
+  // plain directory via the symlink) and reported no symlinked ancestor, bypassing the guard. Parity
+  // fix with packages/keiko-memory-vault/src/paths.ts.
+  it("rejects a path under a symlinked ancestor when a real subdirectory already exists", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const base = makeTempDir();
+    const real = join(base, "real");
+    const link = join(base, "link");
+    mkdirSync(real);
+    mkdirSync(join(real, "child"));
+    symlinkSync(real, link, "dir");
+    expectCode(
+      () => resolveUiDbPath(undefined, { KEIKO_UI_DATA_DIR: join(link, "child", "grandchild") }),
       "INVALID_REQUEST",
     );
   });

@@ -1,11 +1,12 @@
-import { gatewayVerificationContradictsReadiness } from "@oscharko-dev/keiko-contracts";
+import { gatewayVerificationContradictsReadiness } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type {
+  CodingWorkbenchIssueBindingFailure,
   CodingWorkbenchMode,
+  CodingWorkbenchModelRefusalReason,
   CodingWorkbenchModelSource,
   CodingWorkbenchRuntimeResearchGrant,
   CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
-  GatewayVerificationState,
 } from "@oscharko-dev/keiko-contracts";
 import type { CodingWorkbenchTranslate } from "./coding-workbench-i18n";
 import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
@@ -13,8 +14,6 @@ import type {
   CodingWorkbenchResourceStatus,
   CodingWorkbenchRuntimeState,
 } from "@/lib/coding-workbench-live-state";
-
-export type CodingWorkbenchTone = "neutral" | "success" | "warning" | "danger";
 
 export function cx(...classes: readonly (string | undefined | false)[]): string {
   return classes.filter((value): value is string => typeof value === "string").join(" ");
@@ -34,50 +33,61 @@ export function modelSourceLabel(
   return t("codingWorkbench.modelSource.codexSubscription");
 }
 
-/**
- * F-01: the source row used to read "Keiko Gateway · Available" from stored configuration alone.
- * This names what a live probe actually said, so an unprobed gateway reads as unconfirmed instead of
- * healthy, and a failed probe is visible rather than hidden behind a configured source.
- */
-export function sourceVerificationLabel(
-  verification: GatewayVerificationState,
+// The sidecar gateway's closed unavailable reasons (coding-workbench-provider-api.ts allow-list),
+// each with the operator's next step. "Model source unavailable." alone left the operator with no
+// way to learn that a readiness check would have fixed it (workbench end-to-end run, 2026-09-03).
+const SOURCE_UNAVAILABLE_REASON_KEYS: Readonly<Record<string, CodingWorkbenchMessageKey>> = {
+  "missing-config": "codingWorkbench.source.unavailableReason.missing-config",
+  "missing-provider": "codingWorkbench.source.unavailableReason.missing-provider",
+  "missing-credentials": "codingWorkbench.source.unavailableReason.missing-credentials",
+  "non-chat": "codingWorkbench.source.unavailableReason.non-chat",
+  "no-tool-calling": "codingWorkbench.source.unavailableReason.no-tool-calling",
+  "non-workflow-eligible": "codingWorkbench.source.unavailableReason.non-workflow-eligible",
+  "non-coding-capable": "codingWorkbench.source.unavailableReason.non-coding-capable",
+  "deployment-policy-disabled":
+    "codingWorkbench.source.unavailableReason.deployment-policy-disabled",
+  "subscription-source": "codingWorkbench.source.unavailableReason.subscription-source",
+  // #3390 closeout: the source reported "available" with a context window too small for one
+  // real request to survive (readiness gap, epic #3384). Appended, never renumbered.
+  "model-context-window-insufficient":
+    "codingWorkbench.source.unavailableReason.model-context-window-insufficient",
+  // #3591 (1.1.7): transient — the Workbench re-reads the profile until the probe settles.
+  "model-verification-pending":
+    "codingWorkbench.source.unavailableReason.model-verification-pending",
+  // PR #3452 (F73): the coding model's forced tool-call proof is missing or older than 24 h.
+  "tool-calling-unverified": "codingWorkbench.source.unavailableReason.tool-calling-unverified",
+};
+
+/** The operator-facing sentence for an unavailable source's reason, or null when it has none. */
+function sourceUnavailableReasonText(
+  source: CodingWorkbenchRuntimeState["source"]["value"],
   t: CodingWorkbenchTranslate,
-): string {
-  return t(`codingWorkbench.source.verification.${verification}`);
+): string | null {
+  if (source === null || source.available || source.unavailableReason === undefined) return null;
+  const key = SOURCE_UNAVAILABLE_REASON_KEYS[source.unavailableReason];
+  return key === undefined ? null : t(key);
 }
 
-export function runStateLabel(
+function runStateLabel(
   state: CodingWorkbenchRuntimeStateName,
   t: CodingWorkbenchTranslate,
 ): string {
   return t(`codingWorkbench.runState.${state}`);
 }
 
-export function resourceStatusLabel(
-  status: CodingWorkbenchResourceStatus,
-  t: CodingWorkbenchTranslate,
-): string {
-  return t(`codingWorkbench.resourceStatus.${status}`);
-}
-
-export function resourceStatusSymbol(status: CodingWorkbenchResourceStatus): string {
-  if (status === "ready") return "✓";
-  if (status === "loading") return "↻";
-  if (status === "error" || status === "unavailable") return "!";
-  return "○";
-}
-
-export function resourceTone(status: CodingWorkbenchResourceStatus): CodingWorkbenchTone {
-  if (status === "ready") return "success";
-  if (status === "error") return "danger";
-  if (status === "unavailable") return "warning";
-  return "neutral";
-}
-
 function runAnnouncement(state: CodingWorkbenchRuntimeState, t: CodingWorkbenchTranslate): string {
   if (state.run.status === "loading") return t("codingWorkbench.announcement.runChecking");
   const snapshot = state.run.value;
   if (snapshot === null) return t("codingWorkbench.announcement.noActiveRun");
+  if (snapshot.state === "idle" && !state.canStart) {
+    return t("codingWorkbench.header.notReady");
+  }
+  if (
+    snapshot.state === "idle" &&
+    state.runtime.value?.runtimeEvidenceClass === "functional-not-platform-qualified"
+  ) {
+    return t("codingWorkbench.header.readyEvaluation");
+  }
   return t("codingWorkbench.announcement.runRevision", {
     state: runStateLabel(snapshot.state, t),
     revision: snapshot.revision,
@@ -123,9 +133,10 @@ export function lifecycleAnnouncement(
     runAnnouncement(state, t),
     pairingAnnouncement(state, t),
     readinessAnnouncement("modelSource", state.source.status, sourceAvailable, t),
+    sourceReasonAnnouncement(state, t),
     authenticationAnnouncement(state, t),
     readinessAnnouncement("workspace", state.workspace.status, workspaceAvailable, t),
-    readinessAnnouncement("runtime", state.runtime.status, runtimeAvailable, t),
+    runtimeAssuranceAnnouncement(state, runtimeAvailable, t),
     recovery,
     researchAnnouncement(researchGrant, t),
     setupAnnouncement(state.codexSetup.status, t),
@@ -138,6 +149,13 @@ export function lifecycleAnnouncement(
 // resolution (ADR-0141), so the narration must name pairing as the missing input instead of
 // narrating "Workspace ready. Runtime ready." over a start that can never succeed. Silent while
 // pairing is unconfirmed — the narration never claims a truth the workspaces read has not answered.
+function sourceReasonAnnouncement(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string {
+  return sourceUnavailableReasonText(state.source.value, t) ?? "";
+}
+
 function pairingAnnouncement(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
@@ -158,6 +176,31 @@ function readinessAnnouncementState(
   if (status === "ready") return available ? "ready" : "unavailable";
   if (status === "empty") return "notSelected";
   return "notChecked";
+}
+
+/**
+ * SUBSTITUTES the generic runtime readiness line — never appends to it. "Runtime ready." spoken
+ * over an unverified evaluation runtime is the same false green in the assistive-technology
+ * channel that the pill's plain "Ready to start" is on screen (audit F-01, ADR-0163 D9).
+ *
+ * It is a dedicated helper rather than a new `ReadinessAnnouncementState` member because
+ * `readinessAnnouncement` builds its key as a template literal typed against
+ * `CodingWorkbenchMessageKey`: adding a state would force `modelSource.evaluation` and
+ * `workspace.evaluation` keys to exist for resources that can never have that state.
+ */
+function runtimeAssuranceAnnouncement(
+  state: CodingWorkbenchRuntimeState,
+  runtimeAvailable: boolean,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (
+    runtimeAvailable &&
+    state.runtime.status === "ready" &&
+    state.runtime.value?.runtimeEvidenceClass === "functional-not-platform-qualified"
+  ) {
+    return t("codingWorkbench.announcement.runtime.evaluation");
+  }
+  return readinessAnnouncement("runtime", state.runtime.status, runtimeAvailable, t);
 }
 
 function readinessAnnouncement(
@@ -223,6 +266,7 @@ export function eventDetail(
   event: CodingWorkbenchRuntimeSseEvent,
   t: CodingWorkbenchTranslate,
 ): string {
+  const turnFailure = turnFailureDetail(event, t);
   const base = event.failureCode
     ? t("codingWorkbench.event.detailFailure", {
         sequence: event.sequence,
@@ -230,9 +274,29 @@ export function eventDetail(
         failure: event.failureCode,
       })
     : t("codingWorkbench.event.detail", { sequence: event.sequence, revision: event.revision });
-  return [base, eventOutcomeDetail(event, t), eventContentTrustDetail(event, t)]
+  return [base, turnFailure, eventOutcomeDetail(event, t), eventContentTrustDetail(event, t)]
     .filter((part) => part.length > 0)
     .join(" ");
+}
+
+function turnFailureDetail(
+  event: CodingWorkbenchRuntimeSseEvent,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (event.kind !== "runtime-event" || event.eventKind !== "failure-redacted") return "";
+  if (event.failureCode === "provider-failed")
+    return t("codingWorkbench.event.turnFailure.provider-failed");
+  if (event.failureCode === "stream-incomplete")
+    return t("codingWorkbench.event.turnFailure.stream-incomplete");
+  if (event.failureCode === "turn-rejected")
+    return t("codingWorkbench.event.turnFailure.turn-rejected");
+  if (event.failureCode === "output-exhausted")
+    return t("codingWorkbench.event.turnFailure.output-exhausted");
+  if (event.failureCode === "empty-answer")
+    return t("codingWorkbench.event.turnFailure.empty-answer");
+  if (event.failureCode === "invalid-tool-call")
+    return t("codingWorkbench.event.turnFailure.invalid-tool-call");
+  return "";
 }
 
 // #2637: an accepted research read handed quarantined public-page text to the run. The operator has
@@ -266,8 +330,9 @@ function eventOutcomeDetail(
  * three different layers and all three get the identical treatment.
  */
 export interface CodingWorkbenchFailureFacts {
+  readonly issueBindingFailure?: CodingWorkbenchIssueBindingFailure;
   readonly code: string;
-  readonly correlationId?: string | undefined;
+  readonly correlationId?: string;
 }
 
 // F-09a: a rejected action (any non-ok result — never only one status code) must surface as a
@@ -281,7 +346,13 @@ export function actionFailureAlert(
   failure: CodingWorkbenchFailureFacts,
   t: CodingWorkbenchTranslate,
 ): string {
-  const summary = t(summaryKey, { code: failure.code });
+  const generic = t(summaryKey, { code: failure.code });
+  const issueSummary =
+    failure.issueBindingFailure === undefined
+      ? ""
+      : t(`codingWorkbench.issue.error.${failure.issueBindingFailure}`);
+  const summary =
+    failure.issueBindingFailure === undefined ? generic : `${issueSummary} ${generic}`;
   return failure.correlationId === undefined
     ? summary
     : `${summary} ${t("codingWorkbench.alert.actionFailedSupportId", {
@@ -304,14 +375,10 @@ export function changesetDeliveryAlert(
     : actionFailureAlert("codingWorkbench.changesetReview.deliveryFailedCode", failure, t);
 }
 
-export function visibleAlert(
+function refreshFailureAlert(
   state: CodingWorkbenchRuntimeState,
   t: CodingWorkbenchTranslate,
-  setupVisible: boolean,
 ): string | null {
-  if (state.mutation.error) {
-    return actionFailureAlert("codingWorkbench.alert.actionFailedCode", state.mutation.error, t);
-  }
   for (const [resource, value] of [
     ["authentication", state.profile],
     ["authenticationSetup", state.codexSetup],
@@ -323,10 +390,108 @@ export function visibleAlert(
   ] as const) {
     if (value.status === "error") return t(`codingWorkbench.alert.${resource}RefreshFailed`);
   }
-  // Standing conditions come after actionable refresh failures (one alert at a time — reporting a
-  // standing condition first would swallow the recoverable error). The unpaired window (F-08/
-  // RG-12) precedes the unqualified runtime: without a paired app session no run can start at all.
-  if (state.pairing === "unpaired") return t("codingWorkbench.pairing.unpaired");
+  return null;
+}
+
+type StartReadinessResource = "modelSource" | "workspace" | "runtime" | "run";
+
+const START_BLOCKED_KEYS: Readonly<Record<StartReadinessResource, CodingWorkbenchMessageKey>> = {
+  modelSource: "codingWorkbench.composer.blocked.modelSource",
+  workspace: "codingWorkbench.composer.blocked.workspace",
+  runtime: "codingWorkbench.composer.blocked.runtime",
+  run: "codingWorkbench.composer.blocked.run",
+};
+
+// `startBlockedReason` calls this only after `visibleAlert` returned null, and `visibleAlert`
+// already reports every `status === "error"` case through `refreshFailureAlert` — so the "error"
+// branch of this helper would be unreachable here. Keep it to two states: ready → null,
+// everything else → the blocked sentence.
+function resourceStartBlocker(
+  resource: StartReadinessResource,
+  status: CodingWorkbenchResourceStatus,
+  t: CodingWorkbenchTranslate,
+): string | null {
+  if (status === "ready") return null;
+  return t(START_BLOCKED_KEYS[resource]);
+}
+
+function sourceStartBlocker(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string | null {
+  const blocked = resourceStartBlocker("modelSource", state.source.status, t);
+  if (blocked !== null) return blocked;
+  const source = state.source.value;
+  const sourceReady =
+    source?.runtimePreference === state.runtimePreference &&
+    source.available &&
+    !gatewayVerificationContradictsReadiness(source.verification);
+  return sourceReady
+    ? null
+    : (sourceUnavailableReasonText(source, t) ?? t("codingWorkbench.composer.blocked.modelSource"));
+}
+
+function workspaceStartBlocker(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string | null {
+  const blocked = resourceStartBlocker("workspace", state.workspace.status, t);
+  if (blocked !== null) return blocked;
+  const workspace = state.workspace.value;
+  return workspace?.health === "healthy" && workspace.switching !== true
+    ? null
+    : t("codingWorkbench.composer.blocked.workspace");
+}
+
+function runtimeStartBlocker(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string | null {
+  const blocked = resourceStartBlocker("runtime", state.runtime.status, t);
+  if (blocked !== null) return blocked;
+  const runtime = state.runtime.value;
+  return runtime?.runtimeAvailable === true && runtime.requestedMode === state.requestedMode
+    ? null
+    : t("codingWorkbench.composer.blocked.runtime");
+}
+
+function runStartBlocker(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string | null {
+  return resourceStartBlocker("run", state.run.status, t);
+}
+
+function readinessStartBlocker(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string {
+  return (
+    sourceStartBlocker(state, t) ??
+    workspaceStartBlocker(state, t) ??
+    runtimeStartBlocker(state, t) ??
+    runStartBlocker(state, t) ??
+    t("codingWorkbench.composer.blocked.notReady")
+  );
+}
+
+// The standing conditions: properties of the selected source or of this installation, not a failed
+// action. They come after actionable refresh failures (one alert at a time — reporting a standing
+// condition first would swallow the recoverable error). Pairing remains in the lifecycle narration,
+// but it is not useful enough to take over the workbench as a banner.
+function standingConditionAlert(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+  setupVisible: boolean,
+): string | null {
+  // The source's own unavailability reason and next step. It reaches a SIGHTED operator only here:
+  // the header chip renders "<label> — unavailable" with no reason, and the only other renderer of
+  // `sourceUnavailableReasonText` is the source panel, which nothing mounts — so before this branch
+  // the remedy existed for the sr-only live region alone (#3381 review). Ungated by `setupVisible`,
+  // unlike the runtime note below: the bootstrap setup card states the runtime posture itself but
+  // says nothing about the model source, so there is nothing to duplicate.
+  const sourceReason = sourceUnavailableReasonText(state.source.value, t);
+  if (sourceReason !== null) return sourceReason;
   // Last: the unqualified runtime, and only while the bootstrap setup section is off screen — it
   // states the same condition itself, and duplicating it would announce it twice to assistive
   // technology. This wording is its own: the setup copy invites binding a workspace, which is
@@ -339,4 +504,58 @@ export function visibleAlert(
     return t("codingWorkbench.alert.runtimeUnqualified");
   }
   return null;
+}
+
+// #3565 Observation 17: a start the server refused for a nameable cause gets the sentence that
+// tells the operator what to do, not the generic "review the live state and retry". #3603: a model
+// whose window cannot hold a coding run's prompt, or whose window is still being verified, says so.
+function startRefusalSummaryKey(
+  code: string,
+  modelRefusalReason?: CodingWorkbenchModelRefusalReason,
+): CodingWorkbenchMessageKey {
+  if (code === "CODING_RUNTIME_MODEL_UNAVAILABLE") {
+    if (modelRefusalReason === "model-context-window-insufficient")
+      return "codingWorkbench.alert.startRefusedModelWindow";
+    if (modelRefusalReason === "model-verification-pending")
+      return "codingWorkbench.alert.startRefusedModelVerificationPending";
+    return "codingWorkbench.alert.startRefusedModelUnavailable";
+  }
+  if (code === "CODING_RUNTIME_WORKSPACE_UNQUALIFIED") {
+    return "codingWorkbench.alert.startRefusedWorkspaceUnqualified";
+  }
+  return "codingWorkbench.alert.actionFailedCode";
+}
+
+export function visibleAlert(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+  setupVisible: boolean,
+  authorityError: string | null = null,
+): string | null {
+  if (state.mutation.error) {
+    return actionFailureAlert(
+      startRefusalSummaryKey(state.mutation.error.code, state.mutation.error.modelRefusalReason),
+      state.mutation.error,
+      t,
+    );
+  }
+  const refreshAlert = refreshFailureAlert(state, t);
+  if (refreshAlert !== null) return refreshAlert;
+  if (!setupVisible && authorityError !== null) return authorityError;
+  return standingConditionAlert(state, t, setupVisible);
+}
+
+export function startBlockedReason(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+  setupVisible: boolean,
+  authorityError: string | null = null,
+): string | null {
+  if (state.canStart) return null;
+  if (state.mutation.status === "pending") return t("codingWorkbench.composer.blocked.busy");
+  const alert = visibleAlert(state, t, setupVisible, authorityError);
+  if (alert !== null) return alert;
+  if (state.pairing === "unknown") return t("codingWorkbench.composer.blocked.pairing");
+  if (state.pairing === "unpaired") return t("codingWorkbench.composer.blocked.unpaired");
+  return readinessStartBlocker(state, t);
 }

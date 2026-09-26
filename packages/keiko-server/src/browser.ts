@@ -4,11 +4,17 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  sseBackpressureReporter,
+  writeOrDestroy,
+  type SseBackpressureSignal,
+} from "./sse-write.js";
+import {
   BrowserToolError,
   type BrowserEventEnvelope,
   type BrowserSessionManager,
 } from "@oscharko-dev/keiko-tools";
 import type { UiHandlerDeps } from "./deps.js";
+import { redactedEventJson } from "./sse-frame-cache.js";
 import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "./sse.js";
 import {
   errorBody,
@@ -255,33 +261,71 @@ export function handleBrowserEvents(ctx: RouteContext, deps: UiHandlerDeps): Han
   if (!guard.hasSession(sessionId)) {
     return { status: 404, body: errorBody("SESSION_NOT_FOUND", "Browser session not found.") };
   }
-  openBrowserSseStream(ctx.res, guard, sessionId, deps.redactor);
+  // Threads the request's own correlation id (ADR-0173 D5 / g12) so a later backpressure kill
+  // joins back to the request that opened this stream instead of a disconnected mint.
+  openBrowserSseStream(
+    ctx.res,
+    guard,
+    sessionId,
+    deps.redactor,
+    sseBackpressureReporter(deps, "browser", ctx.correlationId),
+    ctx.correlationId,
+  );
   ctx.req.on("close", () => {
     ctx.res.end();
   });
   return STREAMING;
 }
 
-function openBrowserSseStream(
+// Exported for unit testing the backpressure path. `onBackpressure` is optional and defaults to
+// undefined in production (no behavior change); it is emitted exactly once when a frame is rejected
+// because the client is not draining, before the socket is destroyed.
+export function openBrowserSseStream(
   res: ServerResponse,
   manager: BrowserSessionManager,
   sessionId: string,
   redactor: UiHandlerDeps["redactor"],
+  onBackpressure?: (signal: SseBackpressureSignal) => void,
+  correlationId?: string,
 ): void {
   res.writeHead(200, SSE_HEADERS);
-  startSseHeartbeat(res);
+  // Per-connection abort: a slow-client backpressure kill (writeOrDestroy) aborts this controller,
+  // which unsubscribes from the manager so no further frames are produced for a dead socket. The
+  // res.on("close") listener also unsubscribes; `unsubscribed` guards against the double call.
+  // subscribe() returns synchronously and events fire only asynchronously afterward, so no event
+  // (hence no abort) can occur before `unsubscribe` is assigned.
+  const controller = new AbortController();
+  // correlationId (#2902 w5-sse-counters) is threaded to every write path below so whichever one
+  // runs first attaches it: sse-write.ts's per-stream state is set-once-wins. The heartbeat's own
+  // write is deferred to its interval timer, so the ready frame just below is the actual first
+  // write in practice — it also carries correlationId for that reason.
+  startSseHeartbeat(res, undefined, undefined, {
+    controller,
+    ...(onBackpressure === undefined ? {} : { onBackpressure }),
+    ...(correlationId === undefined ? {} : { correlationId }),
+  });
   let seq = 0;
   const unsubscribe = manager.subscribe(sessionId, (event) => {
     seq += 1;
-    writeBrowserEvent(res, event, seq, redactor);
+    writeBrowserEvent(res, event, seq, redactor, controller, onBackpressure);
     if (event.kind === "session-closed") {
-      unsubscribe();
+      stop();
       res.end();
     }
   });
-  res.write(readyMessage());
-  res.on("close", () => {
+  let unsubscribed = false;
+  const stop = (): void => {
+    if (unsubscribed) return;
+    unsubscribed = true;
     unsubscribe();
+  };
+  controller.signal.addEventListener("abort", stop, { once: true });
+  // The ready frame goes through the same protective path: a client that is already not draining
+  // must abort and unsubscribe here too, rather than leaving the subscription live until some
+  // later event happens to trip writeOrDestroy.
+  writeOrDestroy(res, readyMessage(), controller, onBackpressure, correlationId);
+  res.on("close", () => {
+    stop();
   });
 }
 
@@ -290,11 +334,14 @@ function writeBrowserEvent(
   event: BrowserEventEnvelope,
   seq: number,
   redactor: UiHandlerDeps["redactor"],
+  controller: AbortController,
+  onBackpressure?: (signal: SseBackpressureSignal) => void,
 ): void {
-  const redacted = redactor(event);
-  const data = JSON.stringify(redacted);
+  // KEIKO-0674: reuse the WeakMap-keyed redactedEventJson helper (GEN-PERF-FANOUT-001) so a fan-
+  // out of the same browser event to K subscribers pays the redact+serialize cost once, not K
+  // times. Every other SSE fan-out path (agent-run/container/command-runner/terminal) already
+  // routes through this helper; this one was the last inline call to redactor()+JSON.stringify.
+  const data = redactedEventJson(redactor, event);
   const frame = `id: ${String(seq)}\nevent: browser:${event.kind}\ndata: ${data}\n\n`;
-  if (!res.write(frame)) {
-    res.destroy();
-  }
+  writeOrDestroy(res, frame, controller, onBackpressure);
 }

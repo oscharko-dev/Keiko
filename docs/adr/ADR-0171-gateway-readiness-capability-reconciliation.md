@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (Issue #2885, 2026-08-02).
+Accepted (Issue #2885, 2026-08-02). Amended by PR #3452 (2026-09-11): D5.
 
 ## Context
 
@@ -71,6 +71,22 @@ Coding Workbench surfaces. It is neither replaced by nor inferred from the per-f
 signals answer different questions: whether the configured gateway answered, and which model fields
 were specifically observed.
 
+### D5 — An admitted coding run judges the tool-calling proof as of its admission
+
+A forced tool-call proof (`toolCallingVerification`, probe `gateway-tool-calling-v1`) expires 24
+hours after its probe (`TOOL_CALLING_VERIFICATION_MAX_AGE_MS`). A model whose proof has expired cannot
+be chosen for a new Coding Workbench run, and the sidecar profile names that state
+`tool-calling-unverified`, never `non-coding-capable`, because the remedy is a new probe rather
+than another model. A run admitted with a fresh proof keeps its model for the life of its runtime
+capability: each sidecar call judges the proof as of the instant the capability was issued, which
+the capability store records. The capability's own expiry and revocation still bound the run's
+access. Until PR #3452 every call judged the proof as of the call, so coding run 24 (2026-09-11),
+admitted 3.5 minutes before its proof aged out, had every later call refused and could not recover.
+A rule that judges an instant other than now takes it as `{ nowMs }`, never as a bare number, and
+`isCodingWorkbenchModel` takes the capability alone: handed point-free to `Array.filter`, a numeric
+instant receives each element's index, and coding run 25 (2026-09-11) found the Coding Workbench
+judging every model as of the epoch and offering none (F76).
+
 ## Consequences
 
 - Capability consumers keep using deliberate persisted configuration rather than transient traffic.
@@ -81,6 +97,8 @@ were specifically observed.
 - A context-window lower bound cannot silently shrink a correctly configured model capacity.
 - Readiness must be rerun after restart or configuration replacement, which is intentional because
   no current live observation exists then.
+- A coding run admitted with a fresh tool-calling proof is not stranded when the proof ages out
+  mid-run; a new run still needs a fresh proof.
 
 ## References
 

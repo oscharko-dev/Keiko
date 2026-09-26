@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "scenarioId": "description-auto-draft-and-apply",
+  "evidenceClass": "playwright-journey",
+  "sourceCommitSha": "3af295760373908725ebc6391de722e100093d3e",
+  "platformTarget": "macos-arm64",
+  "result": "passed",
+  "assertions": [
+    "auto-draft-reason:generated",
+    "retained-proposal:b961e7ae-4e73-418c-a7b1-1384b145c71f",
+    "governed-apply-completed:true"
+  ],
+  "usage": {
+    "spendObservability": "unknown",
+    "observedToolCallEvents": 41,
+    "observedRunDurationMs": 237578
+  },
+  "flowBinding": {
+    "flowId": "issue-to-pr-flow-05",
+    "taskRunId": "run-293018121911094970338549117343256483215",
+    "repository": "oscharko/Wegwerf-Repo",
+    "issueNumber": 6,
+    "pullRequestNumber": 50,
+    "pullRequestHeadSha": "774e009ae0092fd8c52861b7b0e9f74dba7f8ab7"
+  }
+}

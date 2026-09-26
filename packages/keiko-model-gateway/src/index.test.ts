@@ -5,6 +5,8 @@
 // only direct provider-SDK egress) makes the "stable public surface" guarantee load-bearing.
 
 import { describe, it, expect } from "vitest";
+
+import { createRequire } from "node:module";
 import * as gateway from "./index.js";
 import {
   KEIKO_MODEL_GATEWAY_VERSION,
@@ -72,6 +74,7 @@ import type {
   Clock,
   CostClass,
   FinishReason,
+  GatewayCallRequest,
   GatewayConfig,
   GatewayRequest,
   InfillingAlignment,
@@ -94,11 +97,18 @@ import type {
   CompletionDegradeReason,
   CompletionModelSelection,
   CompletionSelectionOptions,
+  ModelGatewayLogContext,
 } from "./index.js";
 
+// The packaged manifest owns the version; a literal here re-states it and goes
+// stale on every release cut (KfQ findings on #3055).
+const { version: packageVersion } = createRequire(import.meta.url)("../package.json") as {
+  version: string;
+};
+
 describe("keiko-model-gateway package surface", () => {
-  it("exposes the version constant pinned at 0.1.0", () => {
-    expect(KEIKO_MODEL_GATEWAY_VERSION).toBe("0.2.15");
+  it("exposes the version constant pinned at the package version", () => {
+    expect(KEIKO_MODEL_GATEWAY_VERSION).toBe(packageVersion);
   });
 
   it("exposes the capability registry as a frozen-shaped readonly array", () => {
@@ -291,6 +301,7 @@ describe("keiko-model-gateway package surface", () => {
     pin<Clock>();
     pin<CostClass>();
     pin<FinishReason>();
+    pin<GatewayCallRequest>();
     pin<GatewayConfig>();
     pin<GatewayRequest>();
     pin<InfillingAlignment>();
@@ -313,6 +324,7 @@ describe("keiko-model-gateway package surface", () => {
     pin<CompletionDegradeReason>();
     pin<CompletionModelSelection>();
     pin<CompletionSelectionOptions>();
+    pin<ModelGatewayLogContext>();
     // The pins above are compile-time only: `pin<T>()` is erased, so the real check is that
     // `tsc` can resolve each re-export. What IS observable at runtime is whether the barrel
     // loads at all — a circular or broken re-export throws here. The previous

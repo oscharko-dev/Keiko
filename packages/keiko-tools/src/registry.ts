@@ -19,10 +19,22 @@ import {
   type WorkspaceInfo,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { nodeSpawnFn, runCommand, type ExecutableResolver, type SpawnFn } from "./exec.js";
+import {
+  nodeSpawnFn,
+  runCommand,
+  type CommandTerminationEvidence,
+  type ExecutableResolver,
+  type SpawnFn,
+} from "./exec.js";
 import { CommandCancelledError, ToolArgumentError, UnknownToolError } from "./errors.js";
 import { applyPatch, renderDryRun, validatePatch } from "./patch.js";
 import { TOOL_DEFINITIONS } from "./schemas.js";
+import type { WorkspaceCatalogHandlerCall } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
+import {
+  workspaceToolAlias,
+  workspaceToolDescriptor,
+  captureWorkspaceToolArguments,
+} from "./catalog.js";
 import { createContainedNodeWorkspaceWriter, type WorkspaceWriter } from "./writer.js";
 import {
   resolveToolHostConfig,
@@ -112,6 +124,7 @@ export class WorkspaceToolHost implements ToolPort {
   private readonly config: ToolHostConfig;
   private readonly processEnv: NodeJS.ProcessEnv;
   private readonly now: () => number;
+  private readonly onTerminated: ((evidence: CommandTerminationEvidence) => void) | undefined;
 
   constructor(deps: {
     readonly workspace: WorkspaceInfo;
@@ -122,6 +135,10 @@ export class WorkspaceToolHost implements ToolPort {
     readonly config?: ToolHostConfigInput | undefined;
     readonly processEnv?: NodeJS.ProcessEnv | undefined;
     readonly now?: (() => number) | undefined;
+    // Termination-evidence port for the always-on `run_command` tool (RunCommandDeps deps-level
+    // seam): the composing server wires it once, so the agent-facing surface the #3350 fix is
+    // about cannot terminate unobservably (PR #3354 review, comment 3887021650).
+    readonly onTerminated?: ((evidence: CommandTerminationEvidence) => void) | undefined;
   }) {
     this.workspace = deps.workspace;
     this.fs = deps.fs ?? nodeWorkspaceFs;
@@ -131,6 +148,7 @@ export class WorkspaceToolHost implements ToolPort {
     this.config = resolveToolHostConfig(deps.config);
     this.processEnv = deps.processEnv ?? process.env;
     this.now = deps.now ?? Date.now;
+    this.onTerminated = deps.onTerminated;
   }
 
   listTools(): readonly ToolDefinition[] {
@@ -142,7 +160,8 @@ export class WorkspaceToolHost implements ToolPort {
       throw new CommandCancelledError("tool call cancelled before dispatch");
     }
     const startedAt = this.now();
-    const handled = await this.dispatch(request);
+    const captured = captureWorkspaceToolArguments(request.toolName, request.arguments);
+    const handled = await this.dispatch({ ...request, arguments: captured });
     return {
       toolCallId: request.toolCallId,
       output: handled.output,
@@ -152,7 +171,61 @@ export class WorkspaceToolHost implements ToolPort {
     };
   }
 
-  private dispatch(request: ToolCallRequest): Promise<Handled> {
+  catalogDescriptor(
+    ref: WorkspaceCatalogHandlerCall["toolRef"],
+  ): ReturnType<typeof workspaceToolDescriptor> {
+    return workspaceToolDescriptor(workspaceToolAlias(ref));
+  }
+
+  async executeCatalog(request: WorkspaceCatalogHandlerCall): Promise<ToolCallResult> {
+    const { signal, beforeEffect, observeExecution, toolCallId } = request;
+    const alias = workspaceToolAlias(request.toolRef);
+    const descriptor = workspaceToolDescriptor(alias);
+    if (descriptor.descriptorDigest !== request.descriptorDigest)
+      throw new ToolArgumentError("Workspace handler descriptor mismatch", alias);
+    const args = captureWorkspaceToolArguments(alias, request.arguments);
+    const requireEffect = (): void => {
+      if (signal.aborted || !beforeEffect())
+        throw new CommandCancelledError("Catalog effect boundary denied");
+    };
+    const spawn: SpawnFn = (...input) => {
+      requireEffect();
+      return this.spawn(...input);
+    };
+    if (
+      !descriptor.effects.some(
+        (effect) => effect === "command-execution" || effect === "workspace-write",
+      )
+    )
+      requireEffect();
+    const startedAt = this.now();
+    const handled = await this.dispatch(
+      { toolCallId: toolCallId, toolName: alias, arguments: args, signal: signal },
+      spawn,
+      beforeEffect,
+    );
+    const result = {
+      toolCallId: toolCallId,
+      output: handled.output,
+      durationMs: this.now() - startedAt,
+      commandExecuted: handled.commandExecuted,
+      ...(handled.metadata === undefined ? {} : { metadata: handled.metadata }),
+    };
+    observeExecution({
+      toolRef: descriptor.toolRef,
+      toolCallId: toolCallId,
+      durationMs: result.durationMs,
+      commandExecuted: handled.commandExecuted,
+      ...(handled.metadata === undefined ? {} : { metadata: handled.metadata }),
+    });
+    return result;
+  }
+
+  private dispatch(
+    request: ToolCallRequest,
+    spawn = this.spawn,
+    beforeEffect?: () => boolean,
+  ): Promise<Handled> {
     const args = request.arguments;
     switch (request.toolName) {
       case "read_file":
@@ -162,11 +235,11 @@ export class WorkspaceToolHost implements ToolPort {
       case "inspect_package_scripts":
         return Promise.resolve(this.inspectScripts(args));
       case "run_command":
-        return this.runCommandTool(args, request.signal);
+        return this.runCommandTool(args, request.signal, spawn);
       case "propose_patch":
         return Promise.resolve(this.proposePatch(args));
       case "apply_patch":
-        return Promise.resolve(this.applyPatchTool(args, request.signal));
+        return Promise.resolve(this.applyPatchTool(args, request.signal, beforeEffect));
       default:
         throw new UnknownToolError(`no such tool: ${request.toolName}`, request.toolName);
     }
@@ -207,7 +280,7 @@ export class WorkspaceToolHost implements ToolPort {
     return { output: JSON.stringify({ path, scripts }), commandExecuted: false };
   }
 
-  private async runCommandTool(args: Args, signal: AbortSignal): Promise<Handled> {
+  private async runCommandTool(args: Args, signal: AbortSignal, spawn: SpawnFn): Promise<Handled> {
     const command = requireString(args, "command", "run_command");
     const cmdArgs = optionalStringArray(args, "args", "run_command") ?? [];
     const cwd = optionalString(args, "cwd", "run_command");
@@ -218,10 +291,11 @@ export class WorkspaceToolHost implements ToolPort {
         workspace: this.workspace,
         policy: this.config.sandbox,
         commandRules: this.config.commandRules,
-        spawn: this.spawn,
+        spawn,
         resolveExecutable: this.resolveExecutable,
         processEnv: this.processEnv,
         now: this.now,
+        ...(this.onTerminated !== undefined ? { onTerminated: this.onTerminated } : {}),
       },
     );
     return {
@@ -269,10 +343,11 @@ export class WorkspaceToolHost implements ToolPort {
     };
   }
 
-  private applyPatchTool(args: Args, signal: AbortSignal): Handled {
+  private applyPatchTool(args: Args, signal: AbortSignal, beforeEffect?: () => boolean): Handled {
     const diff = requireString(args, "diff", "apply_patch");
     const result = applyPatch(this.workspace, diff, {
       applyEnabled: this.config.applyEnabled,
+      beforeEffect,
       signal,
       fs: this.fs,
       writer: this.writer,

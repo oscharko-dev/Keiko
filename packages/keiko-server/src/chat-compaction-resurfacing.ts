@@ -1,12 +1,15 @@
+import type {
+  ContextCompactionRecord,
+  ContextProvenanceRef,
+  ContextRehydrationHandle,
+} from "@oscharko-dev/keiko-contracts";
 import {
   containsAbsolutePath,
   containsPseudoRoleMarker,
   stripUnsafeFormatChars,
-  validateContextCompactionRecord,
-  type ContextCompactionRecord,
-  type ContextProvenanceRef,
-  type ContextRehydrationHandle,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/text-safety";
+import { partitionContextPreservedFacts } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { validateContextCompactionRecord } from "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation";
 import {
   loadEvidence,
   type EvidenceManifest,
@@ -36,6 +39,7 @@ interface TurnRunIdEntry {
 interface ResurfacingBuckets {
   readonly modelSummaries: string[];
   readonly facts: string[];
+  readonly inferredFacts: string[];
   readonly constraints: string[];
   readonly decisions: string[];
   readonly questions: string[];
@@ -160,6 +164,7 @@ function renderRecords(records: readonly TimedRecord[]): string | undefined {
   ];
   addSection(lines, "Model-written continuity summary", buckets.modelSummaries);
   addSection(lines, "Pinned facts", buckets.facts);
+  addSection(lines, "Inferred statements (not facts)", buckets.inferredFacts);
   addSection(lines, "Constraints", buckets.constraints);
   addSection(lines, "Decisions", buckets.decisions);
   addSection(lines, "Files and symbols", buckets.filesAndSymbols);
@@ -183,6 +188,7 @@ function collectBuckets(records: readonly ContextCompactionRecord[]): Resurfacin
 function emptyBuckets(): ResurfacingBuckets {
   return {
     modelSummaries: [],
+    inferredFacts: [],
     facts: [],
     constraints: [],
     decisions: [],
@@ -245,7 +251,9 @@ function pushSafeMany(bucket: string[], values: readonly string[] | undefined): 
 }
 
 function collectFactBuckets(buckets: ResurfacingBuckets, record: ContextCompactionRecord): void {
-  for (const fact of record.preservedFacts ?? []) pushSafe(buckets.facts, fact.statement);
+  const facts = partitionContextPreservedFacts(record.preservedFacts);
+  for (const fact of facts.verbatim) pushSafe(buckets.facts, fact.statement);
+  for (const fact of facts.inferred) pushSafe(buckets.inferredFacts, fact.statement);
   for (const constraint of record.userConstraints ?? []) {
     pushSafe(buckets.constraints, constraint.statement);
   }

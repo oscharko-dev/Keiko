@@ -3,12 +3,16 @@
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
+import { HOST_COMMAND_MAX_BUFFER_BYTES } from "./lib/host-command.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const githubApiVersion = "2022-11-28";
-const defaultBaseBranch = "release/0.3";
+const defaultBaseBranch = "release/1.0";
 const defaultPollSeconds = 15;
-const defaultTimeoutSeconds = 30 * 60;
+// ADR-0177 D8 writes the stable tag on the dev push, so every waiter on that tag runs beside the
+// tagged commit's CI and must be able to span a whole run: 32 to 36 minutes when runners are free,
+// 62 under congestion, and the longest ci.yml job may take 50. A failed check is refused at once.
+const defaultTimeoutSeconds = 90 * 60;
 
 function fail(message) {
   console.error(`release-required-checks: FAIL - ${message}`);
@@ -166,12 +170,66 @@ function recordRequiredCheck(name, context) {
   missing.push(name);
 }
 
+// ADR-0178. An integration run reuses the required matrix's verdict when this commit's tree is
+// byte-identical to a pull-request head that matrix already proved green, so the gate it reused
+// reports `skipped` on THIS commit while its evidence binds the tree-identical head. The release
+// binds a tree, not a sha: the tagged commit and that head cannot differ in one byte a gate could
+// read. This step therefore resolves a `skipped` required check — and ONLY `skipped` — against a
+// commit that carries the identical tree.
+//
+// It never rescues a check that ran and FAILED here, never accepts evidence from a commit whose
+// tree was not confirmed equal, and returns the verdict untouched when no such evidence exists.
+
+/**
+ * Re-classify `skipped` required checks that an identical tree already proved green.
+ * @param {{failed: Array<{name: string, state: string}>, missing: string[], ok: boolean, passed: string[], pending: unknown[]}} result
+ * @param {Array<{name?: unknown, status?: unknown, conclusion?: unknown}>} treeCheckRuns
+ * @returns {typeof result}
+ */
+/** Identity of a check for reuse: its name AND the app that produced it. */
+function evidenceKey(name, appId) {
+  return `${String(name)}\u0000${appId === undefined || appId === null ? "" : String(appId)}`;
+}
+
+export function resolveSkippedWithTreeEvidence(result, treeCheckRuns) {
+  // Keyed by name AND producing app id. A check name is not unique across GitHub Apps, so matching
+  // on the name alone would let an unrelated app's same-named success rescue a skipped required
+  // check. An entry whose own app is unknown can only be matched by an evidence run whose app is
+  // equally unknown, so the pairing never loosens.
+  const provenByTree = new Set(
+    (Array.isArray(treeCheckRuns) ? treeCheckRuns : [])
+      .filter((run) => run?.status === "completed" && run?.conclusion === "success")
+      .filter((run) => typeof run?.name === "string")
+      .map((run) => evidenceKey(run.name, run?.app?.id)),
+  );
+  if (provenByTree.size === 0) return result;
+
+  const rescued = result.failed.filter(
+    (entry) => entry.state === "skipped" && provenByTree.has(evidenceKey(entry.name, entry.appId)),
+  );
+  if (rescued.length === 0) return result;
+
+  const stillFailed = result.failed.filter((entry) => !rescued.includes(entry));
+  const passed = [...result.passed, ...rescued.map((entry) => entry.name)];
+  return {
+    ...result,
+    failed: stillFailed,
+    ok: stillFailed.length === 0 && result.missing.length === 0 && result.pending.length === 0,
+    passed,
+  };
+}
+
 function recordCheckRun(name, checkRun, result) {
   if (checkRun.status === "completed" && checkRun.conclusion === "success") {
     result.passed.push(name);
     return;
   }
-  const entry = { name, source: "check-run", state: describeCheckRun(checkRun) };
+  const entry = {
+    name,
+    source: "check-run",
+    state: describeCheckRun(checkRun),
+    appId: checkRun?.app?.id,
+  };
   if (checkRun.status === "completed") {
     result.failed.push(entry);
     return;
@@ -235,6 +293,7 @@ function githubJsonFromGh(path, token) {
     {
       encoding: "utf8",
       env,
+      maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES,
     },
   );
   if (result.error?.code === "ENOENT") return undefined;
@@ -272,14 +331,40 @@ async function resolveRequiredChecks({ baseBranch, owner, repo, token, value }) 
   return fromProtection;
 }
 
-async function fetchCommitEvidence({ owner, repo, sha, token }) {
-  const [checkRunsPayload, statusPayload] = await Promise.all([
-    githubJson(
+export const CHECK_RUN_PAGE_SIZE = 100;
+// A commit with more check runs than this is not one this repository produces; refusing it bounds the
+// read instead of deciding on a partial listing.
+export const CHECK_RUN_PAGE_LIMIT = 10;
+
+/**
+ * EVERY check run of a commit, newest first, read to exhaustion (#3565). GitHub returns at most one
+ * page of 100, and the `workflow_run` observers attach a check run to the default-branch head for
+ * every workflow run that completes anywhere in the repository. The 1.1.1 release commit carried 125
+ * of them, the required checks had slid to the second page, and the single-page read reported five
+ * green checks as missing. A listing that cannot be read completely is refused, never evaluated.
+ * @returns {Promise<Array<Record<string, unknown>>>}
+ */
+export async function fetchAllCheckRuns({ owner, repo, sha, token }) {
+  const checkRuns = [];
+  for (let page = 1; page <= CHECK_RUN_PAGE_LIMIT; page += 1) {
+    const payload = await githubJson(
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(
         sha,
-      )}/check-runs?per_page=100&filter=latest`,
+      )}/check-runs?per_page=${CHECK_RUN_PAGE_SIZE}&filter=latest&page=${page}`,
       token,
-    ),
+    );
+    if (!Array.isArray(payload?.check_runs)) {
+      throw new TypeError(`The check runs of ${sha} are malformed.`);
+    }
+    checkRuns.push(...payload.check_runs);
+    if (payload.check_runs.length < CHECK_RUN_PAGE_SIZE) return checkRuns;
+  }
+  throw new Error(`The check runs of ${sha} span more than ${CHECK_RUN_PAGE_LIMIT} pages.`);
+}
+
+async function fetchCommitEvidence({ owner, repo, sha, token }) {
+  const [checkRuns, statusPayload] = await Promise.all([
+    fetchAllCheckRuns({ owner, repo, sha, token }),
     githubJson(
       `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(
         sha,
@@ -288,9 +373,74 @@ async function fetchCommitEvidence({ owner, repo, sha, token }) {
     ),
   ]);
   return {
-    checkRuns: Array.isArray(checkRunsPayload.check_runs) ? checkRunsPayload.check_runs : [],
+    checkRuns,
     statuses: Array.isArray(statusPayload.statuses) ? statusPayload.statuses : [],
   };
+}
+
+/**
+ * Read the tree sha a commit points at, or undefined when it cannot be read.
+ * @returns {Promise<string | undefined>}
+ */
+export async function fetchTreeSha({ owner, repo, sha, token }) {
+  try {
+    const commit = await githubJson(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(sha)}`,
+      token,
+    );
+    const treeSha = commit?.commit?.tree?.sha;
+    return typeof treeSha === "string" && /^[0-9a-f]{40}$/.test(treeSha) ? treeSha : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Collect check runs from commits that carry the IDENTICAL tree to this one. Only the heads of
+ * pull requests this commit merged are considered, and each candidate's tree is confirmed equal
+ * before any of its evidence is used. Any error yields no evidence, so the caller fails closed.
+ * @returns {Promise<Array<{name?: unknown, status?: unknown, conclusion?: unknown}>>}
+ */
+export async function fetchTreeIdenticalCheckRuns({ owner, repo, sha, token }) {
+  const treeSha = await fetchTreeSha({ owner, repo, sha, token });
+  if (treeSha === undefined) return [];
+  let pulls;
+  try {
+    pulls = await githubJson(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(sha)}/pulls?per_page=100`,
+      token,
+    );
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(pulls)) return [];
+
+  // ONE candidate, never a union. Combining check runs from several tree-identical commits would
+  // let a gate be satisfied by pieces from different runs, with no single commit having passed the
+  // complete gate. The first candidate that carries the identical tree is the evidence, or there
+  // is none.
+  for (const pull of pulls) {
+    const headSha = pull?.head?.sha;
+    if (typeof headSha !== "string" || headSha === sha) continue;
+    const runs = await checkRunsForIdenticalTree({ headSha, owner, repo, token, treeSha });
+    if (runs.length > 0) return runs;
+  }
+  return [];
+}
+
+/**
+ * Read one candidate head's check runs, but only after confirming it carries the identical tree.
+ * A tree that cannot be read, or that differs, yields nothing.
+ * @returns {Promise<Array<{name?: unknown, status?: unknown, conclusion?: unknown}>>}
+ */
+export async function checkRunsForIdenticalTree({ headSha, owner, repo, token, treeSha }) {
+  const headTree = await fetchTreeSha({ owner, repo, sha: headSha, token });
+  if (headTree === undefined || headTree !== treeSha) return [];
+  try {
+    return await fetchAllCheckRuns({ owner, repo, sha: headSha, token });
+  } catch {
+    return [];
+  }
 }
 
 function formatNamedStates(entries) {
@@ -349,10 +499,42 @@ async function verifyRequiredChecks() {
   await waitForRequiredChecks(config, requiredChecks, timeoutAt);
 }
 
+/**
+ * A required check that a tree-identical commit already proved green is evidence, not absence
+ * (ADR-0178). Only `skipped` is resolved this way, and only after the trees are confirmed equal;
+ * a verdict with nothing skipped is returned untouched without any extra API call.
+ * @returns {Promise<typeof verdict>}
+ */
+export async function applyTreeEvidence(config, verdict) {
+  if (!verdict.failed.some((entry) => entry.state === "skipped")) return verdict;
+  const resolved = resolveSkippedWithTreeEvidence(
+    verdict,
+    await fetchTreeIdenticalCheckRuns(config),
+  );
+  for (const name of resolved.passed.filter((entry) => !verdict.passed.includes(entry))) {
+    console.log(`release-required-checks: ${name} reused proven evidence from an identical tree.`);
+  }
+  return resolved;
+}
+
+/**
+ * The one verdict on "are the release-required checks of this commit green": the complete check-run
+ * listing, evaluated, with ADR-0178 tree evidence applied. The publish job decides on it here, and
+ * release-advance decides on the same two pure steps (scripts/lib/release-automation.mjs), so the
+ * trigger and the gate it triggers cannot disagree about what green means (#3565).
+ * @returns {Promise<ReturnType<typeof evaluateRequiredChecks>>}
+ */
+export async function readRequiredChecksVerdict(config, requiredChecks) {
+  const evidence = await fetchCommitEvidence(config);
+  return applyTreeEvidence(
+    config,
+    evaluateRequiredChecks(requiredChecks, evidence.checkRuns, evidence.statuses),
+  );
+}
+
 async function waitForRequiredChecks(config, requiredChecks, timeoutAt) {
   for (;;) {
-    const evidence = await fetchCommitEvidence(config);
-    const result = evaluateRequiredChecks(requiredChecks, evidence.checkRuns, evidence.statuses);
+    const result = await readRequiredChecksVerdict(config, requiredChecks);
 
     if (result.ok) {
       console.log(

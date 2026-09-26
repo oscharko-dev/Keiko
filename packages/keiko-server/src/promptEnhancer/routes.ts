@@ -9,7 +9,7 @@
 // existing ModelPort factory so provider credentials stay behind the server boundary.
 
 import type { IncomingMessage } from "node:http";
-import { validatePromptEnhancementWireRequest } from "@oscharko-dev/keiko-contracts";
+import { validatePromptEnhancementWireRequest } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-bff";
 import type {
   PromptEnhancementWireRequest,
   PromptEnhancementWireResponse,

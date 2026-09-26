@@ -1,21 +1,24 @@
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   createGitHubCodeContextApiPort,
   GitHubCodeContextPortError,
 } from "./githubCodeContextPort.js";
-import {
-  createJiraCodeContextHttpPort,
-  JiraCodeContextPortError,
-  parseJiraCodeContextPortConfig,
-} from "./jiraCodeContextPort.js";
-import { DEFAULT_SANDBOX_POLICY, type SpawnFn } from "@oscharko-dev/keiko-tools";
+import { createGovernedJiraCodeContextHttpPort } from "./jiraCodeContextPort.js";
+import { GOVERNED_GIT_REMOTE_SANDBOX_POLICY, type SpawnFn } from "@oscharko-dev/keiko-tools";
+import type { AtlassianHttpBodyPort } from "@oscharko-dev/keiko-connectors";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
+import type { ServerLogEvent } from "../observability/server-log.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 const WORKSPACE: WorkspaceInfo = {
   root: process.cwd(),
+  selectedRoot: process.cwd(),
   name: undefined,
   version: undefined,
   testFramework: "unknown",
@@ -25,19 +28,86 @@ const WORKSPACE: WorkspaceInfo = {
   ignoreLines: [],
 };
 
-function githubPortWith(spawn: SpawnFn): ReturnType<typeof createGitHubCodeContextApiPort> {
+function githubPortWith(
+  spawn: SpawnFn,
+  timeoutMs = 1_000,
+  events?: ServerLogEvent[],
+): ReturnType<typeof createGitHubCodeContextApiPort> {
   return createGitHubCodeContextApiPort({
     workspace: WORKSPACE,
     processEnv: { PATH: process.env.PATH },
     spawn,
     resolveExecutable: () => "/test-bin/gh",
-    timeoutMs: 1_000,
+    timeoutMs,
+    ...(events === undefined
+      ? {}
+      : { activityLog: { write: (event: ServerLogEvent): void => void events.push(event) } }),
   });
 }
 
 const READ_ARGV: readonly string[] = ["api", "repos/oscharko-dev/Keiko/issues/1"];
 
 describe("github code context port", () => {
+  it("threads read correlation to termination evidence and cancels before spawning", async () => {
+    const events: ServerLogEvent[] = [];
+    let spawned = 0;
+    const port = createGitHubCodeContextApiPort({
+      workspace: WORKSPACE,
+      processEnv: { PATH: process.env.PATH },
+      spawn: (() => {
+        spawned += 1;
+        return fakeChild(0, "{}");
+      }) as SpawnFn,
+      resolveExecutable: () => "/test-bin/gh",
+      activityLog: {
+        write: (event) => {
+          events.push(event);
+        },
+      },
+    });
+    await expect(
+      port.readJson(READ_ARGV, { signal: AbortSignal.abort(), correlationId: "read-cancelled" }),
+    ).rejects.toMatchObject({ code: "gh-failed" });
+    expect(spawned).toBe(0);
+    expect(events.find((event) => event.op === "coding-context.github.read")).toMatchObject({
+      errorKind: "cancelled",
+      extra: { outcome: "cancelled" },
+    });
+    await port.readJson(READ_ARGV, { correlationId: "read-issue-42" });
+    expect(events).toContainEqual(expect.objectContaining({ correlationId: "read-issue-42" }));
+    expect(JSON.stringify(events)).not.toContain("repos/oscharko-dev");
+    const succeeded = events.find(
+      (event) =>
+        event.op === "coding-context.github.read" && event.correlationId === "read-issue-42",
+    );
+    const persisted = expectActivityLogProof(
+      "coding-context.github.read.line",
+      formatActivityLogProofLine(succeeded ?? {}),
+    );
+    expect(persisted).toMatchObject({ outcome: "succeeded", correlationId: "read-issue-42" });
+  });
+
+  it("preserves repository provenance while scrubbing credentials in an issue response", async () => {
+    const response = {
+      url: "https://github.com/owner/repo/issues/42",
+      body: "token: credential-value-3385",
+    };
+    const port = createGitHubCodeContextApiPort({
+      workspace: WORKSPACE,
+      processEnv: {
+        PATH: process.env.PATH,
+        GITHUB_REPOSITORY: "owner/repo",
+        GH_TOKEN: "credential-value-3385",
+      },
+      spawn: (() => fakeChild(0, JSON.stringify(response))) as SpawnFn,
+      resolveExecutable: () => "/test-bin/gh",
+      timeoutMs: 1_000,
+    });
+    const result = await port.readJson(["api", "repos/owner/repo/issues/42"]);
+    expect(result).toMatchObject({ url: response.url });
+    expect(JSON.stringify(result)).not.toContain("credential-value-3385");
+  });
+
   it("rejects non-api subcommands, mutation flags, and non-repos endpoints before spawn", async () => {
     let spawned = 0;
     const port = githubPortWith(() => {
@@ -71,6 +141,47 @@ describe("github code context port", () => {
     await expect(badJson.readJson(READ_ARGV)).rejects.toMatchObject({ code: "gh-invalid-json" });
   });
 
+  it.each([
+    {
+      name: "denied invocation",
+      expected: "authority-denied",
+      read: (port: ReturnType<typeof createGitHubCodeContextApiPort>): Promise<unknown> =>
+        port.readJson([]),
+      spawn: (() => fakeChild(0, "{}")) as SpawnFn,
+    },
+    {
+      name: "failed read",
+      expected: "read-failed",
+      read: (port: ReturnType<typeof createGitHubCodeContextApiPort>): Promise<unknown> =>
+        port.readJson(READ_ARGV),
+      spawn: ((..._args: readonly unknown[]) => fakeChild(1, "")) as unknown as SpawnFn,
+    },
+    {
+      name: "transient provider failure",
+      expected: "unavailable",
+      read: (port: ReturnType<typeof createGitHubCodeContextApiPort>): Promise<unknown> =>
+        port.readJson(READ_ARGV),
+      spawn: ((..._args: readonly unknown[]) =>
+        fakeGhChildWithStderr(1, "gh: Too Many Requests (HTTP 429)")) as unknown as SpawnFn,
+    },
+    {
+      name: "invalid provider JSON",
+      expected: "validation-failed",
+      read: (port: ReturnType<typeof createGitHubCodeContextApiPort>): Promise<unknown> =>
+        port.readJson(READ_ARGV),
+      spawn: ((..._args: readonly unknown[]) => fakeChild(0, "not-json")) as unknown as SpawnFn,
+    },
+  ])("maps a $name to the closed $expected error kind", async ({ expected, read, spawn }) => {
+    const events: ServerLogEvent[] = [];
+    const port = githubPortWith(spawn, 1_000, events);
+
+    await expect(read(port)).rejects.toBeInstanceOf(GitHubCodeContextPortError);
+
+    expect(events.find((event) => event.op === "coding-context.github.read")?.errorKind).toBe(
+      expected,
+    );
+  });
+
   // The spawn boundary — not this port — owns the output cap: past `policy.maxOutputBytes` it
   // replaces stdout with a marker, kills the child, and sets `truncated`. Both observable shapes of
   // that one stop (the child had already exited 0, or the kill landed and it died on the signal)
@@ -80,7 +191,7 @@ describe("github code context port", () => {
   describe("output-cap classification", () => {
     // Derived from the policy the port actually runs under, never restated as a literal: if the cap
     // moves, these fixtures move with it instead of silently testing the wrong boundary.
-    const capBytes = DEFAULT_SANDBOX_POLICY.maxOutputBytes;
+    const capBytes = GOVERNED_GIT_REMOTE_SANDBOX_POLICY.maxOutputBytes;
 
     function jsonOfExactByteLength(totalBytes: number): string {
       const envelope = '{"a":""}';
@@ -88,17 +199,25 @@ describe("github code context port", () => {
     }
 
     it("reports an over-cap read as truncated when the child still exits zero", async () => {
-      const port = githubPortWith(((..._args: readonly unknown[]) =>
-        fakeGhChild({
-          chunks: [jsonOfExactByteLength(capBytes + 1)],
-          exitCode: 0,
-          signal: null,
-        })) as unknown as SpawnFn);
+      const events: ServerLogEvent[] = [];
+      const port = githubPortWith(
+        ((..._args: readonly unknown[]) =>
+          fakeGhChild({
+            chunks: [jsonOfExactByteLength(capBytes + 1)],
+            exitCode: 0,
+            signal: null,
+          })) as unknown as SpawnFn,
+        1_000,
+        events,
+      );
 
       const failure = await port.readJson(READ_ARGV).catch((error: unknown) => error);
       expect(failure).toBeInstanceOf(GitHubCodeContextPortError);
       expect(failure).toMatchObject({ code: "gh-output-truncated" });
       expect((failure as Error).message).not.toContain("xxx");
+      expect(events.find((event) => event.op === "coding-context.github.read")?.errorKind).toBe(
+        "read-failed",
+      );
     });
 
     it("reports an over-cap read as truncated when the flood kill terminates the child", async () => {
@@ -123,18 +242,83 @@ describe("github code context port", () => {
       await expect(port.readJson(READ_ARGV)).resolves.toEqual(JSON.parse(body) as unknown);
     });
   });
+
+  // #3384 B5-13: a rate limit, a GitHub-side 5xx, or a wall-time timeout must not be reported as
+  // the same diagnosis as an object that genuinely is not readable. Before this fix every one of
+  // these collapsed into "gh-failed", which `githubIssueResolution.ts` then reported to the
+  // operator as "closed, transferred, a pull request, or not readable" — specific and false.
+  describe("transient-failure classification", () => {
+    it("classifies a rate-limited exit (HTTP 403) as transient", async () => {
+      const port = githubPortWith(((..._args: readonly unknown[]) =>
+        fakeGhChildWithStderr(
+          1,
+          "gh: API rate limit exceeded for user ID 1. (HTTP 403)",
+        )) as unknown as SpawnFn);
+
+      await expect(port.readJson(READ_ARGV)).rejects.toMatchObject({
+        code: "gh-transient-failure",
+      });
+    });
+
+    it("classifies a rate-limited exit (HTTP 429) as transient", async () => {
+      const port = githubPortWith(((..._args: readonly unknown[]) =>
+        fakeGhChildWithStderr(1, "gh: Too Many Requests (HTTP 429)")) as unknown as SpawnFn);
+
+      await expect(port.readJson(READ_ARGV)).rejects.toMatchObject({
+        code: "gh-transient-failure",
+      });
+    });
+
+    it("classifies a GitHub-side 5xx exit as transient", async () => {
+      const port = githubPortWith(((..._args: readonly unknown[]) =>
+        fakeGhChildWithStderr(1, "gh: Internal Server Error (HTTP 500)")) as unknown as SpawnFn);
+
+      await expect(port.readJson(READ_ARGV)).rejects.toMatchObject({
+        code: "gh-transient-failure",
+      });
+    });
+
+    it("keeps a plain not-found exit (HTTP 404) as a genuine read failure, not transient", async () => {
+      const port = githubPortWith(((..._args: readonly unknown[]) =>
+        fakeGhChildWithStderr(1, "gh: Not Found (HTTP 404)")) as unknown as SpawnFn);
+
+      await expect(port.readJson(READ_ARGV)).rejects.toMatchObject({ code: "gh-failed" });
+    });
+
+    it("keeps a non-zero exit with no HTTP status as a genuine read failure", async () => {
+      const port = githubPortWith(((..._args: readonly unknown[]) =>
+        fakeChild(1, "")) as unknown as SpawnFn);
+
+      await expect(port.readJson(READ_ARGV)).rejects.toMatchObject({ code: "gh-failed" });
+    });
+
+    it("classifies a wall-time timeout as transient, not a genuine read failure", async () => {
+      const port = githubPortWith(
+        ((..._args: readonly unknown[]) =>
+          fakeGhChildThatOutlivesItsTimeout(60)) as unknown as SpawnFn,
+        15,
+      );
+
+      await expect(port.readJson(READ_ARGV)).rejects.toMatchObject({
+        code: "gh-transient-failure",
+      });
+    });
+  });
 });
 
 interface FakeGhChildOptions {
   readonly chunks: readonly string[];
   readonly exitCode: number | null;
   readonly signal: string | null;
+  /** stderr chunks the fake child emits before closing (default: none). */
+  readonly stderrChunks?: readonly string[];
 }
 
 // No `pid`: the exec boundary kills the whole process GROUP on a flood, and a fabricated pid in a
 // unit test would signal an unrelated real process group on the host.
 function fakeGhChild(options: FakeGhChildOptions): unknown {
   const stdoutListeners: ((chunk: Buffer) => void)[] = [];
+  const stderrListeners: ((chunk: Buffer) => void)[] = [];
   const closeListeners: ((code: number | null, signal: string | null) => void)[] = [];
   const child = {
     stdout: {
@@ -144,17 +328,20 @@ function fakeGhChild(options: FakeGhChildOptions): unknown {
       },
     },
     stderr: {
-      on: (): unknown => child.stderr,
+      on: (event: string, listener: (chunk: Buffer) => void): unknown => {
+        if (event === "data") stderrListeners.push(listener);
+        return child.stderr;
+      },
     },
     on: (
       event: string,
       listener: (code: number | null, signal: string | null) => void,
     ): unknown => {
       if (event === "close") closeListeners.push(listener);
-      if (event === "spawn")
-        queueMicrotask(() => {
-          (listener as () => void)();
-        });
+      return child;
+    },
+    once: (event: string, listener: () => void): unknown => {
+      if (event === "spawn") queueMicrotask(listener);
       return child;
     },
     kill: (): boolean => true,
@@ -163,6 +350,9 @@ function fakeGhChild(options: FakeGhChildOptions): unknown {
   queueMicrotask(() => {
     for (const listener of stdoutListeners) {
       for (const chunk of options.chunks) listener(Buffer.from(chunk, "utf8"));
+    }
+    for (const listener of stderrListeners) {
+      for (const chunk of options.stderrChunks ?? []) listener(Buffer.from(chunk, "utf8"));
     }
     queueMicrotask(() => {
       for (const listener of closeListeners) listener(options.exitCode, options.signal);
@@ -175,117 +365,131 @@ function fakeChild(exitCode: number, stdout: string): unknown {
   return fakeGhChild({ chunks: [stdout], exitCode, signal: null });
 }
 
+function fakeGhChildWithStderr(exitCode: number, stderr: string): unknown {
+  return fakeGhChild({ chunks: [], exitCode, signal: null, stderrChunks: [stderr] });
+}
+
+// Simulates a child that is killed (by the spawn boundary's own timeout handling, exercised via a
+// short `timeoutMs`) but whose OS-level exit is only observed later — the same "signalled now,
+// closed later" shape the flood-kill fixture above exercises, here driven by a wall-clock timeout
+// instead of the output cap.
+function fakeGhChildThatOutlivesItsTimeout(closeAfterMs: number): unknown {
+  const closeListeners: ((code: number | null, signal: string | null) => void)[] = [];
+  const child = {
+    stdout: { on: (): unknown => child.stdout },
+    stderr: { on: (): unknown => child.stderr },
+    on: (
+      event: string,
+      listener: (code: number | null, signal: string | null) => void,
+    ): unknown => {
+      if (event === "close") closeListeners.push(listener);
+      return child;
+    },
+    once: (event: string, listener: () => void): unknown => {
+      if (event === "spawn") queueMicrotask(listener);
+      return child;
+    },
+    kill: (): boolean => true,
+    pid: undefined,
+  };
+  const timer = setTimeout(() => {
+    for (const listener of closeListeners) listener(null, "SIGTERM");
+  }, closeAfterMs);
+  timer.unref();
+  return child;
+}
+
 describe("jira code context port", () => {
-  const CONFIG = { baseUrl: "https://example.atlassian.net", email: "a@b.c", apiToken: "token-1" };
-
-  function jsonResponse(body: unknown, url = ""): Response {
-    return {
-      ok: true,
-      status: 200,
-      url,
-      text: () => Promise.resolve(JSON.stringify(body)),
-    } as unknown as Response;
-  }
-
-  it("parses config only when every field is present", () => {
-    expect(parseJiraCodeContextPortConfig({})).toBeUndefined();
-    expect(parseJiraCodeContextPortConfig({ KEIKO_JIRA_BASE_URL: "https://x" })).toBeUndefined();
-    expect(
-      parseJiraCodeContextPortConfig({
-        KEIKO_JIRA_BASE_URL: "https://example.atlassian.net",
-        KEIKO_JIRA_EMAIL: "a@b.c",
-        KEIKO_JIRA_API_TOKEN: "t",
-      }),
-    ).toMatchObject({ baseUrl: "https://example.atlassian.net" });
-  });
-
-  it("rejects non-https base urls and embedded credentials fail-closed", () => {
-    expect(() =>
-      createJiraCodeContextHttpPort({ ...CONFIG, baseUrl: "http://example.atlassian.net" }),
-    ).toThrow(JiraCodeContextPortError);
-    expect(() =>
-      createJiraCodeContextHttpPort({ ...CONFIG, baseUrl: "https://user:pw@example.net" }),
-    ).toThrow(JiraCodeContextPortError);
-  });
-
-  it("pins requests to the configured host and GET /rest/api/ paths", async () => {
-    const seen: string[] = [];
-    const port = createJiraCodeContextHttpPort(CONFIG, {
-      fetchFn: ((input: URL) => {
-        seen.push(String(input));
-        return Promise.resolve(jsonResponse({ fields: {} }));
-      }) as unknown as typeof fetch,
+  it("reads through exactly one governed Jira credential", async () => {
+    const requests: unknown[] = [];
+    const port = createGovernedJiraCodeContextHttpPort({
+      custody: {
+        list: () => [
+          {
+            authRef: "atlassian-cred:AAAAAAAAAAAAAAAAAAAAAA",
+            provider: "jira",
+            baseUrl: "https://example.atlassian.net",
+          },
+        ],
+      } as never,
+      httpBodyPortFactory: (): AtlassianHttpBodyPort => (request) => {
+        requests.push(request);
+        return Promise.resolve({
+          kind: "response" as const,
+          status: 200,
+          bodyText: '{"fields":{"summary":"Issue"}}',
+          bodyBytes: 30,
+          truncated: false,
+        });
+      },
     });
 
-    await port.readJson({ method: "GET", path: "/rest/api/3/issue/KEIKO-1", query: {} });
-    expect(seen[0]).toBe("https://example.atlassian.net/rest/api/3/issue/KEIKO-1");
+    await expect(
+      port.readJson({
+        method: "GET",
+        path: "/rest/api/3/issue/PROJ-1",
+        query: { fields: "summary" },
+      }),
+    ).resolves.toMatchObject({ fields: { summary: "Issue" } });
+    expect(requests).toEqual([
+      expect.objectContaining({
+        method: "GET",
+        url: "https://example.atlassian.net/rest/api/3/issue/PROJ-1?fields=summary",
+      }),
+    ]);
+  });
+
+  it.each([
+    [[]],
+    [
+      [
+        {
+          authRef: "atlassian-cred:AAAAAAAAAAAAAAAAAAAAAA",
+          provider: "jira",
+          baseUrl: "https://one.example",
+        },
+        {
+          authRef: "atlassian-cred:BBBBBBBBBBBBBBBBBBBBBB",
+          provider: "jira",
+          baseUrl: "https://two.example",
+        },
+      ],
+    ],
+  ] as const)("rejects ambiguous Jira credential selection", async (credentials) => {
+    const port = createGovernedJiraCodeContextHttpPort({
+      custody: { list: (): typeof credentials => credentials } as never,
+      httpBodyPortFactory: (): AtlassianHttpBodyPort => () =>
+        Promise.reject(new Error("must not execute")),
+    });
 
     await expect(
-      port.readJson({ method: "GET", path: "/other/path", query: {} }),
+      port.readJson({ method: "GET", path: "/rest/api/3/issue/PROJ-1", query: {} }),
     ).rejects.toMatchObject({ code: "jira-denied" });
   });
 
-  it("rejects cross-host redirects and keeps auth material off errors", async () => {
-    const fetchFn = vi.fn<typeof fetch>(() =>
-      Promise.resolve(
-        new Response(undefined, {
-          status: 302,
-          headers: { location: "https://evil.example.com/rest/api/3/issue/K-1" },
-        }),
-      ),
-    );
-    const port = createJiraCodeContextHttpPort(CONFIG, {
-      fetchFn,
+  it.each([
+    "/rest/api/../admin",
+    "/rest/api/%2e%2e/admin",
+    "//evil.example/rest/api/3/issue/PROJ-1",
+    "not-a-path",
+  ])("rejects a path outside the normalized REST API boundary: %s", async (path) => {
+    const port = createGovernedJiraCodeContextHttpPort({
+      custody: {
+        list: () => [
+          {
+            authRef: "atlassian-cred:AAAAAAAAAAAAAAAAAAAAAA",
+            provider: "jira",
+            baseUrl: "https://example.atlassian.net",
+          },
+        ],
+      } as never,
+      httpBodyPortFactory: (): AtlassianHttpBodyPort => () =>
+        Promise.reject(new Error("must not execute")),
     });
-    const failure = await port
-      .readJson({ method: "GET", path: "/rest/api/3/issue/K-1", query: {} })
-      .catch((error: unknown) => error);
-    expect(failure).toMatchObject({ code: "jira-denied" });
-    expect((failure as Error).message).not.toContain("token-1");
-    expect(fetchFn).toHaveBeenCalledOnce();
-    expect(fetchFn.mock.calls[0]?.[1]).toMatchObject({ redirect: "manual" });
-  });
 
-  it("follows only same-origin redirects and preserves the bounded request policy", async () => {
-    const cancelRedirectBody = vi.fn();
-    const fetchFn = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        new Response(new ReadableStream({ cancel: cancelRedirectBody }), {
-          status: 307,
-          headers: { location: "/rest/api/3/issue/K-1?redirected=true" },
-        }),
-      )
-      .mockResolvedValueOnce(jsonResponse({ fields: { summary: "ok" } }));
-    const port = createJiraCodeContextHttpPort(CONFIG, { fetchFn });
-
-    await expect(
-      port.readJson({ method: "GET", path: "/rest/api/3/issue/K-1", query: {} }),
-    ).resolves.toEqual({ fields: { summary: "ok" } });
-    expect(fetchFn).toHaveBeenCalledTimes(2);
-    const redirectedInput = fetchFn.mock.calls[1]?.[0];
-    expect(redirectedInput).toBeInstanceOf(URL);
-    if (!(redirectedInput instanceof URL)) throw new TypeError("expected redirected URL");
-    expect(redirectedInput.href).toBe(
-      "https://example.atlassian.net/rest/api/3/issue/K-1?redirected=true",
-    );
-    expect(fetchFn.mock.calls[1]?.[1]).toMatchObject({ redirect: "manual" });
-    expect(cancelRedirectBody).toHaveBeenCalledOnce();
-  });
-
-  it("bounds oversized responses fail-closed", async () => {
-    const port = createJiraCodeContextHttpPort(CONFIG, {
-      fetchFn: (() =>
-        Promise.resolve({
-          ok: true,
-          status: 200,
-          url: "",
-          text: () => Promise.resolve(`"${"x".repeat(5 * 1024 * 1024)}"`),
-        } as unknown as Response)) as unknown as typeof fetch,
+    await expect(port.readJson({ method: "GET", path, query: {} })).rejects.toMatchObject({
+      code: "jira-denied",
     });
-    await expect(
-      port.readJson({ method: "GET", path: "/rest/api/3/issue/K-1", query: {} }),
-    ).rejects.toMatchObject({ code: "jira-invalid-json" });
   });
 });
 

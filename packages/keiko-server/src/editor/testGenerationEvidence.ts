@@ -13,7 +13,7 @@ import type {
   EditorTestGenerationWireResponse,
   EvidenceStore,
 } from "@oscharko-dev/keiko-contracts";
-import { CODING_CONTEXT_SOURCE_KINDS } from "@oscharko-dev/keiko-contracts";
+import { CODING_CONTEXT_SOURCE_KINDS } from "@oscharko-dev/keiko-contracts/runtime/coding-context";
 import type { Redactor } from "../deps.js";
 
 export const TEST_GENERATION_EVIDENCE_SCHEMA_VERSION = "1" as const;

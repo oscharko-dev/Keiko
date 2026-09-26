@@ -10,6 +10,8 @@ import type { IncomingMessage } from "node:http";
 
 /** Cookie name for the app session. Kept stable so it can be cleared reliably. */
 export const APP_SESSION_COOKIE_NAME = "keiko_coding_app_session";
+/** Advisory browser hygiene only; server-side expiry in the registry is the authoritative bound. */
+export const APP_SESSION_COOKIE_MAX_AGE_SECONDS = 12 * 60 * 60;
 /**
  * Path scopes: only API families that consume protected coding-session authority. W1.9 (#2482)
  * first added Git; the managed-worktree integration adds Files, Editor (including ADR-0147 D7
@@ -25,6 +27,20 @@ export const APP_SESSION_RUNTIME_COOKIE_PATH = "/api/runtime";
 export const APP_SESSION_RUNS_COOKIE_PATH = "/api/runs";
 export const APP_SESSION_WORKSPACES_COOKIE_PATH = "/api/workspaces";
 export const APP_SESSION_DESKTOP_COOKIE_PATH = "/api/desktop/chat";
+export const APP_SESSION_TASK_WORKSPACES_COOKIE_PATH = "/api/task-workspaces";
+
+// Issuance and revocation use one list so a new protected family cannot retain a stale bearer.
+const APP_SESSION_ACTIVE_COOKIE_PATHS = [
+  APP_SESSION_COOKIE_PATH,
+  APP_SESSION_GIT_COOKIE_PATH,
+  APP_SESSION_FILES_COOKIE_PATH,
+  APP_SESSION_EDITOR_COOKIE_PATH,
+  APP_SESSION_RUNTIME_COOKIE_PATH,
+  APP_SESSION_RUNS_COOKIE_PATH,
+  APP_SESSION_WORKSPACES_COOKIE_PATH,
+  APP_SESSION_DESKTOP_COOKIE_PATH,
+  APP_SESSION_TASK_WORKSPACES_COOKIE_PATH,
+] as const;
 
 export interface SessionCookieOptions {
   readonly secure: boolean;
@@ -65,14 +81,7 @@ export function serializeSessionCookies(
   const projection = (path: string): string =>
     `${APP_SESSION_COOKIE_NAME}=${cookieToken}; ${baseAttributes(options.secure, path)}; Max-Age=${String(maxAge)}`;
   return [
-    serializeSessionCookie(cookieToken, options),
-    projection(APP_SESSION_GIT_COOKIE_PATH),
-    projection(APP_SESSION_FILES_COOKIE_PATH),
-    projection(APP_SESSION_EDITOR_COOKIE_PATH),
-    projection(APP_SESSION_RUNTIME_COOKIE_PATH),
-    projection(APP_SESSION_RUNS_COOKIE_PATH),
-    projection(APP_SESSION_WORKSPACES_COOKIE_PATH),
-    projection(APP_SESSION_DESKTOP_COOKIE_PATH),
+    ...APP_SESSION_ACTIVE_COOKIE_PATHS.map(projection),
     // Retire both predecessor projections. Otherwise a browser may send the old, narrower cookie
     // alongside the new editor projection under the same name and leave ordering browser-dependent.
     expiredCookie(options.secure, APP_SESSION_RETIRED_LOCAL_HISTORY_COOKIE_PATH),
@@ -90,14 +99,7 @@ export function clearSessionCookies(secure: boolean): readonly string[] {
   const expire = (path: string): string =>
     `${APP_SESSION_COOKIE_NAME}=; ${baseAttributes(secure, path)}; Max-Age=0`;
   return [
-    clearSessionCookie(secure),
-    expire(APP_SESSION_GIT_COOKIE_PATH),
-    expire(APP_SESSION_FILES_COOKIE_PATH),
-    expire(APP_SESSION_EDITOR_COOKIE_PATH),
-    expire(APP_SESSION_RUNTIME_COOKIE_PATH),
-    expire(APP_SESSION_RUNS_COOKIE_PATH),
-    expire(APP_SESSION_WORKSPACES_COOKIE_PATH),
-    expire(APP_SESSION_DESKTOP_COOKIE_PATH),
+    ...APP_SESSION_ACTIVE_COOKIE_PATHS.map(expire),
     expire(APP_SESSION_RETIRED_LOCAL_HISTORY_COOKIE_PATH),
     expire(APP_SESSION_LEGACY_COOKIE_PATH),
   ];

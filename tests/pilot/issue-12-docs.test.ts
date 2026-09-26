@@ -105,7 +105,7 @@ describe("Issue #12 docs drift", () => {
     expect(ciAggregate).toContain("      - core-quality");
     expect(ciAggregate).toContain('if [ "$result" != "success" ]');
     expect(sdkIndex).toMatch(
-      /^import\s+\{\s*KEIKO_PRODUCT_VERSION\s*\}\s+from\s+"@oscharko-dev\/keiko-contracts";$/m,
+      /^import\s+\{\s*KEIKO_PRODUCT_VERSION\s*\}\s+from\s+"@oscharko-dev\/keiko-contracts\/runtime\/version";$/m,
     );
     expect(sdkIndex).toMatch(
       /^export\s+const\s+SDK_VERSION(?:\s*:\s*string)?\s*=\s*KEIKO_PRODUCT_VERSION;$/m,
@@ -121,14 +121,9 @@ describe("Issue #12 docs drift", () => {
   it("prunes publisher-native optional dependencies before manual package-surface gates", () => {
     expectPruneBeforePackageSurface(readWorkflowJobBlock(".github/workflows/ci.yml", "ui"));
 
-    const releaseVerify = readWorkflowJobBlock(".github/workflows/release.yml", "release-verify");
-    expect(releaseVerify).toContain("Verify required checks for tagged SHA");
-    expect(releaseVerify).toContain('RELEASE_SHA="$(git rev-parse HEAD)"');
-    expect(releaseVerify).toContain("npm run release:plan -- --tag beta");
-    expect(releaseVerify).not.toContain("npm run test:coverage:quality");
-    expect(releaseVerify).not.toContain("npm run check:package-surface");
-    expect(releaseVerify).not.toContain("npm run prune:package-native-optionals");
-
+    // #3498 Phase 2 retired the wait-for-required-checks `release-verify` job. ADR-0177 D9 starts the
+    // publish from release-advance.yml once the required checks are green, while `publish` still
+    // re-verifies them itself before publishing — that is what this pin covers.
     const publish = readWorkflowJobBlock(".github/workflows/release.yml", "publish");
     expect(publish).toContain("Verify required checks for release SHA");
     expect(publish).toContain('RELEASE_SHA="$(git rev-parse HEAD)"');
@@ -196,7 +191,9 @@ describe("Issue #12 docs drift", () => {
     expect(uiCli).toContain('new Set(["127.0.0.1", "localhost"])');
     expect(wireContracts).toContain('export const UI_HOST = "127.0.0.1"');
     expect(uiServer).toContain("export { UI_HOST };");
-    expect(uiServer).toContain('export { DEFAULT_UI_PORT } from "@oscharko-dev/keiko-contracts";');
+    expect(uiServer).toContain(
+      'export { DEFAULT_UI_PORT } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";',
+    );
   });
 
   it("keeps the shipped default UI port aligned", () => {

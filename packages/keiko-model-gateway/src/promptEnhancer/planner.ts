@@ -9,16 +9,16 @@
 // randomness. The enhancer never self-authorizes (ADR-0044 §4): the plan only records whether the
 // generated prompt must carry explicit human-approval safety rules; it never grants authority itself.
 
-import {
-  PROMPT_ENHANCEMENT_PROFILES,
-  type GroundingNeed,
-  type MissingInformationStrategy,
-  type OutputSchemaDescriptor,
-  type PromptCriticality,
-  type PromptEnhancementProfileId,
-  type PromptEnhancementRequestId,
-  type PromptTaskAnalysis,
+import type {
+  GroundingNeed,
+  MissingInformationStrategy,
+  OutputSchemaDescriptor,
+  PromptCriticality,
+  PromptEnhancementProfileId,
+  PromptEnhancementRequestId,
+  PromptTaskAnalysis,
 } from "@oscharko-dev/keiko-contracts";
+import { PROMPT_ENHANCEMENT_PROFILES } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
 import {
   getPromptEnhancerExecutionProfile,
   type PromptEnhancerExecutionProfile,

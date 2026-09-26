@@ -3,13 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import type { LanguageServiceLimits, LanguageServiceRequest } from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_LANGUAGE_SERVICE_LIMITS,
-  EDITOR_LANGUAGE_MODE_IDS,
   LANGUAGE_SERVICE_OPERATIONS,
-  type LanguageServiceLimits,
-  type LanguageServiceRequest,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/language-service";
+import { EDITOR_LANGUAGE_MODE_IDS } from "@oscharko-dev/keiko-contracts/runtime/editor-language-mode-map";
 import {
   describeLanguageCapabilities,
   NO_PROVIDER_UNAVAILABLE_REASON,

@@ -5,7 +5,7 @@
 
 // ─── Detected workspace ─────────────────────────────────────────────────────────
 
-export const WORKSPACE_LANGUAGES = [
+export const WORKSPACE_LANGUAGES = Object.freeze([
   "typescript",
   "javascript",
   "java",
@@ -27,14 +27,24 @@ export const WORKSPACE_LANGUAGES = [
   "protobuf",
   "openapi",
   "graphql",
-] as const;
+] as const);
 
 export type WorkspaceLanguage = (typeof WORKSPACE_LANGUAGES)[number];
 
-export type TestFramework = "vitest" | "jest" | "mocha" | "unknown";
+export type TestFramework = "vitest" | "jest" | "mocha" | "node-test" | "unknown";
 
+// A detected workspace carries TWO identities for one directory, and they are not interchangeable.
+// `root` is the realpath-admitted canonical root: every filesystem effect (discovery, reads, patch
+// application, containment) binds to it, so a mutable alias can never present one target to policy
+// and another to IO. `selectedRoot` is the lexical path the caller actually selected or registered,
+// verified at detection time to resolve to `root`; it is the identity the UI displays and the value
+// an authorization comparison against a registered project path may be compared with. Collapsing
+// the two — reporting the canonical root where a registration is lexical — answered 403 for every
+// project reached through a symlinked ancestor (on macOS the `/var` -> `/private/var` alias makes
+// that the ordinary case). When no lexical alias can be verified, `selectedRoot` equals `root`.
 export interface WorkspaceInfo {
   readonly root: string;
+  readonly selectedRoot: string;
   readonly name: string | undefined;
   readonly version: string | undefined;
   readonly testFramework: TestFramework;
@@ -57,11 +67,11 @@ export interface DiscoveryOptions {
   readonly applyGitignore: boolean;
 }
 
-export const DEFAULT_DISCOVERY_OPTIONS: DiscoveryOptions = {
+export const DEFAULT_DISCOVERY_OPTIONS: DiscoveryOptions = Object.freeze({
   maxDepth: 40,
   maxFiles: 50_000,
   applyGitignore: true,
-} as const;
+});
 
 export interface DiscoveryStats {
   readonly discovered: number;
@@ -77,9 +87,9 @@ export interface ReadOptions {
   readonly maxBytes: number;
 }
 
-export const DEFAULT_READ_OPTIONS: ReadOptions = {
+export const DEFAULT_READ_OPTIONS: ReadOptions = Object.freeze({
   maxBytes: 262_144,
-} as const;
+});
 
 export interface FileContent {
   readonly relativePath: string;
@@ -101,14 +111,14 @@ export type SelectionReason =
   "entrypoint" | "manifest" | "documentation" | "config" | "source" | "test";
 
 // Priority order used to rank candidates: lower index wins. Ties break on lexical path.
-export const SELECTION_REASON_PRIORITY: readonly SelectionReason[] = [
+export const SELECTION_REASON_PRIORITY: readonly SelectionReason[] = Object.freeze([
   "entrypoint",
   "source",
   "test",
   "manifest",
   "config",
   "documentation",
-] as const;
+] as const);
 
 export interface ContextRequest {
   readonly task: string | undefined;
@@ -117,12 +127,12 @@ export interface ContextRequest {
   readonly discovery: DiscoveryOptions;
 }
 
-export const DEFAULT_CONTEXT_REQUEST: ContextRequest = {
+export const DEFAULT_CONTEXT_REQUEST: ContextRequest = Object.freeze({
   task: undefined,
   budgetBytes: 65_536,
   maxBytesPerFile: 8_192,
   discovery: DEFAULT_DISCOVERY_OPTIONS,
-} as const;
+});
 
 export interface ContextEntry {
   readonly path: string;

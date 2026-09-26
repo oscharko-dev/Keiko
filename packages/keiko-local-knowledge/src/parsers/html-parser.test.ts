@@ -160,6 +160,22 @@ describe("htmlParser", () => {
     expect(paths).toEqual([["Top"], ["Top", "Sub"], ["Top2"]]);
   });
 
+  // #2906 KEIKO-0775 — a heading whose source markup spans multiple lines (source
+  // indentation, an inline tag adjacency, a rogue newline) previously produced a
+  // headingPath entry with embedded whitespace because handleHeadingClose only trimmed
+  // the label. Now collapseWhitespace runs once at close time so the path reads as
+  // single-spaced flowing prose, matching how flushBlock/pushCleanedBlock normalize
+  // ordinary body text.
+  it("collapses embedded whitespace inside a heading label before pushing headingPath", () => {
+    const html = "<h1>\n  Chapter\n  One\n</h1><p>body</p>";
+    const result = htmlParser.parse(
+      selectionFromText(html, { extension: "html" }),
+      buildParserOptions({ now: () => 0 }),
+    );
+    const paths = result.units.map((unit) => asBlock(unit).path);
+    expect(paths[0]).toEqual(["Chapter One"]);
+  });
+
   it("projects HTML table rows with header/cell semantics", () => {
     const html =
       "<main><h1>Inventory</h1><table><tr><th>Name</th><th>Preis</th></tr><tr><td>A</td><td>42</td></tr></table></main>";

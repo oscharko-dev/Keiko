@@ -44,13 +44,16 @@ interface NativeUsearchModule {
     expansionSearch: number,
     multi: false,
   ) => NativeCompiledIndex;
-  readonly version: () => string;
+  readonly version?: () => string;
 }
 
 function isNativeUsearchModule(value: unknown): value is NativeUsearchModule {
   if (typeof value !== "object" || value === null) return false;
   const record = value as Record<string, unknown>;
-  return typeof record.CompiledIndex === "function" && typeof record.version === "function";
+  return (
+    typeof record.CompiledIndex === "function" &&
+    (record.version === undefined || typeof record.version === "function")
+  );
 }
 
 function sha256(path: string): string {
@@ -157,7 +160,7 @@ function loadRuntime(data: UsearchWorkerData): NativeUsearchModule | undefined {
     if (
       !runtimeUnchanged(data, opened.identity, opened.descriptor) ||
       !isNativeUsearchModule(loaded) ||
-      loaded.version() !== data.expectedVersion
+      (loaded.version !== undefined && loaded.version() !== data.expectedVersion)
     ) {
       return undefined;
     }

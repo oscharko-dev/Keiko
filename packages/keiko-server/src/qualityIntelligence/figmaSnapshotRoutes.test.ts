@@ -31,6 +31,7 @@ import { Readable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNodeFigmaSnapshotStore } from "@oscharko-dev/keiko-evidence";
 import { buildCspHeader } from "../csp.js";
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "../index.js";
 import { createRunRegistry } from "../runs.js";
 import { UI_HOST } from "../server.js";
@@ -55,7 +56,9 @@ import {
   handleFigmaRevokeToken,
   handleFigmaTriggerSnapshot,
   handleFigmaUpdateSnapshotMetadata,
+  figmaBuildDeadlineMsFromEnv,
   figmaPaginationFromEnv,
+  figmaRequestTimeoutMsFromEnv,
   makeInFlightMap,
   resetInFlightMap,
   type FigmaSnapshotSummary,
@@ -189,6 +192,7 @@ function makeCtx(bodyStr: string): RouteContext {
     once: (_event: string, _listener: () => void): unknown => fakeReq,
   }) as unknown as IncomingMessage;
   return {
+    correlationId: undefined,
     req: fakeReq,
     res: {} as RouteContext["res"],
     params: {},
@@ -381,22 +385,27 @@ describe("POST /api/figma/snapshots — code→status matrix", () => {
     const spy = vi.spyOn(orchModule, "governedSnapshotBuild");
     // A non-coded build error whose message embeds the secret PAT (defence-in-depth redaction).
     spy.mockRejectedValueOnce(new TypeError(`render parse failed token=${TOKEN}`));
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const diagnosticCalls: ServerDiagnosticRecord[] = [];
+    const deps: UiHandlerDeps = {
+      ...makeDeps(evidenceDir, { FIGMA_ACCESS_TOKEN: TOKEN }),
+      diagnostics: { record: (record) => diagnosticCalls.push(record) },
+    };
 
     try {
       const result = await handleFigmaTriggerSnapshot(
         makeCtx(JSON.stringify({ boardLink: BOARD_LINK, acknowledgeReadOnly: false })),
-        makeDeps(evidenceDir, { FIGMA_ACCESS_TOKEN: TOKEN }),
+        deps,
       );
       expect(result.status).toBe(500);
       expect((result.body as { error: { code: string } }).error.code).toBe("FIGMA_INTERNAL");
-      expect(errorSpy).toHaveBeenCalled();
-      const logged = errorSpy.mock.calls.flat().map(String).join(" ");
-      expect(logged).toContain("TypeError"); // the cause class is surfaced for diagnosis…
-      expect(logged).not.toContain(TOKEN); // …but the secret PAT is redacted out
+      // The cause reaches the redaction-safe operator diagnostic sink, not raw console.error.
+      expect(diagnosticCalls.length).toBeGreaterThan(0);
+      const record = diagnosticCalls[0];
+      expect(record?.errorClass).toBe("TypeError"); // the cause class is surfaced for diagnosis…
+      expect(record?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+      expect(JSON.stringify(record)).not.toContain(TOKEN); // …but the secret PAT is redacted out
     } finally {
       spy.mockRestore();
-      errorSpy.mockRestore();
     }
   });
 
@@ -520,15 +529,21 @@ describe("env var parsing — KEIKO_FIGMA_BUILD_DEADLINE_MS", () => {
     }
   });
 
+  // Through the production reader, never a copy of its formula (AGENTS.md §7). A delay no timer can
+  // hold is invalid like any other, because setTimeout would fire it at once (PR #3452 review).
   it.each([
     { value: "0", label: "zero" },
     { value: "-1", label: "negative" },
     { value: "abc", label: "non-numeric" },
+    { value: String(2 ** 31), label: "beyond a timer" },
   ])("invalid value ($label) falls back to default 600 000", ({ value }) => {
-    // Inline the same logic as readPositiveIntEnv to assert the fallback.
-    const parsed = Number(value);
-    const result = Number.isInteger(parsed) && parsed > 0 ? parsed : 600_000;
-    expect(result).toBe(600_000);
+    expect(figmaBuildDeadlineMsFromEnv({ KEIKO_FIGMA_BUILD_DEADLINE_MS: value })).toBe(600_000);
+  });
+
+  it("accepts the largest delay a timer can hold", () => {
+    expect(
+      figmaBuildDeadlineMsFromEnv({ KEIKO_FIGMA_BUILD_DEADLINE_MS: String(2 ** 31 - 1) }),
+    ).toBe(2 ** 31 - 1);
   });
 });
 
@@ -539,10 +554,14 @@ describe("env var parsing — KEIKO_FIGMA_REQUEST_TIMEOUT_MS", () => {
     { value: "-1", expected: 60_000 },
     { value: "abc", expected: 60_000 },
     { value: undefined, expected: 60_000 },
+    { value: String(2 ** 31 - 1), expected: 2 ** 31 - 1 },
+    { value: String(2 ** 31), expected: 60_000 },
   ])("value=$value → effective $expected", ({ value, expected }) => {
-    const parsed = value !== undefined ? Number(value) : undefined;
-    const result = parsed !== undefined && Number.isInteger(parsed) && parsed > 0 ? parsed : 60_000;
-    expect(result).toBe(expected);
+    expect(
+      figmaRequestTimeoutMsFromEnv(
+        value === undefined ? {} : { KEIKO_FIGMA_REQUEST_TIMEOUT_MS: value },
+      ),
+    ).toBe(expected);
   });
 });
 
@@ -748,6 +767,7 @@ function makeGetCtx(runId: string): RouteContext {
     once: (_event: string, _listener: () => void): unknown => fakeReq,
   }) as unknown as IncomingMessage;
   return {
+    correlationId: undefined,
     req: fakeReq,
     res: {} as RouteContext["res"],
     params: { runId },
@@ -762,6 +782,7 @@ function makePatchSnapshotCtx(runId: string, body: Record<string, unknown>): Rou
     once: (_event: string, _listener: () => void): unknown => fakeReq,
   }) as unknown as IncomingMessage;
   return {
+    correlationId: undefined,
     req: fakeReq,
     res: {} as RouteContext["res"],
     params: { runId },
@@ -776,6 +797,7 @@ function makeScreenJsonCtx(runId: string, screenId: string): RouteContext {
     once: (_event: string, _listener: () => void): unknown => fakeReq,
   }) as unknown as IncomingMessage;
   return {
+    correlationId: undefined,
     req: fakeReq,
     res: {} as RouteContext["res"],
     params: { runId: encodeURIComponent(runId), screenId: encodeURIComponent(screenId) },
@@ -794,6 +816,7 @@ function makeListCtx(query = ""): RouteContext {
     once: (_event: string, _listener: () => void): unknown => fakeReq,
   }) as unknown as IncomingMessage;
   return {
+    correlationId: undefined,
     req: fakeReq,
     res: {} as RouteContext["res"],
     params: {},

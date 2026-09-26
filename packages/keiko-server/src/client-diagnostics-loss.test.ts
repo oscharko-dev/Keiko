@@ -1,0 +1,668 @@
+// The BFF client-diagnostics route's loss evidence (#3532): refused reports get their own throttled
+// line, trailing suppressed counts are flushed at shutdown, and browser-reported delivery loss is
+// persisted and counted — all through the real production sink.
+
+import { IncomingMessage, ServerResponse } from "node:http";
+import { mkdtempSync, rmSync } from "node:fs";
+import { Socket } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  activityLogLossCounters,
+  resetActivityLogLossCountersForTests,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+
+import {
+  expectActivityLogProof,
+  persistedActivityLogLines,
+  readPersistedActivityLog,
+} from "../../../tests/support/activity-log-proof.js";
+import {
+  clientBindingDigest,
+  flushClientDiagnosticsIngestCounts,
+  handleClientDiagnosticIngest,
+  resetClientDiagnosticsIngestStateForTests,
+} from "./client-diagnostics-routes.js";
+import { resetServerLogger } from "./observability/index.js";
+import type { RouteContext } from "./routes.js";
+
+const CORRELATION_ID = "client-loss-route-test";
+// Two chats' fingerprints, the one-way form a chat window persists for an id persistence redacts.
+const FINGERPRINT_A = "a1".repeat(32);
+const FINGERPRINT_B = "b2".repeat(32);
+const CLIENT_TS = "2026-09-18T10:00:00.000Z";
+
+function context(rawBody: string): RouteContext {
+  const req = new IncomingMessage(new Socket());
+  req.push(rawBody);
+  req.push(null);
+  return {
+    req,
+    res: new ServerResponse(req),
+    params: {},
+    url: new URL("http://localhost/api/diagnostics/client"),
+    correlationId: CORRELATION_ID,
+  };
+}
+
+describe("client diagnostics loss evidence", () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), "keiko-client-loss-"));
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+    vi.stubEnv("KEIKO_LOG_LEVEL", "debug");
+    resetServerLogger();
+    resetClientDiagnosticsIngestStateForTests();
+    resetActivityLogLossCountersForTests();
+  });
+
+  afterEach(() => {
+    resetServerLogger();
+    resetClientDiagnosticsIngestStateForTests();
+    vi.unstubAllEnvs();
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  function lines(op: string): readonly string[] {
+    return persistedActivityLogLines(readPersistedActivityLog(stateDir), op);
+  }
+
+  it("persists issue-provenance refusal linked to the successful preview request", async () => {
+    const result = await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "private issue body",
+          clientTs: CLIENT_TS,
+          correlationId: "ui_issue-preview-0001",
+          errorKind: "validation-failed",
+          codingIssueOutcome: "multiple-issues",
+        }),
+      ),
+    );
+    expect(result.status).toBe(204);
+    const [persisted] = lines("client.diagnostic");
+    expect(expectActivityLogProof("client.diagnostic.line", persisted ?? "")).toMatchObject({
+      correlationId: "ui_issue-preview-0001",
+      errorKind: "validation-failed",
+      codingIssueOutcome: "multiple-issues",
+    });
+    expect(readPersistedActivityLog(stateDir)).not.toContain("private issue body");
+  });
+
+  it.each([
+    "repository-mismatch",
+    "workspace-mismatch",
+    "activation-cancelled",
+    "activation-superseded",
+    "detail-cleared",
+  ])("persists correlated coding history scope evidence: %s", async (reason) => {
+    const result = await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "private project name must not be logged",
+          clientTs: CLIENT_TS,
+          correlationId: "ui_history-load-0001",
+          codingHistoryScope: {
+            reason,
+            taskId: "chat-one",
+            requestedScopeId: "scope-one",
+            currentScopeId: "scope-two",
+            requestedWorkspaceId: "ws-one",
+            currentWorkspaceId: "ws-two",
+            targetWorkspaceId: "ws-target",
+          },
+        }),
+      ),
+    );
+    expect(result.status).toBe(204);
+    const [persisted] = lines("client.diagnostic");
+    expect(expectActivityLogProof("client.diagnostic.line", persisted ?? "")).toMatchObject({
+      correlationId: "ui_history-load-0001",
+      historyScopeReason: reason,
+      historyTaskId: "chat-one",
+      requestedScopeId: "scope-one",
+      currentScopeId: "scope-two",
+      requestedWorkspaceId: "ws-one",
+      currentWorkspaceId: "ws-two",
+      targetWorkspaceId: "ws-target",
+    });
+    expect(persisted).not.toContain("private project name");
+  });
+
+  it("persists body-free Markdown layout evidence with counted loss", async () => {
+    const result = await handleClientDiagnosticIngest(
+      context(
+        JSON.stringify({
+          message: "private model response must not be logged",
+          kind: "markdown-layout",
+          correlationId: "message-1234",
+          markdownLayout: { listStart: 7, listIndex: 1, depth: 2 },
+          clientTs: CLIENT_TS,
+          loss: { postsThrottled: 2 },
+        }),
+      ),
+    );
+    expect(result.status).toBe(204);
+    const persisted = lines("client.markdown.layout");
+    expect(persisted).toHaveLength(1);
+    const line = expectActivityLogProof("client.markdown.layout.line", persisted[0] ?? "");
+    expect(line).toMatchObject({
+      correlationId: "message-1234",
+      level: "info",
+      listNumbering: "source-start",
+      listStart: 7,
+      listIndex: 1,
+      depth: 2,
+      clientPostsThrottled: 2,
+    });
+    expect(line).not.toHaveProperty("errorKind");
+    expect(persisted[0]).not.toContain("private model response");
+  });
+
+  it("persists one throttled rejection line per refusal reason and counts every refusal", async () => {
+    expect((await handleClientDiagnosticIngest(context("{not json"))).status).toBe(400);
+    expect((await handleClientDiagnosticIngest(context("{still not json"))).status).toBe(400);
+    const oversized = JSON.stringify({ message: "x".repeat(5_000), clientTs: CLIENT_TS });
+    expect((await handleClientDiagnosticIngest(context(oversized))).status).toBe(413);
+    const shapeless = JSON.stringify({ message: "no timestamp" });
+    expect((await handleClientDiagnosticIngest(context(shapeless))).status).toBe(400);
+
+    const rejected = lines("client.diagnostic.rejected");
+    expect(rejected.map((line) => (JSON.parse(line) as { rejection: string }).rejection)).toEqual([
+      "invalid-json",
+      "too-large",
+      "invalid-shape",
+    ]);
+    expect(
+      expectActivityLogProof("client.diagnostic.rejected.line", rejected[0] ?? ""),
+    ).toMatchObject({
+      correlationId: CORRELATION_ID,
+      errorKind: "invalid-request",
+      trigger: "window",
+      loss: "event-dropped",
+    });
+    expect(activityLogLossCounters()["client-rejected"]).toBe(4);
+  });
+
+  it("flushes the trailing suppressed counts at shutdown", async () => {
+    await handleClientDiagnosticIngest(context("{not json"));
+    await handleClientDiagnosticIngest(context("{not json"));
+    await handleClientDiagnosticIngest(context("{not json"));
+    for (let index = 0; index < 62; index += 1) {
+      const body = JSON.stringify({ message: `report ${String(index)}`, clientTs: CLIENT_TS });
+      await handleClientDiagnosticIngest(context(body));
+    }
+
+    flushClientDiagnosticsIngestCounts();
+
+    const flushed = lines("client.diagnostic.rejected").at(-1) ?? "";
+    expect(
+      expectActivityLogProof("client.diagnostic.rejected.shutdown-flush", flushed),
+    ).toMatchObject({
+      rejection: "invalid-json",
+      suppressedRejections: 2,
+      trigger: "shutdown-flush",
+    });
+    const drops = lines("client.diagnostic.rate-limited");
+    expect(drops).toHaveLength(2);
+    expect(
+      expectActivityLogProof("client.diagnostic.rate-limited.line", drops[1] ?? ""),
+    ).toMatchObject({ suppressedDrops: 1, trigger: "shutdown-flush" });
+    expect(activityLogLossCounters()["client-rate-suppressed"]).toBe(2);
+    // A second flush has nothing left to write.
+    flushClientDiagnosticsIngestCounts();
+    expect(lines("client.diagnostic.rate-limited")).toHaveLength(2);
+  });
+
+  it("persists a correlated voice lifecycle stage and accounts for client loss", async () => {
+    const body = JSON.stringify({
+      message: "bounded voice event",
+      clientTs: CLIENT_TS,
+      kind: "voice-dialogue",
+      voiceDialogueStage: "interrupted",
+      correlationId: "voice-turn-correlation",
+      parentCorrelationId: "voice-session-correlation",
+      loss: { postsFailed: 1 },
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+    const [line] = lines("voice.dialogue.stage");
+    const proof = expectActivityLogProof("voice.dialogue.stage.line", line ?? "");
+    expect(proof).toMatchObject({
+      level: "info",
+      correlationId: "voice-turn-correlation",
+      parentCorrelationId: "voice-session-correlation",
+      voiceDialogueStage: "interrupted",
+      clientPostsFailed: 1,
+    });
+    expect(proof).not.toHaveProperty("errorKind");
+    expect(activityLogLossCounters()["client-post-failed"]).toBe(1);
+  });
+
+  it("persists and counts the browser's own delivery loss on the next accepted report", async () => {
+    const body = JSON.stringify({
+      message: "[keiko] uncaught window error: TypeError",
+      clientTs: CLIENT_TS,
+      kind: "window-error",
+      loss: { bufferEvicted: 3, postsFailed: 1, errorsSuppressed: 2 },
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.diagnostic");
+    expect(expectActivityLogProof("client.diagnostic.line", line ?? "")).toMatchObject({
+      clientKind: "window-error",
+      errorKind: "internal",
+      clientBufferEvicted: 3,
+      clientPostsFailed: 1,
+      clientErrorsSuppressed: 2,
+    });
+    const counters = activityLogLossCounters();
+    expect(counters["client-buffer-evicted"]).toBe(3);
+    expect(counters["client-post-failed"]).toBe(1);
+    expect(counters["client-error-suppressed"]).toBe(2);
+  });
+
+  it("refuses a report whose loss block is not closed", async () => {
+    const body = JSON.stringify({
+      message: "report",
+      clientTs: CLIENT_TS,
+      loss: { bufferEvicted: 3, somethingElse: 1 },
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(400);
+    expect(lines("client.diagnostic")).toEqual([]);
+  });
+
+  // KEIKO-3557: proves the new lifecycle operations reach the production file sink with a complete
+  // v2 identity, exactly like every other registered operation — not merely a buffered test event.
+  it("persists a started stage report as client.stage.started", async () => {
+    const body = JSON.stringify({
+      kind: "stage",
+      stage: "editor widget chunk",
+      phase: "started",
+      ordinal: 2,
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.stage.started");
+    expect(expectActivityLogProof("client.stage.started.line", line ?? "")).toMatchObject({
+      correlationId: CORRELATION_ID,
+      stage: "editor-widget-chunk",
+      ordinal: 2,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(lines("client.diagnostic")).toEqual([]);
+  });
+
+  // #3557 review: both binding outcomes reach the production file sink with the complete identity.
+  it("persists a missing binding target as client.binding.target-missing", async () => {
+    const body = JSON.stringify({
+      kind: "binding",
+      surface: "chat-window",
+      windowRef: "chat-mfr3k2x1-1",
+      outcome: "target-missing",
+      referenceShape: "redacted",
+      heuristicFlagged: false,
+      correlationId: "ui_chat-list-load-0002",
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.binding.target-missing");
+    expect(expectActivityLogProof("client.binding.target-missing.line", line ?? "")).toMatchObject({
+      correlationId: "ui_chat-list-load-0002",
+      errorKind: "unavailable",
+      surface: "chat-window",
+      referenceShape: "redacted",
+      heuristicFlagged: false,
+      bindingDigest: clientBindingDigest("chat-mfr3k2x1-1"),
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(lines("client.diagnostic")).toEqual([]);
+  });
+
+  // #3557 review: a fingerprint that names no listed chat any more persists as that fingerprint, so
+  // the failure never reads like a marker that named nothing.
+  it("persists a missing fingerprint reference with the fingerprint it no longer finds", async () => {
+    const body = JSON.stringify({
+      kind: "binding",
+      surface: "chat-window",
+      windowRef: "chat-mfr3k2x1-9",
+      outcome: "target-missing",
+      referenceShape: "fingerprint",
+      heuristicFlagged: true,
+      correlationId: "ui_list-gone-0002",
+      targetFingerprint: FINGERPRINT_A,
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.binding.target-missing");
+    expect(expectActivityLogProof("client.binding.target-missing.line", line ?? "")).toMatchObject({
+      correlationId: "ui_list-gone-0002",
+      errorKind: "unavailable",
+      referenceShape: "fingerprint",
+      heuristicFlagged: true,
+      targetFingerprint: FINGERPRINT_A,
+      completeness: "complete",
+    });
+  });
+
+  it("persists a resolved binding whose reference the heuristic flags as client.binding.resolved", async () => {
+    const body = JSON.stringify({
+      kind: "binding",
+      surface: "chat-window",
+      windowRef: "chat-mfr3k2x1-1",
+      outcome: "resolved",
+      referenceShape: "uuid",
+      heuristicFlagged: true,
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.binding.resolved");
+    const record = expectActivityLogProof("client.binding.resolved.line", line ?? "");
+    expect(record).toMatchObject({
+      correlationId: CORRELATION_ID,
+      referenceShape: "uuid",
+      heuristicFlagged: true,
+    });
+    expect(record.errorKind).toBeUndefined();
+  });
+
+  // #3557 review: both session-repair outcomes reach the production file sink with full identity.
+  it("persists a recovered session repair as client.session-repair.recovered", async () => {
+    const body = JSON.stringify({
+      kind: "session-repair",
+      outcome: "replayed",
+      correlationId: "ui_denied-read-0002",
+      repairCorrelationId: "ui_session-repair-0002",
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.session-repair.recovered");
+    const record = expectActivityLogProof("client.session-repair.recovered.line", line ?? "");
+    expect(record).toMatchObject({
+      correlationId: "ui_denied-read-0002",
+      repairCorrelationId: "ui_session-repair-0002",
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(record.errorKind).toBeUndefined();
+  });
+
+  // #3557 review: a stream repair persists under its failure streak, naming the stream.
+  it("persists a stream repair as client.session-repair.recovered with its stream", async () => {
+    const body = JSON.stringify({
+      kind: "session-repair",
+      outcome: "stream-repaired",
+      stream: "shared-event-source",
+      correlationId: "ui_stream-streak-0001",
+      repairCorrelationId: "ui_session-repair-0004",
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.session-repair.recovered");
+    const record = expectActivityLogProof("client.session-repair.recovered.line", line ?? "");
+    expect(record).toMatchObject({
+      correlationId: "ui_stream-streak-0001",
+      outcome: "stream-repaired",
+      stream: "shared-event-source",
+      repairCorrelationId: "ui_session-repair-0004",
+      completeness: "complete",
+      loss: "none",
+    });
+  });
+
+  // #3557 review: an acknowledged stream repair persists as its own state line.
+  it("persists an acknowledged stream repair as client.session-repair.acknowledged", async () => {
+    const body = JSON.stringify({
+      kind: "session-repair",
+      outcome: "repair-acknowledged",
+      stream: "run-events",
+      correlationId: "ui_stream-streak-0005",
+      repairCorrelationId: "ui_session-repair-0005",
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.session-repair.acknowledged");
+    const record = expectActivityLogProof("client.session-repair.acknowledged.line", line ?? "");
+    expect(record).toMatchObject({
+      correlationId: "ui_stream-streak-0005",
+      stream: "run-events",
+      repairCorrelationId: "ui_session-repair-0005",
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(record.errorKind).toBeUndefined();
+  });
+
+  // #3557 review: a chat restored through its id's fingerprint reports that shape, and names the
+  // chat it bound to by that fingerprint.
+  it("persists a binding restored through a fingerprint as client.binding.resolved", async () => {
+    const body = JSON.stringify({
+      kind: "binding",
+      surface: "chat-window",
+      windowRef: "chat-mfr3k2x1-3",
+      outcome: "resolved",
+      referenceShape: "fingerprint",
+      heuristicFlagged: true,
+      targetFingerprint: FINGERPRINT_A,
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.binding.resolved");
+    expect(expectActivityLogProof("client.binding.resolved.line", line ?? "")).toMatchObject({
+      referenceShape: "fingerprint",
+      heuristicFlagged: true,
+      targetFingerprint: FINGERPRINT_A,
+    });
+  });
+
+  // #3557 review: one window offered chats A and B from one list answer. Whichever the person
+  // chose, the line used to be identical; each now names the chat it bound to.
+  it("keeps two choices from one list answer apart by the chat each bound to", async () => {
+    for (const targetFingerprint of [FINGERPRINT_A, FINGERPRINT_B]) {
+      const body = JSON.stringify({
+        kind: "binding",
+        surface: "chat-window",
+        windowRef: "chat-mfr3k2x1-5",
+        outcome: "resolved",
+        referenceShape: "user-selected",
+        heuristicFlagged: true,
+        correlationId: "ui_list-choice-0001",
+        decidingLoadCount: 1,
+        targetFingerprint,
+      });
+      expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+    }
+
+    const records = lines("client.binding.resolved").map((line) =>
+      expectActivityLogProof("client.binding.resolved.line", line),
+    );
+    expect(records.map((record) => record.targetFingerprint)).toEqual([
+      FINGERPRINT_A,
+      FINGERPRINT_B,
+    ]);
+    for (const record of records) {
+      expect(record).toMatchObject({
+        correlationId: "ui_list-choice-0001",
+        referenceShape: "user-selected",
+        bindingDigest: clientBindingDigest("chat-mfr3k2x1-5"),
+      });
+    }
+  });
+
+  // #3557 review: the chats a window without a fingerprint offered, zero included, are reported
+  // under the list loads that decided the offer, so the recovery state is reconstructable.
+  it("persists an offer as client.binding.candidates-offered with its count, zero included", async () => {
+    for (const offer of [
+      {
+        windowRef: "chat-mfr3k2x1-6",
+        candidateCount: 0,
+        disambiguatedCount: 0,
+        correlationId: "ui_list-offer-0001",
+      },
+      {
+        windowRef: "chat-mfr3k2x1-7",
+        candidateCount: 2,
+        disambiguatedCount: 2,
+        correlationId: "ui_list-offer-0002",
+        relatedCorrelationIds: ["ui_list-offer-0003"],
+        decidingLoadCount: 2,
+      },
+    ]) {
+      const body = JSON.stringify({
+        kind: "binding",
+        surface: "chat-window",
+        outcome: "candidates-offered",
+        referenceShape: "redacted",
+        heuristicFlagged: false,
+        ...offer,
+      });
+      expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+    }
+
+    const [empty, offered] = lines("client.binding.candidates-offered").map((line) =>
+      expectActivityLogProof("client.binding.candidates-offered.line", line),
+    );
+    expect(empty).toMatchObject({
+      correlationId: "ui_list-offer-0001",
+      referenceShape: "redacted",
+      candidateCount: 0,
+      disambiguatedCount: 0,
+      bindingDigest: clientBindingDigest("chat-mfr3k2x1-6"),
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(offered).toMatchObject({
+      correlationId: "ui_list-offer-0002",
+      relatedCorrelationIds: ["ui_list-offer-0003"],
+      candidateCount: 2,
+      disambiguatedCount: 2,
+      bindingDigest: clientBindingDigest("chat-mfr3k2x1-7"),
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(empty?.errorKind).toBeUndefined();
+    expect(lines("client.binding.target-missing")).toEqual([]);
+  });
+
+  // #3557 review: a chat the person chose stays a choice until they keep it or withdraw it. Each
+  // decision persists on the binding's timeline and names the chat by its fingerprint.
+  async function postChoiceDecision(
+    outcome: "choice-kept" | "choice-withdrawn",
+    referenceShape: "fingerprint" | "user-selected",
+    targetFingerprint: string,
+  ): Promise<void> {
+    const body = JSON.stringify({
+      kind: "binding",
+      surface: "chat-window",
+      windowRef: "chat-mfr3k2x1-8",
+      outcome,
+      referenceShape,
+      heuristicFlagged: true,
+      correlationId: "ui_list-choice-0004",
+      targetFingerprint,
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+  }
+
+  const DECISION_LINE = {
+    correlationId: "ui_list-choice-0004",
+    heuristicFlagged: true,
+    bindingDigest: clientBindingDigest("chat-mfr3k2x1-8"),
+    completeness: "complete",
+    loss: "none",
+  } as const;
+
+  it("persists a kept choice as client.binding.choice-kept", async () => {
+    await postChoiceDecision("choice-kept", "user-selected", FINGERPRINT_A);
+
+    const [line] = lines("client.binding.choice-kept");
+    const record = expectActivityLogProof("client.binding.choice-kept.line", line ?? "");
+    expect(record).toMatchObject({
+      ...DECISION_LINE,
+      referenceShape: "user-selected",
+      targetFingerprint: FINGERPRINT_A,
+    });
+    expect(record.errorKind).toBeUndefined();
+  });
+
+  it("persists a withdrawn choice as client.binding.choice-withdrawn", async () => {
+    await postChoiceDecision("choice-withdrawn", "fingerprint", FINGERPRINT_B);
+
+    const [line] = lines("client.binding.choice-withdrawn");
+    const record = expectActivityLogProof("client.binding.choice-withdrawn.line", line ?? "");
+    expect(record).toMatchObject({
+      ...DECISION_LINE,
+      referenceShape: "fingerprint",
+      targetFingerprint: FINGERPRINT_B,
+    });
+    expect(record.errorKind).toBeUndefined();
+  });
+
+  // #3557 review: a window whose redacted id carries no fingerprint, bound to the chat the person
+  // chose, under the chat list load that offered it.
+  it("persists a binding the person chose as client.binding.resolved", async () => {
+    const body = JSON.stringify({
+      kind: "binding",
+      surface: "chat-window",
+      windowRef: "chat-mfr3k2x1-5",
+      outcome: "resolved",
+      referenceShape: "user-selected",
+      heuristicFlagged: true,
+      correlationId: "ui_list-choice-0001",
+      decidingLoadCount: 1,
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.binding.resolved");
+    expect(expectActivityLogProof("client.binding.resolved.line", line ?? "")).toMatchObject({
+      correlationId: "ui_list-choice-0001",
+      referenceShape: "user-selected",
+      heuristicFlagged: true,
+      completeness: "complete",
+      loss: "none",
+    });
+  });
+
+  it("persists a failed session repair as client.session-repair.failed", async () => {
+    const body = JSON.stringify({
+      kind: "session-repair",
+      outcome: "repair-failed",
+      correlationId: "ui_denied-read-0003",
+      repairCorrelationId: "ui_session-repair-0003",
+      errorKind: "unavailable",
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.session-repair.failed");
+    expect(expectActivityLogProof("client.session-repair.failed.line", line ?? "")).toMatchObject({
+      correlationId: "ui_denied-read-0003",
+      errorKind: "unavailable",
+      outcome: "repair-failed",
+      repairCorrelationId: "ui_session-repair-0003",
+    });
+  });
+
+  it("persists a settled stage report as client.stage.settled, with durationMs on the envelope", async () => {
+    const body = JSON.stringify({
+      kind: "stage",
+      stage: "editor widget chunk",
+      phase: "settled",
+      ordinal: 2,
+      durationMs: 17,
+    });
+    expect((await handleClientDiagnosticIngest(context(body))).status).toBe(204);
+
+    const [line] = lines("client.stage.settled");
+    const record = expectActivityLogProof("client.stage.settled.line", line ?? "");
+    expect(record).toMatchObject({
+      correlationId: CORRELATION_ID,
+      durationMs: 17,
+      stage: "editor-widget-chunk",
+      ordinal: 2,
+    });
+    expect(record.errorKind).toBeUndefined();
+  });
+});

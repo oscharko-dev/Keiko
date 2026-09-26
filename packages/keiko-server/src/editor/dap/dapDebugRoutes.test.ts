@@ -9,7 +9,7 @@ import { Readable } from "node:stream";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { DEFAULT_DEBUG_PAYLOAD_LIMITS } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_DEBUG_PAYLOAD_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/dap-debug";
 
 import { buildCspHeader } from "../../csp.js";
 import type { ServerDiagnosticRecord } from "../../diagnostics-log.js";
@@ -61,6 +61,10 @@ class FakeDebugManager implements DapProcessManager {
   public rejectedCommand: string | undefined;
   public malformedCommand: string | undefined;
   public delayedCommand: string | undefined;
+  // Unlike rejectedCommand (which rejects every call to a given command name), this rejects only a
+  // setBreakpoints call whose `source.path` matches -- needed to simulate an adapter that rejects the
+  // rename's old-path clear while still accepting the new-path arm in the same reconciliation.
+  public rejectedSetBreakpointsSourcePath: string | undefined;
   private releaseRequest: (() => void) | undefined;
   private readonly projections = new Map<string, DebugSessionProjection>();
   private readonly bindings = new Map<string, DebugSessionBinding>();
@@ -87,6 +91,14 @@ class FakeDebugManager implements DapProcessManager {
     _signal?: AbortSignal,
   ): Promise<T> {
     this.requests.push({ sessionId, command, args, lane });
+    if (
+      command === "setBreakpoints" &&
+      this.rejectedSetBreakpointsSourcePath !== undefined &&
+      (args as { readonly source?: { readonly path?: string } }).source?.path ===
+        this.rejectedSetBreakpointsSourcePath
+    ) {
+      return Promise.reject(new DapProtocolError("ADAPTER_REJECTED"));
+    }
     if (command === this.rejectedCommand) {
       return Promise.reject(new DapProtocolError("ADAPTER_REJECTED"));
     }
@@ -342,6 +354,10 @@ function debugService(): DapDebugRouteService {
         diagnosticRecords.push(record);
       },
     },
+    // Unit-level fixture: nothing built via this hand-rolled service exercises a rename. Coverage
+    // for the real reconciliation behavior lives on the createDapDebugRouteService-built instance in
+    // the "renameInstrumentation" describe block below.
+    renameInstrumentation: vi.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -387,6 +403,7 @@ function eventContext(cookie: string, response: FakeSseResponse): RouteContext {
   const req = Readable.from([]) as unknown as IncomingMessage;
   Object.defineProperty(req, "headers", { value: { cookie }, configurable: true });
   return {
+    correlationId: undefined,
     req,
     res: response as unknown as ServerResponse,
     params: {},
@@ -490,17 +507,21 @@ async function deniedBody(response: Response): Promise<string> {
   return text;
 }
 
-function breakpointMutationBody(): Record<string, unknown> {
+function breakpointMutationBody(
+  fileId = "src/private-entry.ts",
+  line = 12,
+  expectedRevision = 0,
+): Record<string, unknown> {
   return {
     schemaVersion: "1",
     workspaceId,
-    expectedRevision: 0,
-    fileId: "src/private-entry.ts",
+    expectedRevision,
+    fileId,
     breakpoints: [
       {
         id: "request-breakpoint",
-        fileId: "src/private-entry.ts",
-        line: 12,
+        fileId,
+        line,
         enabled: true,
         kind: "line",
         verification: "pending",
@@ -536,6 +557,21 @@ function requiredFirst<T>(values: readonly T[]): T {
   const first = values[0];
   if (first === undefined) throw new Error("invalid route test fixture");
   return first;
+}
+
+interface CapturedSetBreakpointsArgs {
+  readonly source?: { readonly path?: string };
+  readonly breakpoints?: readonly { readonly line?: unknown }[];
+}
+
+function breakpointRequestPath(args: unknown): string | undefined {
+  return (args as CapturedSetBreakpointsArgs).source?.path;
+}
+
+function breakpointRequestLines(args: unknown): readonly unknown[] {
+  return ((args as CapturedSetBreakpointsArgs).breakpoints ?? []).map(
+    (breakpoint) => breakpoint.line,
+  );
 }
 
 // Recursively collect every [key, primitive-value] pair of a payload. Used to assert redaction in a
@@ -649,6 +685,7 @@ describe("governed DAP debug routes", () => {
       "references",
       "events",
       "activation",
+      "renameInstrumentation",
     ]);
     expect("registry" in service).toBe(false);
     expect("lifecycleLedger" in service).toBe(false);
@@ -888,6 +925,58 @@ describe("governed DAP debug routes", () => {
     expect(requiredFirst(body.snapshot.breakpoints).verification).toBe("verified");
   });
 
+  it("retries active breakpoint reconciliation from the latest snapshot after verification drift", async () => {
+    enableDebug();
+    const cookie = cookieFrom(await bootstrap());
+    const started = await debugJson("/api/editor/debug/sessions", cookie, {
+      schemaVersion: "1",
+      workspaceId,
+      target: { kind: "file", fileId: "src/private-entry.ts" },
+      activationRevision: ACTIVATION_REVISION,
+    });
+    expect(started.status).toBe(201);
+    const initial = (await (await instrumentation(cookie)).json()) as {
+      readonly revision: number;
+      readonly etag: string;
+    };
+
+    manager.delayedCommand = "setBreakpoints";
+    const delayedEdit = putBreakpoints(cookie, breakpointMutationBody(), initial.etag);
+    await vi.waitFor(() => {
+      expect(manager.requests.filter((entry) => entry.command === "setBreakpoints")).toHaveLength(
+        1,
+      );
+    });
+    manager.delayedCommand = undefined;
+    const afterDelayedCommit = (await (await instrumentation(cookie)).json()) as {
+      readonly revision: number;
+      readonly etag: string;
+    };
+    const currentEdit = await putBreakpoints(
+      cookie,
+      breakpointMutationBody("src/private-entry.ts", 34, afterDelayedCommit.revision),
+      afterDelayedCommit.etag,
+    );
+    manager.releaseDelayedRequest();
+    const driftedEdit = await delayedEdit;
+    const persisted = (await (await instrumentation(cookie)).json()) as {
+      readonly breakpoints: readonly { readonly line: number; readonly verification: string }[];
+    };
+
+    const calls = manager.requests.filter((entry) => entry.command === "setBreakpoints");
+    expect(currentEdit.status).toBe(200);
+    expect(driftedEdit.status).toBe(200);
+    expect(calls.map((entry) => breakpointRequestLines(entry.args))).toStrictEqual([
+      [12],
+      [34],
+      [34],
+    ]);
+    expect(requiredFirst(persisted.breakpoints)).toMatchObject({
+      line: 34,
+      verification: "verified",
+    });
+  });
+
   it("reconciles persisted pending breakpoints during session startup", async () => {
     enableDebug();
     const cookie = cookieFrom(await bootstrap());
@@ -910,6 +999,77 @@ describe("governed DAP debug routes", () => {
     expect(started.status).toBe(201);
     expect(state.revision).toBe(initial.revision + 2);
     expect(requiredFirst(state.breakpoints).verification).toBe("verified");
+  });
+
+  it("recovers a replayed configure closure after a concurrent breakpoint edit (KEIKO-0097)", async () => {
+    // dapProcessManager reuses the SAME `configure` closure across its internal launch retries. This
+    // reproduces that reuse directly: capture the closure a real session-start built, let a
+    // breakpoint edit land afterward (simulating the race with an in-flight launch), then replay the
+    // SAME closure exactly as a retry would and assert it observes the edit instead of replaying
+    // whatever it read on its first run.
+    enableDebug();
+    const cookie = cookieFrom(await bootstrap());
+    const initial = (await (await instrumentation(cookie)).json()) as {
+      readonly revision: number;
+      readonly etag: string;
+    };
+    const firstEdit = await putBreakpoints(cookie, breakpointMutationBody(), initial.etag);
+    expect(firstEdit.status).toBe(200);
+
+    const started = await debugJson("/api/editor/debug/sessions", cookie, {
+      schemaVersion: "1",
+      workspaceId,
+      target: { kind: "file", fileId: "src/app.ts" },
+      activationRevision: ACTIVATION_REVISION,
+    });
+    expect(started.status).toBe(201);
+    const session = (await started.json()) as { readonly sessionId: string };
+    const configure = manager.starts.at(-1)?.configure;
+    expect(configure).toBeDefined();
+    // Stop the session so the concurrent edit below persists as pending instead of being live-armed
+    // through the (unrelated) active-session dispatch path -- isolating the closure-staleness bug
+    // this finding is about from that separate reconciliation path.
+    await manager.stop(session.sessionId);
+
+    const beforeSecondEdit = (await (await instrumentation(cookie)).json()) as {
+      readonly revision: number;
+      readonly etag: string;
+    };
+    const secondEdit = await putBreakpoints(
+      cookie,
+      {
+        schemaVersion: "1",
+        workspaceId,
+        expectedRevision: beforeSecondEdit.revision,
+        fileId: "src/private-entry.ts",
+        breakpoints: [
+          {
+            id: "request-breakpoint",
+            fileId: "src/private-entry.ts",
+            line: 34,
+            enabled: true,
+            kind: "line",
+            verification: "pending",
+          },
+        ],
+      },
+      beforeSecondEdit.etag,
+    );
+    expect(secondEdit.status).toBe(202);
+    const beforeReplay = (await (await instrumentation(cookie)).json()) as {
+      readonly breakpoints: readonly { readonly verification: string }[];
+    };
+    expect(requiredFirst(beforeReplay.breakpoints).verification).toBe("pending");
+
+    await configure?.({
+      request: <T>(command: string, args: unknown): Promise<T> =>
+        manager.request(session.sessionId, command, args, "inspection"),
+    }).catch(() => undefined);
+
+    const final = (await (await instrumentation(cookie)).json()) as {
+      readonly breakpoints: readonly { readonly verification: string }[];
+    };
+    expect(requiredFirst(final.breakpoints).verification).toBe("verified");
   });
 
   it("reports persisted but not armed when an active adapter rejects breakpoint delivery", async () => {
@@ -1930,6 +2090,476 @@ describe("governed DAP debug routes", () => {
       expect(response.writes).toHaveLength(writesAfterClose);
     } finally {
       vi.useRealTimers();
+    }
+  });
+});
+
+// KEIKO-0179 follow-up (Codex P1, twice-raised on PR #3141): a rename during an active debug
+// session used to re-key the persisted store and tell the browser panel something changed, while
+// the live DAP adapter stayed armed on the now-nonexistent old path. renameInstrumentation is the
+// single owning-layer entry point files.ts's rename route now delegates to; these tests exercise it
+// directly against a fake bound session + fake adapter transport (FakeDebugManager), reusing this
+// file's existing fixtures rather than standing up a second one.
+describe("renameInstrumentation orchestration (KEIKO-0179 follow-up, Codex P1 on PR #3141)", () => {
+  // debugService() (used by the rest of this file) is a hand-rolled fixture whose
+  // renameInstrumentation is a no-op stub -- these tests need the real, wired implementation, which
+  // only the production factory attaches (createDapDebugRouteService's self-referencing closure).
+  // eventBridge is accepted (rather than always built fresh) so a caller can subscribe a channel on
+  // the exact bridge instance the service dispatches through before triggering a rename.
+  function buildRenameService(eventBridge = createDapEventBridge()): DapDebugRouteService {
+    return createDapDebugRouteService({
+      production: { manager, eventBridge },
+      stateDir,
+      now: () => now,
+      activation: () =>
+        Promise.resolve({
+          ok: true,
+          schemaVersion: "1",
+          adapterId: "node-typescript",
+          revision: ACTIVATION_REVISION,
+          state: "available",
+          reasonCode: "AVAILABLE",
+          policyResult: "allowed",
+        }),
+      diagnosticSink: {
+        record: (record): void => {
+          diagnosticRecords.push(record);
+        },
+      },
+    });
+  }
+
+  async function bindLiveSession(browserSessionBinding: string): Promise<void> {
+    await manager.start({
+      identity: {
+        sessionId: `${browserSessionBinding}-session`,
+        workspaceId,
+        workspacePartitionKey: workspacePartition,
+        browserSessionBinding,
+        targetKind: "file",
+        activationRevision: ACTIVATION_REVISION,
+        network: "none",
+        filesystem: "executionRoot",
+      },
+      adapterRuntime: "node",
+      adapterProviderId: "node-typescript",
+      planCandidate: {},
+    });
+  }
+
+  it("clears the old path and arms the new one on the adapter, publishing the change exactly once", async () => {
+    const service = buildRenameService();
+    const initial = service.breakpoints.snapshot(workspaceRoot);
+    if (!initial.ok) throw new Error("expected an available breakpoint snapshot");
+    const armed = service.breakpoints.setBreakpointsForFile(
+      workspaceRoot,
+      initial.snapshot.revision,
+      initial.snapshot.etag,
+      "src/app.ts",
+      [{ line: 4, enabled: true }],
+    );
+    expect(armed.ok).toBe(true);
+    await bindLiveSession("rename-binding");
+    const publishSpy = vi.spyOn(service.events, "publish");
+
+    await service.renameInstrumentation(workspaceRoot, [
+      { previousFileId: "src/app.ts", nextFileId: "src/renamed.ts" },
+    ]);
+
+    const setBreakpointsCalls = manager.requests.filter(
+      (entry) => entry.command === "setBreakpoints",
+    );
+    expect(setBreakpointsCalls).toHaveLength(2);
+    expect(setBreakpointsCalls[0]?.args).toMatchObject({
+      source: { path: "/keiko-execution-root/src/app.ts" },
+      breakpoints: [],
+    });
+    const armCall = setBreakpointsCalls[1]?.args as { readonly breakpoints: readonly unknown[] };
+    expect(setBreakpointsCalls[1]?.args).toMatchObject({
+      source: { path: "/keiko-execution-root/src/renamed.ts" },
+    });
+    expect(armCall.breakpoints).toHaveLength(1);
+
+    expect(publishSpy).toHaveBeenCalledExactlyOnceWith(
+      { workspacePartitionKey: workspacePartition, browserSessionBinding: "rename-binding" },
+      expect.objectContaining({ kind: "breakpoints-changed", workspaceId }),
+    );
+
+    const migrated = service.breakpoints.snapshot(workspaceRoot);
+    expect(migrated.ok).toBe(true);
+    if (migrated.ok) {
+      expect(migrated.snapshot.breakpoints.map((entry) => entry.fileId)).toEqual([
+        "src/renamed.ts",
+      ]);
+      expect(migrated.snapshot.breakpoints[0]?.verification).toBe("verified");
+    }
+  });
+
+  it("re-arms a renamed path from the latest snapshot after verification drift", async () => {
+    const service = buildRenameService();
+    const initial = service.breakpoints.snapshot(workspaceRoot);
+    if (!initial.ok) throw new Error("expected an available breakpoint snapshot");
+    const armed = service.breakpoints.setBreakpointsForFile(
+      workspaceRoot,
+      initial.snapshot.revision,
+      initial.snapshot.etag,
+      "src/app.ts",
+      [{ line: 4, enabled: true }],
+    );
+    expect(armed.ok).toBe(true);
+    await bindLiveSession("rename-drift-binding");
+    manager.delayedCommand = "setBreakpoints";
+
+    const rename = service.renameInstrumentation(workspaceRoot, [
+      { previousFileId: "src/app.ts", nextFileId: "src/renamed.ts" },
+    ]);
+    await vi.waitFor(() => {
+      const calls = manager.requests.filter((entry) => entry.command === "setBreakpoints");
+      expect(calls).toHaveLength(1);
+      expect(breakpointRequestPath(requiredFirst(calls).args)).toBe(
+        "/keiko-execution-root/src/app.ts",
+      );
+    });
+    manager.delayedCommand = undefined;
+    const renamed = service.breakpoints.snapshot(workspaceRoot);
+    if (!renamed.ok) throw new Error("expected a renamed breakpoint snapshot");
+    const concurrentEdit = service.breakpoints.setBreakpointsForFile(
+      workspaceRoot,
+      renamed.snapshot.revision,
+      renamed.snapshot.etag,
+      "src/renamed.ts",
+      [{ line: 9, enabled: true }],
+    );
+    expect(concurrentEdit.ok).toBe(true);
+
+    manager.releaseDelayedRequest();
+    await rename;
+
+    const calls = manager.requests.filter((entry) => entry.command === "setBreakpoints");
+    expect(calls.map((entry) => breakpointRequestPath(entry.args))).toStrictEqual([
+      "/keiko-execution-root/src/app.ts",
+      "/keiko-execution-root/src/renamed.ts",
+      "/keiko-execution-root/src/renamed.ts",
+    ]);
+    expect(calls.map((entry) => breakpointRequestLines(entry.args))).toStrictEqual([[], [4], [9]]);
+    const migrated = service.breakpoints.snapshot(workspaceRoot);
+    expect(migrated.ok).toBe(true);
+    if (migrated.ok) {
+      expect(migrated.snapshot.breakpoints).toMatchObject([
+        { fileId: "src/renamed.ts", line: 9, verification: "verified" },
+      ]);
+    }
+  });
+
+  it("re-keys the store but never touches the adapter when no debug session is bound", async () => {
+    const service = buildRenameService();
+    const initial = service.breakpoints.snapshot(workspaceRoot);
+    if (!initial.ok) throw new Error("expected an available breakpoint snapshot");
+    const armed = service.breakpoints.setBreakpointsForFile(
+      workspaceRoot,
+      initial.snapshot.revision,
+      initial.snapshot.etag,
+      "src/app.ts",
+      [{ line: 4, enabled: true }],
+    );
+    expect(armed.ok).toBe(true);
+    const publishSpy = vi.spyOn(service.events, "publish");
+
+    await service.renameInstrumentation(workspaceRoot, [
+      { previousFileId: "src/app.ts", nextFileId: "src/renamed.ts" },
+    ]);
+
+    expect(manager.requests.filter((entry) => entry.command === "setBreakpoints")).toHaveLength(0);
+    expect(publishSpy).not.toHaveBeenCalled();
+    const migrated = service.breakpoints.snapshot(workspaceRoot);
+    expect(migrated.ok).toBe(true);
+    if (migrated.ok) {
+      expect(migrated.snapshot.breakpoints.map((entry) => entry.fileId)).toEqual([
+        "src/renamed.ts",
+      ]);
+    }
+  });
+
+  it("reconciles every pair in one call and publishes once for a directory rename", async () => {
+    const service = buildRenameService();
+    const initial = service.breakpoints.snapshot(secondWorkspaceRoot);
+    if (!initial.ok) throw new Error("expected an available breakpoint snapshot");
+    const first = service.breakpoints.setBreakpointsForFile(
+      secondWorkspaceRoot,
+      initial.snapshot.revision,
+      initial.snapshot.etag,
+      "src/app.ts",
+      [{ line: 1, enabled: true }],
+    );
+    expect(first.ok).toBe(true);
+    const second = service.breakpoints.setBreakpointsForFile(
+      secondWorkspaceRoot,
+      first.snapshot.revision,
+      first.snapshot.etag,
+      "src/lib.ts",
+      [{ line: 2, enabled: true }],
+    );
+    expect(second.ok).toBe(true);
+    const secondWorkspacePartition =
+      inspectDebugWorkspaceIdentity(secondWorkspaceRoot).identityDigest;
+    await manager.start({
+      identity: {
+        sessionId: "dir-rename-session",
+        workspaceId: secondWorkspaceId,
+        workspacePartitionKey: secondWorkspacePartition,
+        browserSessionBinding: "dir-rename-binding",
+        targetKind: "file",
+        activationRevision: ACTIVATION_REVISION,
+        network: "none",
+        filesystem: "executionRoot",
+      },
+      adapterRuntime: "node",
+      adapterProviderId: "node-typescript",
+      planCandidate: {},
+    });
+    const publishSpy = vi.spyOn(service.events, "publish");
+
+    await service.renameInstrumentation(secondWorkspaceRoot, [
+      { previousFileId: "src/app.ts", nextFileId: "lib/app.ts" },
+      { previousFileId: "src/lib.ts", nextFileId: "lib/lib.ts" },
+    ]);
+
+    expect(manager.requests.filter((entry) => entry.command === "setBreakpoints")).toHaveLength(4);
+    expect(publishSpy).toHaveBeenCalledTimes(1);
+    const migrated = service.breakpoints.snapshot(secondWorkspaceRoot);
+    expect(migrated.ok).toBe(true);
+    if (migrated.ok) {
+      expect(migrated.snapshot.breakpoints.map((entry) => entry.fileId).sort()).toEqual([
+        "lib/app.ts",
+        "lib/lib.ts",
+      ]);
+    }
+  });
+
+  // Review round 8, Codex P2 (finding A): reconcileRenamedPair used to discard the old-path clear's
+  // outcome outright, so an adapter reject/timeout there was invisible -- the new path still got
+  // armed and the change still published as a clean success, leaving the adapter possibly armed at
+  // both the renamed-away old path and the new one with zero diagnostic.
+  it("diagnoses a rejected old-path clear but still arms the new path and publishes", async () => {
+    const service = buildRenameService();
+    const initial = service.breakpoints.snapshot(workspaceRoot);
+    if (!initial.ok) throw new Error("expected an available breakpoint snapshot");
+    const armed = service.breakpoints.setBreakpointsForFile(
+      workspaceRoot,
+      initial.snapshot.revision,
+      initial.snapshot.etag,
+      "src/app.ts",
+      [{ line: 4, enabled: true }],
+    );
+    expect(armed.ok).toBe(true);
+    await bindLiveSession("reject-old-path-binding");
+    manager.rejectedSetBreakpointsSourcePath = "/keiko-execution-root/src/app.ts";
+    const publishSpy = vi.spyOn(service.events, "publish");
+
+    await service.renameInstrumentation(workspaceRoot, [
+      { previousFileId: "src/app.ts", nextFileId: "src/renamed.ts" },
+    ]);
+
+    const setBreakpointsCalls = manager.requests.filter(
+      (entry) => entry.command === "setBreakpoints",
+    );
+    expect(setBreakpointsCalls).toHaveLength(2);
+    expect(setBreakpointsCalls[0]?.args).toMatchObject({
+      source: { path: "/keiko-execution-root/src/app.ts" },
+    });
+    const armCall = setBreakpointsCalls[1]?.args as { readonly breakpoints: readonly unknown[] };
+    expect(setBreakpointsCalls[1]?.args).toMatchObject({
+      source: { path: "/keiko-execution-root/src/renamed.ts" },
+    });
+    expect(armCall.breakpoints).toHaveLength(1);
+
+    // The new path is armed and verified regardless of the old-path clear having been rejected.
+    const migrated = service.breakpoints.snapshot(workspaceRoot);
+    expect(migrated.ok).toBe(true);
+    if (migrated.ok) {
+      expect(migrated.snapshot.breakpoints.map((entry) => entry.fileId)).toEqual([
+        "src/renamed.ts",
+      ]);
+      expect(migrated.snapshot.breakpoints[0]?.verification).toBe("verified");
+    }
+
+    // The change still publishes exactly once, reporting the reconciled new-path state.
+    expect(publishSpy).toHaveBeenCalledExactlyOnceWith(
+      {
+        workspacePartitionKey: workspacePartition,
+        browserSessionBinding: "reject-old-path-binding",
+      },
+      expect.objectContaining({ kind: "breakpoints-changed", workspaceId }),
+    );
+
+    // The degraded old-path clear is surfaced as its own redacted diagnostic, distinct from the
+    // outer best-effort catch's operation tag -- this is the fix: on unfixed code this array is
+    // empty because the old-path clear's outcome was discarded before ever reaching a diagnostic.
+    const degraded = diagnosticRecords.filter(
+      (record) =>
+        record.operation === "dap.debug-routes.rename-instrumentation.old-path-clear-degraded",
+    );
+    expect(degraded).toHaveLength(1);
+    expect(JSON.stringify(degraded)).not.toContain(workspaceRoot);
+    expect(JSON.stringify(degraded)).not.toContain("src/app.ts");
+  });
+
+  // Review round 8, Codex P2 (finding B): EditorDebugSessionHost opens the browser's SSE debug-event
+  // stream and bootstraps instrumentation before any debuggee launches, so a rename can land while a
+  // stream is already subscribed on the workspace's partition yet no DapProcessManager session is
+  // bound anywhere. The subscribed panel must still learn about the rename.
+  it("publishes to an already-subscribed SSE channel on rename even when no debug session is bound", async () => {
+    const eventBridge = createDapEventBridge();
+    const service = buildRenameService(eventBridge);
+    const initial = service.breakpoints.snapshot(workspaceRoot);
+    if (!initial.ok) throw new Error("expected an available breakpoint snapshot");
+    const armed = service.breakpoints.setBreakpointsForFile(
+      workspaceRoot,
+      initial.snapshot.revision,
+      initial.snapshot.etag,
+      "src/app.ts",
+      [{ line: 4, enabled: true }],
+    );
+    expect(armed.ok).toBe(true);
+
+    const received: unknown[] = [];
+    const subscription = eventBridge.subscribe({
+      channel: {
+        workspacePartitionKey: workspacePartition,
+        browserSessionBinding: "pre-launch-binding",
+      },
+      onEvent: (envelope) => {
+        received.push(envelope.event);
+      },
+    });
+    expect(subscription.kind).toBe("ok");
+
+    await service.renameInstrumentation(workspaceRoot, [
+      { previousFileId: "src/app.ts", nextFileId: "src/renamed.ts" },
+    ]);
+
+    // No live session anywhere -- the adapter is never touched.
+    expect(manager.requests.filter((entry) => entry.command === "setBreakpoints")).toHaveLength(0);
+    // But the already-open SSE stream still learns about the rename -- on unfixed code this array is
+    // empty because runRenameInstrumentation returns as soon as liveDebugWorkspace is undefined.
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject({ kind: "breakpoints-changed", workspaceId });
+
+    const migrated = service.breakpoints.snapshot(workspaceRoot);
+    expect(migrated.ok).toBe(true);
+    if (migrated.ok) {
+      expect(migrated.snapshot.breakpoints.map((entry) => entry.fileId)).toEqual([
+        "src/renamed.ts",
+      ]);
+    }
+  });
+
+  // Codex review round 5 on PR #3141: a renameFile rejection used to vanish — the pair was skipped
+  // silently, and an all-rejected migration returned with no diagnostic and no event, leaving the
+  // old-path breakpoints orphaned with nothing to tell an operator why.
+  it("diagnoses a rejected re-key (destination over the per-file cap) instead of returning silently", async () => {
+    const service = buildRenameService();
+    const initial = service.breakpoints.snapshot(workspaceRoot);
+    if (!initial.ok) throw new Error("expected an available breakpoint snapshot");
+    const capFill = service.breakpoints.setBreakpointsForFile(
+      workspaceRoot,
+      initial.snapshot.revision,
+      initial.snapshot.etag,
+      "src/full.ts",
+      Array.from({ length: 64 }, (_, index) => ({ line: index + 1, enabled: true })),
+    );
+    expect(capFill.ok).toBe(true);
+    if (!capFill.ok) throw new Error("expected the cap fill to commit");
+    const armed = service.breakpoints.setBreakpointsForFile(
+      workspaceRoot,
+      capFill.snapshot.revision,
+      capFill.snapshot.etag,
+      "src/app.ts",
+      [{ line: 4, enabled: true }],
+    );
+    expect(armed.ok).toBe(true);
+    const publishSpy = vi.spyOn(service.events, "publish");
+
+    await service.renameInstrumentation(workspaceRoot, [
+      { previousFileId: "src/app.ts", nextFileId: "src/full.ts" },
+    ]);
+
+    const rejected = diagnosticRecords.filter((record) =>
+      record.operation.endsWith("re-key-rejected"),
+    );
+    expect(rejected).toHaveLength(1);
+    expect(publishSpy).not.toHaveBeenCalled();
+    const untouched = service.breakpoints.snapshot(workspaceRoot);
+    expect(untouched.ok).toBe(true);
+    if (untouched.ok) {
+      const perFile = untouched.snapshot.breakpoints.map((entry) => entry.fileId);
+      expect(perFile.filter((fileId) => fileId === "src/app.ts")).toHaveLength(1);
+      expect(perFile.filter((fileId) => fileId === "src/full.ts")).toHaveLength(64);
+    }
+  });
+
+  // Codex P2 (real, PR #3141): with an active session, a throw from
+  // reconcileRenamedInstrumentation (malformed adapter response, unexpected error) used to land in
+  // runRenameInstrumentation's catch, which only emitted the diagnostic -- the store had already
+  // committed the rename (renameBreakpointRecords runs before the try), but nothing ever told a
+  // subscribed panel, so it kept the OLD fileIds/revision indefinitely. On unfixed code the
+  // `received` array below stays empty because the catch is diagnostic-only.
+  it("still publishes the migrated snapshot to a subscribed channel when adapter reconciliation throws", async () => {
+    const eventBridge = createDapEventBridge();
+    const service = buildRenameService(eventBridge);
+    const initial = service.breakpoints.snapshot(workspaceRoot);
+    if (!initial.ok) throw new Error("expected an available breakpoint snapshot");
+    const armed = service.breakpoints.setBreakpointsForFile(
+      workspaceRoot,
+      initial.snapshot.revision,
+      initial.snapshot.etag,
+      "src/app.ts",
+      [{ line: 4, enabled: true }],
+    );
+    expect(armed.ok).toBe(true);
+    if (!armed.ok) throw new Error("expected the arm to commit");
+    const preRenameRevision = armed.snapshot.revision;
+
+    await bindLiveSession("malformed-reconcile-binding");
+    // Every setBreakpoints call (old-path clear and new-path arm alike) resolves with a body that
+    // fails adapter-shape validation, so verificationUpdates throws DAP_RESPONSE_INVALID out of the
+    // reconciliation loop instead of returning normally.
+    manager.malformedCommand = "setBreakpoints";
+
+    const received: unknown[] = [];
+    const subscription = eventBridge.subscribe({
+      channel: {
+        workspacePartitionKey: workspacePartition,
+        browserSessionBinding: "malformed-reconcile-binding",
+      },
+      onEvent: (envelope) => {
+        received.push(envelope.event);
+      },
+    });
+    expect(subscription.kind).toBe("ok");
+
+    await service.renameInstrumentation(workspaceRoot, [
+      { previousFileId: "src/app.ts", nextFileId: "src/renamed.ts" },
+    ]);
+
+    // The diagnostic still fires -- reconciliation genuinely failed.
+    const failures = diagnosticRecords.filter(
+      (record) => record.operation === "dap.debug-routes.rename-instrumentation",
+    );
+    expect(failures).toHaveLength(1);
+
+    // But the already-migrated (pre-verification) snapshot still reaches the subscribed channel.
+    expect(received).toHaveLength(1);
+    expect(received[0]).toMatchObject({ kind: "breakpoints-changed", workspaceId });
+    const event = received[0] as { readonly revision: number };
+    expect(event.revision).toBeGreaterThanOrEqual(preRenameRevision);
+
+    const migrated = service.breakpoints.snapshot(workspaceRoot);
+    expect(migrated.ok).toBe(true);
+    if (migrated.ok) {
+      expect(migrated.snapshot.breakpoints.map((entry) => entry.fileId)).toEqual([
+        "src/renamed.ts",
+      ]);
     }
   });
 });

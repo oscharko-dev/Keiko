@@ -7,14 +7,14 @@
 // effective profile, so the scorer can compare the cell against those same tables and catch any drift or
 // wrong derivation. Pure.
 
+import type { VoiceProfile } from "@oscharko-dev/keiko-contracts";
 import {
   VOICE_CONTROL_TRANSPORTS,
   VOICE_MEDIA_PLANE,
   VOICE_PROFILE_ALLOWED_MESSAGE_KINDS,
   VOICE_PROFILE_MEDIA_TRANSPORT,
   VOICE_PROFILE_NEGOTIATION_MODE,
-  type VoiceProfile,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
 import { effectiveVoiceProfile, egressDestinationClassFor } from "./profiles.js";
 import type { VoiceTwinCapabilityCell, VoiceEnvironmentProfile } from "./types.js";
 

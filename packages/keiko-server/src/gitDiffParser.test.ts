@@ -1,7 +1,7 @@
 import {
   GIT_EDITOR_DIFF_MAX_FILES,
   GIT_EDITOR_DIFF_MAX_HUNKS_PER_FILE,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-editor";
 import { describe, expect, it } from "vitest";
 import { parseGitEditorUnifiedDiff } from "./gitDiffParser.js";
 

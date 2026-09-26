@@ -181,6 +181,52 @@ export const ATLASSIAN_JIRA_PROJECT_KEY_MAX_CHARS = 32;
 // transports it. No JQL parsing in v1, and it never appears in evidence (D6: hashed or omitted).
 export const ATLASSIAN_JQL_MAX_CHARS = 2048;
 
+// The sync scope executes as `project IN (...) AND (<jql>)`, so the narrowing guarantee holds only
+// while `<jql>` cannot terminate the injected group: `1=1) OR (project = SECRET` re-associates the
+// query into `(project IN (...) AND 1=1) OR (project = SECRET)` and reads unapproved projects.
+// This is a linear structural scan, not a JQL parser — the contract still transports JQL opaquely
+// and never interprets its semantics.
+export function hasBalancedJqlNesting(value: string): boolean {
+  let depth = 0;
+  let index = 0;
+  while (index < value.length) {
+    const character = value[index];
+    if (character === '"' || character === "'") {
+      const closing = indexOfJqlLiteralEnd(value, index + 1, character);
+      if (closing < 0) return false;
+      index = closing + 1;
+      continue;
+    }
+    if (character === "(") {
+      depth += 1;
+    } else if (character === ")") {
+      depth -= 1;
+      if (depth < 0) return false;
+    }
+    index += 1;
+  }
+  return depth === 0;
+}
+
+// Index of the quote that closes a literal opened at `start`, or -1 when it is unterminated. Inside
+// a literal a backslash escapes the next character, so `\"` does not close it — mirroring how Jira
+// lexes the string instead of rejecting a legitimate escaped quote.
+function indexOfJqlLiteralEnd(value: string, start: number, quote: string): number {
+  let index = start;
+  while (index < value.length) {
+    const character = value[index];
+    if (character === "\\") {
+      index += 2;
+      continue;
+    }
+    if (character === quote) {
+      return index;
+    }
+    index += 1;
+  }
+  return -1;
+}
+
 const CONFLUENCE_SPACE_KEY_PATTERN = /^~?[A-Za-z0-9]{1,255}$/u;
 const JIRA_PROJECT_KEY_PATTERN = /^[A-Z][A-Z0-9_]{0,31}$/u;
 
@@ -480,6 +526,31 @@ export const ATLASSIAN_CONNECTOR_WORKBENCH_ACTION_CLASS: Readonly<
   "connector-write": "connector-access",
 } as const satisfies Readonly<Record<AtlassianConnectorActionClass, CodingWorkbenchActionClass>>);
 
+// KEIKO-0701 follow-up note: this table is intentionally NOT an input to
+// `decideAtlassianConnectorAction`'s disposition. An audit flagged the table as "declared but
+// never consumed" and proposed composing `supervisedCodingActionRequiresApproval(supervisedKind)`
+// into that function's `strictestCodingWorkbenchPolicyEffect` chain. That composition was tried
+// and reverted: `supervisedCodingActionRequiresApproval("connector-write")` is unconditionally
+// `true` (mode-independent), so folding it in would force `review-required` for every
+// connector-write action in EVERY mode, including `autonomous-delivery` (Full access) — directly
+// contradicting ADR-0128 D4's own disposition-derivation formula ("`autonomous-delivery` (Full
+// access) allows every `internet` risk tier, so every row is `allowed`, conditioned on the
+// connector scope being present") and ADR-0138's explicit narrowing note ("Scope gating, envelope
+// admission, risk tiers, and all other decisions remain unchanged"). Both are settled, accepted,
+// reasoned decisions, not oversights — see docs/adr/ADR-0128-atlassian-connector-authority-and-
+// security-design.md D4 and its ADR-0138 amendment banner. The
+// "reproduces every D4 disposition cell..." and "admits normally when the Authority Envelope grant
+// includes connector-access" tests below fail immediately if this composition is reintroduced —
+// see also the dedicated pin below this table.
+//
+// The table's real, still-unbuilt consumer is the OTHER supervised-action helper its own comment
+// names: `permissionKindForSupervisedCodingAction` (coding-workbench.ts), which labels a
+// `CodingWorkbenchPermissionRequest.kind` for a supervised-coding-style approval UI — the
+// "additional approval-risk signal on the supervised-action path" ADR-0128 D4 describes — not a
+// second disposition gate on this function's own tri-state output. No such permission-request path
+// exists yet for the Atlassian connector lane (only `supervisedCodingPolicy.ts`'s file-edit /
+// verification-command / generic-mutation flows consume `permissionKindForSupervisedCodingAction`
+// today); wiring one up is a genuine future capability, not a bug in this file.
 export const ATLASSIAN_CONNECTOR_SUPERVISED_ACTION_KIND: Readonly<
   Record<AtlassianConnectorActionClass, CodingWorkbenchSupervisedActionKind | null>
 > = Object.freeze({
@@ -594,6 +665,9 @@ function atlassianClassAdmission(
 //   2. Class admission via `decideCodingWorkbenchActionForMode` plus the envelope grant, composed
 //      stricter-wins with the shared mode × `internet` resource-scope × risk matrix, exactly as
 //      `editor-agent-governance.ts` composes `envelopeModeEffect`.
+// `ATLASSIAN_CONNECTOR_SUPERVISED_ACTION_KIND` is deliberately NOT a third input here — see the
+// KEIKO-0701 follow-up note on that table's declaration for why composing it would contradict
+// ADR-0128 D4 (as narrowed by ADR-0138).
 export function decideAtlassianConnectorAction(
   actionType: AtlassianConnectorActionType,
   mode: CodingWorkbenchMode,
@@ -676,15 +750,34 @@ export const ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS: readonly AtlassianConnec
 // `invalid | expired | budget-exceeded` map 1:1 onto these literals. An expired, digest-
 // mismatched, or budget-exhausted envelope is `denied` with exactly one of these codes in every
 // mode, including Full access.
+// KEIKO-0547: adds `authority-revoked` so a mid-flight-revoked envelope reads distinctly from a
+// malformed/unregistered `authority-invalid` in the audit trail. The editor lane already carries a
+// distinct `revoked` reason (agentAuthorityRegistry.ts:143-149); the Atlassian lane was collapsing
+// that state into `authority-invalid`. The disposition remains `denied` in every mode — only the
+// reason CODE gains precision.
 export type AtlassianConnectorAuthorityFailureReason =
-  "authority-invalid" | "authority-expired" | "authority-budget-exceeded";
+  "authority-invalid" | "authority-expired" | "authority-budget-exceeded" | "authority-revoked";
 
 export const ATLASSIAN_CONNECTOR_AUTHORITY_FAILURE_REASONS: readonly AtlassianConnectorAuthorityFailureReason[] =
   Object.freeze([
     "authority-invalid",
     "authority-expired",
     "authority-budget-exceeded",
+    "authority-revoked",
   ] as const satisfies readonly AtlassianConnectorAuthorityFailureReason[]);
+
+// The bounded server-side pending-approval registry (default cap: 64 in flight) rejects a
+// creation when the cap is exhausted. That is a per-instance capacity limit — distinct from any
+// per-envelope authority budget — so it gets its own closed reason literal instead of being
+// merged into `AtlassianConnectorAuthorityFailureReason`. Every rejected attempt still emits one
+// content-free activity record with this reason, preserving the module's "exactly one record per
+// attempt" invariant.
+export type AtlassianConnectorRegistryFailureReason = "approvals-registry-exhausted";
+
+export const ATLASSIAN_CONNECTOR_REGISTRY_FAILURE_REASONS: readonly AtlassianConnectorRegistryFailureReason[] =
+  Object.freeze([
+    "approvals-registry-exhausted",
+  ] as const satisfies readonly AtlassianConnectorRegistryFailureReason[]);
 
 // ─── Human-initiation rationale (Issue #2244, ADR-0129/ADR-0128 D5) ───────────
 // A direct human-triggered BFF operation (v1 sync is explicitly user-triggered, ADR-0128 D5) is
@@ -723,6 +816,7 @@ export type AtlassianConnectorActivityReasonCode =
   | AtlassianSyncFailureReason
   | AtlassianConnectorWriteFailureReason
   | AtlassianConnectorAuthorityFailureReason
+  | AtlassianConnectorRegistryFailureReason
   | AtlassianConnectorHumanInitiationReason;
 
 export interface AtlassianConnectorActivityRecord {
@@ -773,11 +867,144 @@ export type AtlassianConnectorActionExecutionResult =
   AtlassianConnectorActionExecutionSucceeded | AtlassianConnectorActionExecutionFailed;
 
 // ─── Pending-approval projection (Issue #2244 → rendered by the #2245 UI) ─────
+
+// Bound for the human-reviewable content preview a pending write-action approval carries
+// (KEIKO-0186): long enough that a reviewer can tell what will actually be written, short enough
+// that the approval UI itself cannot become a display/exfiltration channel for an oversized or
+// hostile payload.
+export const ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS = 280;
+
+// KEIKO-0186 P1-P4 (Codex): STOP DENYLISTING INVISIBILITY. ALLOWLIST PRESENTABILITY.
+//
+// Three rounds asked "after removing the things I know are invisible, is anything left?" — a
+// denylist, which fails OPEN: a code point nobody enumerated counts as visible by default. P1
+// covered "empty" and "entirely Unicode combining marks" via `^\p{M}+$`. P2 added whitespace
+// (a lone space, a run of TAB/LF, satisfied that anchored pattern too). P3 added
+// `Default_Ignorable_Code_Point` for U+3164 HANGUL FILLER and the variation-selector families,
+// which render as nothing yet match none of `\s`/`\p{M}`/`\p{Cf}`. P4: U+2800 BRAILLE PATTERN
+// BLANK — deliberately blank by design — is `\p{So}` (a SYMBOL), so it defeated every prior
+// layer too. Unicode has no "renders blank" general property; that enumeration can never be
+// complete, and a fifth round would only add a fifth code point.
+//
+// The fix is structural, not another exception: require at least one character from a
+// CONSERVATIVE ALLOWLIST known to render — Letter, Number, Punctuation, "the honest core" — and
+// classify everything else (marks, whitespace, symbols, and any code point nobody has thought of
+// yet) `unavailable`. An unanticipated code point now defaults to "cannot be previewed" instead
+// of "looks fine": fail closed, the direction this repository requires on a trust boundary.
+//
+// Subtlety: general category alone is not sufficient even for the allowlist side. U+3164 HANGUL
+// FILLER is category `Lo` (a LETTER) despite rendering as nothing — Unicode's category system
+// does not track rendering behavior, only classification. A candidate must be in {L, N, P} AND
+// NOT `Default_Ignorable_Code_Point`; the latter can co-occur with any general category, so it is
+// checked independently rather than assumed absent from an "allowed" category.
+//
+// Decision on `\p{S}` (Symbol, which includes emoji): deliberately EXCLUDED from the allowlist,
+// not folded in as "L/N/P plus the safe parts of S". This is a real cost — a preview consisting
+// only of emoji or other symbols (e.g. a Jira comment that is just "🎉" or "✅") is now classified
+// `unavailable` even though a human could plainly read it. Carving a "known-safe subset of `\p{S}`
+// minus the blank ranges" back out would recreate the exact enumeration this fix exists to end,
+// just on the allow side instead of the deny side — Unicode symbols include other
+// deliberately-blank-or-near-blank code points beyond U+2800 (e.g. other pattern-fill glyphs,
+// private-use-adjacent oddities), and there is no closed, machine-checkable "safe symbol" property
+// the way `Default_Ignorable_Code_Point` closes the invisibility question. On a governed-write
+// approval surface, a symbol-only preview genuinely cannot be summarized for a reviewer any more
+// honestly than the explicit "could not be previewed" signal already provides — that outcome is
+// correct here, not a bug to route around. `\p{L}` already covers CJK ideographs and other
+// non-Latin scripts, so this decision is narrower than it first appears: it excludes symbols and
+// emoji specifically, not non-Latin text.
+//
+// KEIKO-0186 P5 (Codex): U+13441 EGYPTIAN HIEROGLYPH FULL BLANK and U+13442 HALF BLANK are `\p{Lo}`
+// (LETTERS) — not Default_Ignorable_Code_Point — and survive stripUnsafeFormatChars, yet render
+// blank on a client with the font. A fifth input class defeated the allowlist for the same reason
+// HANGUL FILLER defeated it under P3: Unicode general categories classify code points, not
+// rendering behaviour, and there is no property meaning "renders blank" to test for. Whether a
+// glyph renders at all further depends on the READER'S fonts, which this contract cannot see —
+// that is not a gap in this enumeration, it is a gap no enumeration can close. So P5 stops treating
+// the predicate as the sole defence:
+//
+//   1. KNOWN_BLANK_LETTER_PATTERN below closes today's specific case (cheap, and it does close
+//      this exact report) — but it is NOT presented as "the fix", because the next blank-glyph
+//      Letter is exactly as unenumerable as this one was before a report named it.
+//   2. The actual fix lives in the UI: ConnectorApprovalsPanel now derives and renders a
+//      content-free CHARACTER COUNT alongside every available preview (see
+//      packages/keiko-ui/.../ConnectorApprovalsPanel.tsx). A preview that looks empty next to "12
+//      characters" is self-evidently suspicious to a human reviewer, and that signal holds for
+//      every future blank code point without this predicate having to predict it. The requirement
+//      was never "classify visibility perfectly" (provably impossible — see above); it is "a human
+//      must never approve content they cannot see without knowing it", which a structural,
+//      content-free signal satisfies even when classification fails. This predicate is now a
+//      heuristic backed by that structural signal, not a complete classifier: a future blank code
+//      point becomes a cosmetic gap (the preview looks like text but is actually invisible glyphs),
+//      not a governed-approval bypass (the reviewer sees the count and can tell either way).
+const KNOWN_BLANK_LETTER_PATTERN = /[\u{13441}\u{13442}]/u;
+const PRESENTABLE_GENERAL_CATEGORY_PATTERN = /[\p{L}\p{N}\p{P}]/u;
+const DEFAULT_IGNORABLE_PATTERN = /\p{Default_Ignorable_Code_Point}/u;
+
+function isPresentableCharacter(character: string): boolean {
+  return (
+    PRESENTABLE_GENERAL_CATEGORY_PATTERN.test(character) &&
+    !DEFAULT_IGNORABLE_PATTERN.test(character) &&
+    !KNOWN_BLANK_LETTER_PATTERN.test(character)
+  );
+}
+
+export function isAtlassianContentPreviewUnpresentable(value: string): boolean {
+  // Array.from (not a naive index loop) iterates by CODE POINT, matching how \p{L}/\p{N}/\p{P}
+  // classify astral characters under the `u` flag — the same reason this pattern is used to
+  // iterate Unicode-classified text elsewhere in this codebase (see
+  // packages/keiko-workspace/src/repoSearchMatchers.ts).
+  return !Array.from(value).some(isPresentableCharacter);
+}
+
+// A content preview is provider CONTENT in the ADR-0128 D6 sense (like a synced title or a live
+// issue summary) — real text, but bounded and free of bidi/zero-width/control-character display
+// spoofing. Unlike a Jira summary it is not single-line by construction (it may combine a
+// title/summary with a description/body), so — like every other untrusted display surface in
+// this codebase — TAB/LF/CR survive stripUnsafeFormatChars while every other unsafe code point
+// does not; this predicate accepts exactly what that stripper already leaves untouched. It also
+// rejects a preview with no character from the {Letter, Number, Punctuation} allowlist —
+// whitespace-only, combining-marks-only, default-ignorable-only (HANGUL FILLER, variation
+// selectors, …), symbol/emoji-only (including U+2800 BRAILLE PATTERN BLANK), known-blank-letter-only
+// (U+13441/U+13442 EGYPTIAN HIEROGLYPH FULL/HALF BLANK), or any mix — for the same reason the
+// producer never emits one (see `isAtlassianContentPreviewUnpresentable` above, including the
+// deliberate, documented decision to exclude `\p{S}`/emoji from the allowlist, and the P5 note
+// that this predicate is a heuristic backed by the UI's character-count signal, not a complete
+// classifier) — the producer and this predicate must agree.
+//
+// No runtime capability guard for the `\p{Default_Ignorable_Code_Point}` / `\p{L}` / `\p{N}` /
+// `\p{P}` Unicode property escapes above: this repository's `package.json` pins `engines.node` to
+// `>=24.18.0 <25`, and CI (`.github/workflows/ci.yml`) runs every job on exactly `24.18.0` — the
+// V8 build in that Node version has supported `u`-flag Unicode property escapes, including binary
+// properties like `Default_Ignorable_Code_Point` and `ID_Start`/`ID_Continue`, since long before
+// this engines floor (V8 shipped the feature by Node 10). `\p{M}`/`\p{Cf}`/`\p{L}`/`\p{N}` and
+// binary properties are already used unguarded throughout this codebase (e.g.
+// `packages/keiko-server/src/coding-runtime/researchContentQuarantine.ts`,
+// `packages/keiko-workspace/src/repoSearchSourceClassification.ts`) — a guard here would be dead
+// code checking a capability the pinned runtime has always had, which is worse than no guard: it
+// invites a reader to wonder what failure mode it exists to catch when none does.
+export function isSafeAtlassianContentPreview(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS &&
+    stripUnsafeFormatChars(value) === value &&
+    !isAtlassianContentPreviewUnpresentable(value)
+  );
+}
+
 // The redacted pending-approval state a `review-required` disposition surfaces: identifiers, the
-// D4 action row (class, required scope, risk), the single review reason, and the TTL window. The
-// submitted action input (summaries, descriptions, comment text, page bodies) NEVER appears
-// here — it is held only inside the server-side registry entry that the approve endpoint
-// consumes, and credentials are never part of that entry either (ADR-0128 D2/D6).
+// D4 action row (class, required scope, risk), the single review reason, and the TTL window.
+//
+// KEIKO-0186: `contentPreview` is the one deliberate, narrow exception to "no submitted content
+// crosses the wire" — and it is a SHORT-LIVED, single-use interactive review surface, not the
+// permanent audit trail. ADR-0128 D6's content-free rule was written for records that are
+// retained and exported; a pending approval exists so a human can inspect what will be written
+// BEFORE approving it, which is impossible if the content is redacted here too. The full,
+// untruncated action input (summaries, descriptions, comment text, page bodies) still never
+// appears here — only a bounded preview, capped by `ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS`
+// — and it is held in full only inside the server-side registry entry that the approve endpoint
+// consumes. `AtlassianConnectorActivityRecord` (the permanent record) stays exactly as
+// content-free as before; this field must never be added there. Credentials are never part of
+// either projection (ADR-0128 D2).
 export interface AtlassianConnectorPendingApproval {
   readonly schemaVersion: typeof ATLASSIAN_CONNECTOR_SCHEMA_VERSION;
   readonly approvalId: string;
@@ -793,6 +1020,29 @@ export interface AtlassianConnectorPendingApproval {
   readonly correlationId: string;
   readonly requestedAt: number;
   readonly expiresAt: number;
+  // Bounded, sanitized preview of the content the action would write (summary/description,
+  // comment text, or title/body — see contentPreviewFor in keiko-server's actionApprovals.ts).
+  // Absent for actions with nothing to preview (transition-issue; update-issue-fields touching
+  // only non-text fields) and for every non-write action type (sync/live-search) — see
+  // `contentPreviewUnavailable` below for the THIRD case, which this field must stay absent for
+  // too. Mutually exclusive with `contentPreviewUnavailable`: never both present.
+  readonly contentPreview?: string | undefined;
+  // KEIKO-0186 P1 (Codex): true exactly when the action HAD a text field to preview but its
+  // bounded, sanitized preview carries no PRESENTABLE character — see
+  // `isAtlassianContentPreviewUnpresentable`. That is deliberately wider than "sanitized away to
+  // nothing": four review rounds each found a payload that survives sanitization intact and still
+  // renders blank — whitespace-only, HANGUL FILLER (a Letter), BRAILLE PATTERN BLANK (a Symbol),
+  // and the blank Egyptian hieroglyphs (Letters again). The predicate therefore asks whether any
+  // character is presentable rather than enumerating which ones are invisible, and the approval
+  // panel shows a character count beside every preview so that the next unenumerated blank code
+  // point is a cosmetic gap rather than a governed-approval bypass. Emitting an EMPTY
+  // `contentPreview` in this case
+  // would show a reviewer what looks like a contentless action approved in good faith while
+  // invisible content is actually written; this field lets the UI say plainly that the content
+  // could not be safely previewed instead of silently showing nothing (indistinguishable from an
+  // action with no text field at all) or silently showing an empty value. Never present alongside
+  // `contentPreview`, and never present when the action has no text field to begin with.
+  readonly contentPreviewUnavailable?: true | undefined;
 }
 
 // ─── Jira issue citation metadata (#2243; #2248 presents the same field list) ─
@@ -1098,4 +1348,10 @@ export function isAtlassianConnectorAuthorityFailureReason(
   value: unknown,
 ): value is AtlassianConnectorAuthorityFailureReason {
   return isOneOf(value, ATLASSIAN_CONNECTOR_AUTHORITY_FAILURE_REASONS);
+}
+
+export function isAtlassianConnectorRegistryFailureReason(
+  value: unknown,
+): value is AtlassianConnectorRegistryFailureReason {
+  return isOneOf(value, ATLASSIAN_CONNECTOR_REGISTRY_FAILURE_REASONS);
 }

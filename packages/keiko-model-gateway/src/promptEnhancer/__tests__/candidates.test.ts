@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
-import {
-  validateEnhancedPrompt,
-  validatePromptEnhancerIdString,
-  type RawPromptInput,
-} from "@oscharko-dev/keiko-contracts";
+import type { RawPromptInput } from "@oscharko-dev/keiko-contracts";
+import { validateEnhancedPrompt } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation";
+import { validatePromptEnhancerIdString } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
 import { generatePromptCandidates } from "../candidates.js";
 import { makeAnalysis, type AnalysisOverrides } from "./_support.js";
 

@@ -5,7 +5,8 @@
 // canonical set of fixtures instead of reinventing per file. NOTE: this file is a TEST helper, not
 // package source — it is intentionally NOT exported from any package index.ts.
 
-import { QualityIntelligence, type QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import {
   createInMemoryQualityIntelligenceLocalStore,
   type QualityIntelligenceEvidenceManifest,

@@ -4,10 +4,11 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { useLayoutEffect } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { DEFAULT_VOICE_PROTOCOL_TIMEOUTS } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_VOICE_PROTOCOL_TIMEOUTS } from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { prepareCanonicalVoiceHasher } from "./canonical-voice-hasher";
-import { useRealtimeVoice } from "./useRealtimeVoice";
+import { executeVoiceTurnEffects, useRealtimeVoice } from "./useRealtimeVoice";
+import { MAX_REVIEWABLE_REALTIME_TRANSCRIPT_BYTES } from "./voice-realtime-events";
 import { VoiceControlError, type VoiceControlClient } from "./voice-realtime-client";
 import { VoiceRtcError, type VoiceRtcSession, type VoiceRtcTransport } from "./voice-rtc-transport";
 
@@ -286,6 +287,7 @@ describe("useRealtimeVoice media-only session", () => {
         createTransport: () => transport,
         createControl: () => client,
         onUserSpeechStart,
+        assistantSpeaking: true,
       }),
     );
     act(() => result.current.start());
@@ -301,7 +303,7 @@ describe("useRealtimeVoice media-only session", () => {
       fake.fireDataChannelEvent({ type: "input_audio_buffer.speech_stopped" });
       fake.fireDataChannelEvent({ type: "input_audio_buffer.speech_started" });
     });
-    expect(onUserSpeechStart).toHaveBeenCalledTimes(2);
+    expect(onUserSpeechStart).toHaveBeenCalledOnce();
   });
 
   it("starts the first barge-in of a new session after stopping during active speech", async () => {
@@ -309,12 +311,15 @@ describe("useRealtimeVoice media-only session", () => {
     const onUserSpeechStart = vi.fn();
     const transport = makeFakeTransport({ session: fake.session });
     const { client } = makeFakeControl();
-    const { result } = renderHook(() =>
-      useRealtimeVoice({
-        createTransport: () => transport,
-        createControl: () => client,
-        onUserSpeechStart,
-      }),
+    const { result, rerender } = renderHook(
+      ({ assistantSpeaking }: { readonly assistantSpeaking: boolean }) =>
+        useRealtimeVoice({
+          createTransport: () => transport,
+          createControl: () => client,
+          onUserSpeechStart,
+          assistantSpeaking,
+        }),
+      { initialProps: { assistantSpeaking: true } },
     );
     act(() => result.current.start());
     await waitFor(() => expect(result.current.phase).toBe("negotiating"));
@@ -323,8 +328,10 @@ describe("useRealtimeVoice media-only session", () => {
 
     act(() => {
       result.current.stop();
-      result.current.start();
     });
+    rerender({ assistantSpeaking: false });
+    act(() => result.current.start());
+    rerender({ assistantSpeaking: true });
     await waitFor(() => expect(transport.connect).toHaveBeenCalledTimes(2));
     act(() => fake.fireDataChannelEvent({ type: "input_audio_buffer.speech_started" }));
 
@@ -333,6 +340,56 @@ describe("useRealtimeVoice media-only session", () => {
 });
 
 describe("useRealtimeVoice canonical transcript delivery", () => {
+  it("executes interruption, preservation, backchannel, and recovery effects", () => {
+    const handlers = {
+      interruptAssistant: vi.fn(),
+      preserveUserTurn: vi.fn(),
+      emitBackchannel: vi.fn(),
+      beginRecovery: vi.fn(),
+    };
+
+    executeVoiceTurnEffects(
+      [
+        "stop-playback",
+        "cancel-speech-generation",
+        "preserve-user-turn",
+        "emit-backchannel",
+        "begin-recovery",
+      ],
+      handlers,
+    );
+
+    expect(handlers.interruptAssistant).toHaveBeenCalledOnce();
+    expect(handlers.preserveUserTurn).toHaveBeenCalledOnce();
+    expect(handlers.emitBackchannel).toHaveBeenCalledOnce();
+    expect(handlers.beginRecovery).toHaveBeenCalledOnce();
+  });
+
+  it("executes barge-in effects from the Chat-owned playback signal", async () => {
+    const fake = makeFakeSession();
+    const onUserSpeechStart = vi.fn();
+    const transport = makeFakeTransport({ session: fake.session });
+    const { client } = makeFakeControl();
+    const { result, rerender } = renderHook(
+      ({ assistantSpeaking }: { readonly assistantSpeaking: boolean }) =>
+        useRealtimeVoice({
+          createTransport: () => transport,
+          createControl: () => client,
+          onUserSpeechStart,
+          assistantSpeaking,
+        }),
+      { initialProps: { assistantSpeaking: false } },
+    );
+    act(() => result.current.start());
+    await waitFor(() => expect(result.current.phase).toBe("negotiating"));
+    rerender({ assistantSpeaking: true });
+
+    act(() => fake.fireDataChannelEvent({ type: "input_audio_buffer.speech_started" }));
+
+    expect(onUserSpeechStart).toHaveBeenCalledOnce();
+    expect(result.current.turnSnapshot.state).toBe("listening");
+  });
+
   it("dispatches one settled final transcript through the canonical chat callback", async () => {
     vi.useFakeTimers();
     const fake = makeFakeSession();
@@ -359,6 +416,63 @@ describe("useRealtimeVoice canonical transcript delivery", () => {
       text: "Search the connected repository.",
     });
     expect(result.current.partialUserTranscript).toBeUndefined();
+  });
+
+  // KEIKO-0585: appendUserTranscriptDelta's overflow branch used to call
+  // rejectOversizedCanonicalUserTurn without first flushing any already-staged pending turn.
+  // rejectOversizedCanonicalUserTurn unconditionally wipes pendingCanonicalUserTurnRef, so a
+  // valid, already-settled provider final on a DIFFERENT item_id was silently discarded — never
+  // delivered via onCanonicalUserTurn — whenever an unrelated item's delta stream overflowed.
+  it("flushes an already-staged pending turn before rejecting an unrelated item's oversized delta", async () => {
+    vi.useFakeTimers();
+    const fake = makeFakeSession();
+    const onCanonicalUserTurn = vi.fn().mockResolvedValue("completed");
+    const { result } = renderVoice({ fake, onCanonicalUserTurn });
+    act(() => result.current.start());
+    await vi.waitFor(() => expect(result.current.phase).toBe("negotiating"));
+
+    // item A's final settles into pendingCanonicalUserTurnRef but is deliberately NOT flushed yet
+    // — timers are not advanced past CANONICAL_TURN_CONTINUATION_GRACE_MS.
+    const pendingText = "q".repeat(100);
+    act(() =>
+      fake.fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "item-a-pending",
+        transcript: pendingText,
+      }),
+    );
+    expect(result.current.partialUserTranscript).toBe(pendingText);
+    expect(onCanonicalUserTurn).not.toHaveBeenCalled();
+
+    // item B (a different item_id) streams enough delta bytes to exceed
+    // MAX_REVIEWABLE_REALTIME_TRANSCRIPT_BYTES — unrelated to item A's already-settled turn.
+    const oversizedChunk = "b".repeat(90_000);
+    expect(oversizedChunk.length * 3).toBeGreaterThan(MAX_REVIEWABLE_REALTIME_TRANSCRIPT_BYTES);
+    act(() => {
+      fake.fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.delta",
+        item_id: "item-b-oversized",
+        delta: oversizedChunk,
+      });
+      fake.fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.delta",
+        item_id: "item-b-oversized",
+        delta: oversizedChunk,
+      });
+      fake.fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.delta",
+        item_id: "item-b-oversized",
+        delta: oversizedChunk,
+      });
+    });
+
+    // item A's pending turn must have been flushed and delivered — not silently discarded by
+    // item B's unrelated oversized-delta rejection.
+    expect(onCanonicalUserTurn).toHaveBeenCalledOnce();
+    expect(onCanonicalUserTurn).toHaveBeenCalledWith({
+      turnId: expect.stringMatching(CANONICAL_TURN_ID_PATTERN),
+      text: pendingText,
+    });
   });
 
   it("coalesces final segments across a natural speaking pause", async () => {
@@ -499,6 +613,36 @@ describe("useRealtimeVoice canonical transcript delivery", () => {
     expect(onCanonicalUserTurn).toHaveBeenCalledWith({
       turnId: expect.stringMatching(CANONICAL_TURN_ID_PATTERN),
       text: "Please ask Jos\u00e9 tomorrow",
+    });
+  });
+
+  it("preserves a deliberately repeated sentence across final transcript segments", async () => {
+    vi.useFakeTimers();
+    const fake = makeFakeSession();
+    const onCanonicalUserTurn = vi.fn().mockResolvedValue("completed");
+    const { result } = renderVoice({ fake, onCanonicalUserTurn });
+    act(() => result.current.start());
+    await vi.waitFor(() => expect(result.current.phase).toBe("negotiating"));
+
+    act(() => {
+      fake.fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "repeat-one",
+        transcript: "Deploy only after review.",
+      });
+      fake.fireDataChannelEvent({
+        type: "conversation.item.input_audio_transcription.completed",
+        item_id: "repeat-two",
+        transcript: "Deploy only after review before Friday.",
+      });
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(CANONICAL_TURN_CONTINUATION_GRACE_MS);
+    });
+
+    expect(onCanonicalUserTurn).toHaveBeenCalledWith({
+      turnId: expect.stringMatching(CANONICAL_TURN_ID_PATTERN),
+      text: "Deploy only after review. Deploy only after review before Friday.",
     });
   });
 
@@ -1950,5 +2094,36 @@ describe("useRealtimeVoice errors", () => {
     );
     act(() => control.result.current.start());
     await waitFor(() => expect(control.result.current.error?.reason).toBe("negotiation-failed"));
+  });
+});
+
+// Issue #2894 (KEIKO-0364) — `retrieving` was previously hardcoded `false` in the return statement,
+// so the composer's grounded-retrieval aura ("Checking connected sources…") could never activate for
+// a spoken turn no matter what the canonical chat pipeline was doing. Per ADR-0154 D1/D5, retrieval
+// runs in the canonical chat pipeline AFTER the final transcript is handed off, never inside Realtime
+// itself — so the hook must not compute this from any provider event. It only mirrors the caller's
+// own live signal (derived from useChatSession's `sending` + the active chat's grounding scope) onto
+// the returned controller. These tests exercise exactly that passthrough, independent of the
+// transport/negotiation lifecycle covered elsewhere in this file.
+describe("useRealtimeVoice retrieving passthrough (Issue #2894, KEIKO-0364)", () => {
+  it("defaults retrieving to false when the caller supplies no live signal", () => {
+    const { result } = renderHook(() => useRealtimeVoice({}));
+    expect(result.current.retrieving).toBe(false);
+  });
+
+  it("mirrors the caller's live retrieving signal onto the controller as it changes", () => {
+    const { result, rerender } = renderHook(
+      ({ retrieving }: { readonly retrieving: boolean }) => useRealtimeVoice({ retrieving }),
+      { initialProps: { retrieving: false } },
+    );
+    expect(result.current.retrieving).toBe(false);
+
+    // A grounded retrieval starts for the pending canonical voice turn.
+    rerender({ retrieving: true });
+    expect(result.current.retrieving).toBe(true);
+
+    // The canonical send settles (completed, failed, or cancelled) and the signal clears.
+    rerender({ retrieving: false });
+    expect(result.current.retrieving).toBe(false);
   });
 });

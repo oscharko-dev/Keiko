@@ -5,15 +5,26 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "./api";
 import {
   clearActiveTaskWorkspace,
+  fetchRepositoryBaseBranch,
   getActiveTaskWorkspace,
   listTaskWorkspaces,
   pauseTaskWorkspace,
   prepareHandoffTaskWorkspace,
   provisionTaskWorkspace,
   reconcileTaskWorkspaces,
+  repairTaskWorkspace,
   resumeTaskWorkspace,
   setActiveTaskWorkspace,
 } from "./task-workspace-api";
+
+const gitStatusMock = vi.hoisted(() => vi.fn());
+
+// The git status route keeps its own contract validator in ./api; only that one call is replaced so
+// the branch-default helper is exercised against the response shapes the validator admits.
+vi.mock("./api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./api")>();
+  return { ...actual, fetchGitStatus: gitStatusMock };
+});
 
 function jsonOk(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -37,6 +48,13 @@ afterEach(() => {
 });
 
 describe("header injection", () => {
+  it("GET list without a root asks for every managed workspace", async () => {
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonOk({ instances: [] })));
+    vi.stubGlobal("fetch", fetchMock);
+    await listTaskWorkspaces();
+    expect(lastUrl(fetchMock)).toBe("/api/task-workspaces");
+  });
+
   it("GET list sends no CSRF/Content-Type and encodes the root", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonOk({ instances: [] })));
     vi.stubGlobal("fetch", fetchMock);
@@ -144,5 +162,145 @@ describe("responses", () => {
     await expect(
       pauseTaskWorkspace({ workspaceId: "ws-1", requestedBy: "op" }),
     ).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe("repairTaskWorkspace", () => {
+  it("POSTs the strategy and the explicit approval flag to the workspace's repair route", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonOk({
+        instance: {},
+        binding: {},
+        strategy: "reconcile-pointer",
+        applied: true,
+        outcome: "repaired",
+        status: "healthy",
+        driftMarkers: [],
+        operatorActionRequired: false,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await repairTaskWorkspace({
+      workspaceId: "ws/1",
+      requestedBy: "op",
+      strategy: "reconcile-pointer",
+      operatorApproved: true,
+    });
+
+    expect(lastUrl(fetchMock)).toBe("/api/task-workspaces/ws%2F1/repair");
+    const init = lastInit(fetchMock);
+    const headers = init.headers as Record<string, string>;
+    expect(init.method).toBe("POST");
+    expect(headers["X-Keiko-CSRF"]).toBe("1");
+    expect(JSON.parse(init.body as string)).toEqual({
+      requestedBy: "op",
+      strategy: "reconcile-pointer",
+      operatorApproved: true,
+    });
+    expect(result.applied).toBe(true);
+  });
+
+  it("never sets the approval flag on its own", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk({ instance: {}, binding: {} }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await repairTaskWorkspace({
+      workspaceId: "ws-1",
+      requestedBy: "op",
+      strategy: "release-stale-lock",
+      operatorApproved: false,
+    });
+
+    expect(JSON.parse(lastInit(fetchMock).body as string)).toMatchObject({
+      operatorApproved: false,
+    });
+  });
+
+  it("carries the failure class of a refused repair", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        jsonOk(
+          {
+            error: {
+              code: "OPERATOR_APPROVAL_REQUIRED",
+              message: "repair requires operator approval",
+              failureClass: "policy-denied",
+            },
+          },
+          403,
+        ),
+      ),
+    );
+
+    await expect(
+      repairTaskWorkspace({
+        workspaceId: "ws-1",
+        requestedBy: "op",
+        strategy: "reconcile-pointer",
+        operatorApproved: false,
+      }),
+    ).rejects.toMatchObject({
+      code: "OPERATOR_APPROVAL_REQUIRED",
+      failureClass: "policy-denied",
+    });
+  });
+});
+
+describe("fetchRepositoryBaseBranch", () => {
+  afterEach(() => {
+    gitStatusMock.mockReset();
+  });
+
+  it("returns the checked-out branch of an available repository", async () => {
+    gitStatusMock.mockResolvedValue({ available: true, detached: false, branch: " dev " });
+
+    await expect(fetchRepositoryBaseBranch("/repo")).resolves.toBe("dev");
+    expect(gitStatusMock).toHaveBeenCalledWith("/repo");
+  });
+
+  it.each([
+    { label: "an unavailable path", status: { available: false, detached: false } },
+    { label: "a detached HEAD", status: { available: true, detached: true, branch: "dev" } },
+    { label: "a missing branch", status: { available: true, detached: false } },
+    { label: "a blank branch", status: { available: true, detached: false, branch: "  " } },
+  ])("resolves null for $label instead of guessing", async ({ status }) => {
+    gitStatusMock.mockResolvedValue(status);
+
+    await expect(fetchRepositoryBaseBranch("/repo")).resolves.toBeNull();
+  });
+
+  it("propagates a transport failure so the caller can report it", async () => {
+    gitStatusMock.mockRejectedValue(new ApiError("INTERNAL", "HTTP 500", 500));
+
+    await expect(fetchRepositoryBaseBranch("/repo")).rejects.toMatchObject({ code: "INTERNAL" });
+  });
+});
+
+describe("provisionTaskWorkspace — error envelopes", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  // The failure class is read from the envelope only when the envelope has one; a body without an
+  // `error` object must still surface as the classified ApiError, never as a TypeError thrown
+  // while decorating it (workbench audit, 2026-09-03).
+  it("rejects with a plain ApiError when the error body carries no envelope", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() => Promise.resolve(jsonOk({}, 500))),
+    );
+
+    const failure: unknown = await provisionTaskWorkspace({
+      root: "/repo",
+      taskId: "t-1",
+      baseBranch: "main",
+      requestedBy: "u",
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ApiError);
+    expect(failure).toMatchObject({ code: "INTERNAL", status: 500 });
+    expect(Reflect.get(failure as object, "failureClass")).toBeUndefined();
   });
 });

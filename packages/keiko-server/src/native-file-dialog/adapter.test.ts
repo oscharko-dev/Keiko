@@ -1,3 +1,10 @@
+import { randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { PassThrough } from "node:stream";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import {
   createMacosNativeFileDialogAdapter,
@@ -15,23 +22,30 @@ interface CapturedInvocation {
   args: readonly string[];
   stdin: string;
   timeoutMs: number;
+  processOptions?: Parameters<NativeDialogProcessRunner>[5];
 }
 
 function captureRunner(
   result: Partial<NativeDialogProcessResult>,
   captured: CapturedInvocation[],
 ): NativeDialogProcessRunner {
-  return (command, args, stdin, timeoutMs) => {
-    captured.push({ command, args, stdin, timeoutMs });
+  return (command, args, stdin, timeoutMs, _signal, processOptions) => {
+    captured.push({ command, args, stdin, timeoutMs, processOptions });
     return Promise.resolve({
       exitCode: 0,
       stdout: JSON.stringify({ cancelled: false, paths: ["/tmp/x"] }),
       stderr: "",
       timedOut: false,
       outputExceeded: false,
+      windowsTreeKill: "not-attempted",
       ...result,
     });
   };
+}
+
+function hasCanonicalWindowsRootAliases(invocation: CapturedInvocation | undefined): boolean {
+  const childEnv = invocation?.processOptions?.childEnv;
+  return childEnv?.SystemRoot !== undefined && childEnv.SystemRoot === childEnv.WINDIR;
 }
 
 async function adapterFailure(
@@ -105,6 +119,7 @@ describe("Windows native dialog adapter", () => {
     expect(invocation?.command).toContain("WindowsPowerShell");
     expect(invocation?.args.slice(0, 2)).toEqual(["-NoProfile", "-STA"]);
     expect(invocation?.args[2]).toBe("-EncodedCommand");
+    expect(hasCanonicalWindowsRootAliases(invocation)).toBe(true);
     const encoded = invocation?.args[3] ?? "";
     expect(Buffer.from(encoded, "base64").toString("utf16le")).toBe(
       WINDOWS_NATIVE_FILE_DIALOG_SCRIPT,
@@ -129,6 +144,51 @@ describe("Windows native dialog adapter", () => {
       extensions: ["png", "jpg"],
       filters: [{ name: "Images", extensions: ["png", "jpg"] }],
     });
+  });
+
+  it("rejects a hostile system root asynchronously before spawning", async () => {
+    const captured: CapturedInvocation[] = [];
+    const adapter = createWindowsNativeFileDialogAdapter(captureRunner({}, captured), {
+      processEnv: { SystemRoot: String.raw`\\attacker\share` },
+      existsAsFile: () => true,
+      identityCheck: () => true,
+    });
+
+    const opened = adapter.open({ mode: "open-file" });
+
+    await expect(opened).rejects.toMatchObject({
+      name: "NativeFileDialogAdapterError",
+      reason: "failed",
+    });
+    expect(captured).toEqual([]);
+    expect(() => {
+      adapter.cancel();
+    }).not.toThrow();
+  });
+
+  it("maps a missing system helper to unsupported and clears the failed open", async () => {
+    const captured: CapturedInvocation[] = [];
+    let binaryChecks = 0;
+    const adapter = createWindowsNativeFileDialogAdapter(captureRunner({}, captured), {
+      processEnv: { SystemRoot: String.raw`C:\Windows` },
+      existsAsFile: () => {
+        binaryChecks += 1;
+        return binaryChecks > 1;
+      },
+      identityCheck: () => true,
+    });
+
+    await expect(adapter.open({ mode: "open-file" })).rejects.toMatchObject({
+      name: "NativeFileDialogAdapterError",
+      reason: "unsupported",
+    });
+    expect(captured).toEqual([]);
+
+    await expect(adapter.open({ mode: "open-file" })).resolves.toEqual({
+      cancelled: false,
+      paths: ["/tmp/x"],
+    });
+    expect(captured).toHaveLength(1);
   });
 });
 
@@ -211,6 +271,46 @@ describe("adapter failure mapping", () => {
 // The real bounded runner, exercised with the Node binary itself so the tests stay hermetic and
 // platform-neutral (no /bin/*, no shell, no network).
 describe("runNativeDialogProcess", () => {
+  it("does not tree-kill a raw pid after the child handle reports exit but before close", async () => {
+    vi.useFakeTimers();
+    try {
+      const processEvents = new EventEmitter();
+      const stdin = new PassThrough();
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const kill = vi.fn(() => true);
+      const child = Object.assign(processEvents, {
+        pid: 4242,
+        exitCode: null as number | null,
+        signalCode: null as NodeJS.Signals | null,
+        stdin,
+        stdout,
+        stderr,
+        kill,
+      }) as unknown as ChildProcessWithoutNullStreams;
+      const killWindowsTree = vi.fn(() => "succeeded" as const);
+      const resultPromise = runNativeDialogProcess("fixed-helper", [], "", 100, undefined, {
+        platform: "win32",
+        processEnv: { SystemRoot: String.raw`C:\Windows` },
+        killWindowsTree,
+        spawnProcess: () => child,
+      });
+
+      Object.defineProperty(child, "exitCode", { value: 0, configurable: true });
+      await vi.advanceTimersByTimeAsync(100);
+
+      expect(killWindowsTree).not.toHaveBeenCalled();
+      expect(kill).not.toHaveBeenCalled();
+      processEvents.emit("close", 0);
+      await expect(resultPromise).resolves.toMatchObject({
+        exitCode: 0,
+        windowsTreeKill: "not-attempted",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("delivers stdin to the child and captures stdout", async () => {
     const result = await runNativeDialogProcess(
       process.execPath,
@@ -232,6 +332,30 @@ describe("runNativeDialogProcess", () => {
     );
     expect(result.timedOut).toBe(true);
     expect(result.exitCode).not.toBe(0);
+  });
+
+  it("bounds a Windows helper tree before signalling the immediate child", async () => {
+    const treeKills: number[] = [];
+    const result = await runNativeDialogProcess(
+      process.execPath,
+      ["-e", "setTimeout(() => {}, 60000)"],
+      "",
+      150,
+      undefined,
+      {
+        platform: "win32",
+        processEnv: { SystemRoot: String.raw`C:\Windows` },
+        killWindowsTree: (pid) => {
+          treeKills.push(pid);
+          return "succeeded";
+        },
+      },
+    );
+
+    expect(treeKills).toHaveLength(1);
+    expect(result.windowsTreeKill).toBe("succeeded");
+    expect(result.windowsTreeKillEscalation).toBeUndefined();
+    expect(result.timedOut).toBe(true);
   });
 
   it("caps runaway stdout and reports the overflow", async () => {
@@ -275,6 +399,58 @@ describe("runNativeDialogProcess", () => {
     expect(result.timedOut).toBe(false);
     expect(Date.now() - startedAt).toBeLessThan(8_000);
   }, 10_000);
+
+  // Regression: #2906 round 2. Passing `signal` to child_process.spawn made Node send SIGTERM and
+  // emit an AbortError before the child had exited. Cancellation is now owned by the same explicit
+  // escalation path as timeout/output overflow (and, on Windows, tree-kills before child.kill).
+  // This pins that abort keeps the promise pending until the child actually exits.
+  it("keeps the promise pending through an aborted signal until the child actually exits (SIGKILL escalation)", async () => {
+    // #2906 round 3: runNativeDialogProcess only resolves once, at real exit, so the test cannot
+    // observe the child's stdout while it is still running through the function's own return
+    // value. A fixed sleep guessing when the child has installed its SIGTERM handler is flaky on a
+    // slow/loaded runner (abort fires before the handler exists, killing the child via the default
+    // disposition instead of exercising the ignore-then-escalate path this test pins) and wastes
+    // time on a fast one. Instead, the child writes a marker file right after installing its
+    // handler -- an out-of-band readiness channel independent of runNativeDialogProcess's own
+    // stdio pipes -- and the test polls for that file (a condition, not a guessed duration).
+    const readyDir = mkdtempSync(join(tmpdir(), "keiko-native-dialog-ready-"));
+    const readyPath = join(readyDir, `${randomUUID()}.ready`);
+    try {
+      const controller = new AbortController();
+      const startedAt = Date.now();
+      const resultPromise = runNativeDialogProcess(
+        process.execPath,
+        [
+          "-e",
+          "process.on('SIGTERM', () => {}); " +
+            `require('node:fs').writeFileSync(${JSON.stringify(readyPath)}, 'ready'); ` +
+            "setInterval(() => {}, 1000);",
+        ],
+        "",
+        30_000,
+        controller.signal,
+      );
+      await vi.waitFor(
+        () => {
+          expect(existsSync(readyPath)).toBe(true);
+        },
+        { timeout: 5_000, interval: 10 },
+      );
+      controller.abort();
+
+      const result = await resultPromise;
+
+      // Before the fix this resolved almost immediately (~300ms, exitCode 127) from the
+      // abort-driven 'error' event alone, while the child was still alive. Now it can only settle
+      // once the SIGKILL escalation (armed by the abort) has actually terminated the child via
+      // 'close'.
+      expect(Date.now() - startedAt).toBeGreaterThanOrEqual(2_000);
+      expect(result.exitCode).toBeNull();
+      expect(result.timedOut).toBe(false);
+    } finally {
+      rmSync(readyDir, { recursive: true, force: true });
+    }
+  }, 15_000);
 
   it("spawns the helper with a minimal, allowlisted environment instead of full inheritance", async () => {
     const sentinelName = "KEIKO_TEST_NATIVE_DIALOG_SECRET";

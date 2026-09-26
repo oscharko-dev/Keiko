@@ -9,7 +9,7 @@ import {
   createAuditRedactor,
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
-import { MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS } from "@oscharko-dev/keiko-contracts";
+import { MEMORY_AUDIT_EVENT_SUMMARY_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/memory";
 import type {
   MemoryAuditEvent,
   MemoryId,
@@ -158,6 +158,126 @@ describe("createMemoryAuditHandler", () => {
     });
   });
 
+  it("classifies the first post-restart transitions from seeded body-free pre-images", () => {
+    const store = createInMemoryEvidenceStore();
+    const handler = createMemoryAuditHandler({
+      evidenceStore: store,
+      redactString: identityRedact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+    });
+    const archived = makeRecord({ id: brandedMemoryId("mem-archived"), status: "accepted" });
+    const accepted = makeRecord({ id: brandedMemoryId("mem-accepted"), status: "proposed" });
+    const rejected = makeRecord({ id: brandedMemoryId("mem-rejected"), status: "proposed" });
+    const pinned = makeRecord({ id: brandedMemoryId("mem-pinned"), status: "accepted" });
+
+    handler.seed([archived, accepted, rejected, pinned]);
+    handler({ kind: "memory:updated", record: { ...archived, status: "archived" } });
+    handler({ kind: "memory:updated", record: { ...accepted, status: "accepted" } });
+    handler({ kind: "memory:updated", record: { ...rejected, status: "rejected" } });
+    handler({ kind: "memory:updated", record: { ...pinned, pinned: true } });
+
+    expect(readEvents(store, FIXED_NOW).map((event) => event.kind)).toEqual([
+      "memory:archived",
+      "memory:accepted",
+      "memory:rejected",
+      "memory:pinned",
+    ]);
+  });
+
+  it("keeps an unrelated update to a seeded archived record as memory:updated", () => {
+    const store = createInMemoryEvidenceStore();
+    const handler = createMemoryAuditHandler({
+      evidenceStore: store,
+      redactString: identityRedact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+    });
+    const archived = makeRecord({ status: "archived" });
+
+    handler.seed([archived]);
+    handler({ kind: "memory:updated", record: { ...archived, tags: ["metadata-change"] } });
+
+    expect(readEvents(store, FIXED_NOW).map((event) => event.kind)).toEqual(["memory:updated"]);
+  });
+
+  it("classifies an unpin from a seeded body-free pre-image", () => {
+    const store = createInMemoryEvidenceStore();
+    const handler = createMemoryAuditHandler({
+      evidenceStore: store,
+      redactString: identityRedact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+    });
+    const pinned = makeRecord({ pinned: true });
+
+    handler.seed([pinned]);
+    handler({ kind: "memory:updated", record: { ...pinned, pinned: false } });
+
+    expect(readEvents(store, FIXED_NOW).map((event) => event.kind)).toEqual(["memory:unpinned"]);
+  });
+
+  it("rejects a second empty seed instead of discarding live transition state", () => {
+    const store = createInMemoryEvidenceStore();
+    const handler = createMemoryAuditHandler({
+      evidenceStore: store,
+      redactString: identityRedact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+    });
+    const proposed = makeRecord({ status: "proposed" });
+
+    handler.seed([proposed]);
+    expect((): void => {
+      handler.seed([]);
+    }).toThrow("may only be called once");
+    handler({ kind: "memory:updated", record: { ...proposed, status: "accepted" } });
+
+    expect(readEvents(store, FIXED_NOW).map((event) => event.kind)).toEqual(["memory:accepted"]);
+  });
+
+  it("rejects a first seed after event processing instead of clearing live transition state", () => {
+    const store = createInMemoryEvidenceStore();
+    const handler = createMemoryAuditHandler({
+      evidenceStore: store,
+      redactString: identityRedact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+    });
+    const proposed = makeRecord({ status: "proposed" });
+
+    handler({ kind: "memory:inserted", record: proposed });
+    expect((): void => {
+      handler.seed([]);
+    }).toThrow("may only be called once before mutations");
+    handler({ kind: "memory:updated", record: { ...proposed, status: "accepted" } });
+
+    expect(readEvents(store, FIXED_NOW).map((event) => event.kind)).toEqual([
+      "memory:proposed",
+      "memory:accepted",
+    ]);
+  });
+
+  it("prefers the vault's transactional pre-image over a stale seeded cache", () => {
+    const store = createInMemoryEvidenceStore();
+    const handler = createMemoryAuditHandler({
+      evidenceStore: store,
+      redactString: identityRedact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+    });
+    const accepted = makeRecord({ status: "accepted" });
+
+    handler.seed([accepted]);
+    handler({
+      kind: "memory:updated",
+      record: { ...accepted, status: "archived" },
+      previous: { id: accepted.id, status: "proposed", pinned: false },
+    });
+
+    expect(readEvents(store, FIXED_NOW).map((event) => event.kind)).toEqual(["memory:archived"]);
+  });
+
   it("keeps audit hashes independent of runtime locale collation", () => {
     const localeCompare = vi.spyOn(String.prototype, "localeCompare").mockImplementation(() => {
       throw new Error("locale collation must not participate in canonical hashes");
@@ -279,6 +399,42 @@ describe("createMemoryAuditHandler", () => {
       handler({ kind: "memory:inserted", record: makeRecord({ status: "proposed" }) });
     }).not.toThrow();
     expect(errors).toHaveLength(1);
+  });
+
+  it("reports a bridge persistence failure with the SAME date-bucket runId as its correlationId", () => {
+    // ADR-0173 D5 / g12: the vault-bridge path (createMemoryAuditHandler) reports through the
+    // diagnostic sink, not onPersistError, so its failure must carry the SAME runId the append
+    // targeted rather than a disconnected `randomUUID()`. Before the fix this was a random UUID.
+    const throwingStore: EvidenceStore = {
+      put: (): string => {
+        throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+      },
+      get: (): string | undefined => undefined,
+      list: (): readonly string[] => [],
+      location: (runId: string): string => runId,
+      delete: (): void => undefined,
+    };
+    const records: ServerDiagnosticRecord[] = [];
+    const diagnostics: ServerDiagnosticSink = {
+      record: (entry) => {
+        records.push(entry);
+      },
+    };
+    const handler = createMemoryAuditHandler({
+      evidenceStore: throwingStore,
+      redactString: identityRedact,
+      now: () => FIXED_NOW,
+      newEventId: makeIdFactory(),
+      diagnostics,
+    });
+
+    expect(() => {
+      handler({ kind: "memory:inserted", record: makeRecord({ status: "proposed" }) });
+    }).not.toThrow();
+
+    expect(records).toHaveLength(1);
+    expect(records[0]?.source).toBe("memory-audit-handler.bridge");
+    expect(records[0]?.correlationId).toBe(auditRunIdFor(FIXED_NOW));
   });
 
   it("preserves a corrupt audit manifest instead of resetting it", () => {
@@ -733,6 +889,10 @@ describe("recordMemoryAudits", () => {
       expect(records[0]?.operation).toBe("memory.audit.persist");
       expect(records[0]?.code).toBe("EACCES");
       expect(records[0]?.correlationId).toMatch(/^[A-Za-z0-9._-]{8,128}$/);
+      // ADR-0173 D5 / g12: the failure's correlationId is the SAME date-bucket runId the append
+      // itself targeted, not a disconnected `randomUUID()` — an operator can join the failure back
+      // to the bucket it belongs to. Before the fix this was a random UUID.
+      expect(records[0]?.correlationId).toBe(auditRunIdFor(FIXED_NOW));
       // Body-free: the store's path never enters the record.
       expect(JSON.stringify(records)).not.toContain("/Users/op/.keiko/evidence");
       expect(consoleError).not.toHaveBeenCalled();

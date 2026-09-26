@@ -33,6 +33,94 @@ describe("embedding profile compatibility", () => {
     expect(embeddingProfileKey(profile)).toContain("text-embedding-3-small");
   });
 
+  // KEIKO-0418: a model revision IS a different embedding space — re-embedding the same text under a
+  // new revision of the same modelId produces vectors that are not comparable with the old ones.
+  // With modelRevision outside both the comparison and the profile key, two revisions of one model
+  // compared as identical, so no reindex was recommended and stale vectors were searched against
+  // fresh queries.
+  it("treats two revisions of the same model as different embedding spaces", () => {
+    const left = hardenedProfile({ modelRevision: "2024-05" });
+    const right = hardenedProfile({ modelRevision: "2025-01" });
+
+    expect(compareEmbeddingProfiles(left, right).reason).toBe("model-revision-mismatch");
+    expect(compareEmbeddingProfiles(left, right).compatible).toBe(false);
+    expect(embeddingProfileKey(left)).not.toBe(embeddingProfileKey(right));
+  });
+
+  it("distinguishes a revisioned profile from an unversioned one", () => {
+    const versioned = hardenedProfile({ modelRevision: "2025-01" });
+    const unversioned = hardenedProfile();
+
+    expect(compareEmbeddingProfiles(versioned, unversioned).reason).toBe("model-revision-mismatch");
+    expect(embeddingProfileKey(versioned)).not.toBe(embeddingProfileKey(unversioned));
+  });
+
+  // embeddingProfileKey used `field ?? "sentinel"` for every optional component, so an absent
+  // field and a provider legitimately reporting the sentinel word itself (e.g. modelRevision:
+  // "unversioned") produced the IDENTICAL key — two genuinely different embedding spaces would
+  // then share a key even though compareEmbeddingProfiles (direct `===` on the raw field)
+  // correctly still calls them incompatible, making the key actively misleading.
+  it("distinguishes an absent modelRevision from a provider literally reporting 'unversioned'", () => {
+    const absent = hardenedProfile();
+    const literal = hardenedProfile({ modelRevision: "unversioned" });
+
+    expect(compareEmbeddingProfiles(absent, literal).compatible).toBe(false);
+    expect(embeddingProfileKey(absent)).not.toBe(embeddingProfileKey(literal));
+  });
+
+  it("distinguishes absence from a provider literal equal to each optional field's sentinel", () => {
+    // A minimal identity (only the required fields) so instructionVersion/embeddingSpaceFingerprint/
+    // tokenizer/dimensionsParam are genuinely absent, not merely overridden to undefined.
+    const minimal: EmbeddingModelIdentity = {
+      provider: "openai-compatible",
+      modelId: "text-embedding-3-small",
+      vectorDimensions: 1536,
+      vectorMetric: "cosine",
+    };
+    const absent = embeddingProfileFromModelIdentity(minimal);
+    const literalSentinels = embeddingProfileFromModelIdentity({
+      ...minimal,
+      instructionVersion: "legacy",
+      embeddingSpaceFingerprint: "unverified",
+    });
+
+    expect(embeddingProfileKey(absent)).not.toBe(embeddingProfileKey(literalSentinels));
+  });
+
+  it("distinguishes an absent tokenizer from a provider literally named 'unknown-tokenizer'", () => {
+    const withoutTokenizer = hardenedProfile();
+    const literalTokenizerName = embeddingProfileFromModelIdentity(HARDENED_IDENTITY, {
+      tokenizer: "unknown-tokenizer",
+    });
+
+    expect(embeddingProfileKey(withoutTokenizer)).not.toBe(
+      embeddingProfileKey(literalTokenizerName),
+    );
+  });
+
+  // embeddingProfileKey joins components with "|" without framing each one, so a provider-
+  // supplied field containing a literal "|" shifts the join's own field boundary: modelRevision
+  // "r|fam" + modelFamily "x" and modelRevision "r" + modelFamily "fam|x" both produce the
+  // substring "r|fam|x" once joined, even though they are two DIFFERENT, INCOMPATIBLE profiles.
+  it("distinguishes profiles whose fields collide across the '|' join boundary", () => {
+    const revisionCarriesPipe = embeddingProfileFromModelIdentity(
+      { ...HARDENED_IDENTITY, modelRevision: "r|fam" },
+      { modelFamily: "x" },
+    );
+    const familyCarriesPipe = embeddingProfileFromModelIdentity(
+      { ...HARDENED_IDENTITY, modelRevision: "r" },
+      { modelFamily: "fam|x" },
+    );
+
+    expect(revisionCarriesPipe.modelRevision).toBe("r|fam");
+    expect(revisionCarriesPipe.modelFamily).toBe("x");
+    expect(familyCarriesPipe.modelRevision).toBe("r");
+    expect(familyCarriesPipe.modelFamily).toBe("fam|x");
+    expect(embeddingProfileKey(revisionCarriesPipe)).not.toBe(
+      embeddingProfileKey(familyCarriesPipe),
+    );
+  });
+
   it("treats identical hardened profiles as same and query-embedding eligible", () => {
     const profile = hardenedProfile();
     const decision = compareEmbeddingProfiles(profile, { ...profile });

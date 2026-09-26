@@ -343,9 +343,17 @@ string, consistent with ADR-0017 D10's `browser:error` pattern of never surfacin
 - **No cd persistence.** Every execution must specify its cwd explicitly.
 - **No streaming output.** Large commands produce no visible output until they complete or hit the
   output cap.
-- **Individual file arguments are not path-contained.** `cat /etc/passwd` passes the allowlist
-  because `cat` has no subcommand structure to gate. `runCommand`'s cwd containment checks the
-  working directory, not each file argument. See Open Questions for detail.
+- **Per-argument path containment is now implemented.** Since the initial decision, each file/path
+  argument to `cat`, `head`, `tail`, `ls`, `tree`, `grep`, `find`, and `wc` is validated through
+  `assertOperandInsideProject` / `validatePathOperands` / `validateGrepOperands` /
+  `validateFindOperands` inside `validateCommandOperands` before spawn (see
+  `packages/keiko-server/src/terminal.ts`). `cat /etc/passwd` is now rejected with
+  `TERMINAL_OPERAND_OUTSIDE_PROJECT`. The narrower residual limitation is that `git`, `node`, `npm`,
+  `pwd`, and `echo` still fall through the switch's `default: break;` with no per-argument path
+  gate — those commands do not accept arbitrary path operands in the shape the readers do, and
+  their own boundaries (git repo root, node module resolution, pwd inherits cwd) are the practical
+  containment; a hostile file argument to `git ls-files ../../secret` for example is still bounded
+  by the cwd + repo checks.
 
 ### Neutral
 
@@ -535,28 +543,32 @@ existing tests that do not supply it continue to compile.
 **ADR-0013 (UI-Local Persistence):** No schema changes. Executions are ephemeral (D9). `ProjectStore.getProject(projectId)`
 is read (not modified) to resolve the workspace root for D2 Tier 2.
 
-**ADR-0014 (Workspace Shell Architecture):** `TerminalWidget`'s mount point in
-`ui/app/components/desktop/widgets/index.tsx` is unchanged. Only the widget's internals are
-rewritten.
+**ADR-0014 (Workspace Shell Architecture) — not restored:** ADR-0014 was not restored (see
+`docs/adr/README.md`); the workspace shell is now governed by ADR-0026 through ADR-0030. The
+`TerminalWidget` mount point remains unchanged, but its authoritative reference is those
+superseding ADRs. Only the widget's internals are rewritten.
 
 ## Open Questions / Out of Scope
 
-**Individual file argument path containment.** `runCommand`'s cwd containment validates the
-working directory, not each individual file-path argument. A user who passes `../../etc/passwd`
-as an argument to `cat`, `grep`, `head`, or `tail` would not be blocked by the cwd check. These
-commands are read-only, so the risk is information disclosure (reading files outside the project),
-not mutation. Mitigation: output is bounded by `maxOutputBytes` and Layer-1 redacted. A follow-up
-issue could add per-arg path containment to `isTerminalCommandAllowed` for these read-path commands.
-This is the most significant residual limitation of the MVP design.
+**Individual file argument path containment — resolved.** The MVP-era limitation that
+`runCommand`'s cwd containment did not validate individual file-path arguments has been closed for
+the read-path commands `cat`, `head`, `tail`, `ls`, `tree`, `grep`, `find`, and `wc`. Each
+per-argument path now flows through `assertOperandInsideProject` inside `validatePathOperands` /
+`validateGrepOperands` / `validateFindOperands` (see `packages/keiko-server/src/terminal.ts`)
+before spawn, and a regression pin in `packages/keiko-server/src/terminal.test.ts` confirms a
+`cat /etc/passwd`-shaped call is rejected with `TERMINAL_OPERAND_OUTSIDE_PROJECT`. Output remains
+bounded by `maxOutputBytes` and Layer-1 redacted as defence in depth. The residual scope is the
+handful of commands (`git`, `node`, `npm`, `pwd`, `echo`) whose arguments are not file paths in
+the same way; those are bounded by cwd containment plus their command-specific semantics.
 
 **`echo` and literal secrets.** With `shell: false`, `echo $SECRET` does not expand the variable.
 Layer-1 redaction scrubs known env-value patterns. A user who deliberately types a literal secret
 as an arg will see it in output; the redaction layer catches known patterns but not novel ones.
 This inherits the same honest bound as ADR-0006 D5 and is not a new limitation introduced here.
 
-**`grep -r` path escaping.** With `shell: false` and cwd inside the project root, a user who
-passes an absolute path or traversal as a grep path argument would traverse outside the project.
-The same documented limitation as file arguments above applies.
+**`grep -r` path escaping — resolved.** Per-argument containment for `grep` (including recursive
+paths) is now enforced by `validateGrepOperands`; an absolute or traversal path argument is
+rejected with `TERMINAL_OPERAND_OUTSIDE_PROJECT` before spawn.
 
 **Per-project policy overrides.** The global `TERMINAL_COMMAND_RULES` applies to all projects. A
 follow-up issue could introduce per-project `TerminalPolicyOverride` stored in the SQLite database.
@@ -576,7 +588,9 @@ follow-up issue could introduce per-project `TerminalPolicyOverride` stored in t
   SSE pattern, DNS-rebinding defense.
 - ADR-0013: UI-Local SQLite Persistence — `ProjectStore.getProject` used for D2 Tier 2 project
   root resolution. No schema change.
-- ADR-0014: Keiko Workspace Shell Architecture — `TerminalWidget` mount point unchanged.
+- ADR-0014: not restored (see `docs/adr/README.md`); the workspace shell is now governed by
+  ADR-0026 through ADR-0030. The `TerminalWidget` mount point is unchanged; consult the
+  superseding ADRs for the current location.
 - ADR-0017: Browser Tool Boundary and BYO-Chrome Integration — sibling surface; D7 SSE event
   metadata-only pattern, D9 in-memory map lifecycle, D10 typed failure mode table all mirror
   this ADR's approach.

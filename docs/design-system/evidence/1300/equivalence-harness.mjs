@@ -1,8 +1,8 @@
 // Issue #1300 — consolidated Design System 0.4.0 reference-fidelity visual-regression suite.
 //
-// This is the epic #1290 CAPSTONE gate. Children #1296–#1299 each proved ONE ported component
-// layer resolves identically to its DS 0.4.0 reference. This harness re-proves the UNION of those
-// surfaces in a single re-runnable pass, so a future drift in ANY migrated layer fails one gate.
+// This is the epic #1290 historical CAPSTONE evidence script. Children #1296–#1299 each proved ONE ported component
+// layer resolved identically to its DS 0.4.0 reference. This harness reproduces the UNION of those
+// surfaces in one historical pass, so a manual re-run reports any divergence from that snapshot.
 //
 // It renders the same component markup with two CSS sources, in headless Chromium, across all 7
 // theme/contrast/motion modes via page.setContent (no file server — CodeQL-safe):
@@ -403,10 +403,15 @@ function diffSets(a, b, probes, modeId, sink, counters, missing) {
 async function collectAccessibilityProof(page) {
   await applyMode(page, POST, MODES[0]);
   // keyboard / focus: Tab to the first focusable interactive control and assert it receives focus
-  // and a visible ring (WCAG 2.4.7 / 2.1.1).
+  // and a visible ring (WCAG 2.4.7 / 2.1.1). The proof is that the Tab loop reached the target on
+  // its own — never programmatically focus the element afterwards, because a forced focus() makes
+  // the assertion `activeIsBack === true` trivially true and the proof cannot fail. Hoist `reached`
+  // out of the loop and gate focusProof on it, so a Tab loop that never reached the target is
+  // reported as such instead of being papered over.
+  let reached = false;
   for (let i = 0; i < 25; i++) {
     await page.keyboard.press("Tab");
-    const reached = await page.evaluate(() => {
+    reached = await page.evaluate(() => {
       const a = document.activeElement;
       return !!a && a.closest(".c-back") !== null;
     });
@@ -414,7 +419,6 @@ async function collectAccessibilityProof(page) {
   }
   const focusProof = await page.evaluate(() => {
     const btn = document.querySelector(".c-back");
-    btn?.focus();
     const cs = btn ? getComputedStyle(btn) : null;
     return {
       activeIsBack: document.activeElement === btn,
@@ -424,6 +428,7 @@ async function collectAccessibilityProof(page) {
         !!cs && (cs.outlineStyle !== "none" || (cs.boxShadow !== "none" && cs.boxShadow !== "")),
     };
   });
+  focusProof.tabReached = reached;
   // name / role / value: combobox + grid sort header expose the correct ARIA contract.
   const nameRoleValue = await page.evaluate(() => {
     const combo = document.querySelector('.c-combo-input input[role="combobox"]');
@@ -491,8 +496,10 @@ const byMode = {};
 const accentRecord = {};
 
 for (const mode of MODES) {
-  const rPost = await collect(page, POST, mode, PROBES_R);
+  // Order matters: collect REFERENCE first, then POST, so the DOM ends in POST state and the
+  // screenshot below captures the product surface without a redundant applyMode(POST) call.
   const rRef = await collect(page, REFERENCE, mode, PROBES_R);
+  const rPost = await collect(page, POST, mode, PROBES_R);
   const sink = GATE_R_MODES.has(mode.id) ? rDiffsGated : rDiffsRecorded;
   const before = rCounters.diffs;
   diffSets(rRef, rPost, PROBES_R, mode.id, sink, rCounters, missing);
@@ -502,14 +509,15 @@ for (const mode of MODES) {
   };
 
   if (GATE_R_MODES.has(mode.id)) {
-    const addPost = await collect(page, POST, mode, PROBES_ACCENT);
+    // Same ordering: REFERENCE first, then POST last so the DOM stays in POST state.
     const addRef = await collect(page, REFERENCE, mode, PROBES_ACCENT);
+    const addPost = await collect(page, POST, mode, PROBES_ACCENT);
     accentRecord[mode.id] = Object.fromEntries(
       PROBES_ACCENT.map(([sel]) => [sel, { product: addPost[sel], reference: addRef[sel] }]),
     );
   }
 
-  await applyMode(page, POST, mode);
+  // The DOM is already in POST state from the collect(POST, mode, ...) call above.
   byMode[mode.id].mediaProbe = await readMediaProbe(page);
   await page.screenshot({ path: resolve(HERE, `${mode.id}.png`), fullPage: true });
   console.log(
@@ -537,6 +545,7 @@ const boundedRowSmoke = await runBoundedRowSmoke(page);
 await browser.close();
 
 const focusFailed =
+  accessibilityProof.focusProof.tabReached !== true ||
   accessibilityProof.focusProof.activeIsBack !== true ||
   accessibilityProof.focusProof.hasFocusRing !== true ||
   accessibilityProof.nameRoleValue.comboRole !== "combobox" ||
@@ -629,9 +638,16 @@ if (missing.size) {
 console.log(
   `ACCESSIBILITY: back-button focus=${accessibilityProof.focusProof.activeIsBack} ring=${accessibilityProof.focusProof.hasFocusRing}; combo role=${accessibilityProof.nameRoleValue.comboRole}; grid sort=${accessibilityProof.nameRoleValue.gridSort}`,
 );
-console.log(
-  `BOUNDED ROW SMOKE: ${boundedRowSmoke.rowCount} rows, ${boundedRowSmoke.durationMs.toFixed(2)}ms, sticky delta ${boundedRowSmoke.stickyHeaderDeltaPx.toFixed(2)}px`,
-);
+// Narrow on ok=true before formatting durationMs / stickyHeaderDeltaPx: runBoundedRowSmoke returns
+// `{ ok: false, reason }` when the DOM probe elements are absent, and calling .toFixed() on a
+// missing field would throw here — before process.exit is reached — so Chromium would leak.
+if (boundedRowSmoke.ok === true) {
+  console.log(
+    `BOUNDED ROW SMOKE: ${boundedRowSmoke.rowCount} rows, ${boundedRowSmoke.durationMs.toFixed(2)}ms, sticky delta ${boundedRowSmoke.stickyHeaderDeltaPx.toFixed(2)}px`,
+  );
+} else {
+  console.log(`BOUNDED ROW SMOKE: skipped — ${boundedRowSmoke.reason}`);
+}
 console.log(
   `\n${failed ? "FAIL" : "PASS"} — Group R dark/light 0-diff: ${rDiffsGated.length === 0}; missing selectors: ${missingSelectors.length}; media isolation: ${!mediaFailed}; a11y proof: ${!focusFailed}; bounded-row smoke: ${!perfFailed}`,
 );

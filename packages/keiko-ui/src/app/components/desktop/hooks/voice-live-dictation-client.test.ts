@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { VOICE_PROTOCOL_VERSION } from "@oscharko-dev/keiko-contracts";
+import { VOICE_PROTOCOL_VERSION } from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
 import {
   createBrowserVoiceLiveDictationControlClient,
   VoiceLiveDictationControlError,

@@ -16,7 +16,7 @@
 // If no pdfjs runtime is resolvable in the environment the test fails CLOSED under CI (asserts the
 // runtime is present) instead of silently passing, so a broken/absent engine cannot pass unnoticed.
 
-import { DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
 import type { DocumentId, LargeDocumentResourcePolicy } from "@oscharko-dev/keiko-contracts";
 import { describe, expect, it } from "vitest";
 

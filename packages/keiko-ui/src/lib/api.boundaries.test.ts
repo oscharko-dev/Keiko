@@ -2,13 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ApiError,
   StreamingUnavailableError,
+  askGrounded,
   applyRun,
   cancelRun,
   createChat,
   createChatMessage,
   createDesktopChat,
   createProject,
-  createRunSummaryPair,
   fetchChatMessages,
   fetchConfig,
   fetchEvidenceList,
@@ -78,6 +78,28 @@ function streamResponse(text: string): Response {
 describe("API BFF boundary helpers", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it("keeps a caller-supplied voice turn correlation on both chat transports", async () => {
+    const fetchMock = vi.fn<typeof fetch>(() => Promise.resolve(jsonResponse(okBody())));
+    vi.stubGlobal("fetch", fetchMock);
+    const correlationId = "voice-chat-request-0001";
+
+    await sendDesktopChat(
+      { chatId: "chat-1", projectPath: "/repo", content: "spoken", modelId: "model-a" },
+      undefined,
+      correlationId,
+    );
+    await askGrounded(
+      { chatId: "chat-1", content: "spoken", modelId: "model-a" },
+      undefined,
+      correlationId,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(init?.headers).toMatchObject({ "X-Keiko-Correlation-Id": correlationId });
+    }
   });
 
   it("preserves project trust warnings with their support id", async () => {
@@ -170,17 +192,6 @@ describe("API BFF boundary helpers", () => {
       role: "user",
       content: "hello",
       timestamp: 3,
-    });
-    await createRunSummaryPair({
-      chatId: "chat 1",
-      projectPath: "/repo",
-      user: { content: "hello", timestamp: 3 },
-      summary: {
-        content: "done",
-        timestamp: 4,
-        runId: "run 1",
-        workflowStatus: "completed",
-      },
     });
     await patchChatMessage("msg 1", "chat 1", "/repo", { shortResult: "patched" });
     await createDesktopChat({ projectPath: "/repo", title: "Desktop", modelId: "model-a" });
@@ -383,5 +394,50 @@ describe("API BFF boundary helpers", () => {
     await expect(
       sendDesktopChatStream(input, new AbortController().signal, handlers),
     ).rejects.toMatchObject({ code: "STREAMING_UNSUPPORTED", message: "Response body was null." });
+  });
+});
+
+// #3532: `/api/health` carries the Activity Log readiness. The UI keeps a snapshot only when it
+// passes the closed contract, so a malformed one can never be rendered as a real state.
+describe("fetchHealth diagnostic readiness", () => {
+  const degraded = {
+    readiness: "degraded",
+    reasons: ["storage-pressure"],
+    writer: "production-file",
+    lostEvents: 3,
+  };
+
+  function stubHealth(diagnostics: unknown): void {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse({ status: "ok", version: "1.0.0", diagnostics }))),
+    );
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps a readiness snapshot that passes the closed contract", async () => {
+    stubHealth(degraded);
+
+    await expect(fetchHealth()).resolves.toEqual({
+      status: "ok",
+      version: "1.0.0",
+      diagnostics: degraded,
+    });
+  });
+
+  it.each([
+    ["an unknown state", { ...degraded, readiness: "fine" }],
+    ["an unknown reason", { ...degraded, reasons: ["disk-on-fire"] }],
+    ["a degraded state without a reason", { ...degraded, reasons: [] }],
+    ["a ready state that names a reason", { ...degraded, readiness: "ready" }],
+    ["a negative lost-event count", { ...degraded, lostEvents: -1 }],
+    ["a string", "degraded"],
+  ])("drops %s and keeps the version", async (_label, diagnostics) => {
+    stubHealth(diagnostics);
+
+    await expect(fetchHealth()).resolves.toEqual({ status: "ok", version: "1.0.0" });
   });
 });

@@ -6,7 +6,7 @@
 // Test C: serializeExportBundle inherits clean text from the chokepoint across all formats.
 
 import { describe, expect, it } from "vitest";
-import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import type {
   QualityIntelligenceExportBundle,
   QualityIntelligenceTestCaseCandidate,

@@ -5,6 +5,7 @@ import {
   cachedContentScores,
   cachedExactSymbolDefinitionMatches,
   cachedLexicalRecordMatches,
+  cachedLexicalRecordRequiresLiveMatch,
   prepareCachedLexicalQuery,
   scoreCachedLexicalContent,
 } from "./repoSearchCachedLexical.js";
@@ -293,6 +294,59 @@ describe("repoSearchCachedLexical", () => {
     ]);
     expect(cachedLexicalRecordMatches(record, prepared)).toBe(true);
   });
+
+  it("preserves enclosing function ranges for warm exact-symbol matches", () => {
+    const prepared = prepareCachedLexicalQuery(query("dispatchWorkUnit", { kind: "exact-symbol" }));
+    expect(prepared).toBeDefined();
+    if (prepared === undefined) return;
+    const record = buildWorkspaceIndexLexicalRecord(
+      "export async function dispatchWorkUnit(): Promise<void> {\n" +
+        "  await runPipeline();\n" +
+        "}\n",
+      "src/service.ts",
+    );
+
+    expect(bestCachedLexicalLines(record, prepared)).toEqual([
+      { line: 1, startLine: 1, endLine: 3, score: 1 },
+    ]);
+  });
+
+  it("requires live matching when longer terms can contain additional substring hits", () => {
+    const prepared = prepareCachedLexicalQuery(query("needle", { kind: "exact-symbol" }));
+    expect(prepared).toBeDefined();
+    if (prepared === undefined) return;
+
+    expect(
+      cachedLexicalRecordRequiresLiveMatch(
+        buildWorkspaceIndexLexicalRecord(
+          "export const needle = 1;\nexport const superneedlevalue = 2;",
+        ),
+        prepared,
+      ),
+    ).toBe(true);
+    expect(
+      cachedLexicalRecordRequiresLiveMatch(
+        buildWorkspaceIndexLexicalRecord("export const needle = 1;"),
+        prepared,
+      ),
+    ).toBe(false);
+  });
+
+  it.each(["foo+bar", "_foo", "$foo"])(
+    "does not use term-length proofs for punctuation-sensitive query %s",
+    (text) => {
+      const prepared = prepareCachedLexicalQuery(query(text, { kind: "exact-symbol" }));
+      expect(prepared).toBeDefined();
+      if (prepared === undefined) return;
+
+      expect(
+        cachedLexicalRecordRequiresLiveMatch(
+          buildWorkspaceIndexLexicalRecord(`export const ${text} = 1;`),
+          prepared,
+        ),
+      ).toBe(true);
+    },
+  );
 
   it("fails closed for truncated lexical records", () => {
     const retrieval = query("release handler");

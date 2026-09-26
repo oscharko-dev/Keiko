@@ -2,7 +2,6 @@
 
 import { Buffer } from "node:buffer";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
   lstatSync,
   mkdirSync,
@@ -13,11 +12,14 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve, win32 } from "node:path";
+import { dirname, join, relative, resolve, win32 } from "node:path";
 import { tmpdir } from "node:os";
 
 import { buildCompilerEnvironment } from "./build-secure-workspace-read.mjs";
+import { resolveWindowsMsvcEnv } from "./lib/windows-msvc.mjs";
 import { RUNTIME_QUALIFICATION_SUITE } from "./runtime-activation-manifest.mjs";
+import { sha256File } from "./lib/digest.mjs";
+import { portableResourceRoot } from "./portable-signed-archive.mjs";
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const COMMIT = /^[a-f0-9]{40}$/u;
@@ -33,10 +35,6 @@ export class WindowsRuntimeAttestationError extends Error {}
 
 function fail(message) {
   throw new WindowsRuntimeAttestationError(`windows-runtime-attestation: ${message}`);
-}
-
-function sha256(path) {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
 function readReceipt(path) {
@@ -125,19 +123,27 @@ export function generateWindowsRuntimeAttestation(
   if (platform !== "win32") fail("generation requires Windows");
   const stageRoot = resolve(required(options, "stage-root"));
   const receipt = readReceipt(resolve(required(options, "receipt")));
-  const activation = join(stageRoot, "payload", "Keiko", ".portable", "runtime-activation.json");
-  if (sha256(activation) !== receipt.activationManifestSha256) {
+  const manifest = JSON.parse(
+    readFileSync(join(stageRoot, "manifest", "portable-manifest.json"), "utf8"),
+  );
+  const resourceRoot = portableResourceRoot(stageRoot, "windows-x64", manifest);
+  const activation = join(resourceRoot, ".portable", "runtime-activation.json");
+  if (sha256File(activation) !== receipt.activationManifestSha256) {
     fail("qualification receipt activation binding is stale");
   }
-  const destination = join(stageRoot, "payload", "Keiko", ...EXECUTABLE_RELATIVE_PATH.split("/"));
+  const destination = join(resourceRoot, ...EXECUTABLE_RELATIVE_PATH.split("/"));
   mkdirSync(dirname(destination), { recursive: true });
   buildCarrierFn(destination, receipt);
   bindCarrierManifest(stageRoot, destination);
   writeFileSync(
     resolve(required(options, "catalog")),
-    `payload/Keiko/${EXECUTABLE_RELATIVE_PATH}\n`,
+    `${portableCatalogPrefix(stageRoot, resourceRoot)}/${EXECUTABLE_RELATIVE_PATH}\n`,
     { mode: 0o600 },
   );
+}
+
+function portableCatalogPrefix(stageRoot, resourceRoot) {
+  return relative(resolve(stageRoot), resourceRoot).replaceAll("\\", "/");
 }
 
 export function buildWindowsRuntimeAttestationCarrier(
@@ -194,9 +200,22 @@ function allowedWindowsBuildPath(path) {
 
 export function windowsBuildToolchain(
   environment,
-  { lstat = lstatSync, realpath = (path) => realpathSync.native(path) } = {},
+  {
+    lstat = lstatSync,
+    realpath = (path) => realpathSync.native(path),
+    resolveMsvcEnvImpl = resolveWindowsMsvcEnv,
+  } = {},
 ) {
-  const compilerEnvironment = buildCompilerEnvironment("windows-x64", environment);
+  let compilerEnvironment;
+  try {
+    compilerEnvironment = buildCompilerEnvironment("windows-x64", environment, resolveMsvcEnvImpl);
+  } catch (error) {
+    // Expected toolchain causes (vswhere missing, vcvars failure, incomplete import) must reach
+    // the workflow log verbatim — the CLI catch redacts every non-attestation error type.
+    throw new WindowsRuntimeAttestationError(
+      `windows-runtime-attestation: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   const pathEntries = (compilerEnvironment.PATH ?? "")
     .split(win32.delimiter)
     .map((path) => path.trim().replace(/^"|"$/gu, ""))
@@ -231,7 +250,7 @@ function bindCarrierManifest(stageRoot, destination) {
     schemaVersion: 1,
     carrierKind: "authenticode-executable",
     executablePath: EXECUTABLE_RELATIVE_PATH,
-    shippedSha256: sha256(destination),
+    shippedSha256: sha256File(destination),
     sizeBytes: entry.size,
     signing: {
       signatureKind: "authenticode",

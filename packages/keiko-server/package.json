@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-server",
-  "version": "0.2.15",
+  "version": "1.1.9",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal server package: local loopback BFF runtime (HTTP/SSE/WebSocket router, CSP, host check, CSRF gate, terminal, browser, files, run engine, SQLite-backed UI store) that mediates the browser presentation tier and the Node-side domain packages (ADR-0019). Not published independently.",
@@ -14,41 +14,67 @@
     "./credential-vault": {
       "types": "./dist/credentialVault.d.ts",
       "import": "./dist/credentialVault.js"
+    },
+    "./runtime/tool-catalog-lifecycle": {
+      "types": "./dist/tool-catalog/catalogToolLifecycle.d.ts",
+      "import": "./dist/tool-catalog/catalogToolLifecycle.js"
+    },
+    "./diagnostics-log": {
+      "types": "./dist/diagnostics-log.d.ts",
+      "import": "./dist/diagnostics-log.js"
+    },
+    "./observability/server-log": {
+      "types": "./dist/observability/server-log.d.ts",
+      "import": "./dist/observability/server-log.js"
+    },
+    "./tool-catalog/catalogToolDispatch": {
+      "types": "./dist/tool-catalog/catalogToolDispatch.d.ts",
+      "import": "./dist/tool-catalog/catalogToolDispatch.js"
+    },
+    "./tool-catalog/catalogToolPorts": {
+      "types": "./dist/tool-catalog/catalogToolPorts.d.ts",
+      "import": "./dist/tool-catalog/catalogToolPorts.js"
     }
   },
   "scripts": {
     "build": "tsc -b tsconfig.json",
     "typecheck": "tsc -b tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "bench:reconciliation-gitdir-pointer": "vitest bench src/task-workspace/reconciliation-gitdir-pointer-parse.bench.ts"
   },
   "files": [
     "dist"
   ],
   "sideEffects": false,
   "engines": {
-    "node": ">=24.18.0 <25"
+    "node": ">=24.18.0 <25 || >=26.3.0 <27"
   },
   "dependencies": {
-    "@oscharko-dev/keiko-connectors": "0.2.15",
-    "@oscharko-dev/keiko-contracts": "0.2.15",
-    "@oscharko-dev/keiko-evidence": "0.2.15",
-    "@oscharko-dev/keiko-git": "0.2.15",
-    "@oscharko-dev/keiko-harness": "0.2.15",
-    "@oscharko-dev/keiko-local-knowledge": "0.2.15",
-    "@oscharko-dev/keiko-memory-capture": "0.2.15",
-    "@oscharko-dev/keiko-memory-consolidation": "0.2.15",
-    "@oscharko-dev/keiko-memory-governance": "0.2.15",
-    "@oscharko-dev/keiko-memory-retrieval": "0.2.15",
-    "@oscharko-dev/keiko-memory-vault": "0.2.15",
-    "@oscharko-dev/keiko-model-gateway": "0.2.15",
-    "@oscharko-dev/keiko-quality-intelligence": "0.2.15",
-    "@oscharko-dev/keiko-sandbox": "0.2.15",
-    "@oscharko-dev/keiko-sdk": "0.2.15",
-    "@oscharko-dev/keiko-security": "0.2.15",
-    "@oscharko-dev/keiko-tools": "0.2.15",
-    "@oscharko-dev/keiko-verification": "0.2.15",
-    "@oscharko-dev/keiko-workflows": "0.2.15",
-    "@oscharko-dev/keiko-workspace": "0.2.15",
+    "@oscharko-dev/keiko-connectors": "1.1.9",
+    "@oscharko-dev/keiko-contracts": "1.1.9",
+    "@oscharko-dev/keiko-evidence": "1.1.9",
+    "@oscharko-dev/keiko-git": "1.1.9",
+    "@oscharko-dev/keiko-harness": "1.1.9",
+    "@oscharko-dev/keiko-local-knowledge": "1.1.9",
+    "@oscharko-dev/keiko-memory-capture": "1.1.9",
+    "@oscharko-dev/keiko-memory-consolidation": "1.1.9",
+    "@oscharko-dev/keiko-memory-governance": "1.1.9",
+    "@oscharko-dev/keiko-memory-retrieval": "1.1.9",
+    "@oscharko-dev/keiko-memory-vault": "1.1.9",
+    "@oscharko-dev/keiko-model-gateway": "1.1.9",
+    "@oscharko-dev/keiko-quality-intelligence": "1.1.9",
+    "@oscharko-dev/keiko-sandbox": "1.1.9",
+    "@oscharko-dev/keiko-sdk": "1.1.9",
+    "@oscharko-dev/keiko-security": "1.1.9",
+    "@oscharko-dev/keiko-tool-catalog": "1.1.9",
+    "@oscharko-dev/keiko-tools": "1.1.9",
+    "@oscharko-dev/keiko-verification": "1.1.9",
+    "@oscharko-dev/keiko-workflows": "1.1.9",
+    "@oscharko-dev/keiko-workspace": "1.1.9",
+    "@sigstore/bundle": "^5.0.0",
+    "@sigstore/protobuf-specs": "^0.5.2",
+    "@sigstore/tuf": "^5.0.0",
+    "@sigstore/verify": "^4.1.2",
     "smol-toml": "^1.7.1",
     "typescript": "~6.0.3",
     "ws": "^8.21.0",

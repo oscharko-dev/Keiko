@@ -38,7 +38,10 @@ export interface BugWorkflowLimits {
   readonly maxPatchBytes: number; // 65_536
 }
 
-export const DEFAULT_BUG_WORKFLOW_LIMITS: BugWorkflowLimits = {
+// Object.freeze, not `as const` alone: the module header calls this "the frozen
+// DEFAULT_BUG_WORKFLOW_LIMITS table", but `as const` is erased at compile time and left the shared
+// singleton writable. Flat record, so a shallow freeze is sufficient.
+export const DEFAULT_BUG_WORKFLOW_LIMITS: BugWorkflowLimits = Object.freeze({
   maxModelCalls: 3,
   maxRetries: 2,
   contextBudgetBytes: 65_536,
@@ -46,7 +49,7 @@ export const DEFAULT_BUG_WORKFLOW_LIMITS: BugWorkflowLimits = {
   maxFilesChanged: 10,
   maxChangedLines: 300,
   maxPatchBytes: 65_536,
-} as const;
+});
 
 // ─── Event envelope ────────────────────────────────────────────────────────────────
 

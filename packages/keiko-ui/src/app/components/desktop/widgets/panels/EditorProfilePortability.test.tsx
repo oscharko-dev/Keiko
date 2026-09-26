@@ -2,15 +2,19 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { describe, expect, it, vi } from "vitest";
 
+import type {
+  EditorM11ProfileSummary,
+  EditorM11SettingsSnapshot,
+  WorkspaceProfileImportPreview,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
+import {
   EDITOR_M11_DEFAULT_PROFILE_REF,
   resolveEditorM11Settings,
-  type EditorM11ProfileSummary,
-  type EditorM11SettingsSnapshot,
-  type WorkspaceProfileImportPreview,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m11-settings";
 import { I18nProvider } from "@/lib/i18n";
 import type { EditorSettingsView } from "../cards/useEditorSettings";
 import { EditorProfilePortability } from "./EditorProfilePortability";

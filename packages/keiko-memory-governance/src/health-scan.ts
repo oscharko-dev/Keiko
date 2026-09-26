@@ -31,7 +31,7 @@
 // `maxRecordsPerPartition` independently caps EACH (scope, type) partition before the O(n^2) passes —
 // otherwise a single densely-populated partition alone could still reach the full global cap.
 
-import { MEMORY_HEALTH_SCAN_REASON_MAX_CHARS } from "@oscharko-dev/keiko-contracts";
+import { MEMORY_HEALTH_SCAN_REASON_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/memory-health-scan-wire";
 import type {
   MemoryEdge,
   MemoryId,

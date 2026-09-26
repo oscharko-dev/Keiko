@@ -21,15 +21,15 @@
 // state record plus module-level operations, so each operation stays short and explicitly typed.
 
 import { timingSafeEqual } from "node:crypto";
-import {
-  EDITOR_AGENT_SCHEMA_VERSION,
-  isMutatingEditorAgentAction,
-  type EditorAgentAction,
-  type EditorAgentActionResult,
-  type EditorAgentEvent,
-  type EditorAgentFailureCode,
-  type EditorAgentSessionSnapshot,
+import type {
+  EditorAgentAction,
+  EditorAgentActionResult,
+  EditorAgentEvent,
+  EditorAgentFailureCode,
+  EditorAgentSessionSnapshot,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { isMutatingEditorAgentAction } from "@oscharko-dev/keiko-contracts/runtime/editor-agent-governance";
 
 // A queued action the bridge never acknowledges within ACTION_TIMEOUT_MS is failed and evicted so the
 // bounded queue self-heals (AC2). MAX_QUEUED_PER_SESSION bounds the in-flight depth per session;
@@ -162,7 +162,7 @@ function lifecycleFailure(
 
 function resultRootAttribution(
   action: EditorAgentAction,
-): Pick<EditorAgentActionResult, "rootAttribution"> | Record<never, never> {
+): Partial<Pick<EditorAgentActionResult, "rootAttribution">> {
   const binding = action.rootBinding;
   return binding === undefined
     ? {}
@@ -374,20 +374,6 @@ function actionTimeoutMs(state: RegistryState, action: EditorAgentAction): numbe
     : state.actionTimeoutMs;
 }
 
-function rejectedQueueOutcome(action: EditorAgentAction, message: string): EditorAgentQueueOutcome {
-  return {
-    kind: "rejected",
-    result: {
-      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
-      actionId: action.actionId,
-      sessionId: action.sessionId,
-      ...resultRootAttribution(action),
-      status: "failed",
-      message,
-    },
-  };
-}
-
 function queueActionImpl(
   state: RegistryState,
   action: EditorAgentAction,
@@ -426,15 +412,23 @@ function queueRejection(
   inner: ReadonlyMap<string, PendingAction> | undefined,
 ): EditorAgentQueueOutcome | undefined {
   if (inner?.get(action.actionId) !== undefined)
-    return rejectedQueueOutcome(
-      action,
-      "An action with this id is already in flight for this session.",
-    );
+    return {
+      kind: "rejected",
+      result: lifecycleFailure(
+        action,
+        "DUPLICATE_ACTION",
+        "An action with this id is already in flight for this session.",
+      ),
+    };
   if (isMutatingEditorAgentAction(action.type) && hasPendingMutation(inner))
-    return rejectedQueueOutcome(
-      action,
-      "A mutating editor action is already awaiting a terminal result.",
-    );
+    return {
+      kind: "rejected",
+      result: lifecycleFailure(
+        action,
+        "MUTATION_IN_FLIGHT",
+        "A mutating editor action is already awaiting a terminal result.",
+      ),
+    };
   if ((inner?.size ?? 0) < state.maxQueuedPerSession) return undefined;
   return {
     kind: "rejected",

@@ -10,6 +10,7 @@ import type {
   QualityIntelligencePriority,
   QualityIntelligenceRiskClass,
 } from "./testCaseCandidate.js";
+import type { QualityIntelligenceTestCaseId } from "./ids.js";
 
 export interface QualityIntelligenceCandidateEditProvenance {
   readonly editedAt: string;
@@ -30,7 +31,7 @@ export interface QualityIntelligenceCandidateEditableFields {
 }
 
 export interface QualityIntelligenceCandidateEditedRevision {
-  readonly candidateId: string;
+  readonly candidateId: QualityIntelligenceTestCaseId;
   readonly provenance: QualityIntelligenceCandidateEditProvenance;
   readonly editedFields: QualityIntelligenceCandidateEditableFields;
 }

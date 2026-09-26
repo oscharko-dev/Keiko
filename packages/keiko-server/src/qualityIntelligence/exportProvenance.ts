@@ -39,7 +39,10 @@ export function buildQualityIntelligenceExportProvenance(
     model: {
       generation: modelStage(generationModelId),
       judge: modelStage(judgeModelId),
-      ...(manifest.seedUsed !== undefined ? { seedUsed: manifest.seedUsed } : {}),
+      // KEIKO-0603: seedUsed is now required (number | null) on the export contract, following the
+      // completedAt precedent -- null means no seed was used or recorded, collapsing the manifest's
+      // separate absent/null tri-state into the wire's two-state contract at this projection.
+      seedUsed: manifest.seedUsed ?? null,
       ...(manifest.modelParameters !== undefined
         ? { modelParameters: manifest.modelParameters }
         : {}),

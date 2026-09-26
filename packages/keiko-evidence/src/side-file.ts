@@ -9,10 +9,10 @@ import { lstatSync, rmSync } from "node:fs";
 import type { SideFileWriteResult } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { replaceViaDurableTempFile } from "./durable-write.js";
+import { PostRenameFsyncError, replaceViaDurableTempFile } from "./durable-write.js";
 import { assertValidRunId } from "./runid.js";
 import { EvidenceWriteError } from "./errors.js";
-import { ownedChildPath, prepareOwnedDirectory } from "./fs-safety.js";
+import { isSingleLinkRegularFile, ownedChildPath, prepareOwnedDirectory } from "./fs-safety.js";
 
 const MAX_NAME_LENGTH = 128;
 
@@ -59,6 +59,14 @@ function atomicWriteBytes(target: string, data: Buffer, randomSuffix: () => stri
     // parent directory around the rename.
     replaceViaDurableTempFile(target, temp, data);
   } catch (error) {
+    // Post-rename fsync failure = content is durable on the target, only the parent-dir metadata
+    // fsync is unconfirmed. Do not clean the (already gone) temp; do not claim the write failed.
+    // See KEIKO-0388 / KEIKO-1034.
+    if (error instanceof PostRenameFsyncError) {
+      throw new EvidenceWriteError(
+        `side-file parent-directory fsync failed after durable rename: ${error.message}`,
+      );
+    }
     rmSync(temp, { force: true });
     throw new EvidenceWriteError(
       `side-file write failed: ${error instanceof Error ? error.message : "unknown"}`,
@@ -66,21 +74,18 @@ function atomicWriteBytes(target: string, data: Buffer, randomSuffix: () => stri
   }
 }
 
-function isSingleLinkRegularFile(path: string, fs: WorkspaceFs): boolean {
-  try {
-    const stat = fs.stat(path);
-    return stat.isFile && (stat.hardLinkCount ?? 1) <= 1;
-  } catch (error) {
-    throw new EvidenceWriteError(
-      `cannot inspect side-file target: ${error instanceof Error ? error.message : "unknown"}`,
-    );
-  }
+function toSideFileInspectionError(message: string): Error {
+  return new EvidenceWriteError(`cannot inspect side-file target: ${message}`);
+}
+
+function isSingleLinkSideFile(path: string, fs: WorkspaceFs): boolean {
+  return isSingleLinkRegularFile(path, fs, toSideFileInspectionError);
 }
 
 function assertWritableSideFileEntry(target: string, fs: WorkspaceFs): void {
   const entry = lstatSync(target, { throwIfNoEntry: false });
   if (entry === undefined) return;
-  if (!entry.isFile() || entry.isSymbolicLink() || !isSingleLinkRegularFile(target, fs)) {
+  if (!entry.isFile() || entry.isSymbolicLink() || !isSingleLinkSideFile(target, fs)) {
     throw new EvidenceWriteError("cannot overwrite a non-ledger side-file");
   }
 }

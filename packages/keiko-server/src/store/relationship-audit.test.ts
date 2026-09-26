@@ -215,8 +215,8 @@ describe("listRelationshipAuditEntriesForRelationship", () => {
   });
 });
 
-describe("resolveAuditPlacement (#544 seam)", () => {
-  it("always returns sibling-table in this PR (TODO #544 wires evidence-manifest)", () => {
+describe("resolveAuditPlacement", () => {
+  it("uses the documented sibling table until the evidence contract owns relationship entries", () => {
     expect(
       resolveAuditPlacement({ kind: "relationship.created", sourceKind: "workflow-run" }),
     ).toBe("sibling-table");

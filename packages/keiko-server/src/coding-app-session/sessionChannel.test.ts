@@ -59,7 +59,23 @@ describe("createCodingAppSessionChannel", () => {
   it("cannot pair without a pairing authority (fail closed)", () => {
     const channel = createCodingAppSessionChannel({ registry: createSessionRegistry() });
     expect(channel.pair(fakePairingRequestBody())).toEqual({ paired: false });
+    expect(channel.ensureLocalSession(undefined)).toEqual({ status: "unavailable" });
     expect(channel.sessionCount()).toBe(0);
+  });
+
+  it("ensures a local session only when launcher pairing authority is composed", () => {
+    const channel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+    });
+
+    const issued = channel.ensureLocalSession(undefined);
+
+    expect(issued.status).toBe("issued");
+    if (issued.status !== "issued") throw new TypeError("expected a local app session");
+    expect(channel.sessionCount()).toBe(1);
+    expect(channel.ensureLocalSession(issued.cookieToken)).toEqual({ status: "active" });
+    expect(channel.sessionCount()).toBe(1);
   });
 
   it("does not pair when the authority denies a well-formed attestation", () => {
@@ -122,11 +138,13 @@ describe("createCodingAppSessionChannel", () => {
     if (rotated.rotated) expect(channel.snapshot(rotated.cookieToken).content).toEqual(CANARY);
   });
 
-  it("sign-out revokes the session", () => {
+  it("sign-out revokes the session and reports it once", () => {
     const { channel, cookieToken } = pairedChannel(createStatic(CANARY));
-    channel.signOut(cookieToken);
+    expect(channel.signOut(cookieToken)).toBe(true);
     expect(channel.snapshot(cookieToken).content).toBeNull();
     expect(channel.sessionCount()).toBe(0);
+    // Nothing is left to revoke, so a caller records no second sign-out.
+    expect(channel.signOut(cookieToken)).toBe(false);
   });
 
   it("streams bounded updates and detaches when rotation invalidates the original cookie", () => {
@@ -299,9 +317,9 @@ describe("createCodingAppSessionChannel", () => {
       pairingPort: createFakeSessionPairingPort(),
     });
     expect(channel.rotate(undefined)).toEqual({ rotated: false });
-    expect(() => {
-      channel.signOut(undefined);
-    }).not.toThrow();
+    expect(channel.signOut(undefined)).toBe(false);
+    expect(channel.signOut("")).toBe(false);
+    expect(channel.signOut("sess_000000000000000000000000.wrong")).toBe(false);
   });
 
   // #2478: verifySession is the read-authority primitive the W1.5 route guard enforces with.

@@ -1,3 +1,13 @@
+import { createHash } from "node:crypto";
+import type {
+  CodingSafeActivityFeed,
+  CodingSafeActivityMessageRole,
+  CodingSafeActivityPlanStepState,
+  CodingSafeActivityTextSegment,
+  CodingSafeActivityTool,
+  CodingSafeActivityToolState,
+  UnavailableCodingSafeActivityFeed,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_SAFE_ACTIVITY_MAX_DROPPED_EVENT_COUNT,
   CODING_SAFE_ACTIVITY_MAX_MESSAGE_UTF8_BYTES,
@@ -12,24 +22,105 @@ import {
   CODING_SAFE_ACTIVITY_MAX_TURN_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_MAX_UTF8_BYTES,
   CODING_SAFE_ACTIVITY_PLAN_STEP_STATES,
-  stripUnsafeFormatChars,
   unavailableCodingSafeActivityFeed,
   validateCodingSafeActivityFeed,
-  type CodingSafeActivityFeed,
-  type CodingSafeActivityMessageRole,
-  type CodingSafeActivityPlanStepState,
-  type CodingSafeActivityTextSegment,
-  type CodingSafeActivityTool,
-  type CodingSafeActivityToolState,
-  type UnavailableCodingSafeActivityFeed,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
+import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
-import { emitServerDiagnostic, type ServerDiagnosticSink } from "../diagnostics-log.js";
+import {
+  emitServerDiagnostic,
+  type ServerDiagnosticSink,
+  type ServerDiagnosticSummary,
+} from "../diagnostics-log.js";
+import { correlationIdOrUnknown } from "../correlation.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 
 const DEFAULT_TTL_MS = 30 * 60_000;
 const DEFAULT_MAX_SUBSCRIBERS = 32;
 const DEFAULT_MAX_SIGNAL_IDENTITIES = 32_768;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+
+const CODING_RUNTIME_SAFE_ACTIVITY_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.safe-activity",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingSafeActivityProjection.lifecycle",
+  fields: {
+    // `superseded`: a late runtime update for a call Keiko already settled was set aside, not lost
+    // (PR #3617 review), so a reader can reconstruct that the update arrived.
+    event: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["purged", "dropped", "superseded"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "stop",
+        "takeover",
+        "shutdown",
+        "workspace-switch",
+        "invariant-violation",
+        "validation-rejected",
+        "redactor-collapsed",
+        "projection-rejected",
+        "capacity-rejected",
+        "subscriber-rejected",
+        "late-restatement",
+      ],
+    },
+    occurrenceCount: { type: "integer", dataClass: "count", required: false },
+    // On a superseded update only: which call it restated, as a digest, and the call's settled state
+    // against the state the late update restated (PR #3617 review).
+    callIdSha256: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    settledState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["succeeded", "failed", "denied", "cancelled"],
+    },
+    restatedState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["pending", "running", "failed"],
+    },
+    // #3610: why the projection refused a well-formed signal, on a projection-rejected drop only.
+    rejection: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "parent-message-unknown",
+        "message-unknown",
+        "tool-transition-refused",
+        "tool-name-missing",
+        "feed-unavailable",
+      ],
+    },
+    lossState: {
+      type: "string",
+      dataClass: "loss-state",
+      required: false,
+      values: ["event-dropped"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "loss",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-safe-activity-projection"],
+  proofIds: ["coding-runtime.safe-activity.emitted-line"],
+  releaseImpact: "patch",
+});
 
 interface SignalBase {
   readonly occurredAt: string;
@@ -69,7 +160,16 @@ export type CodingSafeActivitySignal =
     });
 
 export type CodingSafeActivityPurgeReason =
-  "stop" | "takeover" | "shutdown" | "workspace-switch" | "expiry";
+  | "stop"
+  | "takeover"
+  | "shutdown"
+  | "workspace-switch"
+  // #2906 round 3: reserved for finalizeIngest's KEIKO-0878 invariant-violation branch -- validate
+  // rejected a post-mutation feed that isFeedNearProjectionLimit's pre-mutation check believed
+  // could not fail. Distinct from TTL/authority expiry (which never reaches purgeCurrent at all --
+  // see expireCurrent, which purges silently with no diagnostic) so the timeline never collapses a
+  // genuine invariant bug into an unrelated, diagnostic-free expiry code.
+  | "invariant-violation";
 export type CodingSafeActivityDropReason =
   | "validation-rejected"
   | "redactor-collapsed"
@@ -106,6 +206,7 @@ export interface CodingSafeActivityProjectionOptions {
   readonly now?: (() => number) | undefined;
   readonly ttlMs?: number | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
   readonly limits?: CodingSafeActivityProjectionLimits | undefined;
   readonly maxDroppedEventCount?: number | undefined;
   readonly maxSubscribers?: number | undefined;
@@ -127,7 +228,8 @@ export interface CodingSafeActivityProjection {
     count: number,
   ) => void;
   readonly purge: (runId: string, reason: CodingSafeActivityPurgeReason) => void;
-  readonly purgeAll: (reason: CodingSafeActivityPurgeReason) => void;
+  // `correlationId` is the calling operation (a server shutdown); see the implementation.
+  readonly purgeAll: (reason: CodingSafeActivityPurgeReason, correlationId?: string) => void;
   readonly markUnavailable: (runId: string) => void;
   readonly currentContent: () => CodingSafeActivityContent | null;
   readonly subscribeContent: (
@@ -200,10 +302,35 @@ interface ResolvedLimits {
   readonly maxPlanBytes: number;
 }
 
+/**
+ * #3610: why the projection refused a well-formed signal. The drop line carried only
+ * "projection-rejected", so an omitted update could not be traced to the signal that caused it.
+ */
+type ProjectionRejection =
+  | "parent-message-unknown"
+  | "message-unknown"
+  | "tool-transition-refused"
+  | "tool-name-missing"
+  | "feed-unavailable";
+
+type SignalApplication =
+  "accepted" | "capacity-dropped" | "restatement-superseded" | ProjectionRejection;
+
+const APPLIED: ReadonlySet<SignalApplication> = new Set<SignalApplication>([
+  "accepted",
+  "capacity-dropped",
+  "restatement-superseded",
+]);
+
+function projectionRejection(application: SignalApplication): ProjectionRejection | undefined {
+  return APPLIED.has(application) ? undefined : (application as ProjectionRejection);
+}
+
 class SafeActivityProjection implements CodingSafeActivityProjection {
   private readonly now: () => number;
   private readonly ttlMs: number;
   private readonly diagnostics: ServerDiagnosticSink | undefined;
+  private readonly activityLog: ServerLogSink | undefined;
   private readonly limits: ResolvedLimits;
   private readonly maxDroppedEventCount: number;
   private readonly maxSubscribers: number;
@@ -212,12 +339,14 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
   private entry: ProjectionEntry | undefined;
   private subscriberRunId: string | undefined;
   private expiryTimer: ReturnType<typeof setTimeout> | undefined;
-  private lastEmittedDropCount = 0;
+  private faultDropCount = 0;
+  private supersededRestatementCount = 0;
 
   public constructor(options: CodingSafeActivityProjectionOptions) {
     this.now = options.now ?? Date.now;
     this.ttlMs = positive(options.ttlMs, DEFAULT_TTL_MS);
     this.diagnostics = options.diagnostics;
+    this.activityLog = options.activityLog;
     this.limits = resolvedLimits(options.limits);
     this.maxDroppedEventCount = boundedCounterLimit(options.maxDroppedEventCount);
     this.maxSubscribers = positive(options.maxSubscribers, DEFAULT_MAX_SUBSCRIBERS);
@@ -240,7 +369,8 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     if (this.subscribers.size > 0) this.subscriberRunId = input.runId;
     if (!validOpenInput(input, expiresAtMs, now)) this.expireCurrent();
     else {
-      this.lastEmittedDropCount = 0;
+      this.faultDropCount = 0;
+      this.supersededRestatementCount = 0;
       this.scheduleExpiry(this.entry);
       this.notify();
     }
@@ -252,29 +382,92 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     const rejected = signalDropReason(signal);
     if (rejected !== undefined) return this.reject(runId, rejected);
     if (signal.signalId !== undefined && entry.signalIds.has(signal.signalId)) return true;
-    const priorFeed = structuredClone(entry.feed);
-    const priorMessageTurns = new Map(entry.messageTurns);
-    const accepted = applySignal(entry, signal, this.limits);
-    if (!accepted) return this.reject(runId, "projection-rejected");
+    // KEIKO-0878: only take the rollback snapshot when the pre-mutation state is close enough to
+    // a projection limit that validateCodingSafeActivityFeed could plausibly reject the
+    // post-mutation state. The overwhelming common case is well below every limit (early in a
+    // run) and never trips validate; skipping the structuredClone on that path replaces per-
+    // signal deep-clone allocation with a cheap 3-field integer comparison. Validate is still
+    // run every time, so a bug in enforceFeedBounds cannot slip past silently.
+    const rollbackNeeded = isFeedNearProjectionLimit(entry, this.limits);
+    const priorFeed = rollbackNeeded ? structuredClone(entry.feed) : undefined;
+    const priorMessageTurns = rollbackNeeded ? new Map(entry.messageTurns) : undefined;
+    const application = applySignal(entry, signal, this.limits);
+    const ended = this.endedApplication(runId, entry, signal, application);
+    if (ended !== undefined) return ended;
     if (signal.signalId !== undefined) {
       rememberBoundedIdentity(entry.signalIds, signal.signalId, this.maxSignalIdentities);
     }
     entry.feed.updatedAt = signal.occurredAt;
+    const capacityDrop = capacityDropForApplication(
+      entry,
+      application,
+      this.maxDroppedEventCount,
+      signal.occurredAt,
+    );
     enforceFeedBounds(entry, this.limits);
-    if (!validateCodingSafeActivityFeed(entry.feed).ok) {
+    return this.finalizeCapacityDrop(runId, entry, priorFeed, priorMessageTurns, capacityDrop);
+  }
+
+  private finalizeCapacityDrop(
+    runId: string,
+    entry: ProjectionEntry,
+    priorFeed: StoredFeed | undefined,
+    priorMessageTurns: Map<string, string> | undefined,
+    capacityDrop: DropCountChange | undefined,
+  ): boolean {
+    const finalized = this.finalizeIngest(runId, entry, priorFeed, priorMessageTurns);
+    if (finalized && capacityDrop !== undefined) {
+      this.emitDropMilestones(runId, "capacity-rejected", capacityDrop.previous, capacityDrop.next);
+    }
+    return finalized;
+  }
+
+  /**
+   * Validates the feed after a signal has been applied and bounds enforced, and settles the
+   * ingest() call: notifies subscribers on success; on failure, rolls back to the pre-mutation
+   * snapshot when one was taken (capacity rejection), or purges the entry entirely when validate
+   * rejected state that isFeedNearProjectionLimit believed was within limits (a bug signal for
+   * that threshold, per KEIKO-0878).
+   */
+  private finalizeIngest(
+    runId: string,
+    entry: ProjectionEntry,
+    priorFeed: StoredFeed | undefined,
+    priorMessageTurns: Map<string, string> | undefined,
+  ): boolean {
+    if (validateCodingSafeActivityFeed(entry.feed).ok) {
+      this.notify();
+      return true;
+    }
+    if (priorFeed !== undefined && priorMessageTurns !== undefined) {
       entry.feed = priorFeed;
       replaceMap(entry.messageTurns, priorMessageTurns);
       return this.reject(runId, "capacity-rejected");
     }
-    this.notify();
-    return true;
+    // KEIKO-0878: pre-mutation state was in the safe zone yet validate rejected -- indicates
+    // a bug in isFeedNearProjectionLimit's threshold, not TTL/authority expiry. Purge so a caller
+    // reading the feed after this cannot see the invalid state; the next signal will start from a
+    // fresh entry. #2906 round 3: reason is the distinct "invariant-violation" code (never
+    // "expiry", which this path is not) so the activity timeline can tell a genuine
+    // validation/invariant bug apart from every other purge cause instead of collapsing them all.
+    this.purgeCurrent("invariant-violation");
+    return false;
   }
 
-  public recordDrop(runId: string, reason: CodingSafeActivityDropReason): void {
-    this.recordDrops(runId, reason, 1);
+  public recordDrop(
+    runId: string,
+    reason: CodingSafeActivityDropReason,
+    rejection?: ProjectionRejection,
+  ): void {
+    this.recordDrops(runId, reason, 1, rejection);
   }
 
-  public recordDrops(runId: string, reason: CodingSafeActivityDropReason, count: number): void {
+  public recordDrops(
+    runId: string,
+    reason: CodingSafeActivityDropReason,
+    count: number,
+    rejection?: ProjectionRejection,
+  ): void {
     const entry = this.liveEntry(runId);
     if (entry?.feed.availability !== "available") return;
     const increment = boundedDropIncrement(count, this.maxDroppedEventCount);
@@ -283,7 +476,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     if (next === previous) return;
     entry.feed = withDroppedCount(entry.feed, next, instant(this.now()));
     this.notify();
-    this.emitDropMilestones(reason, previous, next);
+    this.emitDropMilestones(runId, reason, previous, next, rejection);
   }
 
   public purge(runId: string, reason: CodingSafeActivityPurgeReason): void {
@@ -291,8 +484,12 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     this.purgeCurrent(reason);
   }
 
-  public purgeAll(reason: CodingSafeActivityPurgeReason): void {
-    this.purgeCurrent(reason);
+  /**
+   * `correlationId` is the caller's operation (a server shutdown's). A purge with no run to tie it to
+   * carries that id instead of the unknown fallback; a purged run keeps its own.
+   */
+  public purgeAll(reason: CodingSafeActivityPurgeReason, correlationId?: string): void {
+    this.purgeCurrent(reason, correlationId);
   }
 
   public markUnavailable(runId: string): void {
@@ -354,8 +551,12 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     return entry;
   }
 
-  private reject(runId: string, reason: CodingSafeActivityDropReason): false {
-    this.recordDrop(runId, reason);
+  private reject(
+    runId: string,
+    reason: CodingSafeActivityDropReason,
+    rejection?: ProjectionRejection,
+  ): false {
+    this.recordDrop(runId, reason, rejection);
     return false;
   }
 
@@ -365,15 +566,35 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     this.notifySubscribers(subscribers, null);
   }
 
-  private purgeCurrent(reason: CodingSafeActivityPurgeReason): void {
+  private purgeCurrent(
+    reason: CodingSafeActivityPurgeReason,
+    operationCorrelationId?: string,
+  ): void {
     const retained = this.entry !== undefined || this.subscribers.size > 0;
+    const correlationId = correlationIdOrUnknown(
+      this.entry?.runId ?? this.subscriberRunId ?? operationCorrelationId,
+    );
     const notify = this.entry !== undefined;
     const subscribers = [...this.subscribers];
     this.clearCurrentEntry();
     this.subscribers.clear();
     this.subscriberRunId = undefined;
     if (notify) this.notifySubscribers(subscribers, null);
-    if (retained) emitPurgeDiagnostic(this.diagnostics, this.now, reason);
+    if (retained) {
+      if (reason === "invariant-violation") {
+        emitPurgeDiagnostic(this.diagnostics, this.now, correlationId, reason);
+      }
+      this.activityLog?.write(
+        activityLogEvent(
+          CODING_RUNTIME_SAFE_ACTIVITY_OPERATION,
+          {
+            correlationId,
+            ...(reason === "invariant-violation" ? { level: "error", errorKind: "internal" } : {}),
+          },
+          { event: "purged", reason },
+        ),
+      );
+    }
   }
 
   private clearCurrentEntry(): void {
@@ -401,15 +622,81 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     if (this.subscribers.size === 0) this.subscriberRunId = undefined;
   }
 
+  // A refused signal is a drop and a superseded one is set aside; either ends the ingest here.
+  private endedApplication(
+    runId: string,
+    entry: ProjectionEntry,
+    signal: CodingSafeActivitySignal,
+    application: SignalApplication,
+  ): boolean | undefined {
+    const rejection = projectionRejection(application);
+    if (rejection !== undefined) return this.reject(runId, "projection-rejected", rejection);
+    return application === "restatement-superseded"
+      ? this.supersede(runId, entry, signal)
+      : undefined;
+  }
+
+  // A late update that restates an earlier state of a call Keiko already settled is set aside: it
+  // changes neither the feed nor its timestamp and notifies no one. Its line names the call, as a
+  // digest, and both states, so the log reconstructs every update (PR #3617 review).
+  private supersede(runId: string, entry: ProjectionEntry, signal: CodingSafeActivitySignal): true {
+    if (signal.signalId !== undefined) {
+      rememberBoundedIdentity(entry.signalIds, signal.signalId, this.maxSignalIdentities);
+    }
+    this.supersededRestatementCount += 1;
+    const restatement = signal.kind === "tool" ? supersededRestatement(entry, signal) : {};
+    this.activityLog?.write(
+      activityLogEvent(
+        CODING_RUNTIME_SAFE_ACTIVITY_OPERATION,
+        { correlationId: correlationIdOrUnknown(runId) },
+        {
+          event: "superseded",
+          reason: "late-restatement",
+          occurrenceCount: this.supersededRestatementCount,
+          ...restatement,
+        },
+      ),
+    );
+    return true;
+  }
+
   private emitDropMilestones(
+    runId: string,
     reason: CodingSafeActivityDropReason,
     previous: number,
     next: number,
+    rejection?: ProjectionRejection,
   ): void {
-    for (let milestone = 1; milestone <= next; milestone *= 2) {
-      if (milestone <= previous || milestone <= this.lastEmittedDropCount) continue;
-      this.lastEmittedDropCount = milestone;
-      emitDropDiagnostic(this.diagnostics, this.now, reason, milestone);
+    this.activityLog?.write(
+      activityLogEvent(
+        CODING_RUNTIME_SAFE_ACTIVITY_OPERATION,
+        {
+          correlationId: correlationIdOrUnknown(runId),
+          ...(reason === "capacity-rejected"
+            ? {}
+            : { level: "warn", errorKind: "validation-failed" }),
+        },
+        {
+          event: "dropped",
+          reason,
+          occurrenceCount: next,
+          lossState: "event-dropped",
+          ...(rejection === undefined ? {} : { rejection }),
+        },
+      ),
+    );
+    // A capacity drop is the feed's DESIGNED truncation: a long agent turn keeps its newest
+    // messages within the contract bounds. The activity line above records it; an error-level
+    // diagnostic for it read as a fault in every long run (F49, Coding Workbench run 24).
+    if (reason === "capacity-rejected") return;
+    // Fault drops keep their own count, so the feed's truncation neither delays nor inflates the
+    // diagnostic of a real fault (F49). The count only grows, so each milestone is reported once,
+    // even when a capacity drop is rolled back.
+    const before = this.faultDropCount;
+    this.faultDropCount += next - previous;
+    for (let milestone = 1; milestone <= this.faultDropCount; milestone *= 2) {
+      if (milestone <= before) continue;
+      emitDropDiagnostic(this.diagnostics, this.now, runId, reason, milestone);
     }
   }
 
@@ -473,8 +760,8 @@ function applySignal(
   entry: ProjectionEntry,
   signal: CodingSafeActivitySignal,
   limits: ResolvedLimits,
-): boolean {
-  if (entry.feed.availability !== "available") return false;
+): SignalApplication {
+  if (entry.feed.availability !== "available") return "feed-unavailable";
   if (signal.kind === "message") return applyMessage(entry, signal, limits);
   if (signal.kind === "text") return applyText(entry, signal, limits);
   if (signal.kind === "plan") return applyPlan(entry, signal, limits);
@@ -485,19 +772,29 @@ function applyMessage(
   entry: ProjectionEntry,
   signal: Extract<CodingSafeActivitySignal, { readonly kind: "message" }>,
   limits: ResolvedLimits,
-): boolean {
-  if (entry.feed.availability !== "available") return false;
+): SignalApplication {
+  if (entry.feed.availability !== "available") return "feed-unavailable";
   const knownTurn = entry.messageTurns.get(signal.messageId);
-  if (knownTurn !== undefined) return true;
+  if (knownTurn !== undefined) return "accepted";
   const turn = turnForMessage(entry, signal);
-  if (turn === undefined) return false;
+  if (turn === undefined) return "parent-message-unknown";
+  let application: SignalApplication = "accepted";
   if (turn.messages.length >= limits.maxMessagesPerTurn) {
     turn.truncated = true;
-    return true;
+    if (!evictOldestAssistantMessage(entry, turn)) return "capacity-dropped";
+    application = "capacity-dropped";
   }
   turn.messages.push(newMessage(signal));
   entry.messageTurns.set(signal.messageId, turn.turnId);
   enforceTurnCount(entry, limits.maxTurns);
+  return application;
+}
+
+function evictOldestAssistantMessage(entry: ProjectionEntry, turn: MutableTurn): boolean {
+  const index = turn.messages.findIndex(({ role }) => role === "assistant");
+  if (index < 0) return false;
+  const removed = turn.messages.splice(index, 1)[0];
+  if (removed !== undefined) entry.messageTurns.delete(removed.messageId);
   return true;
 }
 
@@ -541,14 +838,14 @@ function applyText(
   entry: ProjectionEntry,
   signal: Extract<CodingSafeActivitySignal, { readonly kind: "text" }>,
   limits: ResolvedLimits,
-): boolean {
+): SignalApplication {
   const located = locateMessage(entry, signal.messageId);
-  if (located === undefined) return false;
+  if (located === undefined) return "message-unknown";
   const { message, turn } = located;
-  if (message.truncated) return true;
+  if (message.truncated) return "accepted";
   if (message.segments.length >= limits.maxSegmentsPerMessage) {
     markMessageTruncated(message, turn);
-    return true;
+    return "accepted";
   }
   const cleaned = stripUnsafeFormatChars(signal.text);
   const clipped = clipTextForMessage(message, cleaned, limits.maxMessageBytes);
@@ -556,31 +853,32 @@ function applyText(
     message.segments.push({ kind: "text", text: clipped.text, truncated: clipped.truncated });
   }
   if (clipped.truncated) markMessageTruncated(message, turn);
-  return true;
+  return "accepted";
 }
 
 function applyTool(
   entry: ProjectionEntry,
   signal: Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>,
   limits: ResolvedLimits,
-): boolean {
+): SignalApplication {
   const located = locateToolTurn(entry, signal);
-  if (located === undefined) return false;
+  if (located === undefined) return "message-unknown";
   const existingIndex = located.turn.tools.findIndex(({ callId }) => callId === signal.callId);
   const existing = located.turn.tools[existingIndex];
   if (existing !== undefined) {
-    if (!allowedToolTransition(existing.state, signal.state)) return false;
+    if (staleOpenCodeRestatement(existing.state, signal)) return "restatement-superseded";
+    if (!allowedToolTransition(existing.state, signal.state)) return "tool-transition-refused";
     located.turn.tools[existingIndex] = {
       ...existing,
       state: signal.state,
       occurredAt: signal.occurredAt,
     };
-    return true;
+    return "accepted";
   }
-  if (signal.tool === undefined) return false;
+  if (signal.tool === undefined) return "tool-name-missing";
   if (located.turn.tools.length >= limits.maxToolsPerTurn) {
     located.turn.truncated = true;
-    return true;
+    return "accepted";
   }
   located.turn.tools.push({
     callId: signal.callId,
@@ -588,7 +886,7 @@ function applyTool(
     state: signal.state,
     occurredAt: signal.occurredAt,
   });
-  return true;
+  return "accepted";
 }
 
 /** Replaces the whole snapshot; the upstream plan tool always writes the full step list. */
@@ -596,8 +894,8 @@ function applyPlan(
   entry: ProjectionEntry,
   signal: Extract<CodingSafeActivitySignal, { readonly kind: "plan" }>,
   limits: ResolvedLimits,
-): boolean {
-  if (entry.feed.availability !== "available") return false;
+): SignalApplication {
+  if (entry.feed.availability !== "available") return "feed-unavailable";
   const plan: MutablePlan = {
     revision: Math.min(Number.MAX_SAFE_INTEGER, (entry.feed.plan?.revision ?? 0) + 1),
     anchorMessageId: signal.anchorMessageId,
@@ -622,7 +920,7 @@ function applyPlan(
   }
   shrinkPlan(plan, limits.maxPlanBytes);
   entry.feed.plan = plan;
-  return true;
+  return "accepted";
 }
 
 function shrinkPlan(plan: MutablePlan, maxBytes: number): void {
@@ -630,6 +928,38 @@ function shrinkPlan(plan: MutablePlan, maxBytes: number): void {
     plan.steps.pop();
     plan.truncated = true;
   }
+}
+
+type SettledToolState = "succeeded" | "failed" | "denied" | "cancelled";
+type RestatedToolState = "pending" | "running" | "failed";
+
+function isSettledToolState(state: CodingSafeActivityToolState): state is SettledToolState {
+  return TERMINAL_TOOL_STATES.has(state);
+}
+
+function isRestatedToolState(state: CodingSafeActivityToolState): state is RestatedToolState {
+  return state === "pending" || state === "running" || state === "failed";
+}
+
+function supersededRestatement(
+  entry: ProjectionEntry,
+  signal: Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>,
+): {
+  readonly callIdSha256: string;
+  readonly settledState?: SettledToolState;
+  readonly restatedState?: RestatedToolState;
+} {
+  const settled = locateToolTurn(entry, signal)?.turn.tools.find(
+    ({ callId }) => callId === signal.callId,
+  )?.state;
+  return {
+    callIdSha256: createHash("sha256")
+      .update("keiko.safe-activity.call.v1\0")
+      .update(signal.callId)
+      .digest("hex"),
+    ...(settled !== undefined && isSettledToolState(settled) ? { settledState: settled } : {}),
+    ...(isRestatedToolState(signal.state) ? { restatedState: signal.state } : {}),
+  };
 }
 
 function locateToolTurn(
@@ -655,6 +985,28 @@ function locateMessage(
   const turn = entry.feed.turns.find((candidate) => candidate.turnId === turnId);
   const message = turn?.messages.find((candidate) => candidate.messageId === messageId);
   return turn === undefined || message === undefined ? undefined : { turn, message };
+}
+
+// KEIKO-0878: cheap safe-zone check. Returns true when the pre-mutation entry is close enough to
+// any projection limit that a single applySignal + enforceFeedBounds pass could still leave the
+// feed above bounds when validate runs. If false, ingest() may skip the rollback snapshot
+// entirely -- an inexpensive integer comparison replaces a per-signal structuredClone + Map copy.
+// Threshold is 75%: a signal cannot double any of these counters, so 75% headroom keeps a
+// generous safety margin against ANY single-signal growth pushing past the limit.
+function isFeedNearProjectionLimit(entry: ProjectionEntry, limits: ResolvedLimits): boolean {
+  if (entry.feed.availability !== "available") return true;
+  const feed = entry.feed;
+  const turnThreshold = Math.max(1, Math.floor(limits.maxTurns * 3) / 4);
+  if (feed.turns.length >= turnThreshold) return true;
+  for (const turn of feed.turns) {
+    if (turn.messages.length >= Math.max(1, Math.floor(limits.maxMessagesPerTurn * 3) / 4)) {
+      return true;
+    }
+    if (turn.tools.length >= Math.max(1, Math.floor(limits.maxToolsPerTurn * 3) / 4)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function enforceFeedBounds(entry: ProjectionEntry, limits: ResolvedLimits): void {
@@ -736,6 +1088,29 @@ function boundedCharacters(value: string, maxChars: number): readonly string[] {
 function candidateMessageBytes(message: MutableMessage, text: string, truncated: boolean): number {
   const segment: CodingSafeActivityTextSegment = { kind: "text", text, truncated };
   return bytes({ ...message, segments: [...message.segments, segment], truncated });
+}
+
+const TERMINAL_TOOL_STATES: ReadonlySet<CodingSafeActivityToolState> = new Set([
+  "succeeded",
+  "failed",
+  "denied",
+  "cancelled",
+]);
+
+// A late OpenCode part update (it names its message) for a call that has already ended. Keiko settles
+// a call from the facade result, independently of OpenCode's part updates, and can do so before
+// OpenCode's earlier pending or running update arrives over the event stream (a lab run of 1.1.8: a
+// 10 ms read); only Keiko settles a call as denied or cancelled, which OpenCode then reports as a
+// generic failure. Each restates a state the call already passed and is kept as a no-op, not an
+// omitted update (#3612). A settlement never restates pending or running, so one that tries is
+// still a refused regression.
+function staleOpenCodeRestatement(
+  from: CodingSafeActivityToolState,
+  signal: Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>,
+): boolean {
+  if (signal.messageId === undefined || !TERMINAL_TOOL_STATES.has(from)) return false;
+  if (signal.state === "pending" || signal.state === "running") return true;
+  return (from === "denied" || from === "cancelled") && signal.state === "failed";
 }
 
 function allowedToolTransition(
@@ -891,19 +1266,77 @@ function withDroppedCount(
   };
 }
 
+function incrementDroppedCount(
+  entry: ProjectionEntry,
+  maximum: number,
+  updatedAt: string,
+): DropCountChange | undefined {
+  if (entry.feed.availability !== "available") return undefined;
+  const previous = entry.feed.droppedEventCount;
+  const next = Math.min(maximum, previous + 1);
+  if (next === previous) return undefined;
+  entry.feed = withDroppedCount(entry.feed, next, updatedAt);
+  return { previous, next };
+}
+
+interface DropCountChange {
+  readonly previous: number;
+  readonly next: number;
+}
+
+function capacityDropForApplication(
+  entry: ProjectionEntry,
+  application: SignalApplication,
+  maximum: number,
+  updatedAt: string,
+): DropCountChange | undefined {
+  return application === "capacity-dropped"
+    ? incrementDroppedCount(entry, maximum, updatedAt)
+    : undefined;
+}
+
+// Issue #3245: the fault drop/purge reasons are small and genuinely closed, so each
+// (reason -> fixed vocabulary member) pairing is enumerated directly rather than moved to
+// `code` — `code` already carries the fixed generic event code here (CODING_SAFE_ACTIVITY_*), and
+// the bounded count for a drop already has its own dedicated field (`occurrenceCount`), so nothing
+// about the drop/purge is lost by keeping `message` a closed-vocabulary lookup instead of a
+// template literal.
+// A capacity drop is designed truncation and has no diagnostic (F49); every other drop reason is a
+// fault an operator must see.
+type FaultDropReason = Exclude<CodingSafeActivityDropReason, "capacity-rejected">;
+
+const SAFE_ACTIVITY_DROP_SUMMARY: Readonly<Record<FaultDropReason, ServerDiagnosticSummary>> = {
+  "validation-rejected": "safe-activity-dropped-validation-rejected",
+  "redactor-collapsed": "safe-activity-dropped-redactor-collapsed",
+  "projection-rejected": "safe-activity-dropped-projection-rejected",
+  "subscriber-rejected": "safe-activity-dropped-subscriber-rejected",
+};
+
+// A routine purge (stop, takeover, shutdown, workspace switch) clears an in-memory UI projection
+// and loses nothing, so, like a capacity drop, it has no diagnostic: its `purged` line on
+// `coding-runtime.safe-activity` records it. Only an invariant violation is a fault. Reporting the
+// routine reasons as an error-level `server.diagnostic.failure` made every server shutdown open a
+// false support incident and pin evidence for it.
+type FaultPurgeReason = Extract<CodingSafeActivityPurgeReason, "invariant-violation">;
+
+const SAFE_ACTIVITY_PURGE_SUMMARY: Readonly<Record<FaultPurgeReason, ServerDiagnosticSummary>> = {
+  "invariant-violation": "safe-activity-purged-invariant-violation",
+};
+
 function emitDropDiagnostic(
   sink: ServerDiagnosticSink | undefined,
   now: () => number,
-  reason: CodingSafeActivityDropReason,
+  runId: string,
+  reason: FaultDropReason,
   count: number,
 ): void {
   emitServerDiagnostic(sink, {
-    correlationId: `safe-activity-drop-${String(count)}`,
+    correlationId: correlationIdOrUnknown(runId),
     timestamp: instant(now()),
     operation: "coding-runtime.safe-activity",
     source: "opencode.safe-activity",
     errorClass: "SafeActivityProjectionDrop",
-    message: `Safe-activity event dropped (${reason}); bounded count ${String(count)}.`,
+    message: SAFE_ACTIVITY_DROP_SUMMARY[reason],
     code: "CODING_SAFE_ACTIVITY_EVENT_DROPPED",
     occurrenceCount: count,
   });
@@ -912,15 +1345,16 @@ function emitDropDiagnostic(
 function emitPurgeDiagnostic(
   sink: ServerDiagnosticSink | undefined,
   now: () => number,
-  reason: CodingSafeActivityPurgeReason,
+  correlationId: string,
+  reason: FaultPurgeReason,
 ): void {
   emitServerDiagnostic(sink, {
-    correlationId: `safe-activity-purge-${reason}`,
+    correlationId,
     timestamp: instant(now()),
     operation: "coding-runtime.safe-activity",
     source: "opencode.safe-activity",
     errorClass: "SafeActivityProjectionPurge",
-    message: `Safe-activity projection purged (${reason}).`,
+    message: SAFE_ACTIVITY_PURGE_SUMMARY[reason],
     code: "CODING_SAFE_ACTIVITY_PURGED",
   });
 }

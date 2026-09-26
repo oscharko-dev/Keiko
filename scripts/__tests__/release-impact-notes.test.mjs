@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { PORTABLE_RELEASE_IMPACT_CONTRACT, PORTABLE_TARGET_NAMES } from "../portable-runtime.mjs";
 import { renderReleaseImpactNotes } from "../release-impact-notes.mjs";
 
 function currentRepoVersion() {
@@ -48,6 +49,13 @@ function entry(overrides = {}) {
     oneClickEligible: true,
     packageName: "@oscharko-dev/keiko",
     packageVersion: "0.2.11",
+    // The reviewed staging contract, derived from the producer: check-release-impact refuses a
+    // current primary entry without one.
+    portableRuntimeArtifactContract: {
+      ...PORTABLE_RELEASE_IMPACT_CONTRACT,
+      signingScope: "evaluation",
+      targets: [...PORTABLE_TARGET_NAMES],
+    },
     publishGates: [
       "version-consistency",
       "publish-manifests",
@@ -55,6 +63,7 @@ function entry(overrides = {}) {
       "workspace-supply-chain",
       "package-surface",
       "qi-supply-chain",
+      "install-smoke",
     ],
     registry: "https://registry.npmjs.org/",
     releaseNoteBullets: ["Release-impact metadata now governs stable package publication."],

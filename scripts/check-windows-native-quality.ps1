@@ -1,6 +1,115 @@
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
+function Get-ActiveNativeProducerSource {
+  param([Parameter(Mandatory = $true)][string] $FunctionSource)
+
+  $withoutBlockComments = [regex]::Replace($FunctionSource, '(?s)/\*.*?\*/', '')
+  # Preserve quoted JavaScript strings while removing `//` comments. A line-only filter catches
+  # full-line comments but would let a required flag survive in `args = []; // "/MT"`.
+  return [regex]::Replace(
+    $withoutBlockComments,
+    '(?s:"(?:\\.|[^"\\])*")|//[^\r\n]*',
+    [System.Text.RegularExpressions.MatchEvaluator] {
+      param($match)
+      if ($match.Value.StartsWith('"')) { return $match.Value }
+      return ''
+    }
+  )
+}
+
+function Update-NativeArgumentScanState {
+  param(
+    [Parameter(Mandatory = $true)][hashtable] $State,
+    [Parameter(Mandatory = $true)][int] $CodePoint
+  )
+
+  if ($State.Quote -ne 0) {
+    if ($State.Escaped) {
+      $State.Escaped = $false
+      return
+    }
+    if ($CodePoint -eq 92) {
+      $State.Escaped = $true
+      return
+    }
+    if ($CodePoint -eq $State.Quote) { $State.Quote = 0 }
+    return
+  }
+  if ($CodePoint -eq 34 -or $CodePoint -eq 39 -or $CodePoint -eq 96) {
+    $State.Quote = $CodePoint
+    return
+  }
+  if ($CodePoint -eq 91) {
+    $State.Depth += 1
+    return
+  }
+  if ($CodePoint -eq 93) { $State.Depth -= 1 }
+}
+
+function Get-NativeProducerArgumentList {
+  param(
+    [Parameter(Mandatory = $true)][string] $ActiveSource,
+    [Parameter(Mandatory = $true)][string] $ArgumentListStartMarker,
+    [Parameter(Mandatory = $true)][string] $ProducerPath,
+    [Parameter(Mandatory = $true)][string] $FunctionName
+  )
+
+  $markerStart = $ActiveSource.IndexOf($ArgumentListStartMarker)
+  if ($markerStart -lt 0) {
+    throw "could not locate the target compiler invocation in $ProducerPath $FunctionName()"
+  }
+  $argumentListStart = $ActiveSource.IndexOf("[", $markerStart + $ArgumentListStartMarker.Length)
+  if ($argumentListStart -lt 0) {
+    throw "could not locate the target compiler argument list in $ProducerPath $FunctionName()"
+  }
+  $argumentListEnd = -1
+  $state = @{ Depth = 0; Quote = 0; Escaped = $false }
+  for ($index = $argumentListStart; $index -lt $ActiveSource.Length; $index += 1) {
+    $codePoint = [int]$ActiveSource[$index]
+    Update-NativeArgumentScanState -State $state -CodePoint $codePoint
+    if ($codePoint -eq 93 -and $state.Depth -eq 0 -and $state.Quote -eq 0) {
+      $argumentListEnd = $index
+      break
+    }
+  }
+  if ($argumentListEnd -lt $argumentListStart -or $state.Depth -ne 0 -or $state.Quote -ne 0) {
+    throw "could not locate the balanced target compiler argument list in $ProducerPath $FunctionName()"
+  }
+  return $ActiveSource.Substring($argumentListStart, $argumentListEnd - $argumentListStart + 1)
+}
+
+function Assert-NativeProducerLinkFlags {
+  param(
+    [Parameter(Mandatory = $true)][string] $Source,
+    [Parameter(Mandatory = $true)][string] $FunctionName,
+    [Parameter(Mandatory = $true)][string] $EndMarker,
+    [Parameter(Mandatory = $true)][string] $ProducerPath,
+    [Parameter(Mandatory = $true)][string] $ArgumentListStartMarker,
+    [Parameter(Mandatory = $true)][string[]] $RequiredFlagLiterals
+  )
+
+  $functionStart = $Source.IndexOf("function $FunctionName(")
+  $functionEnd = $Source.IndexOf($EndMarker)
+  if ($functionStart -lt 0 -or $functionEnd -lt 0 -or $functionEnd -le $functionStart) {
+    throw "could not locate $FunctionName() in $ProducerPath to derive the production link flags"
+  }
+  $functionSource = $Source.Substring($functionStart, $functionEnd - $functionStart)
+  $activeSource = Get-ActiveNativeProducerSource -FunctionSource $functionSource
+  $argumentList = Get-NativeProducerArgumentList `
+    -ActiveSource $activeSource `
+    -ArgumentListStartMarker $ArgumentListStartMarker `
+    -ProducerPath $ProducerPath `
+    -FunctionName $FunctionName
+  foreach ($requiredFlagLiteral in $RequiredFlagLiterals) {
+    if (-not $argumentList.Contains($requiredFlagLiteral)) {
+      throw ("$ProducerPath $FunctionName() no longer passes the hardened flag " +
+        "$requiredFlagLiteral -- update this gate deliberately if the hardening posture " +
+        "changed, do not let it silently keep proving a configuration the product no longer ships")
+    }
+  }
+}
+
 $root = Split-Path -Parent $PSScriptRoot
 $scratch = Join-Path $env:RUNNER_TEMP ("keiko-native-quality-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $scratch | Out-Null
@@ -14,12 +123,150 @@ try {
     "/nologo", "/std:c17", "/W4", "/WX", "/analyze", "/external:env:INCLUDE", "/external:W0"
   )
 
+  # Review 3887051410 (and its follow-up, PR #3354 review): the shipped launcher's PRODUCTION link
+  # line (/MT static CRT + /DEPENDENTLOADFLAG:0x800 for statically-linked imports,
+  # stage-portable-runtime.mjs) was compiled by no PR-time gate -- portable-assets.yml is
+  # tag/dispatch-only, so a broken link flag surfaced for the first time during a release build.
+  # Compiling with the same flags here proves the toolchain accepts the exact production line on
+  # every pull request.
+  #
+  # There are FOUR independently hardened native producers, not one: compileWindowsLauncher() in
+  # stage-portable-runtime.mjs (the portable launcher), compileSetupBootstrap() in
+  # build-windows-portable-setup.mjs (the setup companion that replaced IExpress, issue #2992), and
+  # windowsCompilerFlags() in build-secure-workspace-read.mjs (the workspace-read helper), and
+  # compilerInvocation() in build-runtime-supervisor.mjs (the Job Object supervisor staged by the
+  # dev lane). All four link /MT and /DEPENDENTLOADFLAG:0x800 for the same DLL-plant/no-
+  # redistributable-dependency reasons. A gate that omitted any one producer would leave that
+  # binary's hardening droppable while the gate stayed green, so all are derived and proven below.
+  #
+  # A SECOND, independently hand-typed copy of either producer's flags would defeat the point: if
+  # any producer ever dropped /MT or /DEPENDENTLOADFLAG:0x800, a retyped copy here would keep
+  # compiling the OLD hardened command and report PASS -- proving a configuration the product no
+  # longer ships. So this gate does not retype them: it reads each function out of its own producer
+  # (AGENTS.md §7 -- a fixture must never restate a formula the code under test owns, derive it from
+  # the production entry point) and fails closed, before compiling anything, the moment either
+  # literal is no longer there in any producer.
+  $productionScriptPath = Join-Path $PSScriptRoot "stage-portable-runtime.mjs"
+  $productionScriptSource = Get-Content -LiteralPath $productionScriptPath -Raw
+  $setupBuildScriptPath = Join-Path $PSScriptRoot "build-windows-portable-setup.mjs"
+  $setupBuildScriptSource = Get-Content -LiteralPath $setupBuildScriptPath -Raw
+  $secureReadBuildScriptPath = Join-Path $PSScriptRoot "build-secure-workspace-read.mjs"
+  $secureReadBuildScriptSource = Get-Content -LiteralPath $secureReadBuildScriptPath -Raw
+  $supervisorBuildScriptPath = Join-Path $PSScriptRoot "build-runtime-supervisor.mjs"
+  $supervisorBuildScriptSource = Get-Content -LiteralPath $supervisorBuildScriptPath -Raw
+  # Comments and dead code are stripped by the shared assertion before any producer is checked.
+  # A plain `Contains` on the unfiltered function would accept a flag surviving only in a comment.
+  $requiredNativeLinkFlagLiterals = @('"/MT"', '"/DEPENDENTLOADFLAG:0x800"')
+  $requiredLauncherLinkFlagLiterals = @(
+    '"/MT"', '"/SUBSYSTEM:WINDOWS"', '"/ENTRY:wmainCRTStartup"', '"/DEPENDENTLOADFLAG:0x800"'
+  )
+  Assert-NativeProducerLinkFlags -Source $productionScriptSource `
+    -FunctionName "compileWindowsLauncher" `
+    -EndMarker "function requireWindowsLauncherIconSource(" `
+    -ProducerPath "scripts/stage-portable-runtime.mjs" `
+    -ArgumentListStartMarker 'windowsToolFromPath(env.PATH, "cl.exe"),' `
+    -RequiredFlagLiterals $requiredLauncherLinkFlagLiterals
+  Assert-NativeProducerLinkFlags -Source $setupBuildScriptSource `
+    -FunctionName "compileSetupBootstrap" `
+    -EndMarker "function fsyncFile(" `
+    -ProducerPath "scripts/build-windows-portable-setup.mjs" `
+    -ArgumentListStartMarker 'windowsToolFromPath(env.PATH, "cl.exe"),' `
+    -RequiredFlagLiterals $requiredNativeLinkFlagLiterals
+  Assert-NativeProducerLinkFlags -Source $secureReadBuildScriptSource `
+    -FunctionName "windowsCompilerFlags" `
+    -EndMarker "const supported =" `
+    -ProducerPath "scripts/build-secure-workspace-read.mjs" `
+    -ArgumentListStartMarker "return" `
+    -RequiredFlagLiterals @('"/MT"')
+  Assert-NativeProducerLinkFlags -Source $secureReadBuildScriptSource `
+    -FunctionName "compilerInvocation" `
+    -EndMarker "export async function runSecureWorkspaceReadBuild(" `
+    -ProducerPath "scripts/build-secure-workspace-read.mjs" `
+    -ArgumentListStartMarker 'target === "windows-x64"' `
+    -RequiredFlagLiterals @('"/DEPENDENTLOADFLAG:0x800"')
+  Assert-NativeProducerLinkFlags -Source $supervisorBuildScriptSource `
+    -FunctionName "compilerInvocation" `
+    -EndMarker "function macosComponentInvocations(" `
+    -ProducerPath "scripts/build-runtime-supervisor.mjs" `
+    -ArgumentListStartMarker 'if (target === "windows-x64")' `
+    -RequiredFlagLiterals $requiredNativeLinkFlagLiterals
+
+  # Proven present above, byte-for-byte, in the production entry point -- not an independent guess.
+  $productionMTFlag = "/MT"
+  $productionLinkFlags = @("/DEPENDENTLOADFLAG:0x800")
+  $productionLauncherLinkFlags = @("/SUBSYSTEM:WINDOWS", "/ENTRY:wmainCRTStartup") + $productionLinkFlags
+  $windowsVersionDefine = "/D_WIN32_WINNT=0x0A00"
+  $generationDefine = '/DKEIKO_PORTABLE_GENERATION_ID="6c88e790a0339797e4941fec266c2f861e7515fb667739e297b8c42c622e6eaa"'
+
+  $localVolumeTest = Join-Path $root "native/keiko-windows-local-volume.windows.test.c"
+  $localVolumeTestOut = Join-Path $scratch "keiko-windows-local-volume-test.exe"
+  $localVolumeTestObject = Join-Path $scratch "keiko-windows-local-volume-test.obj"
+  & cl.exe @nativeFlags $windowsVersionDefine "/Fo:$localVolumeTestObject" `
+    "/Fe:$localVolumeTestOut" $localVolumeTest
+  if ($LASTEXITCODE -ne 0) { throw "MSVC Windows local-volume authority build failed" }
+  & $localVolumeTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows local-volume authority verification failed" }
+
+  $sharePath = Join-Path $scratch "mapped-locality"
+  $shareName = "keiko-locality-" + [Guid]::NewGuid().ToString("N")
+  $driveName = $null
+  $shareCreated = $false
+  New-Item -ItemType Directory -Path $sharePath | Out-Null
+  try {
+    $runnerIdentity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    New-SmbShare -Name $shareName -Path $sharePath -FullAccess $runnerIdentity | Out-Null
+    $shareCreated = $true
+    foreach ($codePoint in 90..68) {
+      $candidate = [char]$codePoint
+      if (-not (Get-PSDrive -Name $candidate -ErrorAction SilentlyContinue)) {
+        $driveName = [string]$candidate
+        break
+      }
+    }
+    if ($null -eq $driveName) { throw "No unused drive letter is available for locality proof" }
+    New-PSDrive -Name $driveName -PSProvider FileSystem -Root "\\localhost\$shareName" `
+      -Persist -Scope Script | Out-Null
+    $mappedRoot = $driveName + ":\"
+    & $localVolumeTestOut --probe $scratch
+    if ($LASTEXITCODE -ne 0) { throw "Native local-volume authority rejected a local root" }
+    & $localVolumeTestOut --probe $mappedRoot
+    if ($LASTEXITCODE -eq 0) { throw "Native local-volume authority accepted a mapped SMB root" }
+
+    $securityPositive = @'
+const security = await import("@oscharko-dev/keiko-security/windows-local-volume");
+security.assertWindowsLocalVolume(process.argv[1]);
+'@
+    node --input-type=module -e $securityPositive $scratch
+    if ($LASTEXITCODE -ne 0) { throw "Shared Windows locality authority rejected a local root" }
+    $securityNegative = @'
+const security = await import("@oscharko-dev/keiko-security/windows-local-volume");
+try { security.assertWindowsLocalVolume(process.argv[1]); } catch { process.exit(0); }
+process.exit(41);
+'@
+    node --input-type=module -e $securityNegative $mappedRoot
+    if ($LASTEXITCODE -ne 0) { throw "Shared Windows locality authority accepted a mapped SMB root" }
+  } finally {
+    if ($null -ne $driveName) {
+      Remove-PSDrive -Name $driveName -Force -ErrorAction SilentlyContinue
+    }
+    if ($shareCreated) {
+      Remove-SmbShare -Name $shareName -Force -Confirm:$false -ErrorAction SilentlyContinue
+    }
+  }
+
   $launcher = Join-Path $root "native/portable-launcher/keiko-portable-launcher.c"
   $launcherOut = Join-Path $scratch "keiko-launcher.exe"
   $launcherObject = Join-Path $scratch "keiko-launcher.obj"
-  & cl.exe @nativeFlags '/DKEIKO_PORTABLE_TARGET="windows-x64"' `
-    "/Fo:$launcherObject" "/Fe:$launcherOut" $launcher
+  & cl.exe @nativeFlags $productionMTFlag '/DKEIKO_PORTABLE_TARGET="windows-x64"' `
+    "/Fo:$launcherObject" "/Fe:$launcherOut" $launcher /link @productionLinkFlags
   if ($LASTEXITCODE -ne 0) { throw "MSVC native quality analysis failed" }
+
+  $generationLauncherOut = Join-Path $scratch "keiko-generation-launcher.exe"
+  $generationLauncherObject = Join-Path $scratch "keiko-generation-launcher.obj"
+  & cl.exe @nativeFlags $productionMTFlag $windowsVersionDefine $generationDefine `
+    '/DKEIKO_PORTABLE_TARGET="windows-x64"' `
+    "/Fo:$generationLauncherObject" "/Fe:$generationLauncherOut" $launcher /link @productionLauncherLinkFlags
+  if ($LASTEXITCODE -ne 0) { throw "MSVC generation launcher quality analysis failed" }
 
   $launcherTest = Join-Path $root "native/portable-launcher/keiko-portable-launcher.windows.test.c"
   $launcherTestOut = Join-Path $scratch "keiko-launcher-test.exe"
@@ -30,6 +277,93 @@ try {
   & $launcherTestOut
   if ($LASTEXITCODE -ne 0) { throw "Windows launcher behavior verification failed" }
 
+  $generationLauncherTestOut = Join-Path $scratch "keiko-generation-launcher-test.exe"
+  $generationLauncherTestObject = Join-Path $scratch "keiko-generation-launcher-test.obj"
+  & cl.exe @nativeFlags $windowsVersionDefine $generationDefine `
+    '/DKEIKO_PORTABLE_TARGET="windows-x64"' `
+    "/Fo:$generationLauncherTestObject" "/Fe:$generationLauncherTestOut" $launcherTest
+  if ($LASTEXITCODE -ne 0) { throw "MSVC generation launcher behavior build failed" }
+  & $generationLauncherTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows generation launcher behavior verification failed" }
+
+  $treeHashTest = Join-Path $root "native/portable-launcher/keiko-portable-tree-hash.test.c"
+  $treeHashTestOut = Join-Path $scratch "keiko-tree-hash-test.exe"
+  $treeHashTestObject = Join-Path $scratch "keiko-tree-hash-test.obj"
+  & cl.exe @nativeFlags $windowsVersionDefine "/Fo:$treeHashTestObject" `
+    "/Fe:$treeHashTestOut" $treeHashTest
+  if ($LASTEXITCODE -ne 0) { throw "MSVC tree-hash behavior build failed" }
+  & $treeHashTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows tree-hash behavior verification failed" }
+
+  # This is a finite namespace-replacement primitive probe, not a launcher qualification or a
+  # power-loss test. It deliberately exercises the current runner's filesystem and SDK through
+  # FileRenameInfoEx rather than extrapolating from mocked rename behavior.
+  $cutoverProbe = Join-Path $root "native/portable-launcher/windows-cutover-probe.test.c"
+  $cutoverProbeOut = Join-Path $scratch "windows-cutover-probe.exe"
+  $cutoverProbeObject = Join-Path $scratch "windows-cutover-probe.obj"
+  & cl.exe @nativeFlags "/D_WIN32_WINNT=0x0A00" "/Fo:$cutoverProbeObject" "/Fe:$cutoverProbeOut" $cutoverProbe
+  if ($LASTEXITCODE -ne 0) { throw "Windows cutover primitive probe build failed" }
+  & $cutoverProbeOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows cutover primitive probe failed" }
+
+  $coordinatorTest = Join-Path $root "native/portable-launcher/keiko-portable-update-coordinator.windows.test.c"
+  $coordinatorTestOut = Join-Path $scratch "keiko-update-coordinator-test.exe"
+  $coordinatorTestObject = Join-Path $scratch "keiko-update-coordinator-test.obj"
+  & cl.exe @nativeFlags $windowsVersionDefine '/DKEIKO_PORTABLE_TARGET="windows-x64"' `
+    "/Fo:$coordinatorTestObject" "/Fe:$coordinatorTestOut" $coordinatorTest
+  if ($LASTEXITCODE -ne 0) { throw "MSVC Windows update coordinator mechanics build failed" }
+  & $coordinatorTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows update coordinator mechanics verification failed" }
+
+  $updateEngineTest = Join-Path $root "native/portable-launcher/keiko-portable-update-engine.test.c"
+  $updateEngineTestOut = Join-Path $scratch "keiko-update-engine-test.exe"
+  $updateEngineTestObject = Join-Path $scratch "keiko-update-engine-test.obj"
+  & cl.exe @nativeFlags "/Fo:$updateEngineTestObject" "/Fe:$updateEngineTestOut" $updateEngineTest
+  if ($LASTEXITCODE -ne 0) { throw "MSVC update engine behavior build failed" }
+  & $updateEngineTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows update engine behavior verification failed" }
+
+  $handoffProtocolTest = Join-Path $root "native/portable-launcher/keiko-portable-update-protocol.test.c"
+  $handoffProtocolTestOut = Join-Path $scratch "keiko-handoff-protocol-test.exe"
+  $handoffProtocolTestObject = Join-Path $scratch "keiko-handoff-protocol-test.obj"
+  & cl.exe @nativeFlags '/DKEIKO_PORTABLE_TARGET="windows-x64"' `
+    "/Fo:$handoffProtocolTestObject" "/Fe:$handoffProtocolTestOut" $handoffProtocolTest
+  if ($LASTEXITCODE -ne 0) { throw "MSVC handoff protocol behavior build failed" }
+  & $handoffProtocolTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows handoff protocol verification failed" }
+
+  $handoffSha256Test = Join-Path $root "native/portable-launcher/keiko-portable-sha256.test.c"
+  $handoffSha256TestOut = Join-Path $scratch "keiko-handoff-sha256-test.exe"
+  $handoffSha256TestObject = Join-Path $scratch "keiko-handoff-sha256-test.obj"
+  & cl.exe @nativeFlags "/Fo:$handoffSha256TestObject" "/Fe:$handoffSha256TestOut" $handoffSha256Test
+  if ($LASTEXITCODE -ne 0) { throw "MSVC handoff SHA-256 behavior build failed" }
+  & $handoffSha256TestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows handoff SHA-256 verification failed" }
+
+  # #2992: the Keiko-owned native setup bootstrap replaces the IExpress self-extractor. It is held
+  # to the same /W4 /WX /analyze bar as the launcher. The baked-payload defines here are QUALITY
+  # dummies (a valid 64-hex digest and a nonzero size) -- the real values are baked per release by
+  # build-windows-portable-setup.mjs; this build only proves the source compiles and analyzes clean.
+  $setupDefines = @(
+    '/DKEIKO_SETUP_TARGET="windows-x64"',
+    '/DKEIKO_SETUP_PAYLOAD_SHA256_HEX="0000000000000000000000000000000000000000000000000000000000000000"',
+    "/DKEIKO_SETUP_PAYLOAD_SIZE_BYTES=1ULL"
+  )
+  $setupBootstrap = Join-Path $root "native/setup-bootstrap/keiko-setup-bootstrap.c"
+  $setupBootstrapOut = Join-Path $scratch "keiko-setup-bootstrap.exe"
+  $setupBootstrapObject = Join-Path $scratch "keiko-setup-bootstrap.obj"
+  & cl.exe @nativeFlags $productionMTFlag @setupDefines "/Fo:$setupBootstrapObject" `
+    "/Fe:$setupBootstrapOut" $setupBootstrap /link @productionLinkFlags
+  if ($LASTEXITCODE -ne 0) { throw "MSVC setup-bootstrap quality analysis failed" }
+
+  $setupBootstrapTest = Join-Path $root "native/setup-bootstrap/keiko-setup-bootstrap.windows.test.c"
+  $setupBootstrapTestOut = Join-Path $scratch "keiko-setup-bootstrap-test.exe"
+  $setupBootstrapTestObject = Join-Path $scratch "keiko-setup-bootstrap-test.obj"
+  & cl.exe @nativeFlags @setupDefines "/Fo:$setupBootstrapTestObject" "/Fe:$setupBootstrapTestOut" $setupBootstrapTest
+  if ($LASTEXITCODE -ne 0) { throw "MSVC setup-bootstrap behavior build failed" }
+  & $setupBootstrapTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows setup-bootstrap behavior verification failed" }
+
   $c11Flags = @(
     "/nologo", "/std:c11", "/W4", "/WX", "/analyze", "/external:env:INCLUDE", "/external:W0",
     "/DUNICODE", "/D_UNICODE", "/D_CRT_SECURE_NO_WARNINGS"
@@ -38,13 +372,13 @@ try {
   $secureRead = Join-Path $root "native/secure-workspace-read/secure_workspace_read.c"
   $secureReadOut = Join-Path $scratch "secure-workspace-read.exe"
   $secureReadObject = Join-Path $scratch "secure-workspace-read.obj"
-  & cl.exe @c11Flags "/Fo:$secureReadObject" "/Fe:$secureReadOut" $secureRead /link ntdll.lib
+  & cl.exe @c11Flags $productionMTFlag "/Fo:$secureReadObject" "/Fe:$secureReadOut" $secureRead /link @productionLinkFlags ntdll.lib
   if ($LASTEXITCODE -ne 0) { throw "MSVC secure-workspace-read quality analysis failed" }
 
   $supervisor = Join-Path $root "native/runtime-supervisor/windows/keiko_runtime_supervisor.c"
   $supervisorOut = Join-Path $scratch "keiko-runtime-supervisor.exe"
   $supervisorObject = Join-Path $scratch "keiko-runtime-supervisor.obj"
-  & cl.exe @c11Flags "/Fo:$supervisorObject" "/Fe:$supervisorOut" $supervisor
+  & cl.exe @c11Flags $productionMTFlag "/Fo:$supervisorObject" "/Fe:$supervisorOut" $supervisor /link @productionLinkFlags
   if ($LASTEXITCODE -ne 0) { throw "MSVC runtime-supervisor quality analysis failed" }
 
   $fixture = Join-Path $root "native/runtime-supervisor/windows/qualification_fixture.c"
@@ -78,12 +412,72 @@ static const size_t KEIKO_RUNTIME_ATTESTATION_LENGTH = 20u;
   node (Join-Path $root "native/runtime-supervisor/test-protocol.mjs")
   if ($LASTEXITCODE -ne 0) { throw "runtime-supervisor Job Object qualification failed" }
 
+  $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio/Installer/vswhere.exe"
+  if (-not (Test-Path -LiteralPath $vswhere -PathType Leaf)) {
+    throw "Visual Studio locator was not found"
+  }
+  $installations = @(
+    & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -property installationPath |
+      Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+  )
+  if ($LASTEXITCODE -ne 0 -or $installations.Count -ne 1) {
+    throw "Exactly one latest Visual Studio MSBuild installation is required"
+  }
+  $csharpCompiler = Join-Path $installations[0] "MSBuild/Current/Bin/Roslyn/csc.exe"
+  $frameworkReferences = Join-Path ${env:ProgramFiles(x86)} `
+    "Reference Assemblies/Microsoft/Framework/.NETFramework/v4.8.1"
+  if (-not (Test-Path -LiteralPath $csharpCompiler -PathType Leaf) -or
+      -not (Test-Path -LiteralPath $frameworkReferences -PathType Container)) {
+    throw "The reviewed C# compiler or .NET Framework references were not found"
+  }
+  node (Join-Path $root "scripts/check-windows-portable-authenticode-verifier.mjs")
+  if ($LASTEXITCODE -ne 0) { throw "Authenticode verifier deterministic asset check failed" }
+
+  $standardTokenSource = Join-Path $root `
+    "scripts/windows-portable-authenticode-standard-token-loader.test.cs"
+  $standardTokenHelper = Join-Path $env:RUNNER_TEMP `
+    "windows-portable-authenticode-standard-token-loader.exe"
+  $standardTokenReferences = @(
+    "mscorlib.dll", "System.dll", "System.Core.dll", "System.Security.dll" |
+      ForEach-Object { "/reference:" + (Join-Path $frameworkReferences $_) }
+  )
+  & $csharpCompiler /nologo /noconfig /nostdlib+ /deterministic+ /optimize+ /debug- `
+    /warn:4 /warnaserror+ /target:exe /platform:anycpu /langversion:5 /utf8output `
+    "/pathmap:$scratch=/_/" "/out:$standardTokenHelper" @standardTokenReferences `
+    $standardTokenSource
+  if ($LASTEXITCODE -ne 0) { throw "Restricted-token Authenticode loader helper build failed" }
+  $windowsPowerShell = Join-Path $env:SystemRoot `
+    "System32/WindowsPowerShell/v1.0/powershell.exe"
+  $serverRuntime = Join-Path $root `
+    "packages/keiko-server/dist/coding-runtime/windowsPortableAuthenticode.js"
+  if (-not (Test-Path -LiteralPath $windowsPowerShell -PathType Leaf) -or
+      -not (Test-Path -LiteralPath $serverRuntime -PathType Leaf)) {
+    throw "Trusted Windows PowerShell or built Authenticode runtime was not found"
+  }
+  node (Join-Path $root "scripts/check-windows-portable-authenticode-loader.mjs")
+  if ($LASTEXITCODE -ne 0) { throw "Restricted-token Authenticode loader verification failed" }
+
   $project = Join-Path $PSScriptRoot "native-quality/windows-rfc3161-quality.csproj"
   $intermediate = Join-Path $scratch "obj/"
   $output = Join-Path $scratch "bin/"
+  # KEIKO-0899: fail closed against scripts/native-quality/packages.lock.json.
+  # RestoreLockedMode stays on this invocation, not in the csproj, so a PackageReference
+  # bump can still regenerate the lock with an unlocked restore.
   dotnet build $project --configuration Release --nologo `
-    "-p:BaseIntermediateOutputPath=$intermediate" "-p:OutputPath=$output"
+    "-p:BaseIntermediateOutputPath=$intermediate" "-p:OutputPath=$output" `
+    "-p:RestoreLockedMode=true"
   if ($LASTEXITCODE -ne 0) { throw ".NET analyzer quality build failed" }
+
+  $runtimeVerifierProject = Join-Path $PSScriptRoot `
+    "native-quality/windows-authenticode-verifier-quality.csproj"
+  $runtimeVerifierIntermediate = Join-Path $scratch "authenticode-verifier-obj/"
+  $runtimeVerifierOutput = Join-Path $scratch "authenticode-verifier-bin/"
+  dotnet build $runtimeVerifierProject --configuration Release --nologo `
+    "-p:BaseIntermediateOutputPath=$runtimeVerifierIntermediate" `
+    "-p:OutputPath=$runtimeVerifierOutput" `
+    "-p:KeikoFrameworkReferencePath=$frameworkReferences" `
+    "-p:RestoreLockedMode=true"
+  if ($LASTEXITCODE -ne 0) { throw ".NET runtime Authenticode analyzer quality build failed" }
 
   & pwsh -NoProfile -NonInteractive -File (Join-Path $PSScriptRoot "__tests__/windows-rfc3161-fixtures.ps1")
   if ($LASTEXITCODE -ne 0) { throw "RFC3161 fixture verification failed" }

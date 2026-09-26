@@ -14,12 +14,15 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { URL, fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { portableTargetByName } from "../portable-runtime.mjs";
+import { PORTABLE_TARGETS, portableTargetByName } from "../portable-runtime.mjs";
 import {
   containedDigest,
+  governedStageRoot,
+  loadAndSearch,
   readContainedText,
   requiredContainedFile,
   requiredStageRoot,
@@ -58,19 +61,30 @@ function provisionedRuntimeFixture() {
   writeFileSync(sourceBinary, "fixture USearch runtime");
   writeFileSync(sourceLicense, "fixture USearch license");
   return {
-    approved: { binarySha256: sha256(sourceBinary) },
+    approved: {
+      version: "fixture-version",
+      sourceCommit: "a".repeat(40),
+      tarballUrl: "https://example.test/usearch.tgz",
+      tarballSha256: "b".repeat(64),
+      binarySha256: sha256(sourceBinary),
+      licenseSha256: sha256(sourceLicense),
+    },
     sourceBinary,
     sourceLicense,
   };
 }
 
-function portableSmokeFixture() {
+function portableSmokeFixture({ generationLayout = false, targetName } = {}) {
   const stageRoot = temporaryRoot();
-  const target = hostPortableTarget();
+  const target = targetName === undefined ? hostPortableTarget() : portableTargetByName(targetName);
+  if (target === undefined) throw new Error("expected a supported portable target");
+  const generationId = "a".repeat(64);
   const resources =
     target.nodePlatform === "darwin"
       ? join(stageRoot, "payload", "Keiko", "Keiko.app", "Contents", "Resources")
-      : join(stageRoot, "payload", "Keiko");
+      : generationLayout
+        ? join(stageRoot, "payload", "Keiko", ".portable", "generations", generationId)
+        : join(stageRoot, "payload", "Keiko");
   const binary = join(resources, "runtime", "native", "usearch.node");
   const license = join(resources, "runtime", "licenses", "usearch", "LICENSE");
   const binarySha256 = sha256Fixture(binary, "fixture native addon");
@@ -96,6 +110,19 @@ function portableSmokeFixture() {
   const manifest = {
     artifact: { platformTarget: target.platformTarget },
     nativeAddons: [addon],
+    ...(generationLayout
+      ? {
+          schemaVersion: 2,
+          windowsGeneration: {
+            schemaVersion: 1,
+            resourceRoot: `.portable/generations/${generationId}`,
+            treeHashSchema: "KHT1",
+            treeSha256: generationId,
+            launcherPath: "Keiko.exe",
+            launcherSha256: "b".repeat(64),
+          },
+        }
+      : {}),
   };
   writeJson(manifestPath, manifest);
   writeJson(join(stageRoot, "evidence", "sbom.cdx.json"), {
@@ -134,6 +161,26 @@ function sha256Fixture(path, content) {
   return sha256(path);
 }
 
+function nativeLoaderFixture(versionApi, counts = "new BigUint64Array([1n])") {
+  const modulePath = join(temporaryRoot(), "usearch-fixture.cjs");
+  writeFixture(
+    modulePath,
+    [
+      "module.exports = {",
+      `  version: ${versionApi},`,
+      "  CompiledIndex: class {",
+      "    add() {}",
+      "    search() {",
+      `      return [new BigUint64Array([0n]), new Float32Array([0]), ${counts}];`,
+      "    }",
+      "  },",
+      "};",
+      "",
+    ].join("\n"),
+  );
+  return modulePath;
+}
+
 afterEach(() => {
   while (roots.length > 0) rmSync(roots.pop(), { recursive: true, force: true });
 });
@@ -149,6 +196,59 @@ describe("portable USearch staging", () => {
     });
 
     expect(loadRuntime).toHaveBeenCalledWith(realpathSync(fixture.binary), "fixture-version");
+  });
+
+  it("loads the signed addon only from the bound Windows generation", () => {
+    const fixture = portableSmokeFixture({ generationLayout: true, targetName: "windows-x64" });
+    const loadRuntime = vi.fn();
+
+    smokePortableUsearch(fixture.stageRoot, fixture.target.platformTarget, {
+      loadRuntime,
+      runtimeManifest: fixture.runtimeManifest,
+    });
+
+    expect(loadRuntime).toHaveBeenCalledWith(realpathSync(fixture.binary), "fixture-version");
+    expect(realpathSync(fixture.binary)).toContain(
+      join(".portable", "generations", fixture.manifest.windowsGeneration.treeSha256),
+    );
+  });
+
+  it("rejects a Windows generation path that is not the exact validated binding", () => {
+    const fixture = portableSmokeFixture({ generationLayout: true, targetName: "windows-x64" });
+    fixture.manifest.windowsGeneration.resourceRoot = "runtime";
+    writeJson(fixture.manifestPath, fixture.manifest);
+
+    expect(() =>
+      smokePortableUsearch(fixture.stageRoot, fixture.target.platformTarget, {
+        loadRuntime: vi.fn(),
+        runtimeManifest: fixture.runtimeManifest,
+      }),
+    ).toThrow("Windows generation binding is invalid");
+  });
+
+  it("validates the native version accessor when the pinned runtime exposes one", () => {
+    expect(() =>
+      loadAndSearch(nativeLoaderFixture("() => 'fixture-version'"), "fixture-version"),
+    ).not.toThrow();
+    expect(() => loadAndSearch(nativeLoaderFixture("undefined"), "fixture-version")).not.toThrow();
+
+    for (const versionApi of ["() => 'wrong-version'", "'fixture-version'"]) {
+      expect(() => loadAndSearch(nativeLoaderFixture(versionApi), "fixture-version")).toThrow(
+        "runtime version mismatch",
+      );
+    }
+  });
+
+  it("accepts only the native BigInt search-result count contract", () => {
+    expect(() =>
+      loadAndSearch(nativeLoaderFixture("() => 'fixture-version'"), "fixture-version"),
+    ).not.toThrow();
+
+    for (const counts of ["new Uint32Array([1])", "new BigUint64Array([0n])"]) {
+      expect(() =>
+        loadAndSearch(nativeLoaderFixture("() => 'fixture-version'", counts), "fixture-version"),
+      ).toThrow("runtime search result is invalid");
+    }
   });
 
   it("fails closed before loading a staged runtime whose digest has drifted", () => {
@@ -269,6 +369,59 @@ describe("portable USearch staging", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("stage root argument does not match the governed target");
     expect(result.stderr).not.toContain("missing portable manifest");
+  });
+
+  it("derives the governed stage root for every released portable target", () => {
+    // SonarCloud reported 0.0% coverage on new code for the repaired governedStageRoot: its only
+    // exercise was through spawnSync, and a subprocess carries no coverage instrumentation. Call it
+    // in process so the governed path itself is asserted, not merely the absence of an error string
+    // on a child's stderr. The CLI tests below stay: they prove the wiring end to end.
+    const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
+
+    for (const target of PORTABLE_TARGETS) {
+      expect(governedStageRoot(target.platformTarget)).toBe(
+        join(repositoryRoot, ".portable-runtime", "staging", target.platformTarget),
+      );
+    }
+  });
+
+  it("refuses in process a platform target the producer does not declare", () => {
+    expect(() => governedStageRoot("linux-arm64")).toThrow("platform target is unsupported");
+  });
+
+  it("accepts every released portable target on the governed CLI path", () => {
+    // Regression: the governed stage root was a hand-copied three-case switch, so linux-x64 - the
+    // fourth released target since ADR-0121 was amended for it (Issue #3451, 2026-09-10) - was
+    // refused as "platform target is unsupported" and the stable Linux staging run died at step 11
+    // before it could read a manifest. Derive from PORTABLE_TARGETS so the next platform cannot
+    // fall out the same way.
+    for (const target of PORTABLE_TARGETS) {
+      const result = spawnSync(
+        process.execPath,
+        [
+          resolve("scripts/smoke-portable-usearch.mjs"),
+          `.portable-runtime/staging/${target.platformTarget}`,
+          target.platformTarget,
+        ],
+        { cwd: temporaryRoot(), encoding: "utf8" },
+      );
+
+      expect(result.stderr).not.toContain("platform target is unsupported");
+    }
+  });
+
+  it("still refuses a platform target the producer does not declare", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        resolve("scripts/smoke-portable-usearch.mjs"),
+        ".portable-runtime/staging/linux-arm64",
+        "linux-arm64",
+      ],
+      { cwd: temporaryRoot(), encoding: "utf8" },
+    );
+
+    expect(result.stderr).toContain("platform target is unsupported");
   });
 
   it("anchors governed repo-relative CLI roots independently of the current directory", () => {

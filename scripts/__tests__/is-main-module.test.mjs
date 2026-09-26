@@ -4,6 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { isMainModule } from "../lib/is-main-module.mjs";
 
+// Three direct-entry imports execute production bundle/evidence scans. Full script coverage
+// recorded 32.4 s under the deliberately bounded two-worker scheduler, while the same assertions
+// are fast in isolation. Keep the 15 s repository default intact and bound only this heavy proof.
+const DIRECT_CLI_ENTRY_TEST_TIMEOUT_MS = 60_000;
+
 describe("isMainModule", () => {
   it("is true when import.meta.url matches the canonical URL for a plain path", () => {
     const argv1 = "/repo/scripts/check-adr-index.mjs";
@@ -114,6 +119,6 @@ describe("isMainModule call sites actually fire their CLI entry on direct execut
           threw,
       ).toBe(true);
     },
-    30_000,
+    DIRECT_CLI_ENTRY_TEST_TIMEOUT_MS,
   );
 });

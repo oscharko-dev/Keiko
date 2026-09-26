@@ -4,6 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { convertAdfToText } from "./adf-to-text.js";
+import { ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES } from "./atlassian-http-port.js";
 import { MARKDOWN_LITE_MAX_INPUT_CHARS } from "./markdown-lite-blocks.js";
 import { composePlainTextToAdf, type AdfComposedDocument } from "./plain-text-to-adf.js";
 
@@ -156,5 +157,24 @@ describe("composePlainTextToAdf — determinism, bounds, and symmetry", () => {
       ok: false,
       reason: "control-characters",
     });
+  });
+
+  // KEIKO-0401: the parser character bound is not sufficient — a document with tens of thousands
+  // of one-character paragraphs stays inside MARKDOWN_LITE_MAX_INPUT_CHARS yet composes to
+  // megabytes of ADF envelope. The composer's own bound must reject such inputs so the invariant
+  // stated in the header holds.
+  it("rejects a composed document that overflows the write-lane request-body ceiling (bound)", () => {
+    const lines = Array.from({ length: 50_000 }, () => "x");
+    const input = lines.join("\n");
+    expect(input.length).toBeLessThanOrEqual(MARKDOWN_LITE_MAX_INPUT_CHARS);
+    const composed = composePlainTextToAdf(input);
+    if (composed.ok) {
+      // Fallback assertion: if the composer stays ok, the serialized doc bytes MUST fit — either
+      // outcome closes the header-declared invariant.
+      const serializedBytes = new TextEncoder().encode(JSON.stringify(composed.doc)).length;
+      expect(serializedBytes).toBeLessThanOrEqual(ATLASSIAN_HTTP_REQUEST_BODY_MAX_BYTES);
+    } else {
+      expect(composed.reason).toBe("input-too-large");
+    }
   });
 });

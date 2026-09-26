@@ -3,6 +3,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 
 import type { CodingWorkbenchCodexSubscriptionProfile } from "@oscharko-dev/keiko-contracts";
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 
 import {
   createCodexAuthNavigationIntentCoordinator,
@@ -67,6 +68,16 @@ describe("Codex runtime composition", () => {
           optOutNotificationMethods: [],
         },
       },
+    });
+  });
+
+  it("announces the product version to the sidecar rather than a restated literal", async () => {
+    const harness = createHarness();
+    await prepare(harness);
+    await attach(harness);
+    expect(harness.frames[0]).toMatchObject({
+      method: "initialize",
+      params: { clientInfo: { name: "keiko", version: KEIKO_PRODUCT_VERSION } },
     });
   });
 
@@ -236,6 +247,25 @@ describe("Codex runtime composition", () => {
         success: true,
         contentItems: [{ type: "inputText", text: "safe result" }],
       },
+    });
+  });
+
+  it("KEIKO-0679: task-submitted event carries the run's injected requestedMode/effectiveMode", async () => {
+    const harness = createHarness(undefined, undefined, undefined, undefined, undefined, {
+      requestedMode: () => "autonomous-delivery" as const,
+      effectiveMode: () => "autonomous-delivery" as const,
+    });
+    await prepare(harness);
+    await attach(harness);
+    harness.stdout.write(`${JSON.stringify(turnNotification("turn/started", "inProgress"))}\n`);
+    await tick();
+
+    const submitted = harness.events.find((event) => event.kind === "task-submitted");
+    expect(submitted).toBeDefined();
+    expect(submitted).toMatchObject({
+      kind: "task-submitted",
+      requestedMode: "autonomous-delivery",
+      effectiveMode: "autonomous-delivery",
     });
   });
 
@@ -476,6 +506,10 @@ function createHarness(
     platformFamily: "unix",
     platformOs: "darwin",
   },
+  modeOverrides?: {
+    readonly requestedMode?: CodexRuntimeCompositionInput["requestedMode"];
+    readonly effectiveMode?: CodexRuntimeCompositionInput["effectiveMode"];
+  },
 ) {
   const stdout = new PassThrough();
   const stdin = new PassThrough();
@@ -568,6 +602,12 @@ function createHarness(
     onRuntimeEvent: (event) => events.push(event),
     onTransientDelta: (delta) => deltas.push(delta),
     onAdapterFailure: (runId, code) => failures.push([runId, code]),
+    ...(modeOverrides?.requestedMode === undefined
+      ? {}
+      : { requestedMode: modeOverrides.requestedMode }),
+    ...(modeOverrides?.effectiveMode === undefined
+      ? {}
+      : { effectiveMode: modeOverrides.effectiveMode }),
   };
   const composition = createCodexRuntimeComposition(input);
   return {

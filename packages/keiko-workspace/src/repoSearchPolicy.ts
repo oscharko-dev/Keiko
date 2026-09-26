@@ -4,7 +4,7 @@ import type {
   RetrievalQuery,
 } from "@oscharko-dev/keiko-contracts/connected-context";
 import { isValidScopePath } from "@oscharko-dev/keiko-contracts/connected-context";
-import { compareStrings } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import {
   canonicalMetadataEcosystem,
   isCanonicalMetadataFile,

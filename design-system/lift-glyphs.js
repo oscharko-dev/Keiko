@@ -189,6 +189,17 @@
     return '<path d="' + d + '"/>';
   }
 
+  /* Shared geometry for the "debug" and "bug" glyphs — intentionally identical;
+     see KEIKO-0935. Edit here once and both keys stay in sync. */
+  var DEBUG_BUG_GLYPH =
+    P(
+      "M8.5 9.2 C 8.5 6.9 10 6 12 6 C 14 6 15.5 6.9 15.5 9.2 V12.4 C 15.5 15.8 14 17.6 12 17.6 C 10 17.6 8.5 15.8 8.5 12.4 Z",
+    ) +
+    P("M9.7 7.2 L8.3 5.2 M14.3 7.2 L15.7 5.2") +
+    P("M8.5 10.4 H5.4 M8.5 13.4 H5.4 M15.5 10.4 H18.6 M15.5 13.4 H18.6") +
+    P("M8.7 8.6 L6.2 7 M15.3 8.6 L17.8 7 M8.7 15.2 L6.2 16.8 M15.3 15.2 L17.8 16.8") +
+    P("M12 8 V15.6");
+
   var G = {
     search: P(ring(10.5, 10.5, 6)) + P("M14.7 14.7 L20 20"),
     compose:
@@ -468,14 +479,7 @@
 
     /* — editor · IDE · run / debug — */
     run: P("M8 5.8 L18.2 12 L8 18.2 Z"),
-    debug:
-      P(
-        "M8.5 9.2 C 8.5 6.9 10 6 12 6 C 14 6 15.5 6.9 15.5 9.2 V12.4 C 15.5 15.8 14 17.6 12 17.6 C 10 17.6 8.5 15.8 8.5 12.4 Z",
-      ) +
-      P("M9.7 7.2 L8.3 5.2 M14.3 7.2 L15.7 5.2") +
-      P("M8.5 10.4 H5.4 M8.5 13.4 H5.4 M15.5 10.4 H18.6 M15.5 13.4 H18.6") +
-      P("M8.7 8.6 L6.2 7 M15.3 8.6 L17.8 7 M8.7 15.2 L6.2 16.8 M15.3 15.2 L17.8 16.8") +
-      P("M12 8 V15.6"),
+    debug: DEBUG_BUG_GLYPH,
     breakpoint: '<circle cx="12" cy="12" r="5" fill="currentColor" stroke="none"/>',
     resume: P("M5.5 6 V18") + P("M9 6.5 L19 12 L9 17.5 Z"),
     stepOver:
@@ -501,14 +505,7 @@
       P("M12 12.5 L15.8 8.8") +
       '<circle cx="12" cy="12.5" r="1.3" fill="currentColor" stroke="none"/>' +
       P("M6.5 12 h.01 M17.5 12 h.01"),
-    bug:
-      P(
-        "M8.5 9.2 C 8.5 6.9 10 6 12 6 C 14 6 15.5 6.9 15.5 9.2 V12.4 C 15.5 15.8 14 17.6 12 17.6 C 10 17.6 8.5 15.8 8.5 12.4 Z",
-      ) +
-      P("M9.7 7.2 L8.3 5.2 M14.3 7.2 L15.7 5.2") +
-      P("M8.5 10.4 H5.4 M8.5 13.4 H5.4 M15.5 10.4 H18.6 M15.5 13.4 H18.6") +
-      P("M8.7 8.6 L6.2 7 M15.3 8.6 L17.8 7 M8.7 15.2 L6.2 16.8 M15.3 15.2 L17.8 16.8") +
-      P("M12 8 V15.6"),
+    bug: DEBUG_BUG_GLYPH,
 
     /* — editor · tool windows — */
     project:
@@ -570,6 +567,9 @@
 
   function svg(name, size) {
     size = size || 22;
+    if (!Object.prototype.hasOwnProperty.call(G, name)) {
+      window.console.warn('[LiftGlyph] unknown data-licon name: "' + name + '"');
+    }
     return (
       '<svg width="' +
       size +

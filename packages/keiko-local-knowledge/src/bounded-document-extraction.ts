@@ -23,6 +23,7 @@
 //     no-text-layer, malformed, encrypted, empty, timed-out).
 
 import type { DocumentId, ParserDiagnostic } from "@oscharko-dev/keiko-contracts";
+import { CancelledError } from "@oscharko-dev/keiko-security";
 
 import { docxParser } from "./parsers/docx-parser.js";
 import { htmlParser } from "./parsers/html-parser.js";
@@ -56,7 +57,8 @@ export type BoundedDocumentExtractionOutcome =
   | "encrypted"
   // Parsed successfully but produced no text (e.g. an empty workbook or blank document).
   | "empty"
-  // The per-document timeout (or caller cancellation) fired before extraction completed.
+  // The per-document timeout fired before extraction completed. Caller cancellation rejects with
+  // CancelledError so request owners can distinguish an explicit abort from exhausted time.
   | "timed-out";
 
 export interface BoundedDocumentExtractionInput {
@@ -255,40 +257,41 @@ interface TimeoutHandle {
 
 function armTimeout(timeoutMs: number, callerSignal: AbortSignal | undefined): TimeoutHandle {
   const controller = new AbortController();
-  const timer = setTimeout(
-    () => {
-      controller.abort();
-    },
-    Math.max(0, timeoutMs),
-  );
-  // Do not keep the event loop alive solely for the extraction deadline.
-  if (typeof timer.unref === "function") {
-    timer.unref();
-  }
   const signal =
     callerSignal === undefined
       ? controller.signal
       : AbortSignal.any([callerSignal, controller.signal]);
   let resolveExpired: (value: "timed-out") => void = () => undefined;
-  const expired = new Promise<"timed-out">((resolve) => {
+  let rejectExpired: (error: CancelledError) => void = () => undefined;
+  const expired = new Promise<"timed-out">((resolve, reject) => {
     resolveExpired = resolve;
+    rejectExpired = reject;
   });
-  const onAbort = (): void => {
+  const onTimeout = (): void => {
+    controller.abort();
     resolveExpired("timed-out");
   };
-  if (signal.aborted) {
-    onAbort();
-  } else {
-    signal.addEventListener("abort", onAbort, { once: true });
-  }
+  const onCallerAbort = (): void => {
+    rejectExpired(new CancelledError("bounded document extraction cancelled"));
+  };
+  const timer = setTimeout(onTimeout, Math.max(0, timeoutMs));
+  timer.unref();
+  callerSignal?.addEventListener("abort", onCallerAbort, { once: true });
+  if (callerSignal?.aborted === true) onCallerAbort();
   return {
     signal,
     expired,
     dispose: (): void => {
       clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
+      callerSignal?.removeEventListener("abort", onCallerAbort);
     },
   };
+}
+
+function throwIfExtractionCancelled(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) {
+    throw new CancelledError("bounded document extraction cancelled");
+  }
 }
 
 // ─── Public entry ────────────────────────────────────────────────────────────────
@@ -306,9 +309,6 @@ function preflightFailure(
     looksEncryptedOfficeContainer(input.bytes)
   ) {
     return failure("encrypted", binding.format);
-  }
-  if (options.signal?.aborted === true) {
-    return failure("timed-out", binding.format);
   }
   return undefined;
 }
@@ -349,12 +349,18 @@ async function runParser(
     signal: timeout.signal,
     now: options.now,
   });
+  const parsing = Promise.resolve().then(() => {
+    throwIfExtractionCancelled(options.signal);
+    return parseWithAdapter(binding, selection, parserOptions);
+  });
   try {
-    return await Promise.race([
-      parseWithAdapter(binding, selection, parserOptions),
-      timeout.expired,
-    ]);
-  } catch {
+    return await Promise.race([parsing, timeout.expired]);
+  } catch (error) {
+    if (options.signal?.aborted === true) {
+      throw error instanceof CancelledError
+        ? error
+        : new CancelledError("bounded document extraction cancelled");
+    }
     if (timeout.signal.aborted) {
       return "timed-out";
     }
@@ -368,6 +374,7 @@ export async function extractBoundedDocumentText(
   input: BoundedDocumentExtractionInput,
   options: BoundedDocumentExtractionOptions,
 ): Promise<BoundedDocumentExtractionResult> {
+  throwIfExtractionCancelled(options.signal);
   const binding = resolveFormat(input.extension, input.mediaType ?? "");
   if (binding === undefined) {
     return failure("unsupported-format", undefined);
@@ -377,6 +384,7 @@ export async function extractBoundedDocumentText(
     return preflight;
   }
   const result = await runParser(binding, input, options);
+  throwIfExtractionCancelled(options.signal);
   if (result === "timed-out") {
     return failure("timed-out", binding.format);
   }

@@ -37,9 +37,20 @@ successful:
 - core quality: typecheck, lint, formatting, architecture, contract, package, security, retrieval,
   evidence, and regression gates;
 - sharded package/UI/script coverage, followed by one Sonar verdict over the reassembled evidence;
-- cross-platform smoke when the change can affect native behavior;
+- the release build, shipped-dependency audit, SBOM, package-install, and runtime smoke lane;
+- Linux/macOS cross-platform smoke, plus the same full Windows proof unless the trusted
+  base-revision classifier positively identifies every changed pull-request path as
+  non-Windows-relevant; pushes, merge groups, and manual runs always use the full matrix;
+- the UI lint, typecheck, build, browser smoke, and release-evidence lane;
 - Fallow semantic duplicate analysis over changed files only; and
 - Gitleaks over every addition in the pull-request commit range, including intermediate commits.
+
+The aggregate permits only the documented editor fast-path and documentation-only skips. For a pull
+request positively classified as non-Windows-relevant, the Windows matrix leg is not created; the
+successful cross-platform matrix result therefore carries no separate Windows skip result. Every
+selected dependency that fails, is cancelled, or is skipped makes `ci` fail. Network and 5xx
+failures from npm's audit endpoint receive bounded retries; a real advisory or an exhausted retry
+budget remains a hard failure.
 
 The jobs run concurrently. Full mutation, extended end-to-end, and reference-machine performance
 measurements remain scheduled or release-owned; fast deterministic proxies and affected-area tests
@@ -54,11 +65,9 @@ inline finding, GitHub's conversation-resolution requirement blocks merge until 
 resolved. Repair remains mandatory policy, but GitHub's resolved bit alone is not proof of a code
 change in this quota-tolerant interim topology.
 
-Keiko for Quality (ADR-0170) is an external, SHA-pinned reviewer that publishes model-backed review
-conversations when `vars.KEIKO_QUALITY_ENABLED` is `true`. It publishes no required status context,
-so like CodeRabbit it blocks only through conversation resolution — but unlike CodeRabbit its
-absence is silent, because an inert or failed run produces nothing at all. When it is enabled it is
-an active producer and its findings belong in the same single-pass enumeration as every other one.
+Keiko for Quality is retired by [ADR-0176](../adr/ADR-0176-retire-keiko-for-quality.md) and is
+not a producer here. CodeRabbit is the only review producer that publishes findings on a pull
+request.
 
 CodSpeed and Greptile are retired under ADR-0169. Their Apps, workflows, policies, validators, and
 protected contexts are absent. The canaries proved that Greptile quota could omit current-head
@@ -70,6 +79,7 @@ Actual performance merge authority stays with `npm run check:retrieval-latency`,
 `npm run check:context-quality`, `npm run check:editor-bundle-size`,
 `npm run check:editor-release-evidence`, `npm run check:perf-evidence:editor`, and
 `npm run check:perf-evidence`. The exact pull-request E2E checks are `npm run test:e2e:smoke`,
+`npm run test:e2e:smoke:firefox`, `npm run test:e2e:smoke:webkit`,
 `npm run test:e2e:editor-run-verification-2215`, `npm run test:e2e:editor-debugging-2348`, and
 `npm run test:e2e:editor-m11-closeout-2533`. The stable protected set contains ten App-bound checks
 and no hosted performance dashboard or quota-paced reviewer status.

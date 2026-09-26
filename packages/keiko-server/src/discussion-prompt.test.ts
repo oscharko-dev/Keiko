@@ -5,7 +5,7 @@ import {
   DISCUSSION_DIRECTIVE_TEMPLATES,
   DISCUSSION_MODES,
   DISCUSSION_MODE_PLANS,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/discussion-intelligence";
 import {
   CONVERSATION_DISCUSSION_BLOCK_HEADER,
   composeDiscussionDirectiveBlock,

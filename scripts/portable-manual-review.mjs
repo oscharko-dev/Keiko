@@ -20,6 +20,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { URL, fileURLToPath, pathToFileURL } from "node:url";
 
 import { PORTABLE_TARGETS, findPortableMetadataRedactionFailures } from "./portable-runtime.mjs";
+import { loadPortableRuntimeApprovals } from "./portable-runtime-approvals.mjs";
 import { writeZipArchiveEntries, writeZipArchiveFromDirectory } from "./lib/zip-archive.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import {
@@ -27,12 +28,15 @@ import {
   RUNTIME_QUALIFICATION_SUITE,
   runtimeActivationManifest,
 } from "./runtime-activation-manifest.mjs";
+import { sha256, sha256File } from "./lib/digest.mjs";
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
-const portableApprovals = JSON.parse(
-  readFileSync(join(repoRoot, "portable-runtime-approvals.json"), "utf8"),
-);
+// The approvals document is the governed release-approval act for both the OpenCode sidecar pin and
+// the Node runtime this harness reviews against. Reading it through the shared validated loader
+// instead of a private JSON.parse keeps this script from becoming a second, laxer reader of the same
+// file, and makes a missing or malformed document fail at load rather than mid-review.
+const portableApprovals = loadPortableRuntimeApprovals(repoRoot);
 const OPEN_CODE_APPROVAL = portableApprovals.sidecarRuntimes.find(
   (runtime) => runtime.name === "opencode-compatible",
 );
@@ -41,7 +45,10 @@ const CURRENT_VERSION = rootPackage.version;
 const TARGET_VERSION = nextPatchVersion(CURRENT_VERSION);
 const RELEASE_TAG = `v${TARGET_VERSION}`;
 const RELEASE_ID = 9_940_204_100;
-const REVIEWED_NODE_VERSION = "24.18.0";
+// Derived, never restated. A literal copy of this version here would keep the manual review binding
+// its manifests to a stale Node patch after the approvals document is updated, with nothing to
+// report the divergence — the exact two-sources-of-truth defect this derivation removes.
+const REVIEWED_NODE_VERSION = approvedNodeVersion(portableApprovals);
 const FIXED_NOW = "2026-07-08T00:00:00.000Z";
 const PACKAGE_NAME = "@oscharko-dev/keiko";
 const HOST = "127.0.0.1";
@@ -99,6 +106,17 @@ SOFTWARE.
 
 function fail(message) {
   throw new Error(`portable manual review failed: ${message}`);
+}
+
+export function approvedNodeVersion(approvals) {
+  const version = approvals?.node?.version;
+  // Fail closed at the consumer boundary too: an absent, empty, or non-string approval must stop the
+  // review outright. Reviewing against a default or an empty runtime identity would publish a
+  // manifest that claims an approval nobody granted.
+  if (typeof version !== "string" || version.length === 0) {
+    fail("approved node version is missing from portable-runtime-approvals.json");
+  }
+  return version;
 }
 
 function nextPatchVersion(version) {
@@ -207,7 +225,7 @@ function assetName(target) {
 }
 
 function launcherName(target) {
-  return target === "windows-x64" ? "Keiko.exe" : "Keiko.app";
+  return targetByName(target).primaryLauncher;
 }
 
 function scriptName(target, scenario, ext) {
@@ -311,6 +329,7 @@ From this directory, run one generated script, for example:
 ./scripts/start-macos-arm64-happy-update.sh
 ./scripts/start-macos-arm64-bad-checksum.sh
 ./scripts/start-macos-x64-happy-update.sh
+./scripts/start-linux-x64-happy-update.sh
 ./scripts/start-windows-x64-happy-update.sh
 \`\`\`
 
@@ -356,7 +375,7 @@ function writeScripts(outDir) {
   }
 }
 
-function writeShellScript(outDir, scriptsDir, target, scenario) {
+function writeShellScript(_outDir, scriptsDir, target, scenario) {
   const path = join(scriptsDir, scriptName(target, scenario, ".sh"));
   const reviewScript = join(repoRoot, "scripts", "portable-manual-review.mjs");
   const body = [
@@ -370,7 +389,7 @@ function writeShellScript(outDir, scriptsDir, target, scenario) {
   chmodSync(path, 0o755);
 }
 
-function writeCmdScript(outDir, scriptsDir, target, scenario) {
+function writeCmdScript(_outDir, scriptsDir, target, scenario) {
   const path = join(scriptsDir, scriptName(target, scenario, ".cmd"));
   const reviewScript = join(repoRoot, "scripts", "portable-manual-review.mjs");
   const body = [
@@ -485,6 +504,26 @@ function writeWindowsLayout(root, target, version, sidecar) {
   writeSidecarPayload(root, target, sidecar);
 }
 
+function writeLinuxLayout(root, target, version, sidecar) {
+  ensureDir(join(root, "runtime", "node", "bin"));
+  ensureDir(join(root, ".portable"));
+  ensureDir(join(root, "support"));
+  writeAppPackage(join(root, "app"), version);
+  writeFileSync(join(root, "runtime", "node", "bin", "node"), "fixture node\n", {
+    mode: 0o755,
+  });
+  writeFileSync(join(root, "Keiko"), "#!/usr/bin/env sh\n", { mode: 0o755 });
+  writeFileSync(join(root, "support", "keiko-support.sh"), "#!/usr/bin/env sh\n", {
+    mode: 0o755,
+  });
+  writeJson(join(root, ".portable", "setup-manifest.json"), setupManifest(target, version));
+  writeNativeHelperPayload(root, target);
+  writeFileSync(join(root, "runtime", "native", "usearch.node"), "fixture usearch\n", {
+    mode: 0o644,
+  });
+  writeSidecarPayload(root, target, sidecar);
+}
+
 function writeMacLayout(root, target, version, sidecar) {
   const bundle = join(root, "Keiko.app");
   const resources = join(bundle, "Contents", "Resources");
@@ -506,19 +545,20 @@ function writeMacLayout(root, target, version, sidecar) {
 function writePortablePayload(root, target, version, sidecar = "absent") {
   const payloadRoot = join(root, "Keiko");
   if (target === "windows-x64") writeWindowsLayout(payloadRoot, target, version, sidecar);
+  else if (target === "linux-x64") writeLinuxLayout(payloadRoot, target, version, sidecar);
   else writeMacLayout(payloadRoot, target, version, sidecar);
   return payloadRoot;
 }
 
 function runtimeResourceRoot(payloadRoot, target) {
-  return target === "windows-x64"
+  return target === "windows-x64" || target === "linux-x64"
     ? payloadRoot
     : join(payloadRoot, "Keiko.app", "Contents", "Resources");
 }
 
-function runtimeQualificationReceipt(manifest) {
+function runtimeQualificationReceipt(manifest, resourceRoot) {
   const helpers = new Map(manifest.nativeHelpers.map((helper) => [helper.name, helper]));
-  return {
+  const common = {
     schemaVersion: 1,
     suiteVersion: RUNTIME_QUALIFICATION_SUITE,
     platformTarget: manifest.artifact.platformTarget,
@@ -530,11 +570,24 @@ function runtimeQualificationReceipt(manifest) {
       name: sidecar.name,
       sha256: sidecar.payloadSha256,
     })),
-    backend:
-      manifest.artifact.platformTarget === "windows-x64"
-        ? "windows-job-object"
-        : "macos-endpoint-security",
+    backend: runtimeQualificationBackend(manifest.artifact.platformTarget),
     result: "passed",
+  };
+  if (manifest.artifact.platformTarget !== "linux-x64") return common;
+  return {
+    ...common,
+    schemaVersion: 2,
+    runtimeComponents: [
+      { name: "primary-launcher", sha256: sha256File(join(resourceRoot, "Keiko")) },
+      {
+        name: "node-runtime",
+        sha256: sha256File(join(resourceRoot, "runtime", "node", "bin", "node")),
+      },
+      {
+        name: "usearch",
+        sha256: sha256File(join(resourceRoot, "runtime", "native", "usearch.node")),
+      },
+    ],
   };
 }
 
@@ -543,11 +596,11 @@ function writeRuntimeEvidencePayload(payloadRoot, target, manifest) {
   const activationPath = join(resourceRoot, ...RUNTIME_ACTIVATION_RELATIVE_PATH.split("/"));
   writeJson(activationPath, runtimeActivationManifest(manifest));
   manifest.runtimeActivation.sha256 = sha256File(activationPath);
-  const receipt = runtimeQualificationReceipt(manifest);
+  const receipt = runtimeQualificationReceipt(manifest, resourceRoot);
   if (target === "windows-x64") {
     writeManualWindowsAttestation(resourceRoot, manifest, receipt);
   } else {
-    writeManualMacosQualification(resourceRoot, manifest, receipt);
+    writeManualQualification(resourceRoot, manifest, receipt);
   }
 }
 
@@ -559,7 +612,7 @@ function writeManualWindowsAttestation(resourceRoot, manifest, receipt) {
   manifest.releaseImpact.reviewedBinding.runtimeAttestation = manifest.runtimeAttestation;
 }
 
-function writeManualMacosQualification(resourceRoot, manifest, receipt) {
+function writeManualQualification(resourceRoot, manifest, receipt) {
   const path = join(resourceRoot, ".portable", "runtime-qualification.json");
   writeJson(path, receipt);
   manifest.runtimeQualification.sha256 = sha256File(path);
@@ -570,18 +623,20 @@ function writeManagedInstall(root, target, version) {
   const managedRoot = managedRootPath(root, target);
   rmSync(managedRoot, { recursive: true, force: true });
   if (target === "windows-x64") writeWindowsLayout(managedRoot, target, version, "absent");
+  else if (target === "linux-x64") writeLinuxLayout(managedRoot, target, version, "absent");
   else writeMacLayout(dirname(managedRoot), target, version, "absent");
   return managedRoot;
 }
 
 function managedRootPath(root, target) {
   if (target === "windows-x64") return join(root, "managed", "Programs", "Keiko");
+  if (target === "linux-x64") return join(root, "managed", ".local", "opt", "Keiko");
   return join(root, "managed", "Applications", "Keiko.app");
 }
 
 function packageRootFor(root, target) {
   const managedRoot = managedRootPath(root, target);
-  if (target === "windows-x64") return join(managedRoot, "app");
+  if (target === "windows-x64" || target === "linux-x64") return join(managedRoot, "app");
   return join(managedRoot, "Contents", "Resources", "app");
 }
 
@@ -620,10 +675,6 @@ function createHostileZip(workRoot, zipPath) {
   );
 }
 
-function sha256File(path) {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
-}
-
 function fileSize(path) {
   return statSync(path).size;
 }
@@ -633,7 +684,7 @@ function sidecarFiles(target) {
   const executableBytes = Buffer.from(
     target === "windows-x64" ? "manual-review-signed-pe-fixture\n" : "#!/bin/sh\n",
   );
-  const executableSha256 = sha256Bytes(executableBytes);
+  const executableSha256 = sha256(executableBytes);
   const approval = OPEN_CODE_APPROVAL;
   const archive = approval.archives[target];
   const sbom = {
@@ -672,10 +723,6 @@ function sidecarFiles(target) {
   ];
 }
 
-function sha256Bytes(bytes) {
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
 const NATIVE_HELPER_NAMES = Object.freeze([
   "keiko-secure-workspace-read",
   "keiko-runtime-supervisor",
@@ -687,6 +734,9 @@ function nativeHelperBytes(target, name) {
 }
 
 function nativeHelperExecutablePath(target, name) {
+  if (target === "linux-x64" && name === "keiko-runtime-supervisor") {
+    return "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
+  }
   return `runtime/native/${name}${target === "windows-x64" ? ".exe" : ""}`;
 }
 
@@ -694,20 +744,19 @@ function writeNativeHelperPayload(resourceRoot, target) {
   for (const name of NATIVE_HELPER_NAMES) {
     const path = join(resourceRoot, nativeHelperExecutablePath(target, name));
     ensureDir(dirname(path));
-    writeFileSync(path, nativeHelperBytes(target, name));
+    writeFileSync(path, nativeHelperBytes(target, name), {
+      mode: target === "windows-x64" ? 0o644 : 0o755,
+    });
   }
 }
 
 function nativeHelper(target, version, signingVerified, name) {
   const runtimeTarget = targetByName(target);
   const secureRead = name === "keiko-secure-workspace-read";
-  let sourcePath = "native/secure-workspace-read";
-  if (!secureRead) {
-    const supervisorPlatform = target === "windows-x64" ? "windows" : "macos";
-    sourcePath = `native/runtime-supervisor/${supervisorPlatform}`;
-  }
+  const sourcePath = nativeHelperSourcePath(target, secureRead);
+  const protocol = nativeHelperProtocol(target, secureRead);
   const bytes = nativeHelperBytes(target, name);
-  const digest = sha256Bytes(bytes);
+  const digest = sha256(bytes);
   const signing = componentSigningEvidence(target, signingVerified);
   return {
     name,
@@ -715,15 +764,11 @@ function nativeHelper(target, version, signingVerified, name) {
     platformTarget: target,
     architecture: runtimeTarget.nodeArchitecture,
     executablePath: nativeHelperExecutablePath(target, name),
-    protocol: {
-      schemaVersion: 1,
-      requestMagic: secureRead ? "KSR1" : "KRP1",
-      responseMagic: secureRead ? "KSS1" : "KRS1",
-    },
+    protocol,
     source: {
       commitSha: "a".repeat(40),
       path: sourcePath,
-      treeSha256: sha256Bytes(
+      treeSha256: sha256(
         Buffer.from(
           `${secureRead ? "native/secure-workspace-read" : "native/runtime-supervisor"}\n`,
         ),
@@ -735,6 +780,21 @@ function nativeHelper(target, version, signingVerified, name) {
     sbomBomRef: `pkg:generic/${name}@${version}?platform=${target}`,
     signing,
   };
+}
+
+function nativeHelperSourcePath(target, secureRead) {
+  if (secureRead) return "native/secure-workspace-read";
+  if (target === "linux-x64") return "packages/keiko-sandbox/src";
+  const platform = target === "windows-x64" ? "windows" : "macos";
+  return `native/runtime-supervisor/${platform}`;
+}
+
+function nativeHelperProtocol(target, secureRead) {
+  if (secureRead) return { schemaVersion: 1, requestMagic: "KSR1", responseMagic: "KSS1" };
+  if (target === "linux-x64") {
+    return { schemaVersion: 1, requestMagic: "none", responseMagic: "none" };
+  }
+  return { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" };
 }
 
 function componentSigningEvidence(target, verified) {
@@ -764,7 +824,7 @@ function sidecarRuntime(target, scenario) {
   const executablePath = target === "windows-x64" ? "bin/opencode.exe" : "bin/opencode";
   const executableFile = files.find((file) => file.path === executablePath);
   if (executableFile === undefined) fail("OpenCode executable fixture is missing");
-  const shippedExecutableSha256 = sha256Bytes(executableFile.bytes);
+  const shippedExecutableSha256 = sha256(executableFile.bytes);
   const shippedExecutableTreeSha256 = createHash("sha256")
     .update(`${executablePath}\0${shippedExecutableSha256}\0`)
     .digest("hex");
@@ -793,11 +853,11 @@ function sidecarRuntime(target, scenario) {
     sizeBytes: files.reduce((sum, file) => sum + file.bytes.length, 0),
     licenseEvidence: {
       path: `${root}/evidence/LICENSE`,
-      sha256: sha256Bytes(files[0].bytes),
+      sha256: sha256(files[0].bytes),
     },
     sbomEvidence: {
       path: `${root}/evidence/sbom.cdx.json`,
-      sha256: sha256Bytes(files[1].bytes),
+      sha256: sha256(files[1].bytes),
     },
     signing: sidecarSigningEvidence(target, shippedExecutableSha256, shippedExecutableTreeSha256),
   };
@@ -814,24 +874,30 @@ function sidecarSigningEvidence(target, executableSha256, executableTreeSha256) 
 }
 
 function signingEvidence(target, verified) {
-  const macos = target !== "windows-x64";
+  const runtimeTarget = targetByName(target);
+  const macos = runtimeTarget.nodePlatform === "darwin";
   return {
     verificationPolicy: "production",
     verificationStatus: verified ? "verified-production" : "verification-failed",
     verificationReasonCodes: verified ? [] : ["manual-review-unsigned-fixture"],
-    signatureKind: target === "windows-x64" ? "authenticode" : "developer-id-notarized",
+    signatureKind: runtimeTarget.signatureKind,
     signatureVerified: verified,
     notarizationRequired: macos,
     notarizationVerified: macos && verified,
-    verificationChecks:
-      target === "windows-x64"
-        ? { publisherChainVerified: verified, timestampVerified: verified }
-        : {
-            developerIdVerified: verified,
-            notarizationVerified: verified,
-            stapleVerified: verified,
-            assessmentVerified: verified,
-          },
+    verificationChecks: manualVerificationChecks(runtimeTarget.nodePlatform, verified),
+  };
+}
+
+function manualVerificationChecks(platform, verified) {
+  if (platform === "win32") {
+    return { publisherChainVerified: verified, timestampVerified: verified };
+  }
+  if (platform === "linux") return { provenanceVerified: verified };
+  return {
+    developerIdVerified: verified,
+    notarizationVerified: verified,
+    stapleVerified: verified,
+    assessmentVerified: verified,
   };
 }
 
@@ -941,8 +1007,7 @@ function portableManifest(input) {
     schemaVersion: 1,
     path: RUNTIME_ACTIVATION_RELATIVE_PATH,
     sha256: "e".repeat(64),
-    trustAnchor:
-      target.nodePlatform === "win32" ? "authenticode-attestor" : "developer-id-app-resource-seal",
+    trustAnchor: runtimeActivationTrustAnchor(target),
   };
   const targetEvidence = portableTargetRuntimeEvidence(input.target, input.signingVerified);
   const manifest = {
@@ -982,7 +1047,7 @@ function portableTargetRuntimeEvidence(target, signingVerified) {
         schemaVersion: 1,
         path: ".portable/runtime-qualification.json",
         sha256: "f".repeat(64),
-        backend: "macos-endpoint-security",
+        backend: runtimeQualificationBackend(target),
       },
     };
   }
@@ -996,6 +1061,19 @@ function portableTargetRuntimeEvidence(target, signingVerified) {
       signing: componentSigningEvidence(target, signingVerified),
     },
   };
+}
+
+function runtimeActivationTrustAnchor(target) {
+  if (target.nodePlatform === "win32") return "authenticode-attestor";
+  return target.nodePlatform === "linux"
+    ? "sigstore-qualification-receipt"
+    : "developer-id-app-resource-seal";
+}
+
+function runtimeQualificationBackend(target) {
+  if (target === "linux-x64") return "linux-namespace-gateway";
+  if (target === "windows-x64") return "windows-job-object";
+  return "macos-endpoint-security";
 }
 
 function reviewedTargetRuntimeEvidence(evidence) {

@@ -117,7 +117,13 @@ export function applyTextEditsToText(original: string, edits: readonly EditorTex
   return out.join("");
 }
 
-function utf8ByteLength(codePoint: number): number {
+/**
+ * UTF-8 byte length of a single Unicode code point. Module-exported (rather than local) so the
+ * patch-preview clamp loop in {@link import("./patch-preview.js")} shares the same primitive
+ * (KEIKO-0527 / KEIKO-0684). Not re-exported from `./index.ts`: an internal cross-module import,
+ * never part of the package's public surface.
+ */
+export function utf8ByteLength(codePoint: number): number {
   if (codePoint <= 0x7f) {
     return 1;
   }

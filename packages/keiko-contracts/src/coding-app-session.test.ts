@@ -126,6 +126,44 @@ describe("coding app-session pairing attestation", () => {
     );
   });
 
+  // KEIKO-0742: the claim is documented as a 64-character lowercase hex HMAC-SHA256 digest.
+  // Reject shapes that don't match that; the earlier 1..256 range was defence-in-depth, not the
+  // real admission shape.
+  it("enforces the launcher-minted claim shape (64 lowercase hex, KEIKO-0742)", () => {
+    // 60 chars — too short, but was accepted before.
+    expect(
+      isWellFormedCodingAppSessionPairingAttestation({ ...attestation, claim: "a".repeat(60) }),
+    ).toBe(false);
+    // 65 all-hex — too long.
+    expect(
+      isWellFormedCodingAppSessionPairingAttestation({ ...attestation, claim: "a".repeat(65) }),
+    ).toBe(false);
+    // 64 chars containing an uppercase letter — the launcher never emits mixed case.
+    expect(
+      isWellFormedCodingAppSessionPairingAttestation({
+        ...attestation,
+        claim: `A${"b".repeat(63)}`,
+      }),
+    ).toBe(false);
+    // 64 chars containing a non-hex char.
+    expect(
+      isWellFormedCodingAppSessionPairingAttestation({
+        ...attestation,
+        claim: `g${"b".repeat(63)}`,
+      }),
+    ).toBe(false);
+    // Valid shape still accepted.
+    expect(
+      isWellFormedCodingAppSessionPairingAttestation({ ...attestation, claim: "a".repeat(64) }),
+    ).toBe(true);
+    expect(
+      isWellFormedCodingAppSessionPairingAttestation({
+        ...attestation,
+        claim: "0123456789abcdef".repeat(4),
+      }),
+    ).toBe(true);
+  });
+
   it("round-trips through the boot URL fragment codec", () => {
     const fragment = encodeCodingAppSessionPairingFragment(attestation);
     expect(fragment.startsWith(CODING_APP_SESSION_PAIRING_FRAGMENT_PREFIX)).toBe(true);

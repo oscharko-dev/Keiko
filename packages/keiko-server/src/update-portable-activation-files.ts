@@ -1,19 +1,26 @@
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
+  constants,
   existsSync,
-  linkSync,
+  fstatSync,
+  fsyncSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readFileSync,
+  readSync,
   realpathSync,
   renameSync,
   rmSync,
   statSync,
+  type Stats,
   writeFileSync,
 } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import type {
   UpdatePortableStagingSummary,
   UpdatePortableTarget,
@@ -29,6 +36,12 @@ import {
   primaryLauncher,
   runtimeFor,
 } from "./update-portable-staging-shared.js";
+import {
+  parseWindowsGenerationBinding,
+  resolveWindowsGenerationLayout,
+  windowsGenerationBindingsEqual,
+  type WindowsGenerationBinding,
+} from "./update-portable-windows-generation.js";
 
 export interface PortableActivationFileInput {
   readonly sessionId: string;
@@ -39,10 +52,13 @@ export interface PortableActivationFileInput {
 
 export interface PortableActivationLayout {
   readonly installRoot: string;
+  readonly resourceRoot: string;
   readonly appRoot: string;
   readonly packageJsonPath: string;
   readonly setupManifestPath: string;
   readonly launcherPath: string;
+  readonly runtimeSupervisorPath: string;
+  readonly windowsGeneration?: WindowsGenerationBinding | undefined;
 }
 
 export interface PortableActivationPaths {
@@ -52,24 +68,24 @@ export interface PortableActivationPaths {
   readonly backupRoot: string;
 }
 
-export interface PortablePromotionResult {
-  readonly layout: PortableActivationLayout;
+export interface PortableHandoffLayouts {
   readonly paths: PortableActivationPaths;
-}
-
-export interface PortableActivationRecovery {
-  readonly activationId: string;
-  readonly stageId: string;
-  readonly target: UpdatePortableTarget;
-  readonly phase: "prepared" | "promoted" | "registered" | "verified";
+  readonly current: PortableActivationLayout;
+  readonly candidate: PortableActivationLayout;
+  readonly currentSupervisorPath: string;
+  readonly candidateSupervisorPath: string;
 }
 
 const REGISTRATION_FILE = "portable-install-state.json";
-const REGISTRATION_SNAPSHOT_SUFFIX = ".registration-backup";
-const REGISTRATION_ABSENT_SUFFIX = ".registration-absent";
-const RECOVERY_FILE = "portable-activation-recovery.json";
 const UPDATES_DIR = "updates";
-const WINDOWS_SHORTCUT_SAFE_PATH = /^[A-Za-z0-9_@ .()/\\:-]+$/u;
+const HANDOFF_DIR = "handoff";
+const REGISTRATION_SNAPSHOT_FILE = "registration.previous";
+const REGISTRATION_ABSENT_FILE = "registration.previous.absent";
+const MAX_REGISTRATION_BYTES = 64 * 1024;
+const MAX_ACTIVE_SETUP_BYTES = 64 * 1024;
+const MAX_ACTIVE_LAUNCHER_BYTES = 64 * 1024 * 1024;
+const ACTIVE_ATTESTATION_TIMEOUT_MS = 15_000;
+const ACTIVE_ATTESTATION_BUFFER_BYTES = 64 * 1024;
 
 export class PortableUpdateActivationError extends Error {
   public constructor(
@@ -96,23 +112,48 @@ export function activationIdFor(input: PortableActivationFileInput): string {
     .slice(0, 32);
 }
 
-function layoutFor(target: UpdatePortableTarget, root: string): PortableActivationLayout {
+function layoutFor(
+  target: UpdatePortableTarget,
+  root: string,
+  setupManifest: Record<string, unknown>,
+): PortableActivationLayout {
   if (target === "windows-x64") {
+    const binding = parseWindowsGenerationBinding(setupManifest.windowsGeneration);
+    if (binding === undefined) {
+      throw activationFailed("portable activation Windows generation binding is malformed");
+    }
+    const generation = resolveWindowsGenerationLayout(root, binding);
     return {
       installRoot: root,
+      resourceRoot: generation.resourceRoot,
+      appRoot: generation.appRoot,
+      packageJsonPath: generation.packageJsonPath,
+      setupManifestPath: generation.rootSetupManifestPath,
+      launcherPath: generation.rootLauncherPath,
+      runtimeSupervisorPath: generation.runtimeSupervisorPath,
+      windowsGeneration: binding,
+    };
+  }
+  if (target === "linux-x64") {
+    return {
+      installRoot: root,
+      resourceRoot: root,
       appRoot: join(root, "app"),
       packageJsonPath: join(root, "app", "package.json"),
       setupManifestPath: join(root, ".portable", "setup-manifest.json"),
-      launcherPath: join(root, "Keiko.exe"),
+      launcherPath: join(root, "Keiko"),
+      runtimeSupervisorPath: join(root, "runtime", "native", "keiko-runtime-supervisor"),
     };
   }
   const resources = join(root, "Contents", "Resources");
   return {
     installRoot: root,
+    resourceRoot: resources,
     appRoot: join(resources, "app"),
     packageJsonPath: join(resources, "app", "package.json"),
     setupManifestPath: join(resources, ".portable", "setup-manifest.json"),
     launcherPath: join(root, "Contents", "MacOS", "Keiko"),
+    runtimeSupervisorPath: join(resources, "runtime", "native", "keiko-runtime-supervisor"),
   };
 }
 
@@ -151,7 +192,7 @@ function manifestCoreMatches(
   targetVersion: string,
 ): boolean {
   return (
-    record.schemaVersion === 1 &&
+    record.schemaVersion === (target === "windows-x64" ? 2 : 1) &&
     record.platformTarget === target &&
     record.packageName === PACKAGE_NAME &&
     record.packageVersion === targetVersion &&
@@ -169,6 +210,16 @@ function validateSetupManifest(
   if (!manifestCoreMatches(record, target, targetVersion) || !runtimeMatches(record, target)) {
     throw activationFailed("portable activation target is not eligible");
   }
+  if (target !== "windows-x64") {
+    if (record.windowsGeneration !== undefined) {
+      throw activationFailed("portable activation target is not eligible");
+    }
+    return;
+  }
+  const binding = parseWindowsGenerationBinding(record.windowsGeneration);
+  if (binding === undefined) {
+    throw activationFailed("portable activation Windows generation binding is malformed");
+  }
 }
 
 function validatePackageJson(record: Record<string, unknown>, targetVersion: string): void {
@@ -185,11 +236,24 @@ function validateLayout(
   root: string,
   targetVersion: string,
 ): PortableActivationLayout {
-  const layout = layoutFor(target, root);
+  const rootSetupManifestPath =
+    target === "windows-x64"
+      ? join(root, ".portable", "setup-manifest.json")
+      : join(root, "Contents", "Resources", ".portable", "setup-manifest.json");
+  requiredFile(rootSetupManifestPath);
+  const setupManifest = readJsonRecord(rootSetupManifestPath);
+  const layout = layoutFor(target, root, setupManifest);
   requiredFile(layout.packageJsonPath);
   requiredFile(layout.setupManifestPath);
   requiredFile(layout.launcherPath);
-  validateSetupManifest(readJsonRecord(layout.setupManifestPath), target, targetVersion);
+  requiredFile(layout.runtimeSupervisorPath);
+  validateSetupManifest(setupManifest, target, targetVersion);
+  if (
+    layout.windowsGeneration !== undefined &&
+    sha256File(layout.launcherPath) !== layout.windowsGeneration.launcherSha256
+  ) {
+    throw activationFailed("portable activation root launcher digest did not match setup");
+  }
   validatePackageJson(readJsonRecord(layout.packageJsonPath), targetVersion);
   return layout;
 }
@@ -242,7 +306,7 @@ function activationPathsFor(
   const parent = realpathSync(dirname(managedRoot));
   const stageRoot = join(parent, PORTABLE_STAGE_DIR_PREFIX, stageId);
   const candidateRoot =
-    target === "windows-x64"
+    target === "windows-x64" || target === "linux-x64"
       ? join(stageRoot, PORTABLE_PAYLOAD_ROOT)
       : join(stageRoot, PORTABLE_PAYLOAD_ROOT, "Keiko.app");
   assertNoSymlinkAncestor(stageRoot);
@@ -252,6 +316,16 @@ function activationPathsFor(
     candidateRoot,
     backupRoot: join(parent, `.keiko-previous-${activationId}`),
   };
+}
+
+function isSafeStageId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value !== "." &&
+    value !== ".." &&
+    /^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(value)
+  );
 }
 
 function activationPaths(
@@ -266,43 +340,11 @@ function activationPaths(
   );
 }
 
-function restoreManagedRoot(paths: PortableActivationPaths): void {
-  if (!existsSync(paths.backupRoot)) return;
-  if (existsSync(paths.managedRoot)) {
-    if (existsSync(paths.candidateRoot)) {
-      throw activationFailed("portable activation recovery is incomplete");
-    }
-    renameSync(paths.managedRoot, paths.candidateRoot);
-  }
-  renameSync(paths.backupRoot, paths.managedRoot);
-}
-
-function promote(
-  paths: PortableActivationPaths,
-  target: UpdatePortableTarget,
-  targetVersion: string,
-): PortableActivationLayout {
-  if (existsSync(paths.backupRoot)) {
-    throw activationFailed("portable activation backup path is occupied");
-  }
-  validateLayout(target, paths.candidateRoot, targetVersion);
-  let moved = false;
-  try {
-    renameSync(paths.managedRoot, paths.backupRoot);
-    moved = true;
-    renameSync(paths.candidateRoot, paths.managedRoot);
-    return validateLayout(target, paths.managedRoot, targetVersion);
-  } catch (error) {
-    if (moved) restoreManagedRoot(paths);
-    if (error instanceof PortableUpdateActivationError) throw error;
-    throw activationFailed("portable activation swap failed");
-  }
-}
-
 function defaultManagedRoot(target: UpdatePortableTarget, env: EnvSource, home: string): string {
   if (target === "windows-x64") {
     return join(env.LOCALAPPDATA ?? join(home, "AppData", "Local"), "Programs", "Keiko");
   }
+  if (target === "linux-x64") return join(home, ".local", "opt", "Keiko");
   return "/Applications/Keiko.app";
 }
 
@@ -321,19 +363,28 @@ function managedRootLocator(
   return { kind: "absolute-local", path: realRoot };
 }
 
-export function promotePortableInstall(
-  input: PortableActivationFileInput,
-  activationId: string,
-): PortablePromotionResult {
-  const paths = activationPaths(input, activationId);
-  return {
-    paths,
-    layout: promote(paths, input.stage.target, input.targetVersion),
-  };
-}
-
-function recoveryPath(stateDir: string): string {
-  return join(stateDir, UPDATES_DIR, RECOVERY_FILE);
+export function resolvePortableHandoffLayouts(input: {
+  readonly activation: PortableActivationFileInput;
+  readonly activationId: string;
+  readonly currentVersion: string;
+}): PortableHandoffLayouts {
+  const unresolved = activationPaths(input.activation, input.activationId);
+  const paths = { ...unresolved, managedRoot: realpathSync(unresolved.managedRoot) };
+  const current = validateLayout(
+    input.activation.stage.target,
+    paths.managedRoot,
+    input.currentVersion,
+  );
+  const candidate = validateLayout(
+    input.activation.stage.target,
+    paths.candidateRoot,
+    input.activation.targetVersion,
+  );
+  const currentSupervisorPath = current.runtimeSupervisorPath;
+  const candidateSupervisorPath = candidate.runtimeSupervisorPath;
+  requiredFile(currentSupervisorPath);
+  requiredFile(candidateSupervisorPath);
+  return { paths, current, candidate, currentSupervisorPath, candidateSupervisorPath };
 }
 
 function registrationPath(stateDir: string): string {
@@ -347,59 +398,385 @@ function registrationSnapshotPaths(
   readonly content: string;
   readonly absent: string;
 } {
-  const root = join(stateDir, UPDATES_DIR);
+  if (!/^[a-f0-9]{32}$/u.test(activationId)) {
+    throw activationFailed("portable registration activation identity is invalid");
+  }
+  const root = join(stateDir, UPDATES_DIR, HANDOFF_DIR, activationId);
   return {
-    content: join(root, `${activationId}${REGISTRATION_SNAPSHOT_SUFFIX}`),
-    absent: join(root, `${activationId}${REGISTRATION_ABSENT_SUFFIX}`),
+    content: join(root, REGISTRATION_SNAPSHOT_FILE),
+    absent: join(root, REGISTRATION_ABSENT_FILE),
   };
 }
 
 function writeExclusiveFile(path: string, content: Uint8Array | string): void {
-  writeFileSync(path, content, { mode: 0o600, flag: "wx" });
+  const descriptor = openSync(
+    path,
+    constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+    0o600,
+  );
+  try {
+    writeFileSync(descriptor, content);
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function readPortableRegistrationSnapshot(path: string): Buffer {
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const stat = fstatSync(descriptor);
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size > MAX_REGISTRATION_BYTES) {
+      throw activationFailed("portable registration path is unsafe");
+    }
+    const content = Buffer.alloc(stat.size);
+    let offset = 0;
+    while (offset < content.length) {
+      const count = readSync(descriptor, content, offset, content.length - offset, null);
+      if (count === 0) throw activationFailed("portable registration changed during capture");
+      offset += count;
+    }
+    if (fstatSync(descriptor).size !== stat.size) {
+      throw activationFailed("portable registration changed during capture");
+    }
+    return content;
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function openedBoundedFile(path: string, descriptor: number, maximumBytes: number): Stats {
+  const current = lstatSync(path);
+  const opened = fstatSync(descriptor);
+  if (
+    !current.isFile() ||
+    current.isSymbolicLink() ||
+    current.nlink !== 1 ||
+    !opened.isFile() ||
+    opened.nlink !== 1 ||
+    opened.size < 1 ||
+    opened.size > maximumBytes ||
+    current.dev !== opened.dev ||
+    current.ino !== opened.ino
+  ) {
+    throw activationFailed("portable active attestation path is unsafe");
+  }
+  return opened;
+}
+
+function sameActiveFileIdentity(left: Stats, right: Stats): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.ctimeMs === right.ctimeMs
+  );
+}
+
+function stableActivePath(current: Stats, opened: Stats): boolean {
+  return (
+    sameActiveFileIdentity(current, opened) && current.nlink === 1 && !current.isSymbolicLink()
+  );
+}
+
+function assertBoundedFileStable(
+  path: string,
+  descriptor: number,
+  opened: Stats,
+  bytesRead: number,
+): void {
+  const after = fstatSync(descriptor);
+  const current = lstatSync(path);
+  if (
+    bytesRead !== opened.size ||
+    !sameActiveFileIdentity(after, opened) ||
+    !stableActivePath(current, opened)
+  ) {
+    throw activationFailed("portable active attestation file changed while reading");
+  }
+}
+
+function assertActiveAttestationDeadline(deadline: number): void {
+  if (Date.now() > deadline) {
+    throw activationFailed("portable active attestation timed out");
+  }
+}
+
+function readBoundedActiveFile(path: string, maximumBytes: number, deadline: number): Buffer {
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const opened = openedBoundedFile(path, descriptor, maximumBytes);
+    const content = Buffer.alloc(opened.size);
+    let offset = 0;
+    while (offset < content.length) {
+      assertActiveAttestationDeadline(deadline);
+      const count = readSync(descriptor, content, offset, content.length - offset, null);
+      if (count === 0) {
+        throw activationFailed("portable active attestation file changed while reading");
+      }
+      offset += count;
+    }
+    assertBoundedFileStable(path, descriptor, opened, offset);
+    return content;
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function digestBoundedActiveFile(path: string, maximumBytes: number, deadline: number): string {
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const opened = openedBoundedFile(path, descriptor, maximumBytes);
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(ACTIVE_ATTESTATION_BUFFER_BYTES);
+    let bytesRead = 0;
+    for (;;) {
+      assertActiveAttestationDeadline(deadline);
+      const count = readSync(descriptor, buffer, 0, buffer.length, null);
+      if (count === 0) break;
+      bytesRead += count;
+      if (bytesRead > opened.size || bytesRead > maximumBytes) {
+        throw activationFailed("portable active attestation file changed while reading");
+      }
+      hash.update(buffer.subarray(0, count));
+    }
+    assertBoundedFileStable(path, descriptor, opened, bytesRead);
+    return hash.digest("hex");
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function activeSetupMatches(
+  setup: Record<string, unknown>,
+  input: { readonly target: UpdatePortableTarget; readonly version: string },
+  expectedGeneration: WindowsGenerationBinding | undefined,
+): boolean {
+  const schemaMatches =
+    input.target === "windows-x64"
+      ? setup.schemaVersion === 2 && expectedGeneration !== undefined
+      : setup.schemaVersion === 1 && setup.windowsGeneration === undefined;
+  return (
+    schemaMatches &&
+    setup.platformTarget === input.target &&
+    setup.packageVersion === input.version &&
+    setup.stable === true
+  );
+}
+
+function activeRegistrationDigestsMatch(
+  record: Record<string, unknown>,
+  setupManifestSha256: string,
+  launcherSha256: string,
+  expectedGeneration: WindowsGenerationBinding | undefined,
+): boolean {
+  return (
+    record.setupManifestSha256 === setupManifestSha256 &&
+    record.launcherIdentitySha256 === launcherSha256 &&
+    (expectedGeneration === undefined ||
+      expectedGeneration.launcherSha256 === record.launcherIdentitySha256)
+  );
+}
+
+function activeWindowsInstallBinding(
+  record: Record<string, unknown>,
+  input: {
+    readonly managedRoot: string;
+    readonly target: UpdatePortableTarget;
+    readonly version: string;
+  },
+): WindowsGenerationBinding | undefined {
+  const deadline = Date.now() + ACTIVE_ATTESTATION_TIMEOUT_MS;
+  const setupManifestPath = join(input.managedRoot, ".portable", "setup-manifest.json");
+  const launcherPath = join(input.managedRoot, "Keiko.exe");
+  const setupBytes = readBoundedActiveFile(setupManifestPath, MAX_ACTIVE_SETUP_BYTES, deadline);
+  const setup = parseJsonRecord(setupBytes.toString("utf8"));
+  if (setup === undefined) return undefined;
+  const expectedGeneration = parseWindowsGenerationBinding(setup.windowsGeneration);
+  if (
+    !activeSetupMatches(setup, input, expectedGeneration) ||
+    !registrationSchemaMatches(record, input.target, expectedGeneration)
+  ) {
+    return undefined;
+  }
+  const setupManifestSha256 = createHash("sha256").update(setupBytes).digest("hex");
+  const launcherSha256 = digestBoundedActiveFile(launcherPath, MAX_ACTIVE_LAUNCHER_BYTES, deadline);
+  return activeRegistrationDigestsMatch(
+    record,
+    setupManifestSha256,
+    launcherSha256,
+    expectedGeneration,
+  )
+    ? expectedGeneration
+    : undefined;
+}
+
+function activeRegistrationMetadataMatches(
+  record: Record<string, unknown>,
+  input: {
+    readonly managedRoot: string;
+    readonly target: UpdatePortableTarget;
+    readonly version: string;
+  },
+): boolean {
+  return (
+    record.status === "managed" &&
+    record.updateEligible === true &&
+    record.stable === true &&
+    record.platformTarget === input.target &&
+    record.packageVersion === input.version &&
+    record.installRootIdentitySha256 === sha256Text(realpathSync(input.managedRoot))
+  );
+}
+
+export interface PortableManagedRegistrationAttestationFacts {
+  readonly windowsGeneration?: WindowsGenerationBinding | undefined;
+}
+
+export function attestPortableManagedRegistrationFacts(input: {
+  readonly stateDir: string;
+  readonly managedRoot: string;
+  readonly target: UpdatePortableTarget;
+  readonly version: string;
+  readonly expectedSha256: string;
+}): PortableManagedRegistrationAttestationFacts | undefined {
+  try {
+    assertNoSymlinkAncestor(input.stateDir);
+    const registration = readPortableRegistrationSnapshot(registrationPath(input.stateDir));
+    if (createHash("sha256").update(registration).digest("hex") !== input.expectedSha256) {
+      return undefined;
+    }
+    const record = parseJsonRecord(registration.toString("utf8"));
+    if (record === undefined || !registrationSchemaMatches(record, input.target)) return undefined;
+    const windowsGeneration =
+      input.target === "windows-x64" ? activeWindowsInstallBinding(record, input) : undefined;
+    if (
+      (input.target === "windows-x64" && windowsGeneration === undefined) ||
+      !activeRegistrationMetadataMatches(record, input)
+    ) {
+      return undefined;
+    }
+    return windowsGeneration === undefined ? {} : { windowsGeneration };
+  } catch {
+    return undefined;
+  }
+}
+
+export function attestPortableManagedRegistration(input: {
+  readonly stateDir: string;
+  readonly managedRoot: string;
+  readonly target: UpdatePortableTarget;
+  readonly version: string;
+  readonly expectedSha256: string;
+}): boolean {
+  return attestPortableManagedRegistrationFacts(input) !== undefined;
+}
+
+export interface PortableRegistrationSnapshot {
+  readonly state: "present" | "absent";
+  readonly sha256: string;
+}
+
+function registrationSchemaMatches(
+  record: Record<string, unknown>,
+  target: UpdatePortableTarget,
+  expectedWindowsGeneration?: WindowsGenerationBinding,
+): boolean {
+  if (target !== "windows-x64") {
+    return record.schemaVersion === 1 && record.windowsGeneration === undefined;
+  }
+  const actual = parseWindowsGenerationBinding(record.windowsGeneration);
+  return (
+    record.schemaVersion === 2 &&
+    actual !== undefined &&
+    (expectedWindowsGeneration === undefined ||
+      windowsGenerationBindingsEqual(actual, expectedWindowsGeneration))
+  );
+}
+
+function registrationIdentityMatches(
+  record: Record<string, unknown>,
+  input: {
+    readonly expectedManagedRootIdentitySha256?: string | undefined;
+    readonly expectedTarget?: UpdatePortableTarget | undefined;
+    readonly expectedVersion?: string | undefined;
+  },
+): boolean {
+  if (
+    input.expectedManagedRootIdentitySha256 !== undefined &&
+    record.installRootIdentitySha256 !== input.expectedManagedRootIdentitySha256
+  ) {
+    return false;
+  }
+  if (input.expectedTarget !== undefined && record.platformTarget !== input.expectedTarget) {
+    return false;
+  }
+  return input.expectedVersion === undefined || record.packageVersion === input.expectedVersion;
+}
+
+function isManagedRegistration(record: Record<string, unknown>): boolean {
+  return record.status === "managed" && record.updateEligible === true && record.stable === true;
+}
+
+function managedRegistrationMatches(
+  record: Record<string, unknown> | undefined,
+  input: {
+    readonly expectedManagedRootIdentitySha256?: string | undefined;
+    readonly expectedTarget?: UpdatePortableTarget | undefined;
+    readonly expectedVersion?: string | undefined;
+    readonly expectedWindowsGeneration?: WindowsGenerationBinding | undefined;
+  },
+): boolean {
+  if (record === undefined) return false;
+  const target = input.expectedTarget;
+  if (target === "windows-x64" && input.expectedWindowsGeneration === undefined) return false;
+  if (
+    target !== undefined &&
+    !registrationSchemaMatches(record, target, input.expectedWindowsGeneration)
+  ) {
+    return false;
+  }
+  if (target === undefined && record.schemaVersion !== 1) return false;
+  return registrationIdentityMatches(record, input) && isManagedRegistration(record);
 }
 
 export function capturePortableRegistration(input: {
   readonly stateDir: string;
   readonly activationId: string;
-}): void {
+  readonly expectedManagedRootIdentitySha256?: string | undefined;
+  readonly expectedTarget?: UpdatePortableTarget | undefined;
+  readonly expectedVersion?: string | undefined;
+  readonly expectedWindowsGeneration?: WindowsGenerationBinding | undefined;
+}): PortableRegistrationSnapshot {
   assertNoSymlinkAncestor(input.stateDir);
-  mkdirSync(join(input.stateDir, UPDATES_DIR), { recursive: true, mode: 0o700 });
-  const registration = registrationPath(input.stateDir);
   const snapshot = registrationSnapshotPaths(input.stateDir, input.activationId);
+  const snapshotRoot = dirname(snapshot.content);
+  assertNoSymlinkAncestor(snapshotRoot);
+  mkdirSync(snapshotRoot, { recursive: true, mode: 0o700 });
+  assertNoSymlinkAncestor(snapshotRoot);
+  const registration = registrationPath(input.stateDir);
   if (existsSync(snapshot.content) || existsSync(snapshot.absent)) {
     throw activationFailed("portable registration recovery is pending");
   }
   if (!existsSync(registration)) {
     writeExclusiveFile(snapshot.absent, "");
-    return;
+    return { state: "absent", sha256: sha256Text("") };
   }
-  if (lstatSync(registration).isSymbolicLink()) {
-    throw activationFailed("portable registration path is unsafe");
+  const content = readPortableRegistrationSnapshot(registration);
+  const record = parseJsonRecord(content.toString("utf8"));
+  if (!managedRegistrationMatches(record, input)) {
+    throw activationFailed("portable registration does not match the managed install");
   }
-  writeExclusiveFile(snapshot.content, readFileSync(registration));
-}
-
-export function restorePortableRegistration(input: {
-  readonly stateDir: string;
-  readonly activationId: string;
-}): void {
-  assertNoSymlinkAncestor(input.stateDir);
-  const registration = registrationPath(input.stateDir);
-  const snapshot = registrationSnapshotPaths(input.stateDir, input.activationId);
-  if (existsSync(snapshot.absent)) {
-    if (lstatSync(snapshot.absent).isSymbolicLink()) {
-      throw activationFailed("portable registration recovery path is unsafe");
-    }
-    if (existsSync(registration)) rmSync(registration, { force: true });
-    return;
+  writeExclusiveFile(snapshot.content, content);
+  const sourceSha256 = createHash("sha256").update(content).digest("hex");
+  const snapshotSha256 = createHash("sha256")
+    .update(readPortableRegistrationSnapshot(snapshot.content))
+    .digest("hex");
+  if (snapshotSha256 !== sourceSha256) {
+    throw activationFailed("portable registration changed during snapshot publication");
   }
-  if (!existsSync(snapshot.content)) return;
-  if (lstatSync(snapshot.content).isSymbolicLink()) {
-    throw activationFailed("portable registration recovery path is unsafe");
-  }
-  const temporary = `${registration}.${String(process.pid)}.restore`;
-  writeExclusiveFile(temporary, readFileSync(snapshot.content));
-  renameSync(temporary, registration);
+  return { state: "present", sha256: snapshotSha256 };
 }
 
 export function cleanupPortableRegistrationSnapshot(input: {
@@ -409,133 +786,6 @@ export function cleanupPortableRegistrationSnapshot(input: {
   const snapshot = registrationSnapshotPaths(input.stateDir, input.activationId);
   rmSync(snapshot.content, { force: true });
   rmSync(snapshot.absent, { force: true });
-}
-
-function isRecoveryTarget(value: unknown): value is UpdatePortableTarget {
-  return value === "windows-x64" || value === "macos-arm64" || value === "macos-x64";
-}
-
-function isRecoveryPhase(value: unknown): value is PortableActivationRecovery["phase"] {
-  return (
-    value === "prepared" || value === "promoted" || value === "registered" || value === "verified"
-  );
-}
-
-function isSafeStageId(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    value !== "." &&
-    value !== ".." &&
-    /^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(value)
-  );
-}
-
-function hasExactRecoveryKeys(record: Record<string, unknown>): boolean {
-  const keys = Object.keys(record);
-  return (
-    keys.length === 4 &&
-    keys.every((key) => ["activationId", "stageId", "target", "phase"].includes(key))
-  );
-}
-
-function isPortableActivationRecovery(value: unknown): value is PortableActivationRecovery {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  return !hasExactRecoveryKeys(record)
-    ? false
-    : typeof record.activationId === "string" &&
-        /^[a-f0-9]{32}$/u.test(record.activationId) &&
-        isSafeStageId(record.stageId) &&
-        isRecoveryTarget(record.target) &&
-        isRecoveryPhase(record.phase);
-}
-
-function assertRecovery(value: unknown): PortableActivationRecovery {
-  if (!isPortableActivationRecovery(value)) {
-    throw activationFailed("portable activation recovery metadata is malformed");
-  }
-  return value;
-}
-
-export function readPortableActivationRecovery(
-  stateDir: string,
-): PortableActivationRecovery | undefined {
-  assertNoSymlinkAncestor(stateDir);
-  const path = recoveryPath(stateDir);
-  if (!existsSync(path)) return undefined;
-  if (lstatSync(path).isSymbolicLink()) {
-    throw activationFailed("portable activation recovery path is unsafe");
-  }
-  return assertRecovery(parseJsonRecord(readFileSync(path, "utf8")));
-}
-
-export function writePortableActivationRecovery(input: {
-  readonly stateDir: string;
-  readonly recovery: PortableActivationRecovery;
-}): void {
-  assertNoSymlinkAncestor(input.stateDir);
-  const path = recoveryPath(input.stateDir);
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  if (existsSync(path) && lstatSync(path).isSymbolicLink()) {
-    throw activationFailed("portable activation recovery path is unsafe");
-  }
-  const temporaryPath = `${path}.${String(process.pid)}.tmp`;
-  if (existsSync(temporaryPath)) {
-    throw activationFailed("portable activation recovery is pending");
-  }
-  writeFileSync(temporaryPath, `${JSON.stringify(input.recovery)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-    flag: "wx",
-  });
-  renameSync(temporaryPath, path);
-}
-
-export function beginPortableActivationRecovery(input: {
-  readonly stateDir: string;
-  readonly recovery: PortableActivationRecovery;
-}): void {
-  assertNoSymlinkAncestor(input.stateDir);
-  const path = recoveryPath(input.stateDir);
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  if (existsSync(path)) {
-    throw activationFailed("portable activation recovery is pending");
-  }
-  const temporaryPath = `${path}.${String(process.pid)}.tmp`;
-  if (existsSync(temporaryPath)) {
-    throw activationFailed("portable activation recovery is pending");
-  }
-  try {
-    writeFileSync(temporaryPath, `${JSON.stringify(input.recovery)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-      flag: "wx",
-    });
-    linkSync(temporaryPath, path);
-  } finally {
-    if (existsSync(temporaryPath) && !lstatSync(temporaryPath).isSymbolicLink()) {
-      rmSync(temporaryPath, { force: true });
-    }
-  }
-}
-
-export function clearPortableActivationRecovery(stateDir: string): void {
-  const path = recoveryPath(stateDir);
-  if (!existsSync(path)) return;
-  if (lstatSync(path).isSymbolicLink()) {
-    throw activationFailed("portable activation recovery path is unsafe");
-  }
-  rmSync(path, { force: true });
-}
-
-export function recoveryPaths(input: {
-  readonly target: UpdatePortableTarget;
-  readonly stageId: string;
-  readonly runtimeFacts?: UpdateRuntimeFacts | undefined;
-  readonly activationId: string;
-}): PortableActivationPaths {
-  return activationPathsFor(input.target, input.runtimeFacts, input.stageId, input.activationId);
 }
 
 export function refreshPortableRegistration(input: {
@@ -552,9 +802,37 @@ export function refreshPortableRegistration(input: {
   if (existsSync(path) && lstatSync(path).isSymbolicLink()) {
     throw activationFailed("portable registration path is unsafe");
   }
+  const registration = portableRegistrationDocument(input);
+  const temporaryPath = `${path}.${String(process.pid)}.tmp`;
+  writeExclusiveFile(temporaryPath, registration);
+  atomicPublishRename(temporaryPath, path, { rename: renameSync });
+  try {
+    chmodSync(path, 0o600);
+  } catch {
+    // Best-effort on non-POSIX filesystems.
+  }
+}
+
+export function portableRegistrationDocument(input: {
+  readonly layout: PortableActivationLayout;
+  readonly target: UpdatePortableTarget;
+  readonly env: EnvSource;
+  readonly home: string;
+  readonly now: number;
+  readonly launcherIdentitySha256?: string | undefined;
+}): string {
   const manifest = readJsonRecord(input.layout.setupManifestPath);
+  const launcherIdentitySha256 =
+    input.launcherIdentitySha256 ?? sha256File(input.layout.launcherPath);
+  if (!/^[a-f0-9]{64}$/u.test(launcherIdentitySha256)) {
+    throw activationFailed("portable registration launcher identity is invalid");
+  }
+  const windowsGeneration = input.layout.windowsGeneration;
+  if (input.target === "windows-x64" && windowsGeneration === undefined) {
+    throw activationFailed("portable registration Windows generation binding is missing");
+  }
   const registration = {
-    schemaVersion: 1,
+    schemaVersion: input.target === "windows-x64" ? 2 : 1,
     status: "managed",
     updateEligible: true,
     platformTarget: input.target,
@@ -568,44 +846,9 @@ export function refreshPortableRegistration(input: {
     ),
     setupManifestSha256: sha256File(input.layout.setupManifestPath),
     installRootIdentitySha256: sha256Text(realpathSync(input.layout.installRoot)),
-    launcherIdentitySha256: sha256File(input.layout.launcherPath),
+    launcherIdentitySha256,
+    ...(windowsGeneration === undefined ? {} : { windowsGeneration }),
     updatedAt: new Date(input.now).toISOString(),
   };
-  const temporaryPath = `${path}.${String(process.pid)}.tmp`;
-  writeExclusiveFile(temporaryPath, `${JSON.stringify(registration, null, 2)}\n`);
-  renameSync(temporaryPath, path);
-  try {
-    chmodSync(path, 0o600);
-  } catch {
-    // Best-effort on non-POSIX filesystems.
-  }
-}
-
-export function refreshPortableShortcut(input: {
-  readonly target: UpdatePortableTarget;
-  readonly layout: PortableActivationLayout;
-  readonly env: EnvSource;
-  readonly home: string;
-}): boolean {
-  if (input.target !== "windows-x64") return true;
-  if (!WINDOWS_SHORTCUT_SAFE_PATH.test(input.layout.launcherPath)) return false;
-  const root = input.env.APPDATA ?? join(input.home, "AppData", "Roaming");
-  const path = join(root, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.bat");
-  const content = `@start "" "${input.layout.launcherPath}" start --open\r\n`;
-  if (existsSync(path) && lstatSync(path).isSymbolicLink()) return false;
-  if (existsSync(path) && statSync(path).isFile() && readFileSync(path, "utf8") !== content) {
-    return false;
-  }
-  mkdirSync(dirname(path), { recursive: true, mode: 0o755 });
-  writeFileSync(path, content, { encoding: "utf8", mode: 0o644 });
-  return true;
-}
-
-export function cleanupPortableActivation(paths: PortableActivationPaths): void {
-  rmSync(paths.backupRoot, { recursive: true, force: true });
-  rmSync(paths.stageRoot, { recursive: true, force: true });
-}
-
-export function restorePortableActivation(paths: PortableActivationPaths): void {
-  restoreManagedRoot(paths);
+  return `${JSON.stringify(registration, null, 2)}\n`;
 }

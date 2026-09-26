@@ -362,8 +362,9 @@ binaries outside the workspace. Resolving the top-level server is insufficient b
 ShellCheck itself. Keiko therefore constructs an ephemeral PATH containing links to only the
 realpath-validated Node and ShellCheck binaries. The PATH is replaced, never extended. Workspace
 shadowing, missing tools, policy denial, and link creation failure all fail closed; the private path
-is removed on crash, restart, and disposal. Process-group termination continues to cover every
-descendant.
+is removed only after the shared process manager proves immediate-child exit and whole-tree
+containment. An unconfirmed crash, restart, or disposal keeps it with the durable quarantine lease.
+Process-group termination continues to cover every descendant.
 
 The protocol projection maps only closed dialect, severity, SC-code exclusions, and contained source
 paths. External sources, explainshell, background workspace analysis, shfmt, and editorconfig-driven
@@ -386,11 +387,30 @@ layout, platform launcher, and JDK identity outside the workspace. Neither works
 environment variables may supply an executable path, launcher JAR, arbitrary JVM argument, Java
 agent, system property, classpath string, or environment override.
 
+Before the long-lived child starts, Keiko runs `java -version` through the shared asynchronous
+`runCommand` boundary as the manager's generation-bound `beforeSpawn` prerequisite. The manager has
+already persisted the active lease and owns private cleanup at that point. The probe uses an exact
+resolved-Java mapping, a 5 s deadline, a 16 KiB output cap, copy-only environment, ephemeral HOME,
+and an enforced native `network:none` backend with container fallbacks disabled. Disposal aborts and
+awaits it; failure releases the lease and starts no JDT LS child; late completion cannot spawn.
+Body-free activity distinguishes supported, unsupported, malformed, nonzero, output-cap, timeout,
+spawn, invocation, and cancellation outcomes with duration, status, and `errorKind` where present.
+The pinned JDT LS launcher then repeats validation via `--validate-java-version` and
+`--java-executable` inside the final long-lived `network:none` process tree, so the prerequisite does
+not become the sole enforcement point. Windows remains fail-closed for Java: the
+available generic Docker fallback is a Linux image and cannot execute an operator's host
+`java.exe`/`.cmd`/`.bat`, see the host JDT LS distribution and private runtime state, or preserve
+Windows document URIs. Until a qualified native Windows no-egress backend exists, all Windows Java
+executable shapes are uniformly unavailable; a command-script-specific rejection or a synthetic
+Docker argv is not treated as runtime support.
+
 Each workspace/language process receives private, permission-restricted, quota-bounded
 `-configuration` and `-data` directories under Keiko runtime state. Both directories are unique to
 the canonical workspace and process generation, never reuse the operator home or the immutable JDT
-LS distribution configuration, and are removed on disposal or reset. Restart creates a fresh pair;
-crash recovery cannot adopt another workspace's state. Failure to create, contain, restrict, account
+LS distribution configuration, and are removed on disposal or reset only after the shared manager's
+whole-tree teardown proof. Restart creates a fresh pair; crash recovery cannot adopt another
+workspace's state, and an unconfirmed predecessor retains its private pair behind the durable
+quarantine lease. Failure to create, contain, restrict, account
 for, or clean either directory fails activation closed and emits only content-free lifecycle
 evidence.
 

@@ -1,4 +1,12 @@
-import type { GroundedRerankerDiagnostics } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type {
+  GroundedRerankerDiagnostics,
+  GroundedRerankerFailureKind,
+} from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   requestLiteLLMRerank,
   resolveOutboundHttpEgressConfig,
@@ -13,8 +21,71 @@ import {
 
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayConfig } from "./deps.js";
+import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import { reserveGatewaySpendForAttempt } from "./gateway-spend-budget.js";
+import { getServerLogger, startLogTimer } from "./observability/index.js";
 
 export type RerankFallbackMode = "slice-topN" | "identity";
+
+const SEARCH_RERANK_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "search.rerank.completed",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "grounded-rerank-facade.logRerankOutcome",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["disabled", "denied", "unavailable", "invalid-response", "applied"],
+    },
+    mode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["none", "local-only", "provider-backed"],
+    },
+    candidateCount: { type: "integer", dataClass: "count", required: true },
+    documentCount: { type: "integer", dataClass: "count", required: true },
+    keptCount: { type: "integer", dataClass: "count", required: true },
+    transportLatencyMs: { type: "number", dataClass: "duration", required: false },
+    fallbackMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["slice-topN", "identity"],
+    },
+    topN: { type: "integer", dataClass: "count", required: true },
+    failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["rerank-degradation"],
+  proofIds: ["search.rerank.completed.line"],
+  releaseImpact: "patch",
+});
+
+const RERANK_ERROR_KIND: Readonly<Record<GroundedRerankerFailureKind, ActivityLogErrorKind>> = {
+  "not-configured": "unavailable",
+  "policy-denied": "authority-denied",
+  "wrong-header": "validation-failed",
+  "rate-limited": "rate-limited",
+  "unsupported-model": "unavailable",
+  timeout: "timeout",
+  cancelled: "cancelled",
+  transport: "unavailable",
+  "proxy-unreachable": "unavailable",
+  "proxy-auth-required": "permission-denied",
+  "proxy-egress-failed": "unavailable",
+  "proxy-blocked-by-policy": "authority-denied",
+  "tls-ca-failure": "unavailable",
+  "invalid-response": "validation-failed",
+};
 
 export interface RerankSelectionPolicy {
   readonly externalReranking: "allow" | "deny";
@@ -34,6 +105,7 @@ export interface RerankSelectionInput<T> {
   readonly documentFor: (candidate: T) => string;
   readonly topN: number;
   readonly signal?: AbortSignal | undefined;
+  readonly timeoutMs?: number | undefined;
   readonly fetchImpl?: typeof fetch | undefined;
   readonly policy?: RerankSelectionPolicy | undefined;
   readonly applyScore?: ((candidate: T, result: RerankResult) => T) | undefined;
@@ -47,6 +119,7 @@ export interface RerankSelectionInput<T> {
    */
   // `null` pins an observed absence; `undefined` asks the facade to capture the live generation.
   readonly gatewayConfig?: GatewayConfig | null | undefined;
+  readonly correlationId?: string | undefined;
 }
 
 export interface RerankSelection<T> {
@@ -60,14 +133,22 @@ interface MaterializedRerankInput {
   readonly documents: readonly string[];
   readonly topN: number;
   readonly signal?: AbortSignal | undefined;
+  readonly timeoutMs?: number | undefined;
   readonly fetchImpl?: typeof fetch | undefined;
   readonly gatewayConfig?: GatewayConfig | undefined;
+  readonly correlationId?: string | undefined;
 }
 
 interface SafeRerankTransportResult {
   readonly outcome?: RerankOutcome | undefined;
   readonly thrownKind?: RerankErrorKind | undefined;
   readonly latencyMs: number;
+}
+
+function rerankTimeoutMs(configuredMs: number, remainingMs: number | undefined): number {
+  if (remainingMs === undefined) return configuredMs;
+  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return 1;
+  return Math.max(1, Math.min(configuredMs, Math.floor(remainingMs)));
 }
 
 export function fallbackRerankSelection<T>(
@@ -195,7 +276,7 @@ function buildRerankRequest(
     query: input.query,
     documents: input.documents,
     topN: input.topN,
-    timeoutMs: reranker.timeoutMs,
+    timeoutMs: rerankTimeoutMs(reranker.timeoutMs, input.timeoutMs),
     ...(egress === undefined ? {} : { egress }),
     ...(input.signal === undefined ? {} : { signal: input.signal }),
     ...(input.fetchImpl === undefined ? {} : { fetchImpl: input.fetchImpl }),
@@ -229,10 +310,26 @@ async function requestRerankTransport(
   const request = input.deps.rerankRequest ?? requestLiteLLMRerank;
   const egress = rerankEgress(input, reranker);
   try {
-    return {
-      outcome: await request(buildRerankRequest(input, reranker, egress)),
-      latencyMs: Math.max(0, Date.now() - startedAt),
-    };
+    const reservation = reserveGatewaySpendForAttempt(
+      input.deps.env,
+      // A chat context limit is not a billable bound for a rerank document batch. The current
+      // capability contract supplies no verified aggregate token/chunk or per-search price
+      // ceiling. The shared monetary owner must refuse this unknown bound when a qualification
+      // budget is configured; ordinary unbudgeted reranking keeps its existing behavior.
+      undefined,
+      {
+        modelId: reranker.modelId,
+        messages: [{ role: "user", content: "Gateway reranker request." }],
+      },
+      input.correlationId ?? UNKNOWN_CORRELATION_ID,
+    );
+    let outcome: RerankOutcome;
+    try {
+      outcome = await request(buildRerankRequest(input, reranker, egress));
+    } finally {
+      reservation?.settle(undefined);
+    }
+    return { outcome, latencyMs: Math.max(0, Date.now() - startedAt) };
   } catch {
     return {
       thrownKind: thrownRerankKind(input),
@@ -281,7 +378,9 @@ async function configuredSelection<T>(
     documents: providerCandidates.map(input.documentFor),
     topN: input.topN,
     ...(input.signal === undefined ? {} : { signal: input.signal }),
+    ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
     ...(input.fetchImpl === undefined ? {} : { fetchImpl: input.fetchImpl }),
+    correlationId: input.correlationId,
     gatewayConfig,
   };
   const transport = await requestRerankTransport(requestInput, reranker);
@@ -304,7 +403,71 @@ async function configuredSelection<T>(
     : { selected, diagnostics: withKeptCount(diagnostics, selected.length) };
 }
 
+// Every non-applied outcome below is a SILENT degradation from the caller's point of view: the
+// caller still receives a usable selection, so nothing upstream can tell that the provider was
+// never asked, refused, timed out, or answered with an unusable mapping. The activity row carries
+// the diagnostics for one query in the UI; this line is the same decision in the operator's log.
+// `denied`, `unavailable` and `invalid-response` warn — those are a policy rejection and two
+// provider faults. `applied` and `disabled` stay at debug: the first is the happy path and the
+// second is the steady state of a default install with no reranker configured.
+function rerankLogLevel(diagnostics: GroundedRerankerDiagnostics): "debug" | "warn" {
+  return diagnostics.status === "applied" || diagnostics.status === "disabled" ? "debug" : "warn";
+}
+
+function logRerankOutcome(
+  diagnostics: GroundedRerankerDiagnostics,
+  fallbackMode: RerankFallbackMode,
+  topN: number,
+  correlationId: string | undefined,
+  durationMs: number,
+): void {
+  getServerLogger().log(rerankLogLevel(diagnostics), () =>
+    activityLogEvent(
+      SEARCH_RERANK_COMPLETED_OPERATION,
+      {
+        correlationId: correlationIdOrUnknown(correlationId),
+        durationMs,
+        ...(diagnostics.failureKind === undefined
+          ? {}
+          : { errorKind: RERANK_ERROR_KIND[diagnostics.failureKind] }),
+      },
+      {
+        // `outcome`, not `status`: the envelope's `status` is an HTTP code, and the reranker's is a
+        // word. Sharing the name would put a string where every operator query expects a number.
+        outcome: diagnostics.status,
+        ...(diagnostics.mode === undefined ? {} : { mode: diagnostics.mode }),
+        candidateCount: diagnostics.candidateCount,
+        documentCount: diagnostics.documentCount,
+        keptCount: diagnostics.keptCount,
+        ...(diagnostics.latencyMs === undefined
+          ? {}
+          : { transportLatencyMs: diagnostics.latencyMs }),
+        fallbackMode,
+        topN: Number.isSafeInteger(topN) && topN >= 0 ? topN : 0,
+        ...(diagnostics.failureKind === undefined ? {} : { failureKind: diagnostics.failureKind }),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
 export async function rerankSelection<T>(
+  input: RerankSelectionInput<T>,
+): Promise<RerankSelection<T>> {
+  const elapsed = startLogTimer();
+  const selection = await resolveRerankSelection(input);
+  logRerankOutcome(
+    selection.diagnostics,
+    input.fallbackMode,
+    input.topN,
+    input.correlationId,
+    elapsed(),
+  );
+  return selection;
+}
+
+async function resolveRerankSelection<T>(
   input: RerankSelectionInput<T>,
 ): Promise<RerankSelection<T>> {
   const fallback = fallbackRerankSelection(input.candidates, input.topN, input.fallbackMode);

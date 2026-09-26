@@ -1,7 +1,7 @@
 # Relationship Engine — UI Implementation Notes
 
 > For issues #541 (activity visualization) and #542 (impact / health) consumers.
-> All file:line citations reference the `claude/issue-540-inspector-graph-viz` branch.
+> Historical: file:line citations below originated on the `claude/issue-540-inspector-graph-viz` feature branch and are preserved here as historical context; refer to the current `dev` branch for authoritative line numbers.
 
 ## Panel locations
 
@@ -93,7 +93,7 @@ each marked with `data-section=` attribute for test targeting:
 4. `data-section="lifecycle"` — current lifecycle state + action buttons
 5. `data-section="activity"` — activity state badge (reuses `RelationshipEdgeBadge`)
 6. `data-section="authority"` — `RELATIONSHIP_AUTHORITY_DISCLAIMER` verbatim
-7. `data-section="audit"` — lifecycle history (paged, from `getExplain`)
+7. `data-section="audit"` — lifecycle history (paged, from `getExplain`; page size 10, same across all density modes — see [visual-density-rules.md §Per-density rendering caps](visual-density-rules.md))
 8. `data-section="evidence"` — evidence references (confidence + summary)
 9. `data-section="impact"` — View Impact link (drives `onViewImpact` prop → #542)
 10. `data-section="denial"` — conditional, shown only when `getExplain` returns `allowed: false`

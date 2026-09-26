@@ -75,6 +75,7 @@ describe("parseAdfDocument — happy path", () => {
     expect(ADF_PARSER_DEFAULTS.maxNodes).toBe(5_000);
     expect(ADF_PARSER_DEFAULTS.maxDepth).toBe(32);
     expect(ADF_PARSER_DEFAULTS.maxTextBytes).toBe(64 * 1024);
+    expect(ADF_PARSER_DEFAULTS.maxDocumentBytes).toBe(2 * 1024 * 1024);
   });
 
   it("degrades table, panel, and status nodes into renderable text", () => {
@@ -229,6 +230,58 @@ describe("parseAdfDocument — typed errors", () => {
     } catch (err) {
       if (err instanceof AdfParserError) {
         expect(err.code).toBe("MAX_NODES_EXCEEDED");
+      }
+    }
+  });
+
+  // KEIKO-0891: the node/depth/text-run bounds above only examine fields the parser actually
+  // reads (type/content/attrs/marks/text) — a huge value sitting in an unvisited property (a key
+  // outside that whitelist) would sail through unexamined. maxDocumentBytes closes that gap by
+  // measuring the whole serialised input up front.
+  it("rejects a document whose serialised size exceeds maxDocumentBytes, even in an unvisited field", () => {
+    const doc = {
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text: "hi" }] }],
+      // Not a field the walker reads (type/content/attrs/marks/text) — proves the cap inspects the
+      // whole payload, not just node-visited data.
+      unvisitedJunk: "x".repeat(1_000),
+    };
+    try {
+      parseAdfDocument(doc, { maxDocumentBytes: 100 });
+      expect.unreachable("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AdfParserError);
+      if (err instanceof AdfParserError) {
+        expect(err.code).toBe("DOCUMENT_TOO_LARGE");
+      }
+    }
+  });
+
+  it("accepts a document within maxDocumentBytes unchanged", () => {
+    const doc = parseAdfDocument(
+      {
+        type: "doc",
+        content: [{ type: "paragraph", content: [{ type: "text", text: "hi" }] }],
+      },
+      { maxDocumentBytes: 100 },
+    );
+    expect(doc.blocks).toHaveLength(1);
+    expect(doc.blocks[0]?.kind).toBe("paragraph");
+  });
+
+  it("rejects at the default 2 MiB ceiling with no override needed", () => {
+    const doc = {
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text: "hi" }] }],
+      unvisitedJunk: "x".repeat(3 * 1024 * 1024),
+    };
+    try {
+      parseAdfDocument(doc);
+      expect.unreachable("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AdfParserError);
+      if (err instanceof AdfParserError) {
+        expect(err.code).toBe("DOCUMENT_TOO_LARGE");
       }
     }
   });

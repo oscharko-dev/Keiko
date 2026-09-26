@@ -6,7 +6,7 @@
 // drain the stream into an array and assert on the sequence/structure of events as the
 // contract surface, with side-effect assertions on `vectors` / `indexing_jobs` rows.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   CitationReference,
@@ -17,12 +17,14 @@ import type {
   KnowledgeSourceId,
   NormalizedResponse,
 } from "@oscharko-dev/keiko-contracts";
+import type { KnowledgePodModelUsePolicy } from "@oscharko-dev/keiko-contracts";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
 import {
   KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
   sealedLocalPodModelUsePolicy,
   standardPodModelUsePolicy,
-  type KnowledgePodModelUsePolicy,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 import type { OpenAIEmbeddingOutcome } from "@oscharko-dev/keiko-model-gateway";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 
@@ -31,11 +33,13 @@ import {
   getCapsule,
   updateCapsuleDetails,
   updateCapsuleEmbeddingModelIdentity,
+  updateCapsuleState,
 } from "../capsule-lifecycle.js";
 import {
   createDefaultParserRegistry,
   createParserRegistry,
   registerParser,
+  syntheticProgressiveExtractor,
   type ParserAdapter,
   type ParserOptions,
   type ParserSelectionInput,
@@ -49,7 +53,16 @@ import { folderScope, memoryFs } from "../discovery/test-support.js";
 import { documentIdFor } from "../discovery/types.js";
 import { LEXICAL_ANALYZER_KEY } from "../retrieval/lexical-normalization.js";
 
-import { runIndexingJob } from "./orchestrator.js";
+import {
+  CONSECUTIVE_TRANSIENT_FAILURE_LIMIT,
+  EMBEDDING_GATEWAY_UNAVAILABLE_CODE,
+  runIndexingJob,
+} from "./orchestrator.js";
+import {
+  knowledgeLogCorrelationId,
+  type KnowledgeLogEvent,
+  type KnowledgeLogSink,
+} from "../knowledge-log.js";
 import { selectJobById, rowToIndexingJobRecord } from "./job-persist.js";
 import {
   countVectorsForCapsule,
@@ -57,7 +70,12 @@ import {
   selectChunksForDocument,
 } from "./vector-persist.js";
 import { deterministicVector, happyAdapter, scriptedAdapter } from "./_support.js";
-import type { IndexingEvent, IndexingOptions } from "./types.js";
+import {
+  DEFAULT_INDEXING_BATCH_SIZE,
+  DEFAULT_INDEXING_CONCURRENCY,
+  type IndexingEvent,
+  type IndexingOptions,
+} from "./types.js";
 import type { KnowledgeStore } from "../store.js";
 
 const ROOT = "/srv/orchestrator";
@@ -1771,6 +1789,146 @@ describe("runIndexingJob — embedding capability preflight", () => {
     }
   });
 
+  it("re-verifies an unverified identity after a failed first run instead of freezing the guess", async () => {
+    fixture.cleanup();
+    fixture = buildFixture(
+      { "alpha.txt": "Provisional source text. ".repeat(8) },
+      {
+        ...provisionalDefaultEmbedding(),
+        // Creation-time dimension GUESS (derived from the model name, never verified).
+        vectorDimensions: DEFAULT_EMBEDDING.vectorDimensions + 1,
+      },
+    );
+    const unreachable = scriptedAdapter({
+      responder: () => ({ ok: false, kind: "transport" }),
+    });
+    const first = await drain(
+      runIndexingJob(buildOptions(fixture, { embeddingAdapter: unreachable })),
+    );
+    expect(first.at(-1)?.kind).toBe("job-failed");
+    expect(getCapsule(fixture.store, fixture.capsuleId)?.lifecycleState).toBe("error");
+
+    // Gateway repaired: the next plain run must adopt the VERIFIED identity (real dimensions
+    // plus fingerprint) instead of failing INCOMPATIBLE_EMBEDDING_IDENTITY on the stale guess.
+    const second = await drain(runIndexingJob(buildOptions(fixture)));
+    expect(second.at(-1)?.kind).toBe("job-completed");
+    const identity = getCapsule(fixture.store, fixture.capsuleId)?.embeddingModelIdentity;
+    expect(identity?.vectorDimensions).toBe(DEFAULT_EMBEDDING.vectorDimensions);
+    expect(identity?.embeddingSpaceFingerprint).toBeDefined();
+  });
+
+  it("indexes an HTML-manual folder end to end after the gateway recovers", async () => {
+    // The full customer flow in one pin: a fresh pod bound to a non-OpenAI embedding model
+    // (creation-time dimension guess WRONG), a folder source of .htm manual pages, a first run
+    // against an unreachable gateway, then a repaired gateway. The pod must recover on its own
+    // and index the complete corpus — no delete/recreate, no force re-embed.
+    fixture.cleanup();
+    fixture = buildFixture(
+      {
+        "manual/index.htm":
+          "<!doctype html><html><head><title>Manual</title></head><body><nav>Navigation</nav>" +
+          "<main><h1>Securities Deposit</h1><p>Functional description of the READ_DEPOSIT function." +
+          " ".repeat(4) +
+          "</p></main><footer>Imprint</footer></body></html>",
+        "manual/READ_DEPOSIT_functional.htm":
+          "<html><body><script>var ignored = 1;</script>" +
+          "<p>READ_DEPOSIT reads a deposit and returns its master data.</p></body></html>",
+        "manual/READ_DEPOSIT_parameters.htm":
+          "<html><body><style>.x{color:red}</style>" +
+          "<table><tr><td>Parameter</td><td>depositId</td></tr></table></body></html>",
+      },
+      {
+        ...provisionalDefaultEmbedding(),
+        vectorDimensions: DEFAULT_EMBEDDING.vectorDimensions + 1,
+      },
+    );
+    const unreachable = scriptedAdapter({
+      responder: () => ({ ok: false, kind: "transport" }),
+    });
+    const first = await drain(
+      runIndexingJob(buildOptions(fixture, { embeddingAdapter: unreachable })),
+    );
+    expect(first.at(-1)?.kind).toBe("job-failed");
+
+    const second = await drain(runIndexingJob(buildOptions(fixture)));
+    const terminal = second.at(-1);
+    expect(terminal?.kind).toBe("job-completed");
+    if (terminal?.kind === "job-completed") {
+      expect(terminal.result.processedDocuments).toBe(3);
+      expect(terminal.result.failedDocuments).toBe(0);
+      expect(terminal.result.vectorsPersisted).toBeGreaterThan(0);
+    }
+    const capsule = getCapsule(fixture.store, fixture.capsuleId);
+    expect(capsule?.lifecycleState).toBe("ready");
+    expect(capsule?.embeddingModelIdentity.vectorDimensions).toBe(
+      DEFAULT_EMBEDDING.vectorDimensions,
+    );
+  });
+
+  it("never rebinds an unverified identity while vectors exist, even in draft lifecycle", async () => {
+    // The vector guard must be unconditional: a fingerprint-less capsule that somehow owns
+    // vectors keeps the strict incompatibility gate regardless of lifecycle state — a draft
+    // shortcut bypassing it would silently mix embedding spaces.
+    fixture.cleanup();
+    fixture = buildFixture(
+      { "alpha.txt": "Provisional source text. ".repeat(8) },
+      provisionalDefaultEmbedding(),
+    );
+    const first = await drain(runIndexingJob(buildOptions(fixture)));
+    expect(first.at(-1)?.kind).toBe("job-completed");
+    expect(countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId)).toBeGreaterThan(
+      0,
+    );
+
+    const staleDims = DEFAULT_EMBEDDING.vectorDimensions + 1;
+    updateCapsuleEmbeddingModelIdentity(fixture.store, fixture.capsuleId, {
+      ...provisionalDefaultEmbedding(),
+      vectorDimensions: staleDims,
+    });
+    updateCapsuleState(fixture.store, fixture.capsuleId, "draft");
+
+    const second = await drain(runIndexingJob(buildOptions(fixture)));
+    const terminal = second.at(-1);
+    expect(terminal?.kind).toBe("job-failed");
+    if (terminal?.kind === "job-failed") {
+      expect(terminal.error.code).toBe("INCOMPATIBLE_EMBEDDING_IDENTITY");
+    }
+    expect(
+      getCapsule(fixture.store, fixture.capsuleId)?.embeddingModelIdentity.vectorDimensions,
+    ).toBe(staleDims);
+  });
+
+  it("keeps enforcing an unverified identity once the capsule owns vectors", async () => {
+    fixture.cleanup();
+    fixture = buildFixture(
+      { "alpha.txt": "Provisional source text. ".repeat(8) },
+      provisionalDefaultEmbedding(),
+    );
+    const first = await drain(runIndexingJob(buildOptions(fixture)));
+    expect(first.at(-1)?.kind).toBe("job-completed");
+    expect(countVectorsForCapsule(fixture.store._internal.db, fixture.capsuleId)).toBeGreaterThan(
+      0,
+    );
+
+    // A legacy capsule: vectors exist, the identity carries no fingerprint, and the stored
+    // dimensions no longer match the live model. Adopting the live identity here would
+    // silently mix embedding spaces — the run must fail incompatible instead.
+    const staleDims = DEFAULT_EMBEDDING.vectorDimensions + 1;
+    updateCapsuleEmbeddingModelIdentity(fixture.store, fixture.capsuleId, {
+      ...provisionalDefaultEmbedding(),
+      vectorDimensions: staleDims,
+    });
+    const second = await drain(runIndexingJob(buildOptions(fixture)));
+    const terminal = second.at(-1);
+    expect(terminal?.kind).toBe("job-failed");
+    if (terminal?.kind === "job-failed") {
+      expect(terminal.error.code).toBe("INCOMPATIBLE_EMBEDDING_IDENTITY");
+    }
+    expect(
+      getCapsule(fixture.store, fixture.capsuleId)?.embeddingModelIdentity.vectorDimensions,
+    ).toBe(staleDims);
+  });
+
   it("persists a fixed safe message when embedding preflight throws", async () => {
     const adapter = {
       endpoint: "https://private-gateway.internal/v1",
@@ -1848,6 +2006,459 @@ describe("runIndexingJob — partial adapter failure", () => {
     expect(embedded).toHaveLength(2);
     // Job-level outcome: completed (because at least one doc succeeded).
     expect(events.at(-1)?.kind).toBe("job-completed");
+  });
+});
+
+// ─── Gateway-outage circuit breaker + honest terminal status (2026-08 field review) ─────────
+// A dead gateway used to grind EVERY remaining document through the full transient-retry
+// ladder — days of nothing on a large corpus — and a run with most documents failed still
+// reported "succeeded" and flipped the capsule to "ready" while the corpus was absent from
+// retrieval. The breaker aborts on consecutive transient failures; the status rule refuses
+// "succeeded" when failures outnumber processed documents.
+
+const INSTANT_RETRY = {
+  maxRetries: 0,
+  baseDelayMs: 0,
+  sleep: (): Promise<void> => Promise.resolve(),
+};
+
+function isProbeInput(input: string): boolean {
+  return input === "ping" || input.startsWith("Keiko embedding space probe");
+}
+
+function okVector(input: string): OpenAIEmbeddingOutcome {
+  return {
+    ok: true,
+    value: {
+      vector: deterministicVector(input, DEFAULT_EMBEDDING.vectorDimensions),
+      modelId: DEFAULT_EMBEDDING.modelId,
+    },
+  };
+}
+
+describe("runIndexingJob — gateway-outage circuit breaker", () => {
+  const corpus = Object.fromEntries(
+    ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta"].map((name) => [
+      `${name}.txt`,
+      `Document ${name} content. `.repeat(8),
+    ]),
+  );
+
+  it("aborts after consecutive transient failures instead of grinding every document", async () => {
+    const fixture = buildFixture(corpus);
+    try {
+      // Preflight passes (the gateway was healthy at job start), then the gateway dies:
+      // every chunk embedding times out — the transient shape a dead or saturated
+      // gateway produces.
+      const adapter = scriptedAdapter({
+        responder: (req) =>
+          isProbeInput(req.input) ? okVector(req.input) : { ok: false, kind: "timeout" },
+      });
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, { embeddingAdapter: adapter, embedRetry: INSTANT_RETRY }),
+        ),
+      );
+
+      const terminal = events.at(-1);
+      expect(terminal?.kind).toBe("job-failed");
+      if (terminal?.kind === "job-failed") {
+        expect(terminal.error.code).toBe(EMBEDDING_GATEWAY_UNAVAILABLE_CODE);
+      }
+      // The run stopped at the breaker limit — the remaining documents were NOT ground
+      // through the retry ladder against a dead gateway.
+      const failed = events.filter((e) => e.kind === "document-failed");
+      expect(failed).toHaveLength(CONSECUTIVE_TRANSIENT_FAILURE_LIMIT);
+      expect(Object.keys(corpus).length).toBeGreaterThan(CONSECUTIVE_TRANSIENT_FAILURE_LIMIT);
+      const capsule = getCapsule(fixture.store, fixture.capsuleId);
+      expect(capsule?.lifecycleState).toBe("error");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("does not trip on sub-threshold transient failures or deterministic ones", async () => {
+    const fixture = buildFixture({
+      "alpha.txt": "Lorem ipsum dolor. ".repeat(8),
+      "beta.txt": "Pack my box. ".repeat(8),
+      "gamma.txt": "Sphinx of black quartz. ".repeat(8),
+    });
+    try {
+      // One transient failure (alpha), two successes: far below the limit, and a success
+      // resets the streak — the job completes with a per-document failure, exactly as before.
+      const adapter = scriptedAdapter({
+        responder: (req) =>
+          !isProbeInput(req.input) && req.input.startsWith("Lorem")
+            ? { ok: false, kind: "timeout" }
+            : okVector(req.input),
+      });
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, { embeddingAdapter: adapter, embedRetry: INSTANT_RETRY }),
+        ),
+      );
+      expect(events.at(-1)?.kind).toBe("job-completed");
+      expect(events.filter((e) => e.kind === "document-failed")).toHaveLength(1);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("counts only transient adapter failures — deterministic rejections never open the breaker", async () => {
+    const fixture = buildFixture(corpus);
+    try {
+      // Every document fails DETERMINISTICALLY (malformed response). That is not gateway-outage
+      // evidence: the breaker must stay closed and every document must be attempted, ending in
+      // the all-failed terminal state — not the gateway-unavailable abort.
+      const adapter = scriptedAdapter({
+        responder: (req) =>
+          isProbeInput(req.input) ? okVector(req.input) : { ok: false, kind: "invalid-response" },
+      });
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, { embeddingAdapter: adapter, embedRetry: INSTANT_RETRY }),
+        ),
+      );
+      const terminal = events.at(-1);
+      expect(terminal?.kind).toBe("job-failed");
+      if (terminal?.kind === "job-failed") {
+        expect(terminal.error.code).not.toBe(EMBEDDING_GATEWAY_UNAVAILABLE_CODE);
+      }
+      expect(events.filter((e) => e.kind === "document-failed")).toHaveLength(
+        Object.keys(corpus).length,
+      );
+    } finally {
+      fixture.cleanup();
+    }
+  });
+});
+
+describe("runIndexingJob — honest terminal status on overwhelming failure", () => {
+  it("reports failed but keeps the usable index retrievable when failures outnumber processed documents", async () => {
+    const fixture = buildFixture({
+      "alpha.txt": "Lorem ipsum dolor. ".repeat(8),
+      "beta.txt": "Pack my box. ".repeat(8),
+      "gamma.txt": "Sphinx of black quartz. ".repeat(8),
+    });
+    try {
+      // Two of three documents fail deterministically; one succeeds. The old rule reported
+      // SUCCEEDED (processedDocuments > 0) while most of the corpus was silently absent from
+      // retrieval. The JOB must fail loudly — but the capsule keeps its usable partial index
+      // (grounded surfaces hard-refuse "error" capsules, so demoting it would also take the
+      // successfully indexed documents offline).
+      const adapter = scriptedAdapter({
+        responder: (req) =>
+          !isProbeInput(req.input) && req.input.startsWith("Pack")
+            ? okVector(req.input)
+            : isProbeInput(req.input)
+              ? okVector(req.input)
+              : { ok: false, kind: "invalid-response" },
+      });
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, { embeddingAdapter: adapter, embedRetry: INSTANT_RETRY }),
+        ),
+      );
+      const terminal = events.at(-1);
+      expect(terminal?.kind).toBe("job-failed");
+      if (terminal?.kind === "job-failed") {
+        expect(terminal.error.code).toBe("MAJORITY_DOCUMENTS_FAILED");
+        expect(terminal.result.processedDocuments).toBe(1);
+        expect(terminal.result.failedDocuments).toBe(2);
+      }
+      const capsule = getCapsule(fixture.store, fixture.capsuleId);
+      expect(capsule?.lifecycleState).toBe("ready");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("fails a run whose only outcomes are discovery failures — zero progress is never a success", async () => {
+    // Review finding on #3221 proposed excluding discovery failures from the zero-progress rule
+    // for symmetry with the majority ratio. The two rules answer different questions: the ratio
+    // scores the corpus the run SAW, while this rule guards a run that saw NOTHING succeed.
+    // With zero processed and zero skipped documents, a discovery-only failure run covered none
+    // of its corpus — reporting it "succeeded" would be a lie. The raw count stays authoritative.
+    const { store, cleanup } = freshStore();
+    const capsuleId = "cap-orch" as KnowledgeCapsuleId;
+    createCapsule(
+      store,
+      sampleCapsuleInput({ id: capsuleId, modelUsePolicy: standardPodModelUsePolicy() }),
+    );
+    const source = addSourceToCapsule(store, capsuleId, {
+      id: "src-orch" as KnowledgeSourceId,
+      displayName: "orch",
+      tags: [],
+      scope: folderScope(ROOT, { recursive: true }),
+    });
+    // An unreadable walk root — the shape a torn mount or revoked permission produces in the
+    // field: the whole run yields exactly one READ_FAILED scope-error and no document work.
+    const unreadableFs: WorkspaceFs = {
+      ...memoryFs(ROOT, []),
+      readDir: (): never => {
+        throw new Error("EACCES: permission denied");
+      },
+    };
+    const fixture: Fixture = {
+      store,
+      cleanup,
+      capsuleId,
+      sourceId: source.id,
+      source,
+      fs: unreadableFs,
+    };
+    try {
+      const events = await drain(runIndexingJob(buildOptions(fixture)));
+      const terminal = events.at(-1);
+      expect(terminal?.kind).toBe("job-failed");
+      if (terminal?.kind === "job-failed") {
+        expect(terminal.result.processedDocuments).toBe(0);
+        expect(terminal.result.failedDocuments).toBeGreaterThan(0);
+      }
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("keeps a repair-style delta run succeeded when the healthy corpus is skipped alongside it", async () => {
+    // Adversarial-review finding: a run-scoped ratio measured only the delta, so a repair run
+    // fixing 1 of 3 stragglers on an otherwise healthy corpus reported MAJORITY_DOCUMENTS_FAILED
+    // and (old semantics) blacked out the whole pod. Skipped (verified-unchanged) documents are
+    // healthy-corpus evidence and belong in the denominator.
+    const fixture = buildFixture({
+      "good-one.txt": "Healthy document one. ".repeat(8),
+      "good-two.txt": "Healthy document two. ".repeat(8),
+      "good-three.txt": "Healthy document three. ".repeat(8),
+      "bad-one.txt": "Broken document one. ".repeat(8),
+      "bad-two.txt": "Broken document two. ".repeat(8),
+    });
+    try {
+      const failBroken = scriptedAdapter({
+        responder: (req) =>
+          !isProbeInput(req.input) && req.input.startsWith("Broken")
+            ? { ok: false, kind: "invalid-response" }
+            : okVector(req.input),
+      });
+      // First run: 3 healthy documents index, 2 fail — minority failure, job completes.
+      const first = await drain(
+        runIndexingJob(
+          buildOptions(fixture, { embeddingAdapter: failBroken, embedRetry: INSTANT_RETRY }),
+        ),
+      );
+      expect(first.at(-1)?.kind).toBe("job-completed");
+
+      // Delta run: the 3 healthy documents are skipped as unchanged; the 2 broken ones fail
+      // again. Run-scoped ratio would say 2 failed > 0 processed... but the corpus is fine.
+      const second = await drain(
+        runIndexingJob(
+          buildOptions(fixture, { embeddingAdapter: failBroken, embedRetry: INSTANT_RETRY }),
+        ),
+      );
+      const terminal = second.at(-1);
+      expect(terminal?.kind).toBe("job-completed");
+      if (terminal?.kind === "job-completed") {
+        expect(terminal.result.skippedDocuments).toBe(3);
+        expect(terminal.result.failedDocuments).toBe(2);
+      }
+      expect(getCapsule(fixture.store, fixture.capsuleId)?.lifecycleState).toBe("ready");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("never counts walk-level discovery diagnostics as failed attempts in the ratio", async () => {
+    // Adversarial-review finding: LIMIT_REACHED can surface once per ancestor frame, so a
+    // truncated deep tree could out-count the processed documents and flip an otherwise
+    // healthy truncated run to failed. Walk diagnostics are not attempted documents.
+    const fixture = buildFixture({
+      "top.txt": "Top level document. ".repeat(8),
+      "a/nested-one.txt": "Nested document one. ".repeat(8),
+      "a/b/nested-two.txt": "Nested document two. ".repeat(8),
+      "a/b/c/nested-three.txt": "Nested document three. ".repeat(8),
+    });
+    try {
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, {
+            embedRetry: INSTANT_RETRY,
+            discoveryOptions: { maxFiles: 1, maxDepth: 12 },
+          }),
+        ),
+      );
+      const terminal = events.at(-1);
+      // One document indexed; every other document-failed is a LIMIT_REACHED walk frame.
+      expect(terminal?.kind).toBe("job-completed");
+      if (terminal?.kind === "job-completed") {
+        expect(terminal.result.processedDocuments).toBe(1);
+      }
+    } finally {
+      fixture.cleanup();
+    }
+  });
+});
+
+describe("runIndexingJob — breaker gateway evidence (adversarial re-verification)", () => {
+  it("never trips on a live-but-flaky gateway where every document keeps some answered chunks", async () => {
+    // Each document large enough to chunk multiple times: the FIRST chunk of each document
+    // times out, the rest answer. Documents fail — but every one of them carries persisted
+    // vectors, which is proof the gateway is alive. The breaker must stay closed and every
+    // document must be attempted.
+    // The poison sentence rides at the END of a multi-chunk document, so the earlier chunks
+    // answer and persist vectors before the final chunk times out — a genuinely flaky (not
+    // dead) gateway, robust to chunk-boundary placement.
+    const flakyCorpus = Object.fromEntries(
+      ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta"].map((name) => [
+        `${name}.txt`,
+        `Follow-up ${name} content sentence. `.repeat(400) + `POISON ${name} tail.`,
+      ]),
+    );
+    const fixture = buildFixture(flakyCorpus);
+    try {
+      const adapter = scriptedAdapter({
+        responder: (req) =>
+          !isProbeInput(req.input) && req.input.includes("POISON")
+            ? { ok: false, kind: "timeout" }
+            : okVector(req.input),
+      });
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, { embeddingAdapter: adapter, embedRetry: INSTANT_RETRY }),
+        ),
+      );
+      // Every document legitimately fails (its poison chunk), so an honest job-failed is
+      // expected — but it must be the MAJORITY classification, never the gateway-outage
+      // abort, and every document must have been ATTEMPTED instead of abandoned early.
+      const terminal = events.at(-1);
+      expect(terminal?.kind).toBe("job-failed");
+      if (terminal?.kind === "job-failed") {
+        expect(terminal.error.code).not.toBe(EMBEDDING_GATEWAY_UNAVAILABLE_CODE);
+      }
+      const failed = events.filter((e) => e.kind === "document-failed");
+      expect(failed.length + events.filter((e) => e.kind === "document-embedded").length).toBe(
+        Object.keys(flakyCorpus).length,
+      );
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("does not let zero-chunk documents reset the outage streak they never observed", async () => {
+    // Empty documents contact no gateway. Interleaved between transient failures they must
+    // not launder the streak — the breaker still trips at the limit.
+    // Walk order is lexicographic: empties genuinely INTERLEAVE with the transient failures.
+    const fixture = buildFixture({
+      "a-fail.txt": "Content one. ".repeat(8),
+      "b-empty.html": "<html><body>   </body></html>",
+      "c-fail.txt": "Content two. ".repeat(8),
+      "d-empty.html": "<html><body> </body></html>",
+      "e-fail.txt": "Content three. ".repeat(8),
+      "f-fail.txt": "Content four. ".repeat(8),
+      "g-fail.txt": "Content five. ".repeat(8),
+      "h-fail.txt": "Content six. ".repeat(8),
+    });
+    try {
+      const adapter = scriptedAdapter({
+        responder: (req) =>
+          isProbeInput(req.input) ? okVector(req.input) : { ok: false, kind: "timeout" },
+      });
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, { embeddingAdapter: adapter, embedRetry: INSTANT_RETRY }),
+        ),
+      );
+      const terminal = events.at(-1);
+      expect(terminal?.kind).toBe("job-failed");
+      if (terminal?.kind === "job-failed") {
+        expect(terminal.error.code).toBe(EMBEDDING_GATEWAY_UNAVAILABLE_CODE);
+      }
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("resets the streak on an answered deterministic rejection — the gateway is alive", async () => {
+    // A gateway that ANSWERS (even with a deterministic 4xx-shaped rejection) is not down.
+    // Four transient failures, one answered rejection, four more transient failures: the
+    // streak never reaches the limit and every document is attempted.
+    // Walk order is lexicographic: exactly four timeouts, then the answered rejection, then
+    // four more timeouts — the streak peaks at four on either side of the reset.
+    const names = ["a1", "a2", "a3", "a4", "m-answered", "z1", "z2", "z3", "z4"];
+    const fixture = buildFixture(
+      Object.fromEntries(names.map((name) => [`${name}.txt`, `Doc ${name} content. `.repeat(8)])),
+    );
+    try {
+      const adapter = scriptedAdapter({
+        responder: (req) => {
+          if (isProbeInput(req.input)) return okVector(req.input);
+          if (req.input.startsWith("Doc m-answered"))
+            return { ok: false, kind: "invalid-response" };
+          return { ok: false, kind: "timeout" };
+        },
+      });
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, { embeddingAdapter: adapter, embedRetry: INSTANT_RETRY }),
+        ),
+      );
+      const terminal = events.at(-1);
+      if (terminal?.kind === "job-failed") {
+        expect(terminal.error.code).not.toBe(EMBEDDING_GATEWAY_UNAVAILABLE_CODE);
+      }
+      expect(events.filter((e) => e.kind === "document-failed")).toHaveLength(names.length);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("keeps a previously indexed capsule retrievable when the breaker aborts a delta refresh", async () => {
+    // Adversarial-review finding: the breaker abort used to flip the capsule to "error",
+    // taking thousands of intact, already-indexed documents out of grounded retrieval over a
+    // five-document gateway blip. The index survived — the capsule must stay ready; the failed
+    // job carries the outage in its history.
+    const healthy = Object.fromEntries(
+      ["one", "two", "three"].map((name) => [
+        `${name}.txt`,
+        `Established document ${name}. `.repeat(8),
+      ]),
+    );
+    const fixture = buildFixture(healthy);
+    try {
+      const first = await drain(
+        runIndexingJob(buildOptions(fixture, { embedRetry: INSTANT_RETRY })),
+      );
+      expect(first.at(-1)?.kind).toBe("job-completed");
+
+      // The gateway dies; a delta of new documents arrives (memoryFs is immutable, so run 2
+      // injects a widened filesystem over the same store and capsule).
+      const widenedFs = memoryFs(ROOT, [
+        ...Object.entries(healthy).map(([relativePath, content]) => ({ relativePath, content })),
+        ...["n1", "n2", "n3", "n4", "n5", "n6"].map((name) => ({
+          relativePath: `${name}.txt`,
+          content: `Late delta document ${name}. `.repeat(8),
+        })),
+      ]);
+      const dead = scriptedAdapter({
+        responder: (req) =>
+          isProbeInput(req.input) ? okVector(req.input) : { ok: false, kind: "timeout" },
+      });
+      const second = await drain(
+        runIndexingJob(
+          buildOptions(fixture, {
+            embeddingAdapter: dead,
+            embedRetry: INSTANT_RETRY,
+            workspaceFs: widenedFs,
+          }),
+        ),
+      );
+      const terminal = second.at(-1);
+      expect(terminal?.kind).toBe("job-failed");
+      if (terminal?.kind === "job-failed") {
+        expect(terminal.error.code).toBe(EMBEDDING_GATEWAY_UNAVAILABLE_CODE);
+      }
+      expect(getCapsule(fixture.store, fixture.capsuleId)?.lifecycleState).toBe("ready");
+    } finally {
+      fixture.cleanup();
+    }
   });
 });
 
@@ -2042,11 +2653,17 @@ describe("runIndexingJob — concurrency clamp", () => {
     expect(peak).toBeLessThanOrEqual(4);
   });
 
-  it("clamps oversized discovery maxDepth to the default bound", async () => {
-    const deepPath = `${Array.from({ length: 13 }, (_unused, i) => `d${String(i)}`).join("/")}/deep.txt`;
+  // Relocated pin (2026-08 field review): the DEFAULT used to double as a hard ceiling —
+  // Math.min(default, value) — so an operator could lower the walk bounds but never raise
+  // them, and a corpus above the default was silently truncated forever. The runaway
+  // invariant the old clamp provided lives on in the explicit CEILING.
+  it("lets a caller raise discovery bounds up to the runaway ceiling — never beyond", async () => {
+    const withinRaisedDepth = `${Array.from({ length: 13 }, (_unused, i) => `d${String(i)}`).join("/")}/deep.txt`;
+    const beyondCeiling = `${Array.from({ length: 65 }, (_unused, i) => `e${String(i)}`).join("/")}/too-deep.txt`;
     const single = buildFixture({
       "root.txt": "root document",
-      [deepPath]: "deep document",
+      [withinRaisedDepth]: "deep document",
+      [beyondCeiling]: "unreachably deep document",
     });
 
     try {
@@ -2062,9 +2679,928 @@ describe("runIndexingJob — concurrency clamp", () => {
         .map((event) => event.relativePath);
 
       expect(discovered).toContain("root.txt");
+      // Raising past the old default now works…
+      expect(discovered).toContain(withinRaisedDepth);
+      // …but an absurd caller value still cannot demand an unbounded walk.
+      expect(discovered).not.toContain(beyondCeiling);
+    } finally {
+      single.cleanup();
+    }
+  });
+
+  it("keeps the built-in defaults when the caller passes no discovery options", async () => {
+    const deepPath = `${Array.from({ length: 13 }, (_unused, i) => `d${String(i)}`).join("/")}/deep.txt`;
+    const single = buildFixture({
+      "root.txt": "root document",
+      [deepPath]: "deep document",
+    });
+
+    try {
+      const events = await drain(runIndexingJob(buildOptions(single)));
+      const discovered = events
+        .filter((event) => event.kind === "document-discovered")
+        .map((event) => event.relativePath);
+
+      expect(discovered).toContain("root.txt");
       expect(discovered).not.toContain(deepPath);
     } finally {
       single.cleanup();
+    }
+  });
+});
+
+// ─── Loud truncation surfacing (2026-08 field review) ────────────────────────
+// LIMIT_REACHED used to be one buried document-failed entry in job history while the capsule
+// finished "ready" — a corpus silently missing part of its files. A truncated walk must leave
+// a capsule-level quality warning that the health surface shows, and a later run that covers
+// the corpus must clear it again.
+describe("runIndexingJob — discovery truncation warning", () => {
+  const corpus = {
+    "a.txt": "Document a. ".repeat(8),
+    "b.txt": "Document b. ".repeat(8),
+    "c.txt": "Document c. ".repeat(8),
+    "d.txt": "Document d. ".repeat(8),
+  };
+
+  function truncationWarnings(fixture: Fixture): readonly { readonly message: string }[] {
+    return fixture.store._internal.db
+      .prepare(
+        "SELECT message FROM parser_diagnostics WHERE capsule_id = :c AND document_id IS NULL AND code = 'DISCOVERY_LIMIT_REACHED' AND severity = 'warning'",
+      )
+      .all({ c: fixture.capsuleId }) as unknown as readonly { readonly message: string }[];
+  }
+
+  it("persists ONE capsule-level warning when the walk truncates, and clears it once a later run covers the corpus", async () => {
+    const fixture = buildFixture(corpus);
+    try {
+      const truncated = await drain(
+        runIndexingJob(buildOptions(fixture, { discoveryOptions: { maxFiles: 2, maxDepth: 12 } })),
+      );
+      expect(
+        truncated.some(
+          (event) =>
+            event.kind === "document-failed" &&
+            event.error.code === "DISCOVERY_FAILED:LIMIT_REACHED",
+        ),
+      ).toBe(true);
+      const warnings = truncationWarnings(fixture);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]?.message).toContain("KEIKO_LOCAL_KNOWLEDGE_MAX_DISCOVERY_FILES");
+
+      // The warning describes the LAST walk: a run without the limit covers the corpus and
+      // must clear it instead of shouting forever.
+      await drain(runIndexingJob(buildOptions(fixture)));
+      expect(truncationWarnings(fixture)).toHaveLength(0);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+});
+
+// ─── Activity log ─────────────────────────────────────────────────────────────
+// The event stream above reports STATE, and only to a consumer driving the iterator. These
+// tests pin the file an operator actually opens: the run's spine at `info`, the preflight that
+// precedes it, and the correlation that makes four concurrent documents readable.
+describe("runIndexingJob — activity log", () => {
+  function recordingSink(): {
+    sink: KnowledgeLogSink;
+    events: KnowledgeLogEvent[];
+    ops: () => readonly string[];
+    find: (op: string) => KnowledgeLogEvent | undefined;
+    all: (op: string) => readonly KnowledgeLogEvent[];
+  } {
+    const events: KnowledgeLogEvent[] = [];
+    return {
+      sink: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+      events,
+      ops: (): readonly string[] => events.map((event) => event.op),
+      find: (op): KnowledgeLogEvent | undefined => events.find((event) => event.op === op),
+      all: (op): readonly KnowledgeLogEvent[] => events.filter((event) => event.op === op),
+    };
+  }
+
+  // Index of each op's FIRST appearance, so an ordering assertion reads as a sequence rather
+  // than a pile of individual index comparisons.
+  function firstIndexes(ops: readonly string[], wanted: readonly string[]): readonly number[] {
+    return wanted.map((op) => ops.indexOf(op));
+  }
+
+  const HEX_DIGEST = /^[0-9a-f]{16}$/u;
+
+  // Optional chaining is what pushes these `it` callbacks over the complexity ceiling, so the
+  // two lookups every assertion needs are resolved once, here, and fail loudly when absent.
+  function requireLine(
+    log: { find: (op: string) => KnowledgeLogEvent | undefined },
+    op: string,
+  ): KnowledgeLogEvent {
+    const event = log.find(op);
+    if (event === undefined) throw new Error(`missing activity-log line: ${op}`);
+    return event;
+  }
+
+  function extraOf(event: KnowledgeLogEvent): Readonly<Record<string, unknown>> {
+    return event.extra ?? {};
+  }
+
+  it("writes the whole run spine at info, in order, with the counts an operator reads", async () => {
+    const fixture = buildFixture({
+      "alpha.txt": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(12),
+    });
+    const log = recordingSink();
+    try {
+      const events = await drain(
+        runIndexingJob(buildOptions(fixture, { logSink: log.sink, idSource: () => "job-spine" })),
+      );
+      expect(events.some((event) => event.kind === "job-completed")).toBe(true);
+
+      const spine = [
+        "indexing.job.received",
+        "indexing.job.started",
+        "embedding.preflight.started",
+        "embedding.preflight.completed",
+        "indexing.source.started",
+        "indexing.document.extraction-started",
+        "indexing.document.extracted",
+        "indexing.document.chunked",
+        "indexing.document.embedding-started",
+        "indexing.document.embedded",
+        "indexing.source.completed",
+        "indexing.job.finished",
+      ];
+      const indexes = firstIndexes(log.ops(), spine);
+      // Every step present…
+      expect(indexes.filter((index) => index < 0)).toEqual([]);
+      // …and in the order the pipeline actually runs them.
+      expect(indexes).toEqual([...indexes].sort((a, b) => a - b));
+      // Default level: an operator who filters nothing out must still see all of it.
+      expect(spine.map((op) => requireLine(log, op).level)).toEqual(spine.map(() => "info"));
+
+      expect(extraOf(requireLine(log, "indexing.job.started"))).toMatchObject({
+        sourceCount: 1,
+        batchSize: DEFAULT_INDEXING_BATCH_SIZE,
+        concurrency: DEFAULT_INDEXING_CONCURRENCY,
+        force: false,
+      });
+      const jobStarted = requireLine(log, "indexing.job.started");
+      const preflightStarted = requireLine(log, "embedding.preflight.started");
+      expect(
+        activityLogEventRegistration(
+          jobStarted as unknown as Readonly<Record<PropertyKey, unknown>>,
+        )?.fields.force,
+      ).toEqual({ type: "boolean", dataClass: "closed-enum", required: true });
+      expect(
+        activityLogEventRegistration(
+          preflightStarted as unknown as Readonly<Record<PropertyKey, unknown>>,
+        )?.fields.fingerprinted,
+      ).toEqual({ type: "boolean", dataClass: "closed-enum", required: true });
+      expect(extraOf(requireLine(log, "indexing.document.chunked")).chunkCount).toBeGreaterThan(0);
+      expect(extraOf(requireLine(log, "indexing.source.completed"))).toMatchObject({
+        discoveredCount: 1,
+        failedCount: 0,
+        walkCompleted: true,
+        cancelled: false,
+      });
+
+      const completed = events.find((event) => event.kind === "job-completed");
+      const finished = requireLine(log, "indexing.job.finished");
+      expect(finished.durationMs).toBeGreaterThanOrEqual(0);
+      expect(extraOf(finished)).toMatchObject({
+        jobStatus: "succeeded",
+        processedDocuments: 1,
+        failedDocuments: 0,
+        skippedDocuments: 0,
+        vectorsPersisted:
+          completed?.kind === "job-completed" ? completed.result.vectorsPersisted : -1,
+      });
+      // `extra` is flattened onto the same record as the envelope, whose `status` is the numeric
+      // HTTP status. A terminal run state written under that name poisons every operator query
+      // that reads `status` as a number, so the field must stay absent here.
+      expect(extraOf(finished)).not.toHaveProperty("status");
+      expect(finished.status).toBeUndefined();
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("states the resolved chunker profile on indexing.job.started, reflecting an operator override", async () => {
+    // `IndexingOptions.chunkingOptions` is operator-overridable but, before this test, never
+    // reached the run's spine line — an operator-supplied budget was invisible to anyone
+    // reading the activity log. Asserting on a NON-default override (rather than the defaults
+    // every other test in this suite exercises implicitly) proves the values are read from the
+    // resolved run configuration, not hard-coded defaults that would pass even if the wiring
+    // were dropped.
+    const fixture = buildFixture({
+      "alpha.txt": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(12),
+    });
+    const log = recordingSink();
+    try {
+      await drain(
+        runIndexingJob(
+          buildOptions(fixture, {
+            logSink: log.sink,
+            idSource: () => "job-chunker-profile",
+            chunkingOptions: { maxTokens: 96, minTokens: 8, overlapTokens: 12 },
+          }),
+        ),
+      );
+      expect(extraOf(requireLine(log, "indexing.job.started"))).toMatchObject({
+        minChunkTokens: 8,
+        maxChunkTokens: 96,
+        overlapTokens: 12,
+        tokenizerKind: "estimator",
+      });
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("correlates every line to the job and identifies capsule and document by digest only", async () => {
+    const fixture = buildFixture({
+      "alpha.txt": "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(12),
+    });
+    const log = recordingSink();
+    try {
+      await drain(
+        runIndexingJob(buildOptions(fixture, { logSink: log.sink, idSource: () => "job-corr" })),
+      );
+
+      expect(log.events.length).toBeGreaterThan(0);
+      const digests = new Set<string>();
+      for (const event of log.events) {
+        expect(event.correlationId).toBe("job-corr");
+        const capsuleDigest = event.extra?.capsuleIdDigest;
+        expect(capsuleDigest).toMatch(HEX_DIGEST);
+        digests.add(String(capsuleDigest));
+      }
+      // One capsule, one digest — a correlation key that changed per line would correlate
+      // nothing.
+      expect(digests.size).toBe(1);
+
+      // The document-scoped lines carry the second key; the job-scoped ones must not invent it.
+      const documentDigest = log.find("indexing.document.chunked")?.extra?.documentIdDigest;
+      expect(documentDigest).toMatch(HEX_DIGEST);
+      expect(log.find("indexing.job.started")?.extra).not.toHaveProperty("documentIdDigest");
+      // The batcher's own lines are correlated to the same document, or an operator cannot tie
+      // a stalled embedding flush to the document that owns it.
+      expect(log.find("embedding.batch.transport-selected")?.extra?.documentIdDigest).toBe(
+        documentDigest,
+      );
+
+      // A digest REPLACES the value; it may not be accompanied by it. The capsule id is
+      // caller-chosen and the document id embeds the document's relative path.
+      const serialized = JSON.stringify(log.events);
+      expect(serialized).not.toContain(String(fixture.capsuleId));
+      expect(serialized).not.toContain(String(fixture.sourceId));
+      expect(serialized).not.toContain("alpha.txt");
+      expect(serialized).not.toContain(ROOT);
+      expect(serialized).not.toContain("Lorem ipsum");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  // The preflight is the FIRST outbound call of a run and precedes every event the stream can
+  // emit, so a run wedged here shows an operator a started job and nothing else — the exact
+  // field-incident shape. Attempt, outcome and duration all have to be on the record.
+  it("records the preflight attempt and its outcome with a duration", async () => {
+    const fixture = buildFixture({ "alpha.txt": "Alpha body text. ".repeat(12) });
+    const log = recordingSink();
+    try {
+      await drain(
+        runIndexingJob(buildOptions(fixture, { logSink: log.sink, idSource: () => "job-pf" })),
+      );
+
+      const started = requireLine(log, "embedding.preflight.started");
+      expect(started.level).toBe("info");
+      expect(started.category).toBe("embedding");
+      const startedExtra = extraOf(started);
+      const providerDigest = startedExtra.providerDigest;
+      const modelIdDigest = startedExtra.modelIdDigest;
+      const endpointDigest = startedExtra.endpointDigest;
+      expect(providerDigest).toMatch(HEX_DIGEST);
+      expect(modelIdDigest).toMatch(HEX_DIGEST);
+      expect(endpointDigest).toMatch(HEX_DIGEST);
+      expect(startedExtra).toMatchObject({
+        providerDigest,
+        modelIdDigest,
+        cached: false,
+        endpointDigest,
+      });
+
+      const completed = requireLine(log, "embedding.preflight.completed");
+      expect(completed.level).toBe("info");
+      expect(completed.durationMs).toBeGreaterThanOrEqual(0);
+      expect(extraOf(completed)).toMatchObject({
+        observedDimensions: DEFAULT_EMBEDDING.vectorDimensions,
+      });
+      // Ordering: nothing about the corpus may be logged before the gateway was asked.
+      expect(log.ops().indexOf("embedding.preflight.started")).toBeLessThan(
+        log.ops().indexOf("indexing.source.started"),
+      );
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  // The cache short-circuit makes NO outbound call, so without its own line the absence of a
+  // preflight round-trip in the file is indistinguishable from a preflight that never returned.
+  it("names the cache short-circuit instead of leaving a silent gap", async () => {
+    const fixture = buildFixture({ "alpha.txt": "Alpha body text. ".repeat(12) });
+    const cacheScope = {};
+    try {
+      const first = recordingSink();
+      await drain(
+        runIndexingJob(
+          buildOptions(fixture, {
+            logSink: first.sink,
+            idSource: () => "job-pf-1",
+            embeddingPreflightCacheScope: cacheScope,
+          }),
+        ),
+      );
+      expect(first.ops()).toContain("embedding.preflight.started");
+      expect(first.ops()).not.toContain("embedding.preflight.cache-hit");
+
+      const second = recordingSink();
+      await drain(
+        runIndexingJob(
+          buildOptions(fixture, {
+            logSink: second.sink,
+            idSource: () => "job-pf-2",
+            embeddingPreflightCacheScope: cacheScope,
+          }),
+        ),
+      );
+      const hit = second.find("embedding.preflight.cache-hit");
+      expect(hit?.level).toBe("info");
+      expect(hit?.category).toBe("embedding");
+      expect(hit?.correlationId).toBe("job-pf-2");
+      const modelIdDigest = hit?.extra?.modelIdDigest;
+      expect(modelIdDigest).toMatch(HEX_DIGEST);
+      expect(hit?.extra).toMatchObject({
+        cached: true,
+        modelIdDigest,
+      });
+      // The short-circuit is the whole point: no probe was issued on the second run.
+      expect(second.ops()).not.toContain("embedding.preflight.started");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("records a refused preflight with its reason, duration, and gateway digest", async () => {
+    const fixture = buildFixture({ "alpha.txt": "Alpha body text. ".repeat(12) });
+    const log = recordingSink();
+    try {
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, {
+            embeddingAdapter: scriptedAdapter({
+              responder: () => ({ ok: false, kind: "transport" }),
+            }),
+            logSink: log.sink,
+            idSource: () => "job-pf-fail",
+          }),
+        ),
+      );
+      expect(events.some((event) => event.kind === "job-failed")).toBe(true);
+
+      const failed = log.find("embedding.preflight.failed");
+      expect(failed?.level).toBe("error");
+      expect(failed?.errorKind).toBeDefined();
+      expect(failed?.durationMs).toBeGreaterThanOrEqual(0);
+      const endpointDigest = failed?.extra?.endpointDigest;
+      expect(endpointDigest).toMatch(HEX_DIGEST);
+      expect(failed?.extra).toMatchObject({
+        endpointDigest,
+        failureSource: "result",
+      });
+      // A failed run must close at a level an operator filters TO, not one they filter out.
+      const finished = log.find("indexing.job.finished");
+      expect(finished?.level).toBe("error");
+      expect(finished?.extra).toMatchObject({
+        jobStatus: "failed",
+        processedDocuments: 0,
+        vectorsPersisted: 0,
+      });
+      expect(finished?.extra).not.toHaveProperty("status");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  // The chunk-preparation lanes flatten every cause to CHUNKING_FAILED with a fixed message, so
+  // the real cause exists nowhere but this line.
+  it("names the real cause behind a CHUNKING_FAILED document in the standard lane", async () => {
+    const fixture = buildFixture({ "alpha.txt": "Alpha body text. ".repeat(12) });
+    const log = recordingSink();
+    try {
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, {
+            // The chunker owns the token estimator, so a throwing one fails chunk preparation
+            // for a document whose extraction already succeeded — the lane the orchestrator
+            // relabels to a fixed CHUNKING_FAILED.
+            chunkingOptions: {
+              tokenEstimator: (): number => {
+                throw new RangeError("token estimator exploded");
+              },
+            },
+            logSink: log.sink,
+            idSource: () => "job-chunk-fail",
+          }),
+        ),
+      );
+      const failed = events.find((event) => event.kind === "document-failed");
+      expect(failed?.kind === "document-failed" && failed.error.code).toBe("CHUNKING_FAILED");
+
+      const line = requireLine(log, "indexing.chunking.failed");
+      expect(line.level).toBe("warn");
+      expect(line.category).toBe("indexing");
+      // The document error is the flattened CHUNKING_FAILED; the log line names the class that
+      // actually threw, which is the gap this line exists to close.
+      expect(line.errorKind).toBe("internal");
+      expect(extraOf(line)).toMatchObject({
+        lane: "standard-chunker",
+        failureKind: "ChunkingError",
+      });
+      expect(extraOf(line).documentIdDigest).toMatch(HEX_DIGEST);
+      // And the per-document failure is on the record with its code.
+      const documentFailed = requireLine(log, "indexing.document.failed");
+      expect(documentFailed.level).toBe("warn");
+      expect(documentFailed.errorKind).toBe("internal");
+      expect(extraOf(documentFailed).failureKind).toBe("CHUNKING_FAILED");
+
+      const serialized = JSON.stringify(log.events);
+      expect(serialized).not.toContain("token estimator exploded");
+      expect(serialized).not.toContain("alpha.txt");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  // The bounded large-document lane had the identical hole, and it is the lane that matters most
+  // for a stalled run: these are the documents that take minutes. Same op name, same level, same
+  // correlation — distinguished only by `lane`, so one grep covers every chunk-preparation
+  // failure in the product.
+  it("gives the bounded large-document lane the same chunk-preparation failure line", async () => {
+    const page = "ABCDEFGHIJKLMNOPQRSTUVWX";
+    const pages: string[] = [];
+    for (let p = 0; p < 8; p += 1) pages.push(page);
+    const fixture = buildFixture({ "report.synthetic": pages.join("\n\n") });
+    const log = recordingSink();
+    try {
+      await drain(
+        runIndexingJob(
+          buildOptions(fixture, {
+            largeDocumentPolicy: {
+              ...DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
+              largeFileThresholdBytes: 32,
+              extractionWindowPages: 4,
+            },
+            progressiveExtractors: [
+              syntheticProgressiveExtractor({ totalPages: 8, pageChars: 24, pagesPerWindow: 4 }),
+            ],
+            chunkingOptions: {
+              tokenEstimator: (): number => {
+                throw new RangeError("token estimator exploded");
+              },
+            },
+            logSink: log.sink,
+            idSource: () => "job-bounded-fail",
+          }),
+        ),
+      );
+
+      const bounded = log
+        .all("indexing.chunking.failed")
+        .find((event) => event.extra?.lane === "bounded");
+      expect(bounded).toBeDefined();
+      expect(bounded?.level).toBe("warn");
+      expect(bounded?.category).toBe("indexing");
+      expect(bounded?.correlationId).toBe("job-bounded-fail");
+      expect(bounded?.errorKind).toBe("internal");
+      expect(bounded?.extra).toMatchObject({
+        cancelled: false,
+        policyRejection: false,
+        failureKind: "RangeError",
+      });
+      expect(bounded?.extra?.documentIdDigest).toMatch(HEX_DIGEST);
+
+      const serialized = JSON.stringify(log.events);
+      expect(serialized).not.toContain("report.synthetic");
+      expect(serialized).not.toContain(ROOT);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  // ─── Discovery and extraction lane ──────────────────────────────────────────
+  // This is the lane behind "0 of 1 documents": between `indexing.source.started` and
+  // `indexing.source.completed` the walk and the per-file extraction ran with nothing at all in
+  // the file, so a wedged walk, a wedged parser and an empty folder were one indistinguishable
+  // silence. Every test below fails if its line is removed.
+
+  // Digests of the documents a given op names, in emission order.
+  function digestsFor(
+    log: { all: (op: string) => readonly KnowledgeLogEvent[] },
+    op: string,
+  ): readonly string[] {
+    return log.all(op).map((event) => String(event.extra?.documentIdDigest));
+  }
+
+  function unreadableRootFixture(): Fixture {
+    const { store, cleanup } = freshStore();
+    const capsuleId = "cap-orch" as KnowledgeCapsuleId;
+    createCapsule(
+      store,
+      sampleCapsuleInput({ id: capsuleId, modelUsePolicy: standardPodModelUsePolicy() }),
+    );
+    const source = addSourceToCapsule(store, capsuleId, {
+      id: "src-orch" as KnowledgeSourceId,
+      displayName: "orch",
+      tags: [],
+      scope: folderScope(ROOT, { recursive: true }),
+    });
+    const fs: WorkspaceFs = {
+      ...memoryFs(ROOT, []),
+      readDir: (): never => {
+        throw new Error("EACCES: permission denied");
+      },
+    };
+    return { store, cleanup, capsuleId, sourceId: source.id, source, fs };
+  }
+
+  // A workspace whose bytes cannot be read: the torn-mount / revoked-permission shape, which is
+  // where READ_FAILED comes from in the field.
+  function unreadableBytes(fs: WorkspaceFs): WorkspaceFs {
+    return {
+      ...fs,
+      readFileBytes: (): Promise<Uint8Array> => Promise.reject(new Error("EIO: read failed")),
+    };
+  }
+
+  it("ticks a discovery/extraction start line per file, with a running count and no file name", async () => {
+    const fixture = buildFixture({
+      "alpha.txt": "Alpha body text. ".repeat(12),
+      "beta.txt": "Beta body text. ".repeat(12),
+      "gamma.txt": "Gamma body text. ".repeat(12),
+    });
+    const log = recordingSink();
+    try {
+      await drain(
+        runIndexingJob(buildOptions(fixture, { logSink: log.sink, idSource: () => "job-disc" })),
+      );
+
+      const started = log.all("indexing.document.extraction-started");
+      expect(started).toHaveLength(3);
+      expect(started.map((event) => event.level)).toEqual(["info", "info", "info"]);
+      expect(started.map((event) => event.category)).toEqual(["indexing", "indexing", "indexing"]);
+      // The running count is the "1" in "0 of 1 documents": a walk that is grinding advances it,
+      // a walk that found nothing never emits the line at all.
+      expect(started.map((event) => extraOf(event).discoveredCount)).toEqual([1, 2, 3]);
+      for (const event of started) {
+        expect(extraOf(event).sizeBytes).toBeGreaterThan(0);
+        expect(extraOf(event).documentIdDigest).toMatch(HEX_DIGEST);
+      }
+      // Three distinct documents, each identified only by digest.
+      expect(new Set(digestsFor(log, "indexing.document.extraction-started")).size).toBe(3);
+
+      // The tick precedes the completion line for the same document — it is the marker that
+      // separates "the walk never reached it" from "extraction started and never returned".
+      const ops = log.ops();
+      expect(ops.indexOf("indexing.document.extraction-started")).toBeLessThan(
+        ops.indexOf("indexing.document.extracted"),
+      );
+      expect(ops.indexOf("indexing.source.started")).toBeLessThan(
+        ops.indexOf("indexing.document.extraction-started"),
+      );
+
+      const serialized = JSON.stringify(log.events);
+      expect(serialized).not.toContain("alpha.txt");
+      expect(serialized).not.toContain("beta.txt");
+      expect(serialized).not.toContain(ROOT);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  // The half of the pair that proves the start line is worth having: a document whose extraction
+  // never completes has a start line and NO `indexing.document.extracted` partner, which is the
+  // exact state the field incident could not distinguish from a document never reached.
+  it("leaves a start line with no extracted partner when extraction fails", async () => {
+    const fixture = buildFixture({ "alpha.txt": "Alpha body text. ".repeat(12) });
+    const log = recordingSink();
+    try {
+      await drain(
+        runIndexingJob(
+          buildOptions(fixture, {
+            workspaceFs: unreadableBytes(fixture.fs),
+            logSink: log.sink,
+            idSource: () => "job-halfpair",
+          }),
+        ),
+      );
+      expect(log.all("indexing.document.extraction-started")).toHaveLength(1);
+      expect(log.all("indexing.document.extracted")).toHaveLength(0);
+      // Same document on both sides of the gap.
+      expect(digestsFor(log, "indexing.document.extraction-started")).toEqual(
+        digestsFor(log, "indexing.document.extraction-failed"),
+      );
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("names the discovery code behind an extraction failure that never reaches the chunker", async () => {
+    const fixture = buildFixture({ "alpha.txt": "Alpha body text. ".repeat(12) });
+    const log = recordingSink();
+    try {
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, {
+            workspaceFs: unreadableBytes(fixture.fs),
+            logSink: log.sink,
+            idSource: () => "job-extract-fail",
+          }),
+        ),
+      );
+      const failed = events.find((event) => event.kind === "document-failed");
+      expect(failed?.kind === "document-failed" && failed.error.code).toBe(
+        "DISCOVERY_FAILED:READ_FAILED",
+      );
+
+      const line = requireLine(log, "indexing.document.extraction-failed");
+      expect(line.level).toBe("warn");
+      expect(line.category).toBe("indexing");
+      expect(line.correlationId).toBe("job-extract-fail");
+      // The code is the whole point: READ_FAILED, STAT_FAILED and a parse failure are three
+      // different repairs and were previously one silence.
+      expect(line.errorKind).toBe("read-failed");
+      expect(extraOf(line)).toMatchObject({ failedDocuments: 1, failureKind: "READ_FAILED" });
+      expect(extraOf(line).documentIdDigest).toMatch(HEX_DIGEST);
+
+      const finished = requireLine(log, "indexing.job.finished");
+      expect(finished.errorKind).toBe("read-failed");
+      expect(extraOf(finished)).toMatchObject({
+        completeness: "complete",
+        failureKind: "DISCOVERY_FAILED.READ_FAILED",
+        loss: "none",
+      });
+
+      // This lane does NOT funnel through `appendDocumentFailure` — the corrected comment there
+      // says so, and this is what makes the line above the only record of the failure.
+      expect(log.ops()).not.toContain("indexing.document.failed");
+
+      const serialized = JSON.stringify(log.events);
+      expect(serialized).not.toContain("EIO");
+      expect(serialized).not.toContain("alpha.txt");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("records the transient re-read downgrade the event stream reports as an ordinary skip", async () => {
+    const fixture = buildFixture({ "alpha.txt": "Alpha body text. ".repeat(12) });
+    const log = recordingSink();
+    try {
+      // A healthy first run leaves the document with good chunks…
+      await drain(runIndexingJob(buildOptions(fixture, { idSource: () => "job-warm" })));
+      // …so a re-read failure on the second run is downgraded to a skip instead of destroying it.
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, {
+            workspaceFs: unreadableBytes(fixture.fs),
+            logSink: log.sink,
+            idSource: () => "job-reread",
+          }),
+        ),
+      );
+      const skipped = events.find((event) => event.kind === "document-skipped");
+      // The EVENT is indistinguishable from a genuinely unchanged document — that flattening is
+      // deliberate, and it is exactly why the log has to keep the truth.
+      expect(skipped?.kind === "document-skipped" && skipped.reason).toBe("unchanged");
+
+      const downgrade = log
+        .all("indexing.document.skipped")
+        .find((event) => extraOf(event).reason === "transient-read-failure");
+      if (downgrade === undefined) throw new Error("missing transient re-read downgrade line");
+      expect(downgrade.level).toBe("warn");
+      expect(downgrade.errorKind).toBe("read-failed");
+      expect(extraOf(downgrade).failureKind).toBe("READ_FAILED");
+      expect(Number(extraOf(downgrade).preservedChunkCount)).toBeGreaterThan(0);
+      expect(extraOf(downgrade).documentIdDigest).toMatch(HEX_DIGEST);
+      // Not a failure, and not a destroyed index: the document was simply not refreshed.
+      expect(log.ops()).not.toContain("indexing.document.extraction-failed");
+      const documentId = documentIdFor({
+        capsuleId: fixture.capsuleId,
+        sourceId: fixture.sourceId,
+        relativePath: "alpha.txt",
+      });
+      expect(
+        countVectorsForDocument(fixture.store._internal.db, fixture.capsuleId, documentId),
+      ).toBeGreaterThan(0);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("records every walk-level scope rejection with its discovery code", async () => {
+    const fixture = unreadableRootFixture();
+    const log = recordingSink();
+    try {
+      await drain(
+        runIndexingJob(buildOptions(fixture, { logSink: log.sink, idSource: () => "job-scope" })),
+      );
+      const line = requireLine(log, "indexing.discovery.scope-error");
+      expect(line.level).toBe("warn");
+      expect(line.category).toBe("indexing");
+      expect(line.correlationId).toBe("job-scope");
+      expect(line.errorKind).toBe("read-failed");
+      expect(extraOf(line)).toMatchObject({
+        discoveryFailedDocuments: 1,
+        failureKind: "READ_FAILED",
+      });
+      // A walk that never yielded a file: the scope-error line is the ONLY thing that says why.
+      expect(log.ops()).not.toContain("indexing.document.extraction-started");
+
+      const serialized = JSON.stringify(log.events);
+      expect(serialized).not.toContain("EACCES");
+      expect(serialized).not.toContain(ROOT);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("says once, loudly, that discovery truncated the corpus at the configured limit", async () => {
+    const fixture = buildFixture({
+      "top.txt": "Top level document. ".repeat(8),
+      "a/nested-one.txt": "Nested document one. ".repeat(8),
+      "a/b/nested-two.txt": "Nested document two. ".repeat(8),
+      "a/b/c/nested-three.txt": "Nested document three. ".repeat(8),
+    });
+    const log = recordingSink();
+    try {
+      await drain(
+        runIndexingJob(
+          buildOptions(fixture, {
+            embedRetry: INSTANT_RETRY,
+            discoveryOptions: { maxFiles: 1, maxDepth: 12 },
+            logSink: log.sink,
+            idSource: () => "job-limit",
+          }),
+        ),
+      );
+      // LIMIT_REACHED surfaces once per ancestor frame; the truncation line is written once.
+      expect(log.all("indexing.discovery.scope-error").length).toBeGreaterThan(1);
+      for (const event of log.all("indexing.discovery.scope-error")) {
+        expect(event.errorKind).toBe("validation-failed");
+        expect(extraOf(event).failureKind).toBe("LIMIT_REACHED");
+      }
+      const limit = requireLine(log, "indexing.discovery.limit-reached");
+      expect(log.all("indexing.discovery.limit-reached")).toHaveLength(1);
+      // A truncated run SUCCEEDS with an incomplete corpus, so `warn` is the only level at which
+      // an operator ever finds out.
+      expect(limit.level).toBe("warn");
+      expect(extraOf(limit)).toMatchObject({ maxFiles: 1, maxDepth: 12, discoveredCount: 1 });
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("accounts for an unsupported document instead of dropping it out of the file", async () => {
+    const fixture = buildFixture({
+      "keiko-logo.svg":
+        '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>',
+    });
+    const log = recordingSink();
+    try {
+      const events = await drain(
+        runIndexingJob(buildOptions(fixture, { logSink: log.sink, idSource: () => "job-unsup" })),
+      );
+      expect(
+        events.some((event) => event.kind === "document-skipped" && event.reason === "unsupported"),
+      ).toBe(true);
+
+      // The whole lane: discovered, extracted, and then skipped without ever producing a vector.
+      expect(log.all("indexing.document.extraction-started")).toHaveLength(1);
+      const extracted = requireLine(log, "indexing.document.extracted");
+      expect(extracted.level).toBe("info");
+      const skipped = requireLine(log, "indexing.document.skipped");
+      expect(skipped.level).toBe("info");
+      expect(extraOf(skipped)).toMatchObject({ reason: "unsupported", skippedDocuments: 1 });
+      // The extractor's own closed status enum — never a media type guessed from a file name.
+      expect(String(extraOf(skipped).documentStatus)).toMatch(/^(unsupported|extracted-image)$/u);
+      expect(log.ops()).not.toContain("indexing.document.embedding-started");
+      expect(JSON.stringify(log.events)).not.toContain("keiko-logo");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  // ─── Job prologue ───────────────────────────────────────────────────────────
+  it("announces the run before the four prologue steps that can throw or hang", async () => {
+    const fixture = buildFixture({ "alpha.txt": "Alpha body text. ".repeat(12) });
+    const log = recordingSink();
+    const legacyJobId = "job-pro";
+    const correlationId = knowledgeLogCorrelationId(legacyJobId);
+    const adapter = happyAdapter();
+    const request = vi.spyOn(adapter, "request");
+    try {
+      const events = await drain(
+        runIndexingJob(
+          buildOptions(fixture, {
+            embeddingAdapter: adapter,
+            logSink: log.sink,
+            idSource: () => legacyJobId,
+          }),
+        ),
+      );
+      // FIRST line of the file for this run — capsule resolution, source resolution, the
+      // tokenizer load and the started-job write all happen after it.
+      expect(log.ops()[0]).toBe("indexing.job.received");
+      const received = requireLine(log, "indexing.job.received");
+      expect(received.level).toBe("info");
+      expect(received.category).toBe("indexing");
+      // A legacy job id is normalized once before any layer sees it. Every Knowledge line and
+      // every gateway dispatch that carries a log context must use that exact sanctioned id,
+      // while the public job event retains the caller-visible job id.
+      expect(received.correlationId).toBe(correlationId);
+      expect(new Set(log.events.map((event) => event.correlationId))).toEqual(
+        new Set([correlationId]),
+      );
+      const gatewayCorrelationIds = request.mock.calls.flatMap(([input]) =>
+        input.logContext === undefined ? [] : [input.logContext.correlationId],
+      );
+      expect(gatewayCorrelationIds.length).toBeGreaterThan(0);
+      expect(new Set(gatewayCorrelationIds)).toEqual(new Set([correlationId]));
+      expect(events.find((event) => event.kind === "job-started")?.jobId).toBe(legacyJobId);
+      expect(selectJobById(fixture.store._internal.db, legacyJobId)?.id).toBe(legacyJobId);
+      expect(extraOf(received).capsuleIdDigest).toMatch(HEX_DIGEST);
+      expect(extraOf(received)).toMatchObject({ sourceIdFilterCount: 0, force: false });
+      expect(extraOf(received)).not.toHaveProperty("documentIdDigest");
+      expect(JSON.stringify(log.events)).not.toContain(String(fixture.capsuleId));
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("distinguishes a job that died in its prologue from one that never launched", async () => {
+    const fixture = buildFixture({ "alpha.txt": "Alpha body text. ".repeat(12) });
+    const log = recordingSink();
+    try {
+      // `resolveCapsule` throws before `indexing.job.started` can ever be reached — the shape a
+      // deleted capsule, an unresolvable source filter or a wedged tokenizer load produces.
+      await expect(
+        drain(
+          runIndexingJob(
+            buildOptions(fixture, {
+              capsuleId: "cap-missing" as KnowledgeCapsuleId,
+              logSink: log.sink,
+              idSource: () => "job-dead",
+            }),
+          ),
+        ),
+      ).rejects.toMatchObject({ code: "CAPSULE_NOT_FOUND" });
+
+      // Exactly one line: the run was launched and died in its prologue. A run that was never
+      // launched leaves an empty file, which is now a different observation.
+      expect(log.ops()).toEqual(["indexing.job.received"]);
+      expect(log.events[0]?.correlationId).toBe("job-dead");
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  // `emitProgress` already isolates the caller's progress callback because "progress sinks must
+  // not affect run correctness". The log sink is the same kind of foreign code, wired by the same
+  // caller, and it is written from the prologue, every document, the retry ladder and the failure
+  // path — so an unguarded write would turn a logging defect into a failed indexing run, starting
+  // with `indexing.job.received`, which is emitted before the run has any state at all.
+  it("completes the run when every write to the log sink throws", async () => {
+    const fixture = buildFixture({ "alpha.txt": "Alpha body text. ".repeat(12) });
+    const warn = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    const dead: KnowledgeLogSink = {
+      write: (): never => {
+        throw new Error("sink is down");
+      },
+    };
+    try {
+      const events = await drain(
+        runIndexingJob(buildOptions(fixture, { logSink: dead, idSource: () => "job-dead-sink" })),
+      );
+
+      expect(events.some((event) => event.kind === "job-completed")).toBe(true);
+      expect(events.some((event) => event.kind === "document-failed")).toBe(false);
+      // The lost lines are reported once for the sink, not once per line and not never.
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+      fixture.cleanup();
     }
   });
 });

@@ -1,11 +1,27 @@
 import { execFile } from "node:child_process";
 import { lstatSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { PortableLayout } from "./portable-shared.js";
+// GEN-PERF-CLI-001 — server/evidence graphs load at dispatch; module scope stays type-only.
+import { loadServer } from "./lazy-modules.js";
+import type { PortableLayout, PortableTarget } from "./portable-shared.js";
 
 const MAX_ACTIVATION_OUTPUT_BYTES = 1_024;
 
-export type MacosRuntimeActivationFn = (layout: PortableLayout) => Promise<boolean>;
+/**
+ * The launch-time containment decision for a macOS install.
+ *
+ * - `active`: the runtime supervisor confirmed platform containment.
+ * - `waived-unsigned`: the install carries no release signature, so the Endpoint Security
+ *   extension can never load — the platform itself, not the artifact, rules containment out.
+ *   Launch proceeds without it and says so (ADR-0163 D9).
+ * - `unavailable`: a release-signed install could not confirm containment. Launch refuses.
+ */
+export type MacosRuntimeActivation = "active" | "waived-unsigned" | "unavailable";
+
+export type MacosRuntimeActivationFn = (
+  layout: PortableLayout,
+  target: PortableTarget,
+) => Promise<MacosRuntimeActivation>;
 
 interface ActivationManagerResult {
   readonly ok: boolean;
@@ -18,6 +34,24 @@ interface MacosActivationDeps {
     ((path: string, cwd: string) => Promise<ActivationManagerResult>) | undefined;
   /** Ownership seam for tests; production requires an immutable root-owned app path. */
   readonly verifyImmutableOwnership?: ((appRoot: string, manager: string) => boolean) | undefined;
+  /**
+   * Signature-anchor seam for tests; production asks the platform verifier. The anchor must stay
+   * outside the artifact: a probe that reads any file the install can rewrite would let that file
+   * switch off the very activation requirement that detects the rewrite. The probe takes the
+   * RESOURCE root (`Contents/Resources`), the same shape the server's lane-downgrade guard uses —
+   * handing it the bundle path would make it derive the wrong app root, never find signable code,
+   * and silently classify even a release-signed install as unsigned.
+   */
+  readonly carriesReleaseSignature?:
+    ((resourceRoot: string, target: PortableTarget) => boolean | Promise<boolean>) | undefined;
+}
+
+async function platformCarriesReleaseSignature(
+  resourceRoot: string,
+  target: PortableTarget,
+): Promise<boolean> {
+  const { portableInstallCarriesReleaseSignature } = await loadServer();
+  return portableInstallCarriesReleaseSignature(resourceRoot, target);
 }
 
 function activationManagerPath(
@@ -78,16 +112,23 @@ function runActivationManager(path: string, cwd: string): Promise<ActivationMana
 
 export async function activateMacosPortableRuntime(
   layout: PortableLayout,
+  target: PortableTarget,
   deps: MacosActivationDeps = {},
-): Promise<boolean> {
+): Promise<MacosRuntimeActivation> {
+  const carriesReleaseSignature = deps.carriesReleaseSignature ?? platformCarriesReleaseSignature;
   try {
+    // Inside the try on purpose: a rejected probe (or a failed lazy server load) must resolve to
+    // the fail-closed "unavailable", never escape the MacosRuntimeActivation contract as a
+    // rejection.
+    if (!(await carriesReleaseSignature(layout.resourceRoot, target))) return "waived-unsigned";
     const manager = activationManagerPath(
       layout,
       deps.verifyImmutableOwnership ?? immutableRootOwnedActivationPath,
     );
     const result = await (deps.runManager ?? runActivationManager)(manager, layout.installRoot);
-    return result.ok && result.stdout.trim() === "active" && result.stderr === "";
+    const active = result.ok && result.stdout.trim() === "active" && result.stderr === "";
+    return active ? "active" : "unavailable";
   } catch {
-    return false;
+    return "unavailable";
   }
 }

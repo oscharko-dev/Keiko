@@ -41,11 +41,15 @@ code `unsupported-version`; emitting it is the transport's responsibility (#497)
 | **Control / signaling** | Session lifecycle, capability negotiation, provider selection, SDP/ICE signaling, cancellation, transcript lifecycle, policy decisions | Capability-gated loopback WebSocket (`VOICE_REALTIME_CONTROL_TRANSPORT`) | none     |
 | **Media**               | Real-time audio only; optional low-latency `RTCDataChannel` mirroring a control subset                                                 | Native browser WebRTC (DTLS-SRTP)                                        | none     |
 
-**WebSocket is the authoritative control role.** The BFF accepts upgrades only on
-`/api/voice/control`, only from the approved loopback origin, and only when a complete Realtime
-deployment is available. Every other upgrade remains hard-rejected. `loopback-http-sse` stays in the
-transport union for historical records. `VOICE_CONTROL_TRANSPORT_V1` preserves that immutable
-HTTP/SSE baseline; productive sessions use `VOICE_REALTIME_CONTROL_TRANSPORT = "loopback-websocket"`.
+**WebSocket is the authoritative control role.** The BFF accepts upgrades on exactly two
+capability-gated paths, only from the approved loopback origin: `/api/voice/control` (accepted only
+when a complete Realtime deployment is available) and `/api/voice/transcribe/live` (accepted only
+when the live-dictation transcription capability is provisioned). Every other upgrade remains
+hard-rejected. `loopback-http-sse` stays in the transport union for historical records.
+`VOICE_CONTROL_TRANSPORT_V1` preserves that immutable HTTP/SSE baseline; productive sessions use
+`VOICE_REALTIME_CONTROL_TRANSPORT = "loopback-websocket"`. The live-dictation upgrade is a separate,
+capability-gated media-adjacent transcript channel — not a variant of the control plane — governed
+by `VOICE_LIVE_TRANSCRIBE_PATH` in `packages/keiko-server/src/voice-live-dictation.ts`.
 
 **Raw audio is never a control message.** The immutable v1 `VOICE_MEDIA_PLANE` descriptor remains
 decodable, while productive Realtime authority is narrowed by `VOICE_REALTIME_INPUT_MEDIA_PLANE` to
@@ -66,11 +70,24 @@ Every control message shares one envelope:
 | `kind`            | `VoiceControlMessageKind`          | Discriminates the payload.                                            |
 
 `validateVoiceControlMessage` validates this envelope and returns every reason it is malformed;
-`isVoiceControlMessage` is the structural guard. The authority-bearing `session.create` payload is
-also exact-key validated by the shared contract: its sequence is `0`, direction is `client-to-host`,
-profile and negotiation mode agree, and `chatContext` may contain only `chatId`. Removed persona,
-memory, grounding, or arbitrary fields fail closed before session allocation. Other per-kind payloads
-remain owned by their transport implementation (#497).
+`isVoiceControlMessage` is the structural guard. Every payload for every catalog kind (KEIKO-0392) is
+then centrally, exact-key validated by the shared contract — not only the envelope and
+`session.create`: each kind accepts only its declared fields plus the envelope (an unrecognized
+property fails closed the same way a wrong-typed one does), and every required field is checked
+against its declared type or enum. The authority-bearing `session.create` payload keeps its stricter,
+additional rules on top of that: its sequence is `0`, direction is `client-to-host`, profile and
+negotiation mode agree, and `chatContext` may contain only `chatId` — removed persona, memory,
+grounding, or arbitrary fields fail closed before session allocation.
+
+The free-text signaling and transcript fields are additionally length-bounded (this contract assumes
+hostile input at the wire boundary): `sdp` <= 256,000 UTF-16 code units (`signal.sdp.offer` /
+`signal.sdp.answer`), `candidate` <= 4096 (`signal.ice.candidate`), its optional `sdpMid` <= 128, and
+`text` <= 8192 (`transcript.partial` / `transcript.committed`). None of these bounds narrows anything
+a downstream route already enforces — `.length` (UTF-16 code units) is always <= the UTF-8 byte length
+a transport route's own byte-based cap checks, and `keiko-server` independently re-validates `sdp`
+more strictly still (SDP prefix and exact audio direction) after this decoder accepts it. A peer
+implemented strictly against this document's declared shapes and bounds is therefore always accepted;
+only a shape or length this document does not declare is newly rejected.
 
 ## 4. Control / signaling message catalog (Deliverable: WS control & signaling event schemas)
 
@@ -257,9 +274,11 @@ the contract:
   local. The honest limitation that no positive destination host allowlist exists yet (ADR-0100 D4) is
   unchanged by this protocol.
 - **Controls remain narrow.** Issue #497 re-opened only the capability-gated loopback
-  `/api/voice/control` upgrade and scoped microphone permission to self. Any browser-direct credential,
-  custom STUN/TURN relay, or wider origin/permission posture remains a future explicit decision under the
-  security gate (ADR-0100 D6, privacy-contract §4).
+  `/api/voice/control` upgrade and scoped microphone permission to self. A separate capability-gated
+  `/api/voice/transcribe/live` upgrade was subsequently added for the live-dictation transcript
+  channel and is bounded by the same loopback-origin and hard-reject-by-default posture. Any
+  browser-direct credential, custom STUN/TURN relay, or wider origin/permission posture remains a
+  future explicit decision under the security gate (ADR-0100 D6, privacy-contract §4).
 
 ## 11. No new runtime media packages (AC4)
 

@@ -1,8 +1,22 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
+
+vi.mock("./lazy-modules.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./lazy-modules.js")>();
+  return {
+    ...actual,
+    loadServer: (): Promise<{
+      createFileServerLogSink: () => { write: () => void };
+    }> =>
+      Promise.resolve({
+        createFileServerLogSink: () => ({ write: (): void => undefined }),
+      }),
+  };
+});
+
 import { runCli, type CliIo } from "./runner.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -95,6 +109,7 @@ describe("runCli", () => {
     expect(c.out()).toContain("keiko init");
     expect(c.out()).toContain("keiko doctor");
     expect(c.out()).toContain("keiko start|stop|status|restart");
+    expect(c.out()).toContain("keiko task-workspace");
   });
 
   it("dispatches the doctor subcommand", () => {
@@ -102,6 +117,34 @@ describe("runCli", () => {
     const code = runCli(["doctor"], c.io);
     expect(code).toBe(0);
     expect(c.out()).toContain("Keiko doctor");
+  });
+
+  // KEIKO-0230: the local-state audit was reachable only through `npm run audit:local-state`, which
+  // needs the monorepo. The audience with a ~/.keiko tree to audit is exactly the audience without
+  // it, so the compensating control the at-rest contract names was unreachable by everyone who
+  // needed it. These pin the dispatch entry and the help line that make it reachable.
+  it("lists the audit subcommand in help (KEIKO-0230)", () => {
+    const c = makeIo();
+    const code = runCli(["--help"], c.io);
+    expect(code).toBe(0);
+    expect(c.out()).toContain("keiko audit local-state");
+  });
+
+  it("dispatches audit local-state and fails closed when the auditor is not installed", async () => {
+    const c = makeIo();
+    // No KEIKO_LOCAL_STATE_AUDITOR: a packaged install always sets it from the bin entry, so its
+    // absence means the auditor is genuinely missing. It must say so and exit non-zero rather than
+    // print nothing and return 0 — a silent skip reads as "audited, nothing wrong".
+    const code = await runCli(["audit", "local-state"], c.io, {});
+    expect(code).toBe(1);
+    expect(c.err()).toContain("KEIKO_LOCAL_STATE_AUDITOR");
+  });
+
+  it("rejects an unknown audit subcommand with a usage error", async () => {
+    const c = makeIo();
+    const code = await runCli(["audit", "everything"], c.io, {});
+    expect(code).toBe(2);
+    expect(c.err()).toContain("keiko audit local-state");
   });
 
   it("lists the launcher subcommand in help (epic #121 child #125)", () => {
@@ -134,6 +177,11 @@ describe("runCli", () => {
     ["verify", ["--help"], "keiko verify"],
     ["evaluate", ["--suite", "definitely-not-a-suite"], "unknown suite"],
     ["memory", [], "Usage:"],
+    // Both handlers are wrapped in a closure in COMMAND_HANDLERS (they thread `env`/build extra
+    // deps rather than being registered directly), so calling `runPromptEnhancerCli`/
+    // `runSupportCli` straight from their own test files never exercises the wrapper itself.
+    ["prompt-enhancer", ["--help"], "keiko prompt-enhancer"],
+    ["support", ["--help"], "keiko support"],
   ] as const)("dispatches %s through the top-level command table", async (_name, rest, marker) => {
     const c = makeIo();
     const code = await runCli([_name, ...rest], c.io);
@@ -170,4 +218,21 @@ describe("runCli", () => {
     expect(c.err().length).toBeGreaterThan(0);
     expect(c.out()).toBe("");
   });
+
+  // Regression pin (KEIKO-0434): the command dispatch table indexed a prototype-bearing object
+  // with unvalidated argv, so `keiko toString`, `constructor`, `hasOwnProperty`, `valueOf`, and
+  // `__proto__` each resolved to an inherited function whose return value became the process exit
+  // code — `process.exit("[object Object]")` then threw ERR_INVALID_ARG_TYPE and the CLI crashed
+  // instead of reporting `unknown command`. The table must expose no prototype-chain lookup surface.
+  it.each(["toString", "valueOf", "constructor", "hasOwnProperty", "__proto__"])(
+    "rejects Object.prototype keys as unknown commands (%s)",
+    (name) => {
+      const c = makeIo();
+      const result = runCli([name], c.io);
+      expect(result).toBe(2);
+      expect(c.err()).toContain(`unknown command: ${name}`);
+      expect(c.err()).toContain("keiko --help");
+      expect(c.out()).toBe("");
+    },
+  );
 });

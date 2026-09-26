@@ -9,6 +9,7 @@
  */
 import { registerKeikoEditorTheme, resolveEditorThemeTokensFromDom } from "../index.js";
 import type { EditorThemeVariant, MonacoThemeRegistrar } from "../monaco/theme.js";
+import { runtimeFailureNotice } from "./runtime-notice.js";
 
 /** Minimal `monaco` namespace surface the diff mount needs (the live `onMount` second arg). */
 export interface MountDiffMonaco {
@@ -46,8 +47,7 @@ function registerTheme(args: WireDiffEditorOnMountArgs): void {
     const tokens = resolveEditorThemeTokensFromDom(args.editor.getContainerDomNode());
     registerKeikoEditorTheme(args.monaco.editor, args.themeVariant, tokens);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Diff theme registration failed";
-    args.onThemeError?.(message);
+    args.onThemeError?.(runtimeFailureNotice("diff-theme-registration-failed", error));
   }
 }
 

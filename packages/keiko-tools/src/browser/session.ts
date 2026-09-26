@@ -30,17 +30,17 @@ import type {
   BrowserViewportPx,
   CdpReachability,
 } from "./types.js";
-import {
-  EVIDENCE_SCHEMA_VERSION,
-  HARNESS_VERSION,
-  type CostClass,
-  type EvidenceBrowserContentCapture,
-  type EvidenceBrowserEvent,
-  type EvidenceBrowserScreenshot,
-  type EvidenceManifest,
-  type EvidenceStore,
-  type SideFileWriteResult,
+import type {
+  CostClass,
+  EvidenceBrowserContentCapture,
+  EvidenceBrowserEvent,
+  EvidenceBrowserScreenshot,
+  EvidenceManifest,
+  EvidenceStore,
+  SideFileWriteResult,
 } from "@oscharko-dev/keiko-contracts";
+import { EVIDENCE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/evidence";
+import { HARNESS_VERSION } from "@oscharko-dev/keiko-contracts/runtime/harness";
 
 const MAX_SESSIONS = 4;
 const SESSION_IDLE_TTL_MS = 30 * 60 * 1000;

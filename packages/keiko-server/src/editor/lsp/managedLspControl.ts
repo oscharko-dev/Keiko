@@ -1,30 +1,36 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
+import type {
+  ManagedLspActivationResolution,
+  ManagedLspActivationStatus,
+  ManagedLspConfigurationSummary,
+  ManagedLspControlDeniedResult,
+  ManagedLspControlMutation,
+  ManagedLspControlResult,
+  ManagedLspControlSnapshot,
+  ManagedLspControlSuccessResult,
+  ManagedLspEvidence,
+  ManagedLspEvidenceAction,
+  ManagedLspEvidenceOutcome,
+  ManagedLspLanguage,
+  ManagedLspRestartField,
+  ManagedLspRuntimeConfiguration,
+  WorkspaceTrustLevel,
+} from "@oscharko-dev/keiko-contracts";
 import {
   MANAGED_LSP_ACTIVATION_SCHEMA_VERSION,
-  MANAGED_LSP_EVIDENCE_SCHEMA_VERSION,
   MANAGED_LSP_LANGUAGES,
+} from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-activation";
+import { MANAGED_LSP_EVIDENCE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-evidence";
+import {
   parseManagedLspControlRequest,
   parseManagedLspRevisionEtag,
+} from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-route";
+import {
   parseManagedLspRuntimeConfiguration,
   matchesManagedLspConfigurationPrecondition,
-  type ManagedLspActivationResolution,
-  type ManagedLspActivationStatus,
-  type ManagedLspConfigurationSummary,
-  type ManagedLspControlDeniedResult,
-  type ManagedLspControlMutation,
-  type ManagedLspControlResult,
-  type ManagedLspControlSnapshot,
-  type ManagedLspControlSuccessResult,
-  type ManagedLspEvidence,
-  type ManagedLspEvidenceAction,
-  type ManagedLspEvidenceOutcome,
-  type ManagedLspLanguage,
-  type ManagedLspRestartField,
-  type ManagedLspRuntimeConfiguration,
-  type WorkspaceTrustLevel,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-runtime";
 
 import type { WorkspaceMutexRegistry } from "../../task-workspace/mutex.js";
 import type { ManagedLspEvidenceProjector } from "./managedLspEvidenceProjector.js";

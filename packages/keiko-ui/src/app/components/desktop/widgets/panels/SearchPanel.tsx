@@ -12,18 +12,20 @@ import {
   type RefObject,
   type SetStateAction,
 } from "react";
+import type {
+  WorkspaceReplaceApplyConflict,
+  WorkspaceReplaceApplyFile,
+  WorkspaceReplacePreviewFileEdit,
+  WorkspaceReplacePreviewResponse,
+  WorkspaceSearchMode,
+  WorkspaceSearchRequest,
+  WorkspaceSearchResponse,
+  WorkspaceSymbolSearchResponse,
+} from "@oscharko-dev/keiko-contracts";
 import {
   WORKSPACE_REPLACE_MAX_FILES,
   WORKSPACE_SEARCH_MAX_RESULTS,
-  type WorkspaceReplaceApplyConflict,
-  type WorkspaceReplaceApplyFile,
-  type WorkspaceReplacePreviewFileEdit,
-  type WorkspaceReplacePreviewResponse,
-  type WorkspaceSearchMode,
-  type WorkspaceSearchRequest,
-  type WorkspaceSearchResponse,
-  type WorkspaceSymbolSearchResponse,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-search";
 import type { PatchPreviewModel, PatchPreviewSource } from "@oscharko-dev/keiko-editor";
 import {
   applyWorkspaceReplace,
@@ -394,10 +396,20 @@ function replaceSummary(
           count: response.omittedFileCount,
         })
       : "";
+  // #2906 round-3 review: response.truncated can be true with omittedFileCount === 0 -- the
+  // upstream search hit its own bound (e.g. "match-cap" mid-file; see
+  // WorkspaceReplacePreviewResponse.searchTruncationReasons's doc comment) without this preview's
+  // own maxFiles cap dropping a file. Surface that incompleteness too, so the summary the user
+  // reads before applying never reads as complete when search did not scan every match. Gated on
+  // omittedFileCount === 0 so the two suffixes never both fire for the same cause.
+  const searchLimited =
+    response.truncated && response.omittedFileCount === 0
+      ? t("searchPanel.replace.searchLimitSuffix")
+      : "";
   return t("searchPanel.replace.summary", {
     editCount: response.editCount,
     fileCount: response.fileCount,
-    omitted,
+    omitted: `${omitted}${searchLimited}`,
   });
 }
 

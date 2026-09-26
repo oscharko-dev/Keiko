@@ -7,7 +7,7 @@
 // (SC3); and the safelyRemoveManagedPath choke point refuses every out-of-root / symlink-escape /
 // unowned / non-leaf target (SC1). No generic git runner; the single governed spawn boundary throughout.
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
@@ -19,9 +19,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { createNodeGitWorktreeAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type {
   GitWorktreeAdapter,
   WorktreeOperationResult,
@@ -43,8 +44,36 @@ import { MANAGED_ROOT_MARKER_FILENAME } from "./naming.js";
 import { createWorkspaceProvisioningService } from "./provisioning.js";
 import { createWorkspaceCleanupService, safelyRemoveManagedPath } from "./cleanup.js";
 import { TaskWorkspaceError } from "./errors.js";
+import { assertManagedRootOwned } from "./managed-root.js";
 import type { WorkspaceCleanupService, WorkspaceProvisioningService } from "./types.js";
 import { createWorkspaceMutexRegistry } from "./mutex.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+  type ServerLogEvent,
+  type ServerLogSink,
+} from "../observability/index.js";
+import {
+  inspectManagedGitdirIdentity,
+  inspectManagedGitdirIdentityOutcome,
+} from "./gitdir-identity.js";
+
+// A volume without creation times, or an I/O failure inside the proof, cannot be produced on a real
+// filesystem from a test, so the one identity classifier is wrapped (never replaced) and answers a
+// queued outcome exactly once where a pin needs it; every other call reaches the real proof.
+vi.mock("./gitdir-identity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./gitdir-identity.js")>();
+  return {
+    ...actual,
+    inspectManagedGitdirIdentityOutcome: vi.fn(actual.inspectManagedGitdirIdentityOutcome),
+  };
+});
+
+// A queued classifier outcome must never leak into the next test.
+afterEach(() => {
+  vi.mocked(inspectManagedGitdirIdentityOutcome).mockReset();
+});
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -59,12 +88,34 @@ let evidence: { id: string; json: string }[];
 let idCounter: number;
 let nowMs: number;
 
+type AdapterFactory = (
+  workspace: WorkspaceInfo,
+  correlationId: string,
+  fs?: WorkspaceFs,
+) => GitWorktreeAdapter;
+
 function git(args: readonly string[], cwd = repoRoot): string {
   return execFileSync("git", [...args], { cwd, encoding: "utf8" });
 }
 
 function parseEvent(json: string): { operation?: string; outcome?: string } {
   return JSON.parse(json) as { operation?: string; outcome?: string };
+}
+
+// Single narrowing point for a captured activity-log line, so a chain of `expect(line?.field)`
+// assertions (each `?.` its own branch to ESLint's `complexity` rule) does not push an otherwise
+// linear assertion test over the repo's complexity ceiling (AGENTS.md §6).
+function lastActivityLogEvent(sink: BufferedServerLogSink): ServerLogEvent {
+  const line = sink.events.at(-1);
+  if (line === undefined) throw new Error("no activity-log event recorded");
+  return line;
+}
+
+function lastEventCorrelationId(): string {
+  const last = evidence.at(-1);
+  if (last === undefined) throw new Error("no evidence recorded");
+  const parsed = JSON.parse(last.json) as { readonly event: { readonly correlationId: string } };
+  return parsed.event.correlationId;
 }
 
 function capturingEvidence(): EvidenceStore {
@@ -79,8 +130,35 @@ function capturingEvidence(): EvidenceStore {
   };
 }
 
-function realAdapter(workspace: WorkspaceInfo): GitWorktreeAdapter {
-  return createNodeGitWorktreeAdapter({ workspace, processEnv: { PATH: process.env.PATH ?? "" } });
+function realAdapter(
+  workspace: WorkspaceInfo,
+  _correlationId?: string,
+  fs?: WorkspaceFs,
+): GitWorktreeAdapter {
+  return createNodeGitWorktreeAdapter({
+    workspace,
+    processEnv: { PATH: process.env.PATH ?? "" },
+    ...(fs === undefined ? {} : { fs }),
+  });
+}
+
+function capturingAdapterFactory(received: string[]): AdapterFactory {
+  return (workspace, correlationId, fs): GitWorktreeAdapter => {
+    received.push(correlationId);
+    return realAdapter(workspace, correlationId, fs);
+  };
+}
+
+function rejectingAdapterFactory(received: string[]): AdapterFactory {
+  return (_workspace, correlationId): GitWorktreeAdapter => {
+    received.push(correlationId);
+    throw new Error("captured adapter correlation");
+  };
+}
+
+function expectOnlyAdapterCorrelation(received: readonly string[], expected: string): void {
+  expect(received.length).toBeGreaterThan(0);
+  expect(new Set(received)).toEqual(new Set([expected]));
 }
 
 function provisioning(): WorkspaceProvisioningService {
@@ -98,8 +176,9 @@ function provisioning(): WorkspaceProvisioningService {
 
 function cleanup(
   instanceStore: WorkspaceInstanceStore = store,
-  adapterFactory: (workspace: WorkspaceInfo) => GitWorktreeAdapter = realAdapter,
+  adapterFactory: AdapterFactory = realAdapter,
   removeManagedWorkspaceIdentity?: (instance: WorkspaceInstance) => void,
+  activityLog?: ServerLogSink,
 ): WorkspaceCleanupService {
   return createWorkspaceCleanupService({
     store: instanceStore,
@@ -112,6 +191,7 @@ function cleanup(
     newId: (): string => `id-${String(idCounter++)}`,
     ...(removeManagedWorkspaceIdentity === undefined ? {} : { removeManagedWorkspaceIdentity }),
     mutex: __twMutex,
+    ...(activityLog === undefined ? {} : { activityLog }),
   });
 }
 
@@ -188,6 +268,29 @@ afterEach(() => {
 });
 
 describe("governed cleanup happy path (AC4)", () => {
+  it("completes cleanup for an exact registered workspace below the denied state directory", async () => {
+    managedRoot = join(dirname(managedRoot), ".keiko", "task-workspaces");
+    const instance = await provisionTask("t-owned-denied-root");
+    setState(instance, "archived");
+    await cleanup().cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "request",
+    });
+
+    const completed = await cleanup().cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+    });
+
+    expect(completed.outcome).toBe("completed");
+    expect(existsSync(instance.managedWorktreePath)).toBe(false);
+    expect(store.getById(instance.workspaceId)).toBeUndefined();
+  });
+
   it("request → complete removes the worktree, deletes the row, and clears the active pointer", async () => {
     const instance = await provisionTask("t-archive");
     const removedIdentities: WorkspaceInstance[] = [];
@@ -208,7 +311,8 @@ describe("governed cleanup happy path (AC4)", () => {
     expect(requested.outcome).toBe("requested");
     expect(store.getById(instance.workspaceId)?.lifecycleState).toBe("cleanup-pending");
 
-    const completed = await cleanup(undefined, undefined, (removed) => {
+    const received: string[] = [];
+    const completed = await cleanup(undefined, capturingAdapterFactory(received), (removed) => {
       removedIdentities.push(removed);
     }).cleanup({
       workspaceId: instance.workspaceId,
@@ -216,6 +320,7 @@ describe("governed cleanup happy path (AC4)", () => {
       operatorApproved: true,
       mode: "complete",
     });
+    expectOnlyAdapterCorrelation(received, UNKNOWN_CORRELATION_ID);
     expect(completed.outcome).toBe("completed");
     expect(existsSync(instance.managedWorktreePath)).toBe(false);
     expect(store.getById(instance.workspaceId)).toBeUndefined();
@@ -233,6 +338,165 @@ describe("governed cleanup happy path (AC4)", () => {
       expect(e.json).not.toContain(managedRoot);
       expect(e.json).not.toContain(repoRoot);
     }
+  });
+
+  // F1: the evidence's correlationId must be the triggering request's own id, not the workspace's own
+  // persisted auditCorrelationId reused for every operation across the workspace's whole life — reuse
+  // would make every distinct HTTP request's evidence collapse onto ONE correlationId, breaking the
+  // join back to the specific request that produced each line (AGENTS.md §8).
+  it("threads the request's own correlationId into cleanup evidence, not the auditCorrelationId", async () => {
+    const instance = await provisionTask("t-corr");
+    setState(instance, "archived");
+    await cleanup().cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "request",
+      correlationId: "req-corr-cleanup-1",
+    });
+    expect(lastEventCorrelationId()).toBe("req-corr-cleanup-1");
+    expect(lastEventCorrelationId()).not.toBe(instance.auditCorrelationId);
+  });
+
+  it("falls back to UNKNOWN_CORRELATION_ID (never the auditCorrelationId) when no request scope exists", async () => {
+    const instance = await provisionTask("t-nocorr");
+    setState(instance, "archived");
+    await cleanup().cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "request",
+    });
+    expect(lastEventCorrelationId()).toBe(UNKNOWN_CORRELATION_ID);
+    expect(lastEventCorrelationId()).not.toBe(instance.auditCorrelationId);
+  });
+
+  describe("adapter correlation-ID boundary", () => {
+    it.each([
+      ["empty", ""],
+      ["malformed", "req corr\ncontrol"],
+      ["hostile", `req-corr-${"a".repeat(4000)}`],
+      ["below the HTTP boundary", "x"],
+    ] as const)(
+      "normalizes a supplied %s ID before adapter construction",
+      async (_label, input) => {
+        const received: string[] = [];
+        const instance = await provisionTask(`t-adapter-${_label.replaceAll(" ", "-")}`);
+        setState(instance, "cleanup-pending");
+        await expect(
+          cleanup(store, rejectingAdapterFactory(received)).cleanup({
+            workspaceId: instance.workspaceId,
+            requestedBy: "u",
+            operatorApproved: true,
+            mode: "complete",
+            correlationId: input,
+          }),
+        ).rejects.toThrow("captured adapter correlation");
+        expectOnlyAdapterCorrelation(received, UNKNOWN_CORRELATION_ID);
+      },
+    );
+  });
+
+  // IDX51: the same normalization that protects adapter termination evidence also protects lifecycle
+  // evidence. A supplied value outside SAFE_CORRELATION_ID joins the explicit omitted-id fallback.
+  describe("correlation-ID normalization", () => {
+    it.each([
+      ["empty", ""],
+      ["malformed", "req corr\ncontrol"],
+      ["hostile", `req-corr-${"a".repeat(4000)}`],
+      ["below the HTTP boundary", "x"],
+    ] as const)("normalizes a supplied %s ID in lifecycle evidence", async (_label, input) => {
+      const instance = await provisionTask(`t-corr-${_label.replaceAll(" ", "-")}`);
+      setState(instance, "archived");
+      await cleanup().cleanup({
+        workspaceId: instance.workspaceId,
+        requestedBy: "u",
+        operatorApproved: true,
+        mode: "request",
+        correlationId: input,
+      });
+      expect(lastEventCorrelationId()).toBe(UNKNOWN_CORRELATION_ID);
+    });
+  });
+
+  // IDX61: the EvidenceStore ledger above is a SEPARATE audit surface from `<stateDir>/logs/
+  // server.log` — this proves the SAME cleanup outcome also reaches the server activity log
+  // (AGENTS.md §8), carrying the SAME correlationId the evidence assertions above just proved. A
+  // refusal (a first-class SUCCESSFUL safety outcome, never thrown — SC4) still carries a structured
+  // `errorKind`, its own `WorkspaceCleanupRefusalReason`, so an agent can tell WHY without opening
+  // the evidence ledger.
+  it("emits a task-workspace.lifecycle activity-log line alongside the evidence, same correlationId", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const received: string[] = [];
+    const instance = await provisionTask("t-activity-log");
+    setState(instance, "archived");
+    const service = cleanup(store, capturingAdapterFactory(received), undefined, activityLog);
+    await service.cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "request",
+      correlationId: "req-corr-cleanup-activity-1",
+    });
+    await service.cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+      correlationId: "req-corr-cleanup-activity-1",
+    });
+    expectOnlyAdapterCorrelation(received, "req-corr-cleanup-activity-1");
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.category).toBe("diagnostic");
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.correlationId).toBe("req-corr-cleanup-activity-1");
+    expect(line.level).toBe("info");
+    expect(line.errorKind).toBeUndefined();
+    const extra = line.extra ?? {};
+    expect(extra.operation).toBe("cleanup");
+    expect(extra.outcome).toBe("cleanup-completed");
+    expect(extra.workspaceId).toBe(instance.workspaceId);
+  });
+
+  it("classifies a refused cleanup and preserves its exact refusal reason", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const instance = await provisionTask("t-activity-log-refused");
+    writeFileSync(join(instance.managedWorktreePath, "wip.txt"), "uncommitted\n");
+    setState(instance, "cleanup-pending");
+    await cleanup(store, realAdapter, undefined, activityLog).cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+    });
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.level).toBe("warn");
+    expect(line.errorKind).toBe("conflict");
+    expect(line.extra?.failureKind).toBe("worktree-dirty");
+    expect(line.extra?.outcome).toBe("cleanup-refused");
+  });
+
+  it("logs a closed, correlated rejection when cleanup approval is missing", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const instance = await provisionTask("t-activity-log-rejection");
+    setState(instance, "archived");
+    await expect(
+      cleanup(store, realAdapter, undefined, activityLog).cleanup({
+        workspaceId: instance.workspaceId,
+        requestedBy: "u",
+        operatorApproved: false,
+        mode: "request",
+        correlationId: "req-corr-cleanup-rejection-1",
+      }),
+    ).rejects.toMatchObject({ code: "OPERATOR_APPROVAL_REQUIRED" });
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.correlationId).toBe("req-corr-cleanup-rejection-1");
+    expect(line.errorKind).toBe("authority-denied");
+    expect(line.extra?.failureKind).toBe("OPERATOR_APPROVAL_REQUIRED");
+    expect(line.extra?.operation).toBe("cleanup");
+    expect(line.extra?.workspaceIdentity).toMatch(/^wsref_[0-9a-f]{24}$/u);
   });
 
   it("is idempotent on a second request (already cleanup-pending)", async () => {
@@ -340,7 +604,10 @@ describe("cleanup safety refusals (SC4 — refusal is a successful outcome, neve
       mode: "complete",
     });
     expect(result.outcome).toBe("refused");
-    expect(result.refusalReason).toBe("worktree-dirty");
+    // A corrupt pointer is a DISPROVEN registration, not a migration: the row is refused because Keiko
+    // cannot vouch for the tree at all (ownership-unproven), never probed on the orphan path — and the
+    // uncommitted work stays exactly where it is (#3376 review).
+    expect(result.refusalReason).toBe("ownership-unproven");
     expect(existsSync(join(instance.managedWorktreePath, "wip.txt"))).toBe(true);
     expect(store.getById(instance.workspaceId)).toBeDefined();
   });
@@ -413,6 +680,7 @@ describe("cleanup safety refusals (SC4 — refusal is a successful outcome, neve
   });
 
   it("refuses when the managed-root ownership marker is absent (ownership-unproven)", async () => {
+    managedRoot = join(dirname(managedRoot), ".keiko", "task-workspaces");
     const instance = await provisionTask("t-unowned");
     setState(instance, "cleanup-pending");
     rmSync(join(managedRoot, MANAGED_ROOT_MARKER_FILENAME));
@@ -444,6 +712,264 @@ describe("cleanup safety refusals (SC4 — refusal is a successful outcome, neve
     expect(result.outcome).toBe("refused");
     expect(result.refusalReason).toBe("path-escape");
     expect(existsSync(join(escapeTarget, "keep.txt"))).toBe(true);
+  });
+});
+
+// A terminal row whose managed identity can no longer be re-proven — registered under the retired
+// inode-only schema here; a replaced tree or a volume without creation times deny the same way —
+// is still Keiko's to remove: it is contained, the managed root is owned, the operator approved.
+// Converting the identity denial into "dirty" refused it forever without ever running `git status`
+// (#3376 review P1). The probe now falls back to the orphan-style contained path and the denial is
+// evidence on the activity log under the cleanup's own correlation, not a verdict.
+describe("identity-denied terminal rows stay removable (#3376 review P1)", () => {
+  function retireIdentity(instance: WorkspaceInstance): WorkspaceInstance {
+    const inspection = inspectManagedGitdirIdentity(instance.managedWorktreePath, repoRoot);
+    if (inspection === undefined) throw new Error("real linked-worktree identity was not resolved");
+    return setState(instance, "cleanup-pending", { gitdirIdentity: inspection.legacyIdentity });
+  }
+
+  it("removes a clean retired-schema row and logs the denial under the cleanup's correlation", async () => {
+    const instance = retireIdentity(await provisionTask("t-retired-clean"));
+    const activityLog = createBufferedServerLogSink();
+
+    const result = await cleanup(store, realAdapter, undefined, activityLog).cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+      correlationId: "cleanup-retired-0001",
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(existsSync(instance.managedWorktreePath)).toBe(false);
+    expect(store.getById(instance.workspaceId)).toBeUndefined();
+    const denials = activityLog.events.filter((event) => event.op === "workspace.root.denied");
+    expect(denials).toHaveLength(1);
+    expect(denials[0]).toMatchObject({
+      correlationId: "cleanup-retired-0001",
+      extra: { decision: "denied", reason: "managed-root-identity-schema-retired" },
+    });
+    expect(JSON.stringify(denials[0])).not.toContain(managedRoot);
+  });
+
+  it("refuses a DIRTY retired-schema row on a real Git status, not on the denial", async () => {
+    const instance = retireIdentity(await provisionTask("t-retired-dirty"));
+    writeFileSync(join(instance.managedWorktreePath, "wip.txt"), "uncommitted\n");
+
+    const result = await cleanup().cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+    });
+
+    expect(result.outcome).toBe("refused");
+    expect(result.refusalReason).toBe("worktree-dirty");
+    expect(existsSync(join(instance.managedWorktreePath, "wip.txt"))).toBe(true);
+    expect(store.getById(instance.workspaceId)).toBeDefined();
+  });
+});
+
+// A proof that could not run is not a denial: a destructive operation fails closed on the classified,
+// retryable IDENTITY_PROOF_FAILED instead of proceeding on the orphan path or reporting "dirty"
+// (Cursor review on f50133b95).
+describe("identity proof failure fails cleanup closed", () => {
+  it("rejects with IDENTITY_PROOF_FAILED and leaves the row and directory untouched", async () => {
+    const instance = await provisionTask("t-proof-failed");
+    setState(instance, "cleanup-pending");
+    vi.mocked(inspectManagedGitdirIdentityOutcome).mockReturnValueOnce({
+      kind: "failed",
+      cause: new Error("EIO: input/output error"),
+    });
+
+    await expect(
+      cleanup().cleanup({
+        workspaceId: instance.workspaceId,
+        requestedBy: "u",
+        operatorApproved: true,
+        mode: "complete",
+      }),
+    ).rejects.toMatchObject({ code: "IDENTITY_PROOF_FAILED" });
+
+    expect(existsSync(instance.managedWorktreePath)).toBe(true);
+    expect(store.getById(instance.workspaceId)?.lifecycleState).toBe("cleanup-pending");
+  });
+});
+
+// The gap between the safety gate's clean verdict and the removal is closed by git itself: the
+// removal is never forced, so a file written into the tree after the gate makes git refuse, and
+// the refusal is a `worktree-dirty` outcome with the tree untouched (#3376 review).
+describe("removal re-checks cleanliness through git, never --force", () => {
+  it("refuses a worktree that turned dirty after the safety gate and keeps the file", async () => {
+    const instance = await provisionTask("t-late-dirty");
+    setState(instance, "cleanup-pending");
+    const lateFile = join(instance.managedWorktreePath, "late.txt");
+    const racing: AdapterFactory = (workspace, correlationId, fs) => {
+      const real = realAdapter(workspace, correlationId, fs);
+      return {
+        ...real,
+        removeWorktree: (operands): Promise<WorktreeOperationResult> => {
+          // Written after the gate proved the tree clean, before git removes it.
+          writeFileSync(lateFile, "written after the safety gate\n");
+          expect(operands.force).toBe(false);
+          return real.removeWorktree(operands);
+        },
+      };
+    };
+
+    const result = await cleanup(store, racing).cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+    });
+
+    expect(result.outcome).toBe("refused");
+    expect(result.refusalReason).toBe("worktree-dirty");
+    expect(existsSync(lateFile)).toBe(true);
+    expect(store.getById(instance.workspaceId)).toBeDefined();
+  });
+
+  // A tree that survives a SUCCESSFUL removal is not ours to delete on the unproven fallback: another
+  // actor may have recreated a clean worktree at the path between git's removal and the fallback,
+  // and ownership of the replacement can no longer be proven (#3376 review).
+  it("refuses to delete a replacement recreated after git removed the worktree", async () => {
+    const instance = await provisionTask("t-replaced-after-removal");
+    setState(instance, "cleanup-pending");
+    const replacementPointer = join(instance.managedWorktreePath, ".git");
+    const racing: AdapterFactory = (workspace, correlationId, fs) => {
+      const real = realAdapter(workspace, correlationId, fs);
+      return {
+        ...real,
+        removeWorktree: async (operands): Promise<WorktreeOperationResult> => {
+          const removal = await real.removeWorktree(operands);
+          expect(removal.ok).toBe(true);
+          expect(existsSync(operands.worktreePath)).toBe(false);
+          // Recreated by another actor before the fallback looks at the path: a CLEAN git worktree
+          // on the task branch, which a status probe alone would wave through.
+          git(["worktree", "add", operands.worktreePath, instance.taskBranch]);
+          expect(existsSync(replacementPointer)).toBe(true);
+          return removal;
+        },
+      };
+    };
+
+    const result = await cleanup(store, racing).cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+    });
+
+    expect(result.outcome).toBe("refused");
+    expect(result.refusalReason).toBe("ownership-unproven");
+    expect(existsSync(replacementPointer)).toBe(true);
+    expect(store.getById(instance.workspaceId)).toBeDefined();
+  });
+
+  // A nonzero git exit with the directory already gone is not a completed cleanup by itself: the
+  // row may only be deleted once git no longer lists the worktree, or partial admin metadata that
+  // prune could not clear would be orphaned behind a deleted row (#3376 review).
+  it("completes a nonzero removal only when git no longer lists the worktree", async () => {
+    const instance = await provisionTask("t-nonzero-removed");
+    setState(instance, "cleanup-pending");
+    const nonzeroAfterRemoval: AdapterFactory = (workspace, correlationId, fs) => {
+      const real = realAdapter(workspace, correlationId, fs);
+      return {
+        ...real,
+        removeWorktree: async (operands): Promise<WorktreeOperationResult> => {
+          const removal = await real.removeWorktree(operands);
+          expect(existsSync(operands.worktreePath)).toBe(false);
+          // The directory and the registration are gone; git still reported a failure.
+          return { ...removal, ok: false, exitCode: 1 };
+        },
+      };
+    };
+
+    const result = await cleanup(store, nonzeroAfterRemoval).cleanup({
+      workspaceId: instance.workspaceId,
+      requestedBy: "u",
+      operatorApproved: true,
+      mode: "complete",
+    });
+
+    expect(result.outcome).toBe("completed");
+    expect(store.getById(instance.workspaceId)).toBeUndefined();
+    expect(git(["worktree", "list", "--porcelain"])).not.toContain(instance.managedWorktreePath);
+  });
+
+  it("keeps the row when git exits nonzero and still lists the worktree after prune", async () => {
+    const instance = await provisionTask("t-nonzero-registered");
+    setState(instance, "cleanup-pending");
+    const registrationKept: AdapterFactory = (workspace, correlationId, fs) => {
+      const real = realAdapter(workspace, correlationId, fs);
+      return {
+        ...real,
+        removeWorktree: (operands): Promise<WorktreeOperationResult> => {
+          // A locked entry survives `git worktree prune`; the directory vanished regardless.
+          git(["worktree", "lock", operands.worktreePath]);
+          rmSync(operands.worktreePath, { recursive: true, force: true });
+          return Promise.resolve({
+            ok: false,
+            exitCode: 128,
+            durationMs: 0,
+            timedOut: false,
+            truncated: false,
+          });
+        },
+      };
+    };
+
+    await expect(
+      cleanup(store, registrationKept).cleanup({
+        workspaceId: instance.workspaceId,
+        requestedBy: "u",
+        operatorApproved: true,
+        mode: "complete",
+      }),
+    ).rejects.toMatchObject({ code: "CLEANUP_FAILED" });
+
+    expect(store.getById(instance.workspaceId)).toMatchObject({
+      lifecycleState: "cleanup-pending",
+    });
+    expect(git(["worktree", "list", "--porcelain"])).toContain(instance.managedWorktreePath);
+    expect(evidence.some((entry) => parseEvent(entry.json).outcome === "cleanup-completed")).toBe(
+      false,
+    );
+  });
+
+  it("keeps the row when git exits nonzero and the worktree listing itself fails", async () => {
+    const instance = await provisionTask("t-nonzero-list-failed");
+    setState(instance, "cleanup-pending");
+    const listingFails: AdapterFactory = (workspace, correlationId, fs) => {
+      const real = realAdapter(workspace, correlationId, fs);
+      return {
+        ...real,
+        removeWorktree: async (operands): Promise<WorktreeOperationResult> => ({
+          ...(await real.removeWorktree(operands)),
+          ok: false,
+          exitCode: 1,
+        }),
+        // What the adapter answers for a `git worktree list` that exited nonzero: no evidence at all.
+        listWorktrees: (): Promise<readonly never[]> => Promise.resolve([]),
+      };
+    };
+
+    await expect(
+      cleanup(store, listingFails).cleanup({
+        workspaceId: instance.workspaceId,
+        requestedBy: "u",
+        operatorApproved: true,
+        mode: "complete",
+      }),
+    ).rejects.toMatchObject({ code: "CLEANUP_FAILED" });
+
+    expect(store.getById(instance.workspaceId)).toMatchObject({
+      lifecycleState: "cleanup-pending",
+    });
+    expect(evidence.some((entry) => parseEvent(entry.json).outcome === "cleanup-completed")).toBe(
+      false,
+    );
   });
 });
 
@@ -521,6 +1047,25 @@ describe("cleanup approval + eligibility gates", () => {
 });
 
 describe("orphan cleanup", () => {
+  it("refuses an unregistered orphan below the denied state directory", async () => {
+    managedRoot = join(dirname(managedRoot), ".keiko", "task-workspaces");
+    const instance = await provisionTask("t-owned-denied-orphan");
+    const orphanPath = instance.managedWorktreePath;
+    store.delete(instance.workspaceId);
+
+    const result = await cleanup().cleanupOrphans({
+      repositoryRoot: repoRoot,
+      requestedBy: "u",
+      operatorApproved: true,
+    });
+
+    expect(result).toMatchObject({
+      removed: 0,
+      refused: [{ refusalReason: "worktree-dirty" }],
+    });
+    expect(existsSync(orphanPath)).toBe(true);
+  });
+
   it("removes an orphaned managed worktree (directory with no persisted record)", async () => {
     const instance = await provisionTask("t-orphan");
     const orphanPath = instance.managedWorktreePath;
@@ -578,11 +1123,24 @@ describe("orphan cleanup", () => {
     expect(existsSync(join(orphanPath, "late-wip.txt"))).toBe(true);
   });
 
+  // GEN-TEST-FLAKE-006: this test does 4 genuine `provisionTask` calls plus one extra `makeRepo`, each
+  // spawning real `git` subprocesses (init/config/commit/worktree add) against disposable
+  // repositories — already the minimum fixture count that can prove the invariant ("the global
+  // sweep visits more than one repository-id directory and spares a live worktree in each"; fewer
+  // repos or fewer worktrees per repo stops proving that). Three consecutive local runs of this exact
+  // test (unmodified except this override) measured 21.4s / 22.1s / 21.9s wall time on a dev machine
+  // already busy with several other concurrent vitest/tsc processes — real, not synthetic, host
+  // load — comfortably past the suite's default 15s `testTimeout`. The suite
+  // already uses this exact per-test override shape for other real-I/O-heavy tests (e.g.
+  // packages/keiko-evaluations/src/local-knowledge/*.test.ts,
+  // packages/keiko-evidence/src/listByPrefix.test.ts); 60s gives ~3x headroom over the measured
+  // busy-host cost without masking a real hang.
   it("global sweep finds orphans across multiple repositories while sparing live worktrees", async () => {
-    // Two distinct repositories → two distinct repository-id directories under the managed root. Each
-    // keeps one live (persisted) worktree and contributes one orphan (record deleted, directory kept).
-    // The global sweep (no repositoryRoot) must visit BOTH repository-id directories and remove exactly
-    // the two orphans, leaving the two live worktrees and their records untouched.
+    // Two distinct repositories → two distinct repository-id directories under the managed root.
+    // Each keeps one live (persisted) worktree and contributes one orphan (record deleted,
+    // directory kept). The global sweep (no repositoryRoot) must visit BOTH repository-id
+    // directories and remove exactly the two orphans, leaving the two live worktrees and their
+    // records untouched.
     const repoB = makeRepo("keiko-clean-repo-b-");
 
     const orphanA = await provisionTask("t-multi-a-orphan");
@@ -609,7 +1167,7 @@ describe("orphan cleanup", () => {
     expect(existsSync(liveB.managedWorktreePath)).toBe(true);
     expect(store.getById(liveA.workspaceId)).toBeDefined();
     expect(store.getById(liveB.workspaceId)).toBeDefined();
-  });
+  }, 60_000);
 
   it("does not treat a persisted instance's worktree as an orphan", async () => {
     const instance = await provisionTask("t-keep");
@@ -660,16 +1218,76 @@ describe("orphan cleanup", () => {
     expect(store.getById(instance.workspaceId)).toBeDefined();
   });
 
-  it("rejects orphan cleanup without operator approval", async () => {
-    await expect(
-      cleanup().cleanupOrphans({ requestedBy: "u", operatorApproved: false }),
-    ).rejects.toMatchObject({ code: "OPERATOR_APPROVAL_REQUIRED" });
+  // #3382/L-2: `orphanLeavesFor` swallowed a per-repository `readdir` failure with `catch { return
+  // []; }`, so "this repository has no orphans" and "this repository could not be listed" were the
+  // same answer — a permission change or an unreadable mount silently removed the orphan sweep for
+  // that repository while the operator-approved run reported `removed: 0` as if it had swept it. The
+  // failure is now classified on the same `task-workspace.lifecycle` line the health report's twin
+  // uses, and the mutating sweep still deletes nothing it could not inventory.
+  it("classifies a repository directory it cannot list and removes nothing", async () => {
+    const instance = await provisionTask("t-orphan-unlistable");
+    const repoDir = dirname(instance.managedWorktreePath);
+    store.delete(instance.workspaceId);
+    // A FILE where the repository-id directory was: `existsSync` still answers true and `readdirSync`
+    // fails with ENOTDIR on every platform, without depending on process privileges.
+    rmSync(repoDir, { recursive: true, force: true });
+    writeFileSync(repoDir, "not a directory\n");
+    const activityLog = createBufferedServerLogSink();
+
+    const result = await cleanup(store, realAdapter, undefined, activityLog).cleanupOrphans({
+      // Scoped to this repository: a GLOBAL sweep resolves its repository ids from the managed
+      // root's DIRECTORY entries, and the fixture's repository-id entry is deliberately not one.
+      repositoryRoot: repoRoot,
+      requestedBy: "u",
+      operatorApproved: true,
+      correlationId: "req-corr-orphan-unlistable-1",
+    });
+
+    expect(result).toEqual({ removed: 0, refused: [] });
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.op).toBe("task-workspace.lifecycle");
+    expect(line.level).toBe("warn");
+    expect(line.errorKind).toBe("unavailable");
+    expect(line.extra?.failureKind).toBe("REPOSITORY_UNREACHABLE");
+    expect(line.correlationId).toBe("req-corr-orphan-unlistable-1");
+    expect(line.extra?.operation).toBe("cleanup");
+    expect(JSON.stringify(activityLog.events)).not.toContain(repoDir);
   });
 
+  it("rejects orphan cleanup without operator approval", async () => {
+    const activityLog = createBufferedServerLogSink();
+    await expect(
+      cleanup(store, realAdapter, undefined, activityLog).cleanupOrphans({
+        requestedBy: "u",
+        operatorApproved: false,
+        correlationId: "req-corr-orphan-cleanup-rejection-1",
+      }),
+    ).rejects.toMatchObject({ code: "OPERATOR_APPROVAL_REQUIRED" });
+    const line = lastActivityLogEvent(activityLog);
+    expect(line.correlationId).toBe("req-corr-orphan-cleanup-rejection-1");
+    expect(line.errorKind).toBe("authority-denied");
+    expect(line.extra?.failureKind).toBe("OPERATOR_APPROVAL_REQUIRED");
+    expect(line.extra?.operation).toBe("cleanup");
+    expect(line.extra?.workspaceIdentity).toMatch(/^wsref_[0-9a-f]{24}$/u);
+  });
+
+  // GEN-TEST-FLAKE-006: the invariant this test pins is a CALL-COUNT bound (listAll() runs at most once
+  // for the whole sweep, never once per candidate) — it does not depend on wall-clock time and does
+  // not need a large candidate count to be meaningful: pre-fix, listAll() ran once per candidate, so
+  // even 2 candidates already produce 2 calls, which already fails `toBeLessThanOrEqual(1)` below.
+  // Kept at 3 (down from 6) so the fixture still plainly reads as "several candidates sharing one
+  // snapshot" while cutting the real cost: each candidate is a genuine `provisionTask` (real git
+  // subprocess spawns) followed by up to two real `git status` dirty-probes during the sweep. At 6
+  // candidates this test measured 35.3s wall time on this same busy dev machine (unmodified except
+  // instrumentation to isolate setup-vs-sweep cost). At 3 candidates, three consecutive local runs
+  // measured 18.0s / 16.3s / 18.1s. The suite already uses this per-test override shape for other
+  // real-I/O-heavy tests
+  // (e.g. packages/keiko-evaluations/src/local-knowledge/*.test.ts,
+  // packages/keiko-evidence/src/listByPrefix.test.ts).
   it("calls store.listAll() at most once for a sweep with many orphan candidates (GEN-PERF-PERSISTENCE-016)", async () => {
     // Materialize several orphan directories in one repository (records deleted, dirs kept).
     const orphans: string[] = [];
-    for (let i = 0; i < 6; i += 1) {
+    for (let i = 0; i < 3; i += 1) {
       const instance = await provisionTask(`t-many-orphan-${String(i)}`);
       store.delete(instance.workspaceId);
       orphans.push(instance.managedWorktreePath);
@@ -694,17 +1312,16 @@ describe("orphan cleanup", () => {
     // Correctness preserved: all orphans removed.
     expect(result.removed).toBe(orphans.length);
     for (const path of orphans) expect(existsSync(path)).toBe(false);
-    // Pre-fix: listAll() ran once per candidate (>= 6). Fixed: the single buildKnownPathsByRepo
+    // Pre-fix: listAll() ran once per candidate (>= 3). Fixed: the single buildKnownPathsByRepo
     // snapshot is reused for every candidate, so listAll() runs at most once for the whole sweep.
     expect(listAllCalls).toBeLessThanOrEqual(1);
-  });
+  }, 45_000);
 });
 
 describe("safelyRemoveManagedPath choke point (SC1 — the only filesystem deletion)", () => {
   beforeEach(() => {
     // Establish ownership of the managed root for the positive case.
-    mkdirSync(managedRoot, { recursive: true });
-    writeFileSync(join(managedRoot, MANAGED_ROOT_MARKER_FILENAME), "{}");
+    assertManagedRootOwned(managedRoot);
   });
 
   it("removes a contained <repoId>/<leaf> directory", () => {

@@ -7,7 +7,6 @@
 import {
   useCallback,
   useEffect,
-  useId,
   useMemo,
   useRef,
   useState,
@@ -22,6 +21,7 @@ import {
   useOptionalWidgetTranslate,
   type OptionalWidgetTranslate,
 } from "@/lib/optional-widget-i18n";
+import { restoreModalFocusAfterUnlock } from "./modalFocusRestore";
 import type { OpenEditorFileRequest, OpenEditorFileResult } from "../hooks/useWorkspace.types";
 import { FileIcon } from "../widgets/shared/projectTree";
 import { fuzzyScore } from "../widgets/cards/editorCommands";
@@ -31,6 +31,10 @@ import { NATIVE_BLOCK_STYLE } from "../native-element-styles";
 
 const SEARCH_DEBOUNCE_MS = 120;
 const SEARCH_LIMIT = 30;
+// MD-05: the input owns the active option; do not replace this with a native select because each
+// result is an interactive command that opens a file or executes a palette action.
+const ACTIVE_DESCENDANT_RESULTS_ROLE = "listbox";
+const ACTIVE_DESCENDANT_OPTION_ROLE = "option";
 
 type QuickAccessMode = "files" | "commands";
 
@@ -64,6 +68,7 @@ interface UnifiedQuickAccessPaletteProps {
   readonly roots?: readonly WorkspaceRootTarget[] | undefined;
   readonly commands: readonly QuickAccessCommand[];
   readonly openEditorFile: (request: OpenEditorFileRequest) => OpenEditorFileResult;
+  readonly opener?: HTMLElement | null;
   readonly onClose: () => void;
 }
 
@@ -274,18 +279,24 @@ function quickAccessResultsStatus(
 }
 
 // Restores focus to whatever had it before the palette opened, once the palette closes.
-function useQuickAccessFocusRestore(inputRef: RefObject<HTMLInputElement | null>): void {
-  const openerRef = useRef<HTMLElement | null>(
-    typeof document === "undefined" ? null : (document.activeElement as HTMLElement | null),
-  );
+function useQuickAccessFocusRestore(
+  inputRef: RefObject<HTMLInputElement | null>,
+  opener: HTMLElement | null,
+): () => void {
+  const openerRef = useRef(opener);
+  const restoreOpenerRef = useRef(true);
+  const focusActivatedTarget = useCallback((): void => {
+    restoreOpenerRef.current = false;
+  }, []);
   useEffect(() => {
     const opener = openerRef.current;
     inputRef.current?.focus();
     return (): void => {
-      if (opener?.isConnected === true) opener.focus();
+      restoreModalFocusAfterUnlock(restoreOpenerRef.current ? opener : null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  return focusActivatedTarget;
 }
 
 interface QuickAccessFileSearchState {
@@ -377,20 +388,20 @@ export function UnifiedQuickAccessPalette({
   roots,
   commands,
   openEditorFile,
+  opener = null,
   onClose,
 }: UnifiedQuickAccessPaletteProps): ReactNode {
   const t = useOptionalWidgetTranslate();
   const [query, setQuery] = useState(initialMode === "commands" ? ">" : "");
   const [selected, setSelected] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const listId = useId();
+  const dialogRef = useRef<HTMLDialogElement>(null);
   const mode: QuickAccessMode = query.startsWith(">") ? "commands" : "files";
   const commandQuery = query.startsWith(">") ? query.slice(1).trim() : "";
   const targets = useMemo(() => quickAccessTargets(root, roots), [root, roots]);
   const multiRoot = targets.length > 1;
 
-  useQuickAccessFocusRestore(inputRef);
+  const focusActivatedTarget = useQuickAccessFocusRestore(inputRef, opener);
   const { searchResults, truncated, failedRoots } = useQuickAccessFileSearch(mode, query, targets);
 
   const commandResults = useMemo(
@@ -412,6 +423,7 @@ export function UnifiedQuickAccessPalette({
         const command = commandResults[index];
         if (command === undefined) return;
         command.run();
+        focusActivatedTarget();
         onClose();
         return;
       }
@@ -423,9 +435,10 @@ export function UnifiedQuickAccessPalette({
         lineStart: result.line,
         lineEnd: result.line,
       });
+      focusActivatedTarget();
       onClose();
     },
-    [commandResults, mode, onClose, openEditorFile, searchResults],
+    [commandResults, focusActivatedTarget, mode, onClose, openEditorFile, searchResults],
   );
 
   const onKeyDown = quickAccessKeyDownHandler(
@@ -437,8 +450,8 @@ export function UnifiedQuickAccessPalette({
     inputRef,
   );
 
-  const optionId = (index: number): string => `${listId}-option-${String(index)}`;
   const emptyText = quickAccessEmptyText(t, mode, root, query);
+  const activeOptionId = itemCount > 0 ? `quick-access-option-${String(selected)}` : undefined;
   const resultsStatus = quickAccessResultsStatus(
     t,
     itemCount,
@@ -448,14 +461,15 @@ export function UnifiedQuickAccessPalette({
 
   return (
     <div className="cmdk-overlay" onPointerDown={onClose}>
-      <div
+      <dialog
         ref={dialogRef}
+        open
         className="cmdk"
-        role="dialog"
         aria-modal="true"
         aria-labelledby="quick-access-title"
         aria-describedby="quick-access-desc"
         tabIndex={-1}
+        style={{ margin: 0, padding: 0 }}
         onPointerDown={(event) => event.stopPropagation()}
       >
         <h2 id="quick-access-title" className="sr-only">
@@ -467,10 +481,12 @@ export function UnifiedQuickAccessPalette({
         <div className="cmdk-input">
           <input
             ref={inputRef}
+            type="search"
             role="combobox"
+            aria-autocomplete="list"
+            aria-controls="quick-access-results"
             aria-expanded="true"
-            aria-controls={listId}
-            aria-activedescendant={itemCount > 0 ? optionId(selected) : undefined}
+            aria-activedescendant={activeOptionId}
             aria-label={
               mode === "commands" ? t("quickAccess.query.commands") : t("quickAccess.query.files")
             }
@@ -495,16 +511,16 @@ export function UnifiedQuickAccessPalette({
             {t("quickAccess.searchUnavailable", { roots: failedRoots.join(", ") })}
           </div>
         ) : null}
-        <div id={listId} role="listbox" className="cmdk-list">
+        <div id="quick-access-results" className="cmdk-list" role={ACTIVE_DESCENDANT_RESULTS_ROLE}>
           {itemCount === 0 && <div className="cmdk-empty">{emptyText}</div>}
           {itemCount > 0 &&
             mode === "commands" &&
             commandResults.map((command, index) => (
               <button
                 key={command.id}
+                id={`quick-access-option-${String(index)}`}
                 type="button"
-                id={optionId(index)}
-                role="option"
+                role={ACTIVE_DESCENDANT_OPTION_ROLE}
                 aria-selected={index === selected}
                 className="cmdk-row"
                 data-sel={index === selected}
@@ -525,9 +541,9 @@ export function UnifiedQuickAccessPalette({
             searchResults.map((result, index) => (
               <button
                 key={`${result.root}:${result.kind}:${result.path}:${String(result.line)}:${index.toString()}`}
+                id={`quick-access-option-${String(index)}`}
                 type="button"
-                id={optionId(index)}
-                role="option"
+                role={ACTIVE_DESCENDANT_OPTION_ROLE}
                 aria-selected={index === selected}
                 className="cmdk-row"
                 data-sel={index === selected}
@@ -549,7 +565,7 @@ export function UnifiedQuickAccessPalette({
               </button>
             ))}
         </div>
-      </div>
+      </dialog>
     </div>
   );
 }

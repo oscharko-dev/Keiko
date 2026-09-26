@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted (2026-07-11).
+Accepted (2026-07-11); amended 2026-09-03 to require dev-equivalent full-project analysis on every
+pull request targeting `dev`.
 
 ## Context
 
@@ -54,6 +55,17 @@ retrieval, editor, and architecture gates. The scan itself still runs after "Cov
 gates" so both LCOV reports exist. It runs only for pull requests targeting `dev` and pushes to
 `dev`; unrelated PR targets emit a successful not-applicable coverage/Sonar job rather than
 silently omitting the required aggregate evidence.
+
+The scanner cache is disabled for the required analysis. This is deliberate even though it makes a
+pull-request scan take approximately as long as the subsequent `dev` scan: a cached pull-request
+analysis is not integration evidence. Incident #3377 demonstrated the mismatch directly: its green
+pull-request scan freshly analyzed 91 JavaScript/TypeScript files and restored 4,753 cached results,
+while the merged `dev` revision freshly analyzed 4,844 files and failed on an architecture-graph
+warning in an unchanged source. `check-sonar-analysis-log.mjs` now rejects every warning except the
+exact SCM metadata warning `File '<path>' was detected as changed but without having changed lines`,
+and verifies fresh-cache receipts, an 80-percent breadth floor against the scanner's indexed
+inventory, and individually complete architecture receipts bound to SonarJasmin's plan. A cached
+or narrowly incremental scan therefore fails the required PR context before GitHub can integrate it.
 
 ### D2 — Native gate plus commit-bound fail-closed verification
 
@@ -185,6 +197,9 @@ there is no API path to automate them even with an admin token:
 
 - The `ci` job grows by scanner, source-mapping, Quality Gate polling, and commit-bound evidence
   verification steps, adding to its runtime.
+- Pull-request Sonar analysis no longer reuses the target-branch sensor cache; it pays the
+  full-project analysis cost so its verdict predicts the `dev` push analysis rather than merely
+  checking changed files.
 - A `SONAR_TOKEN` secret is now a dependency of the required `ci` check; if it expires or is
   revoked, `ci` fails closed for every PR until it is rotated.
 - `new_violations > 0` is strict: a single new Minor/Info finding blocks the merge, with no

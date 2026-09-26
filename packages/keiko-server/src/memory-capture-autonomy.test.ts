@@ -7,7 +7,7 @@
 // deps.codingRuntimeDeploymentCeiling (undefined fails closed to governed-assist).
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createMemoryVault, type MemoryVaultStore } from "@oscharko-dev/keiko-memory-vault";
@@ -77,8 +77,12 @@ const SECRET_ONLY = JSON.stringify([
 ]);
 
 // User text is clean: no secret (egress guard passes → model is consulted) and no regex-capture
-// trigger (deterministic path stays empty).
-const USER_TEXT = "We reviewed the deployment configuration for the platform team today.";
+// trigger (deterministic path stays empty). Each accepted model body is an exact complete line from
+// this user turn, preserving the user-provenance boundary in the real salience extractor.
+const USER_TEXT = [
+  "The platform team ships releases on a fortnightly cadence.",
+  "The escalation contact address is oncall@example.com.",
+].join("\n");
 
 const ALL_MODES: readonly CodingWorkbenchMode[] = [
   "governed-assist",
@@ -129,7 +133,7 @@ afterEach(() => {
 });
 
 function makeVault(): MemoryVaultStore {
-  const dir = mkdtempSync(join(tmpdir(), "keiko-autonomy-"));
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-autonomy-"));
   tmpDirs.push(dir);
   const vault = createMemoryVault({ memoryDir: dir, redactString: (s) => s });
   activeVaults.push(vault);
@@ -189,7 +193,7 @@ function makeDeps(options: DepsOptions): UiHandlerDeps {
 }
 
 function context(): ConversationMemoryRuntimeContext {
-  const path = mkdtempSync(join(tmpdir(), "keiko-autonomy-proj-"));
+  const path = mkdtempSync(join(realpathSync(tmpdir()), "keiko-autonomy-proj-"));
   tmpDirs.push(path);
   return {
     userId: "local-operator" as UserId,
@@ -289,19 +293,20 @@ function recordingDiagnosticsSink(): ServerDiagnosticSink & {
 }
 
 // Extracts the content-free "SalienceExtractionDiagnostic" records a spy diagnostics sink
-// captured. logSalienceDiagnostic emits counts/kind only — never bodies — as a plain
-// "model=... kind=<kind> rawItemCount=<n>" message, so a regex read keeps the assertion
-// content-free without depending on the message's exact wording.
+// captured. logSalienceDiagnostic emits counts/kind only — never bodies — as a colon-joined
+// "model=...:kind=<kind>:rawItemCount=<n>" detail on `record.code` (the fixed `record.message`
+// is just the label "salience-extraction-diagnostic", per #3245's relocation), so a regex read
+// keeps the assertion content-free without depending on the code's exact wording.
 function capturedSalienceDiagnostics(
   calls: readonly (readonly unknown[])[],
 ): readonly SalienceDiagnosticPayload[] {
   const payloads: SalienceDiagnosticPayload[] = [];
   for (const args of calls) {
-    const record = args[0] as { readonly errorClass?: string; readonly message?: string };
+    const record = args[0] as { readonly errorClass?: string; readonly code?: string };
     if (record.errorClass !== "SalienceExtractionDiagnostic") continue;
-    const message = record.message ?? "";
-    const kind = /kind=(\S+)/u.exec(message)?.[1];
-    const rawItemCountMatch = /rawItemCount=(\d+)/u.exec(message)?.[1];
+    const code = record.code ?? "";
+    const kind = /kind=(\S+?)(?=:|$)/u.exec(code)?.[1];
+    const rawItemCountMatch = /rawItemCount=(\d+)/u.exec(code)?.[1];
     payloads.push({
       ...(kind === undefined ? {} : { kind }),
       ...(rawItemCountMatch === undefined ? {} : { rawItemCount: Number(rawItemCountMatch) }),

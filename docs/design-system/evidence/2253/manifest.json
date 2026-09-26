@@ -1,5 +1,5 @@
 {
-  "issue": "#2253",
+  "issue": 2253,
   "generatedAt": "2026-07-31T09:07:20.383Z",
   "command": "KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run test:e2e:coding-workbench-2253",
   "playwrightCommand": "playwright test --config tests/e2e/config/playwright.issue-2253-coding-workbench.config.ts --project=chromium",
@@ -18,9 +18,13 @@
     "manifest.json"
   ],
   "captureCount": 9,
-  "redaction": {
-    "profileFixture": "contains only deterministic status/capability metadata; no credentials, paths, endpoints, or runtime output",
-    "screenshots": "capture the current labelled Workbench with its server-confirmed Gateway context",
-    "proofs": "contain assertions, accessibility counts, hashes, and visible product copy only"
+  "redactionBoundary": {
+    "customerRepositoryFilesIncluded": false,
+    "secretsIncluded": false,
+    "privatePathsIncluded": false,
+    "rawDiffsIncluded": false,
+    "rawModelPromptsIncluded": false,
+    "rawModelOutputsIncluded": false,
+    "tokensIncluded": false
   }
 }

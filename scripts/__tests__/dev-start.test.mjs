@@ -1,27 +1,199 @@
 import { Buffer } from "node:buffer";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
-import {
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+// Default seams must never observe or stop the developer's running application.
+const stateDirectory = mkdtempSync(join(tmpdir(), "keiko-dev-start-test-"));
+vi.stubEnv("KEIKO_STATE_DIR", stateDirectory);
+afterAll(() => {
+  vi.unstubAllEnvs();
+  rmSync(stateDirectory, { recursive: true, force: true });
+});
+
+const {
   codingRuntimeHealth,
   codingRuntimeRequired,
+  DEV_START_LOCK_FILE,
   ensureDevCodingRuntime,
+  healthyDevServer,
   maybeOpenPairedBrowser,
   npmCommand,
   pairedDevBrowserUrl,
+  prepareRunnerCriticalSection,
+  resolveOpenBrowserRequested,
   resolveDevPairingSecret,
+  requiredRuntimeHealth,
+  resolveDevGatewayConfigAction,
   resolveExternalOpener,
   run,
   shouldShellNpmCommand,
-} from "../dev-start.mjs";
+  withDevStartLock,
+} = await import("../dev-start.mjs");
+
+describe("dev-start paired-browser default", () => {
+  it("opens by default, preserves --open, and fails closed for CI or --no-open", () => {
+    expect(resolveOpenBrowserRequested(["node", "dev-start.mjs"], {})).toBe(true);
+    expect(resolveOpenBrowserRequested(["node", "dev-start.mjs", "--open"], { CI: "true" })).toBe(
+      true,
+    );
+    expect(resolveOpenBrowserRequested(["node", "dev-start.mjs"], { CI: "true" })).toBe(false);
+    expect(
+      resolveOpenBrowserRequested(["node", "dev-start.mjs", "--no-open"], { CI: "false" }),
+    ).toBe(false);
+  });
+});
+
+// KEIKO-0286: a stale KEIKO_CONFIG_FILE inherited from a sourced operator .env used to suppress the
+// dev-config seed entirely. The server then started with zero providers and said nothing — the
+// "no provisioned config" condition that blocked four prior live-test attempts.
+describe("dev-start gateway config resolution (KEIKO-0286)", () => {
+  const DEV_CONFIG = "/state/ui/keiko.config.json";
+  const SEEDS = [
+    "/repo/.keiko/ui/keiko.config.json",
+    "/repo/keiko.config.json",
+    "/repo/sandbox/.keiko/ui/keiko.config.json",
+  ];
+  const existsOnly =
+    (...present) =>
+    (path) =>
+      present.includes(path);
+
+  it("leaves a configured path alone when the file is really there", () => {
+    const action = resolveDevGatewayConfigAction({
+      configuredPath: "/operator/keiko.config.json",
+      devConfigFile: DEV_CONFIG,
+      seedCandidates: SEEDS,
+      fileExists: existsOnly("/operator/keiko.config.json"),
+    });
+    expect(action).toEqual({ notices: [] });
+  });
+
+  it("seeds AND repoints when the configured path does not exist", () => {
+    const action = resolveDevGatewayConfigAction({
+      configuredPath: "/gone/keiko.config.json",
+      devConfigFile: DEV_CONFIG,
+      seedCandidates: SEEDS,
+      fileExists: existsOnly(SEEDS[0]),
+    });
+    // Repointing is the half that makes the seed take effect: the development runner inherits this
+    // environment, so seeding without repointing leaves the server reading the dead path.
+    expect(action.repointTo).toBe(DEV_CONFIG);
+    expect(action.seedFrom).toBe(SEEDS[0]);
+    expect(action.notices.join("\n")).toContain("does not exist");
+  });
+
+  it("uses the repository root config as the fallback seed for local development", () => {
+    const action = resolveDevGatewayConfigAction({
+      configuredPath: undefined,
+      devConfigFile: DEV_CONFIG,
+      seedCandidates: SEEDS,
+      fileExists: existsOnly(SEEDS[1]),
+    });
+    expect(action.seedFrom).toBe(SEEDS[1]);
+    expect(action.notices.join("\n")).toContain(SEEDS[1]);
+  });
+
+  it("repoints without reseeding when a dev config already exists", () => {
+    const action = resolveDevGatewayConfigAction({
+      configuredPath: "/gone/keiko.config.json",
+      devConfigFile: DEV_CONFIG,
+      seedCandidates: SEEDS,
+      fileExists: existsOnly(DEV_CONFIG),
+    });
+    expect(action.repointTo).toBe(DEV_CONFIG);
+    expect(action.seedFrom).toBeUndefined();
+  });
+
+  it("says so out loud when nothing can be seeded, instead of degrading silently", () => {
+    const action = resolveDevGatewayConfigAction({
+      configuredPath: "/gone/keiko.config.json",
+      devConfigFile: DEV_CONFIG,
+      seedCandidates: SEEDS,
+      fileExists: existsOnly(),
+    });
+    expect(action.seedFrom).toBeUndefined();
+    expect(action.notices.join("\n")).toContain("start unprovisioned");
+  });
+
+  it("never puts config file contents in a notice, only paths", () => {
+    const action = resolveDevGatewayConfigAction({
+      configuredPath: "/gone/keiko.config.json",
+      devConfigFile: DEV_CONFIG,
+      seedCandidates: SEEDS,
+      fileExists: existsOnly(SEEDS[0]),
+    });
+    for (const notice of action.notices) {
+      expect(notice).not.toMatch(/apiKey|secret|token|cred:/iu);
+    }
+  });
+});
+
+describe("dev-start runtime health gate", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // The gate, not the display string. codingRuntimeHealth reports an available-but-unverified
+  // runtime as "ok" followed by its honest evidence detail (ADR-0163 D9); a gate that compared
+  // against the bare literal turned every macOS dev:start into a 60s timeout against a healthy
+  // server, and the pin on codingRuntimeHealth alone could not fail on it.
+  it("passes an available runtime whose evidence class is weaker than platform-qualified", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        runtimeAvailable: true,
+        runtimeEvidenceClass: "functional-not-platform-qualified",
+      }),
+    });
+
+    const health = await requiredRuntimeHealth("http://127.0.0.1:1", true);
+
+    expect(health.startsWith("ok")).toBe(true);
+    expect(health).not.toContain("runtime:");
+  });
+
+  it("reuses a running server whose healthy runtime status carries evidence detail", () => {
+    expect(healthyDevServer("ok · local runtime integrity verified (no platform signature)")).toBe(
+      true,
+    );
+    expect(healthyDevServer("runtime: unavailable (payload-missing)")).toBe(false);
+  });
+
+  it("skips the runtime gate entirely on a host with no dev lane", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+
+    expect(await requiredRuntimeHealth("http://127.0.0.1:1", false)).toBe("ok");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("still fails an unavailable runtime", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        runtimeAvailable: false,
+        runtimeUnavailableReason: "runtime-unqualified",
+      }),
+    });
+
+    const health = await requiredRuntimeHealth("http://127.0.0.1:1", true);
+
+    expect(health).toBe("runtime: unavailable (runtime-unqualified)");
+  });
+});
 
 describe("dev-start coding runtime lifecycle", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it("requires coding-runtime readiness on supported macOS hosts only", () => {
+  it("requires coding-runtime readiness on every supported dev host", () => {
     expect(codingRuntimeRequired("darwin", "arm64")).toBe(true);
     expect(codingRuntimeRequired("darwin", "x64")).toBe(true);
+    expect(codingRuntimeRequired("win32", "x64")).toBe(true);
+    expect(codingRuntimeRequired("win32", "arm64")).toBe(false);
     expect(codingRuntimeRequired("darwin", "ppc64")).toBe(false);
     expect(codingRuntimeRequired("linux", "x64")).toBe(false);
   });
@@ -50,12 +222,36 @@ describe("dev-start coding runtime lifecycle", () => {
       response: { ok: false, status: 503 },
       expected: "HTTP 503",
     },
+    // ADR-0163 D9: a bare "ok" is reserved for a platform-qualified runtime. An available runtime
+    // whose evidence class is weak — or absent, which fails closed to weak — says so.
+    {
+      response: {
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            runtimeAvailable: true,
+            runtimeEvidenceClass: "platform-qualified",
+          }),
+      },
+      expected: "ok",
+    },
+    {
+      response: {
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            runtimeAvailable: true,
+            runtimeEvidenceClass: "functional-not-platform-qualified",
+          }),
+      },
+      expected: "ok · local runtime integrity verified (no platform signature)",
+    },
     {
       response: {
         ok: true,
         json: () => Promise.resolve({ runtimeAvailable: true }),
       },
-      expected: "ok",
+      expected: "ok · local runtime integrity verified (no platform signature)",
     },
     {
       response: {
@@ -86,7 +282,7 @@ describe("dev-start coding runtime lifecycle", () => {
     expect(stage).not.toHaveBeenCalled();
   });
 
-  it("reuses a verified runtime and stages a repair only when production discovery refuses it", async () => {
+  it("refreshes native helpers for a verified runtime and stages a full repair when discovery refuses it", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const activated = {
       outcome: "activated",
@@ -94,6 +290,7 @@ describe("dev-start coding runtime lifecycle", () => {
     };
     const discoverReady = vi.fn().mockResolvedValue(activated);
     const stageReady = vi.fn();
+    const restageReady = vi.fn().mockResolvedValue(undefined);
     await expect(
       ensureDevCodingRuntime({
         platform: "darwin",
@@ -101,13 +298,23 @@ describe("dev-start coding runtime lifecycle", () => {
         env: {},
         discover: discoverReady,
         stage: stageReady,
+        restageNative: restageReady,
       }),
     ).resolves.toBe(true);
     expect(stageReady).not.toHaveBeenCalled();
-    expect(discoverReady).toHaveBeenCalledWith({
+    expect(restageReady).toHaveBeenCalledOnce();
+    expect(discoverReady).toHaveBeenCalledTimes(2);
+    expect(discoverReady).toHaveBeenNthCalledWith(1, {
       env: { KEIKO_CODING_RUNTIME_DEV_LANE: "1" },
       platform: "darwin",
       arch: "arm64",
+      admitRuntimeSupervisor: false,
+    });
+    expect(discoverReady).toHaveBeenLastCalledWith({
+      env: { KEIKO_CODING_RUNTIME_DEV_LANE: "1" },
+      platform: "darwin",
+      arch: "arm64",
+      admitRuntimeSupervisor: true,
     });
 
     const discoverRepair = vi
@@ -126,6 +333,26 @@ describe("dev-start coding runtime lifecycle", () => {
     ).resolves.toBe(true);
     expect(stageRepair).toHaveBeenCalledOnce();
     expect(discoverRepair).toHaveBeenCalledTimes(2);
+
+    const discoverWindows = vi.fn().mockResolvedValue(activated);
+    const restageWindows = vi.fn().mockResolvedValue(undefined);
+    await expect(
+      ensureDevCodingRuntime({
+        platform: "win32",
+        arch: "x64",
+        env: {},
+        discover: discoverWindows,
+        stage: vi.fn(),
+        restageNative: restageWindows,
+      }),
+    ).resolves.toBe(true);
+    expect(restageWindows).toHaveBeenCalledOnce();
+    expect(discoverWindows).toHaveBeenLastCalledWith({
+      env: { KEIKO_CODING_RUNTIME_DEV_LANE: "1" },
+      platform: "win32",
+      arch: "x64",
+      admitRuntimeSupervisor: true,
+    });
   });
 
   it("fails closed when staging cannot produce an activated runtime", async () => {
@@ -159,6 +386,31 @@ describe("dev-start coding runtime lifecycle", () => {
         stage: vi.fn(),
       }),
     ).rejects.toThrow("coding runtime dev lane refused (unsupported-platform)");
+  });
+
+  it("repairs an untrusted native helper directory through complete staging", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const activated = {
+      outcome: "activated",
+      runtime: { evidenceClass: "functional-not-platform-qualified" },
+    };
+    const discover = vi
+      .fn()
+      .mockResolvedValueOnce({ outcome: "refused", reason: "native-helper-directory-untrusted" })
+      .mockResolvedValueOnce(activated);
+    const stage = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      ensureDevCodingRuntime({
+        platform: "win32",
+        arch: "x64",
+        env: {},
+        discover,
+        stage,
+      }),
+    ).resolves.toBe(true);
+
+    expect(stage).toHaveBeenCalledOnce();
   });
 });
 
@@ -271,7 +523,7 @@ describe("dev-start app-session pairing launcher", () => {
     const url = await pairedDevBrowserUrl(secret, "http://localhost:1983");
     expect(url.startsWith("http://localhost:1983/#keiko-app-session=")).toBe(true);
     const { decodeCodingAppSessionPairingFragment } =
-      await import("../../packages/keiko-contracts/dist/index.js");
+      await import("../../packages/keiko-contracts/dist/coding-app-session.js");
     const { computeLauncherPairingClaim } =
       await import("../../packages/keiko-server/dist/index.js");
     const attestation = decodeCodingAppSessionPairingFragment(
@@ -307,5 +559,151 @@ describe("dev-start app-session pairing launcher", () => {
     expect(error).toHaveBeenCalledWith(
       "[dev:start] could not open a paired browser window: dist missing",
     );
+  });
+});
+
+// KEIKO-0542: the dev-config seed used to copy only the config file. A sibling `credentials/`
+// directory next to a seed candidate (mirroring the credentialVault convention on-disk) was
+// silently left behind, so a well-configured seed ended up as "not configured" in the running
+// gateway with no diagnostic surfaced anywhere. Extend ensureDevGatewayConfig so a
+// `credentials/` sibling is copied alongside the seed and the outcome is announced through the
+// existing notice channel.
+describe("dev-start gateway config credentials seed (KEIKO-0542)", () => {
+  it("copies a sibling credentials/ directory when the seed has one", async () => {
+    const { ensureDevGatewayConfig } = await import("../dev-start.mjs");
+    // The seed candidates ensureDevGatewayConfig checks are hardcoded from module scope; the
+    // fileExists seam names them for us. We approve one seed candidate (the first) and its
+    // credentials/ sibling; every other path returns false (including the dev-config file, so
+    // the seed path is entered).
+    const copyCalls = [];
+    const notices = [];
+    let approvedSeed;
+    const seams = {
+      fileExists: (path) => {
+        // Approve the first seed candidate (repoRoot/.keiko/ui/keiko.config.json) whose exact
+        // form we cannot know here — approve the first ".keiko/ui/keiko.config.json" path.
+        if (
+          typeof path === "string" &&
+          path.endsWith("/.keiko/ui/keiko.config.json") &&
+          !path.includes("/ui/ui/")
+        ) {
+          approvedSeed = path;
+          return true;
+        }
+        return false;
+      },
+      directoryExists: (path) =>
+        approvedSeed !== undefined &&
+        path === approvedSeed.replace(/keiko\.config\.json$/u, "credentials"),
+      mkdir: vi.fn(),
+      copyFile: (source, target) => copyCalls.push({ kind: "file", source, target }),
+      copyDirectory: (source, target) => copyCalls.push({ kind: "directory", source, target }),
+      chmod: vi.fn(),
+      notify: (message) => notices.push(message),
+      env: {},
+    };
+    ensureDevGatewayConfig(seams);
+    expect(
+      copyCalls.some((call) => call.kind === "directory" && /credentials$/u.test(call.target)),
+    ).toBe(true);
+    expect(notices.join("\n")).toMatch(/seeded credentials\/ from/u);
+  });
+
+  it("surfaces a distinct notice when the seed has no credentials/ directory", async () => {
+    const { ensureDevGatewayConfig } = await import("../dev-start.mjs");
+    const notices = [];
+    const seams = {
+      // Approve the first .keiko/ui/keiko.config.json seed candidate.
+      fileExists: (path) =>
+        typeof path === "string" &&
+        path.endsWith("/.keiko/ui/keiko.config.json") &&
+        !path.includes("/ui/ui/"),
+      directoryExists: () => false,
+      mkdir: vi.fn(),
+      copyFile: vi.fn(),
+      copyDirectory: () => {
+        throw new Error("credentials/ must not be copied when it does not exist");
+      },
+      chmod: vi.fn(),
+      notify: (message) => notices.push(message),
+      env: {},
+    };
+    ensureDevGatewayConfig(seams);
+    expect(notices.join("\n")).toMatch(/no credentials\/ subdirectory next to/u);
+  });
+});
+
+// KEIKO-0719: `npm run dev:start` acquires a per-stateDir lockfile so two concurrent invocations
+// serialise instead of colliding in `npm run build` and racing for the same ports. The lock file
+// is an atomic O_EXCL|O_CREAT create at `$stateDir/dev-start.lock`. Regression: prove serialization
+// by holding the lock in one call while a second call queues behind it.
+describe("dev-start concurrency lock (KEIKO-0719)", () => {
+  it("serialises two concurrent withDevStartLock calls in FIFO order", async () => {
+    const order = [];
+    const first = withDevStartLock(async () => {
+      order.push("A-start");
+      await new Promise((resolveDelay) => globalThis.setTimeout(resolveDelay, 50));
+      order.push("A-end");
+    });
+    // Give A a tick to acquire the lock and start work.
+    await new Promise((resolveTick) => globalThis.setImmediate(resolveTick));
+    const second = withDevStartLock(async () => {
+      order.push("B-start");
+      order.push("B-end");
+    });
+    await Promise.all([first, second]);
+    expect(order).toEqual(["A-start", "A-end", "B-start", "B-end"]);
+    // Lock file removed after both settle.
+    expect(existsSync(DEV_START_LOCK_FILE)).toBe(false);
+  });
+
+  it("releases the lock even when the wrapped work throws", async () => {
+    await expect(
+      withDevStartLock(async () => {
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow(/boom/);
+    expect(existsSync(DEV_START_LOCK_FILE)).toBe(false);
+    // A subsequent call must succeed (proves the lock file was released).
+    const marker = { ran: false };
+    await withDevStartLock(async () => {
+      marker.ran = true;
+    });
+    expect(marker.ran).toBe(true);
+  });
+});
+
+// KEIKO-0719 (extended): the two-step "stop any prior runner, then clear pidFile" sequence used
+// to live outside the dev-start lock; two concurrent `dev:start` invocations could both clear
+// the check and then race to overwrite pidFile. The extracted `prepareRunnerCriticalSection`
+// helper runs inside `withDevStartLock` so the sequence executes only once per acquirer.
+describe("prepareRunnerCriticalSection (KEIKO-0719 race close)", () => {
+  it("runs restartExistingRunnerIfNeeded before removing the pid file", async () => {
+    const order = [];
+    await prepareRunnerCriticalSection({
+      restartExistingRunnerIfNeeded: async () => order.push("restart"),
+      removePidFile: () => order.push("remove"),
+    });
+    expect(order).toEqual(["restart", "remove"]);
+  });
+
+  it("propagates a restart failure without removing the pid file", async () => {
+    const removePidFile = vi.fn();
+    await expect(
+      prepareRunnerCriticalSection({
+        restartExistingRunnerIfNeeded: async () => {
+          throw new Error("restart failed");
+        },
+        removePidFile,
+      }),
+    ).rejects.toThrow(/restart failed/);
+    expect(removePidFile).not.toHaveBeenCalled();
+  });
+
+  it("falls through to the default seams when none are provided", async () => {
+    expect(DEV_START_LOCK_FILE).toBe(join(stateDirectory, "dev-start.lock"));
+    expect(existsSync(join(stateDirectory, "dev-ui.pid.json"))).toBe(false);
+    await expect(prepareRunnerCriticalSection({})).resolves.toBeUndefined();
+    await expect(prepareRunnerCriticalSection()).resolves.toBeUndefined();
   });
 });

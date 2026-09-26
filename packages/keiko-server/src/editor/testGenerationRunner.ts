@@ -19,16 +19,16 @@ import {
   type TestVerification,
   type UnitTestTarget,
 } from "@oscharko-dev/keiko-workflows";
-import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import {
-  notRunTestGenerationFunnel,
-  type CodingContextPack,
-  type EditorTestGenerationFunnel,
-  type EditorTestGenerationWirePatch,
-  type EditorTestGenerationWireProvenance,
-  type EditorTestGenerationWireRequest,
-  type EditorTestGenerationWireTarget,
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import type {
+  CodingContextPack,
+  EditorTestGenerationFunnel,
+  EditorTestGenerationWirePatch,
+  EditorTestGenerationWireProvenance,
+  EditorTestGenerationWireRequest,
+  EditorTestGenerationWireTarget,
 } from "@oscharko-dev/keiko-contracts";
+import { notRunTestGenerationFunnel } from "@oscharko-dev/keiko-contracts/runtime/editor-test-generation";
 import { currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
 import { translateDiffToWirePatch, type OriginalContentReader } from "./testGenerationPatch.js";
 import type { AssuredVerificationKind } from "./assuredPreFilterRunner.js";
@@ -40,6 +40,7 @@ export interface TestGenerationRunnerArgs {
   readonly request: EditorTestGenerationWireRequest;
   readonly deps: UiHandlerDeps;
   readonly realRoot: string;
+  readonly fs: WorkspaceFs;
   readonly signal: AbortSignal;
   readonly nowMs: number;
   // Governed discovery context (#1211). The existing workflow assembles its own ContextPack today, so
@@ -105,11 +106,11 @@ function contentFreeHash(parts: readonly string[]): string {
   return hash.digest("hex");
 }
 
-function originalReader(realRoot: string): OriginalContentReader {
+function originalReader(realRoot: string, fs: WorkspaceFs): OriginalContentReader {
   return (relativePath) => {
     const absolute = resolve(realRoot, relativePath);
     try {
-      return nodeWorkspaceFs.exists(absolute) ? nodeWorkspaceFs.readFileUtf8(absolute) : undefined;
+      return fs.exists(absolute) ? fs.readFileUtf8(absolute) : undefined;
     } catch {
       return undefined;
     }
@@ -152,7 +153,7 @@ export const defaultTestGenerationRunner: TestGenerationRunner = async (args) =>
       apply: false,
       modelId,
     },
-    { model, signal: args.signal },
+    { model, signal: args.signal, fs: args.fs },
   );
   if (report.proposedDiff === undefined) {
     return undefined;
@@ -162,7 +163,7 @@ export const defaultTestGenerationRunner: TestGenerationRunner = async (args) =>
   const patch = translateDiffToWirePatch(
     report.proposedDiff,
     patchId,
-    originalReader(args.realRoot),
+    originalReader(args.realRoot, args.fs),
   );
   if (patch === undefined) {
     return undefined;

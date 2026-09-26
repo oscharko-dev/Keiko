@@ -60,6 +60,23 @@ describe("useCodingWorkbenchRuntimeActions", () => {
     expect(dispatch).toHaveBeenCalledWith({ kind: "select-mode", mode: "supervised-coding" });
   });
 
+  it("dispatches model and reasoning selections", () => {
+    const dispatch = vi.fn();
+    const { actions } = renderActions(dispatch);
+
+    actions.setSelectedModel("gpt-5.4");
+    actions.setReasoningEffort("high");
+
+    expect(dispatch).toHaveBeenNthCalledWith(1, {
+      kind: "select-model",
+      modelId: "gpt-5.4",
+    });
+    expect(dispatch).toHaveBeenNthCalledWith(2, {
+      kind: "select-reasoning-effort",
+      effort: "high",
+    });
+  });
+
   it("ignores re-selecting the active runtime preference without bumping sequences", () => {
     const dispatch = vi.fn();
     const { actions, resources } = renderActions(dispatch);

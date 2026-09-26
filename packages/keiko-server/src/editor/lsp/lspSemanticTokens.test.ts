@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS } from "@oscharko-dev/keiko-contracts";
+import { MANAGED_LSP_SEMANTIC_TOKEN_MAX_TOKENS } from "@oscharko-dev/keiko-contracts/runtime/managed-lsp-capabilities";
 
 import {
   MANAGED_LSP_SEMANTIC_MAX_DOCUMENT_BYTES,

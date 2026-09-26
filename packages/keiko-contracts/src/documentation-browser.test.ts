@@ -203,6 +203,13 @@ describe("mapBrowserErrorToDocumentationReason", () => {
     expect(mapBrowserErrorToDocumentationReason(undefined)).toBe("navigation-failed");
     expect(mapBrowserErrorToDocumentationReason("")).toBe("navigation-failed");
   });
+
+  it.each(["constructor", "toString", "__proto__", "hasOwnProperty", "valueOf"])(
+    "prototype-chain: falls through to navigation-failed on %s (KEIKO-0657)",
+    (protoKey) => {
+      expect(mapBrowserErrorToDocumentationReason(protoKey)).toBe("navigation-failed");
+    },
+  );
 });
 
 describe("resolveDocumentationNavigationReason", () => {

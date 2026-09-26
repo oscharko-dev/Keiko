@@ -48,15 +48,13 @@ import { randomUUID } from "node:crypto";
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { join } from "node:path";
+import { MAX_TIMER_DELAY_MS } from "../abort-race.js";
 import { STREAMING, type HandlerOutcome, type RouteContext, type RouteResult } from "../routes.js";
-import {
-  currentGatewayConfig,
-  currentGatewayEgressConfig,
-  currentRedactionSecrets,
-  type UiHandlerDeps,
-} from "../deps.js";
-import { redact } from "@oscharko-dev/keiko-security";
+import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { newReferenceId } from "../reference-id.js";
 import type { EnvSource } from "@oscharko-dev/keiko-security";
+import { emitServerDiagnostic } from "../diagnostics-log.js";
 import {
   appendFigmaConnectorAudit,
   parseFigmaTarget,
@@ -82,7 +80,7 @@ import {
   type FigmaSnapshotRecord,
   type FigmaSnapshotUserMetadata,
 } from "@oscharko-dev/keiko-evidence";
-import { compareStrings } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 
 // ─── Error helpers ─────────────────────────────────────────────────────────────
 
@@ -753,37 +751,51 @@ const DEFAULT_BUILD_DEADLINE_MS = 600_000;
 /** Default per-fetch request timeout in milliseconds (1 minute). */
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
-// Parses a positive-integer env var, returning the default when the value is absent or invalid.
-function readPositiveIntEnv(raw: string | undefined, defaultValue: number): number {
+// Parses a timer delay from an env var, returning the default when the value is absent or invalid.
+// A delay no timer can hold (more than 2^31 - 1 ms) is invalid too: setTimeout and
+// AbortSignal.timeout fire it at once (PR #3452 review of KEIKO_RERANKER_TIMEOUT_MS; the same class).
+function readTimerDelayEnv(raw: string | undefined, defaultValue: number): number {
   if (raw === undefined) return defaultValue;
   const value = Number(raw);
-  return Number.isInteger(value) && value > 0 ? value : defaultValue;
+  return Number.isInteger(value) && value > 0 && value <= MAX_TIMER_DELAY_MS ? value : defaultValue;
 }
 
 /** KEIKO_FIGMA_BUILD_DEADLINE_MS — total build deadline used by the coalesced promise race. */
-function figmaBuildDeadlineMsFromEnv(env: EnvSource): number {
-  return readPositiveIntEnv(env.KEIKO_FIGMA_BUILD_DEADLINE_MS, DEFAULT_BUILD_DEADLINE_MS);
+export function figmaBuildDeadlineMsFromEnv(env: EnvSource): number {
+  return readTimerDelayEnv(env.KEIKO_FIGMA_BUILD_DEADLINE_MS, DEFAULT_BUILD_DEADLINE_MS);
 }
 
 /** KEIKO_FIGMA_REQUEST_TIMEOUT_MS — per-fetch timeout threaded into the transport ports. */
-function figmaRequestTimeoutMsFromEnv(env: EnvSource): number {
-  return readPositiveIntEnv(env.KEIKO_FIGMA_REQUEST_TIMEOUT_MS, DEFAULT_REQUEST_TIMEOUT_MS);
+export function figmaRequestTimeoutMsFromEnv(env: EnvSource): number {
+  return readTimerDelayEnv(env.KEIKO_FIGMA_REQUEST_TIMEOUT_MS, DEFAULT_REQUEST_TIMEOUT_MS);
 }
 
 // F9 observability: a `FIGMA_INTERNAL` 500 is the catch-all for an UNEXPECTED build/persist failure;
 // the coded body is content-free, so on its own an operator cannot tell a transient render-body
 // malformation from a filesystem failure from a genuine bug. Log the redacted cause (class + message,
 // secrets scrubbed) so the incident is diagnosable without ever leaking a token or provider body.
-// Matches the redacted-console.error convention (memory-salience.ts). Only fires for FIGMA_INTERNAL —
-// expected coded errors (consent/auth/rate-limit) stay quiet (they are already audited).
+// Routes through the single redaction-safe server diagnostic sink (diagnostics-log.ts), the same
+// pattern memory-salience.ts's emitSalienceDiagnostic uses — never console.* directly, so the record
+// lands in server.log with a correlationId and is visible to a support bundle. Only fires for
+// FIGMA_INTERNAL — expected coded errors (consent/auth/rate-limit) stay quiet (already audited).
 function logFigmaInternal(stage: string, err: unknown, deps: UiHandlerDeps): void {
   const name = err instanceof Error ? err.constructor.name : typeof err;
-  const message = err instanceof Error ? err.message : String(err);
-  // eslint-disable-next-line no-console
-  console.error(
-    `figma snapshot-build failed (${stage}): ${name}`,
-    redact(message, currentRedactionSecrets(deps)),
-  );
+  // Issue #3245: `redact()` only strips known SECRET shapes (bearer tokens, API keys) out of a
+  // string — it passes every other character through unchanged, so `err.message` survived it as
+  // free-form provider/filesystem text, exactly the "foreign error/provider/customer text" this
+  // record's own contract forbids on `message`. `message` narrowing from `string` to the closed
+  // `ServerDiagnosticSummary` union caught this at compile time: the fix drops the raw message
+  // entirely rather than relocating it — unlike a bounded count or a machine-readable code, an
+  // arbitrary error message has no safe home on a body-free evidence record. `errorClass` (the
+  // constructor name, already content-free) is retained as the diagnosable signal.
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: randomUUID(),
+    timestamp: new Date().toISOString(),
+    operation: "figma.snapshotBuild",
+    source: `figmaSnapshotRoutes.logFigmaInternal.${stage}`,
+    errorClass: name,
+    message: "figma-internal-error",
+  });
 }
 
 // Map a thrown error from the governed build to a coded route result: a coded connector error maps to
@@ -905,6 +917,7 @@ function startCoalescedBuild(
   body: ParsedTriggerBody,
   evidenceDir: string,
   deps: UiHandlerDeps,
+  correlationId: string,
 ): Promise<RouteResult> {
   const buildAndPersist = async (): Promise<RouteResult> => {
     let result: GovernedSnapshotResult;
@@ -918,6 +931,7 @@ function startCoalescedBuild(
           evidenceDir,
           env: deps.env,
           now: new Date().toISOString(),
+          correlationId,
           acknowledgeReadOnly: body.acknowledgeReadOnly,
           version: body.version,
           pagination: figmaPaginationFromEnv(deps.env),
@@ -932,7 +946,8 @@ function startCoalescedBuild(
       return figmaErrorResult(err, deps);
     }
 
-    const runId = `fs-${randomUUID()}`;
+    // A Figma window persists it as a reference (#3557 review).
+    const runId = newReferenceId({ kind: "figma-snapshot-run", prefix: "fs-", correlationId });
     const stored = persistSnapshot(evidenceDir, runId, result, deps);
     if ("status" in stored) {
       appendSnapshotRouteFailureAudit(evidenceDir, result, body.isResnapshot, "FIGMA_INTERNAL");
@@ -972,6 +987,20 @@ function makeDeadline(ms: number): Deadline {
   };
 }
 
+function triggerBuildPromise(
+  scopeKey: string,
+  inFlight: Map<string, CoalescedBuildEntry>,
+  body: ParsedTriggerBody,
+  evidenceDir: string,
+  deps: UiHandlerDeps,
+  correlationId: string,
+): Promise<RouteResult> {
+  return (
+    inFlight.get(scopeKey)?.promise ??
+    startCoalescedBuild(scopeKey, inFlight, body.boardLink, body, evidenceDir, deps, correlationId)
+  );
+}
+
 // ─── POST /api/figma/snapshots ─────────────────────────────────────────────────
 
 export async function handleFigmaTriggerSnapshot(
@@ -999,11 +1028,14 @@ export async function handleFigmaTriggerSnapshot(
   }
 
   // Coalesce: join an existing build for this scope, or start a new one.
-  const existing = inFlight.get(scopeKey);
-  const buildPromise =
-    existing !== undefined
-      ? existing.promise
-      : startCoalescedBuild(scopeKey, inFlight, body.boardLink, body, evidenceDir, deps);
+  const buildPromise = triggerBuildPromise(
+    scopeKey,
+    inFlight,
+    body,
+    evidenceDir,
+    deps,
+    ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+  );
 
   const deadlineMs = figmaBuildDeadlineMsFromEnv(deps.env);
   const deadline = makeDeadline(deadlineMs);

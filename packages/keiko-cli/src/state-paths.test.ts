@@ -3,16 +3,30 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  ACTIVITY_LOG_STORE_POLICY_FILE_NAME,
+  activityLogPinFileName,
+  activityLogSegmentFileName,
+  supportIncidentFileName,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   ATLASSIAN_CREDENTIAL_ARTIFACTS,
   DEFAULT_STATE_DIR_NAME,
   KEIKO_STATE_FILES,
+  UI_SHUTDOWN_REQUEST_FILE,
   classifyPid,
+  clearShutdownRequest,
   defaultUiDataDir,
   defaultIsProcessAlive,
   isInsidePath,
+  peekShutdownRequest,
   readPidFile,
+  readPidRecord,
+  removePidFileIfMatches,
+  removeStaleShutdownRequest,
   resolveStateDir,
   scanRuntimeState,
+  writeExclusivePidFile,
+  writeShutdownRequest,
   type RuntimeStateCategory,
 } from "./state-paths.js";
 
@@ -92,6 +106,15 @@ describe("readPidFile", () => {
     writeFileSync(path, "  4242 \n", "utf8");
     expect(readPidFile(path)).toBe(4242);
   });
+
+  it("parses an optional launch id on the second line", () => {
+    const root = makeRoot();
+    const path = join(root, "ui.pid");
+    const launchId = "ab".repeat(16);
+    writeExclusivePidFile(path, 4242, launchId);
+    expect(readPidRecord(path)).toEqual({ pid: 4242, launchId });
+    expect(readPidFile(path)).toBe(4242);
+  });
 });
 
 describe("defaultIsProcessAlive", () => {
@@ -128,14 +151,94 @@ describe("classifyPid", () => {
     expect(result.state).toBe("running");
     expect(result.pid).toBe(1234);
   });
+
+  it("returns the launch id from the same pid record as the pid", () => {
+    const root = makeRoot();
+    const path = join(root, "ui.pid");
+    const launchId = "ab".repeat(16);
+    writeExclusivePidFile(path, 1234, launchId);
+    const result = classifyPid(path, () => true);
+    expect(result).toEqual({ state: "running", pid: 1234, launchId });
+  });
 });
 
 describe("KEIKO_STATE_FILES", () => {
   it("enumerates the lifecycle and launcher state files", () => {
     expect(KEIKO_STATE_FILES).toContain("ui.pid");
     expect(KEIKO_STATE_FILES).toContain("ui.log");
+    expect(KEIKO_STATE_FILES).toContain(UI_SHUTDOWN_REQUEST_FILE);
     expect(KEIKO_STATE_FILES).toContain("launcher-state.json");
     expect(KEIKO_STATE_FILES).toContain("portable-install-state.json");
+  });
+});
+
+describe("ui.shutdown request", () => {
+  it("is pid-bound: peek is true only for the written pid", () => {
+    const stateDir = makeRoot();
+    writeShutdownRequest(stateDir, 4242);
+    expect(peekShutdownRequest(stateDir, 4242)).toBe(true);
+    expect(peekShutdownRequest(stateDir, 1)).toBe(false);
+    clearShutdownRequest(stateDir);
+    expect(peekShutdownRequest(stateDir, 4242)).toBe(false);
+  });
+
+  it("does not throw when the sentinel path is a directory", () => {
+    const stateDir = makeRoot();
+    mkdirSync(join(stateDir, UI_SHUTDOWN_REQUEST_FILE));
+    expect(() => {
+      clearShutdownRequest(stateDir);
+    }).not.toThrow();
+  });
+
+  it("fails closed when a stale sentinel path is a directory", () => {
+    const stateDir = makeRoot();
+    mkdirSync(join(stateDir, UI_SHUTDOWN_REQUEST_FILE));
+    expect(() => {
+      removeStaleShutdownRequest(stateDir);
+    }).toThrow();
+  });
+
+  it("matches a launch id across a re-exec pid change", () => {
+    const stateDir = makeRoot();
+    const launchId = "cd".repeat(16);
+    writeShutdownRequest(stateDir, 100, launchId);
+    expect(peekShutdownRequest(stateDir, 999, launchId)).toBe(true);
+    expect(peekShutdownRequest(stateDir, 999, "ef".repeat(16))).toBe(false);
+  });
+
+  it("returns false for empty, malformed, and oversized requests", () => {
+    const stateDir = makeRoot();
+    const path = join(stateDir, UI_SHUTDOWN_REQUEST_FILE);
+    writeFileSync(path, "", "utf8");
+    expect(peekShutdownRequest(stateDir, 1)).toBe(false);
+    writeFileSync(path, "not-a-pid\n", "utf8");
+    expect(peekShutdownRequest(stateDir, 1)).toBe(false);
+    writeFileSync(path, "9".repeat(64), "utf8");
+    expect(peekShutdownRequest(stateDir, 1)).toBe(false);
+  });
+
+  it("refuses a symlinked shutdown request the same way ui.pid does", () => {
+    const root = makeRoot();
+    const target = join(root, "decoy");
+    writeFileSync(target, "999\n", "utf8");
+    symlinkSync(target, join(root, UI_SHUTDOWN_REQUEST_FILE));
+    expect(peekShutdownRequest(root, 999)).toBe(false);
+  });
+
+  it("writeExclusivePidFile creates a regular single-link pid file", () => {
+    const path = join(makeRoot(), "ui.pid");
+    writeExclusivePidFile(path, 17);
+    expect(readPidFile(path)).toBe(17);
+  });
+
+  it("removePidFileIfMatches unlinks only the pid this stop owns", () => {
+    const root = makeRoot();
+    const path = join(root, "ui.pid");
+    writeExclusivePidFile(path, 17, "ab".repeat(16));
+    expect(removePidFileIfMatches(path, 99)).toBe(false);
+    expect(readPidFile(path)).toBe(17);
+    expect(removePidFileIfMatches(path, 17, "ab".repeat(16))).toBe(true);
+    expect(readPidFile(path)).toBeUndefined();
   });
 });
 
@@ -157,8 +260,11 @@ function seedRuntimeState(root: string): string {
   mkdirSync(join(stateDir, "evidence", "qi", "figma-snapshots", "run-1"), { recursive: true });
   mkdirSync(join(stateDir, "editor-hot-exit"), { recursive: true });
   mkdirSync(join(stateDir, "updates", "snapshots", "snap-1"), { recursive: true });
+  mkdirSync(join(stateDir, "logs"), { recursive: true });
+  mkdirSync(join(stateDir, "support-incidents"), { recursive: true });
   touch(join(stateDir, "ui.pid"));
   touch(join(stateDir, "ui.log"));
+  touch(join(stateDir, UI_SHUTDOWN_REQUEST_FILE));
   touch(join(stateDir, "launcher-state.json"));
   touch(join(stateDir, "portable-install-state.json"));
   touch(join(stateDir, "keiko-ui.db"));
@@ -211,9 +317,33 @@ function seedRuntimeState(root: string): string {
   touch(join(stateDir, "updates", "runtime-state.json"));
   touch(join(stateDir, "updates", "update-audit.jsonl"));
   touch(join(stateDir, "updates", "snapshots", "snap-1", "manifest.json"));
+  touch(join(stateDir, "logs", "server.log"));
+  touch(join(stateDir, "logs", "server-2026-06-20.log"));
+  touch(join(stateDir, "logs", SEALED_SEGMENT));
+  touch(join(stateDir, "logs", ACTIVE_SEGMENT));
+  touch(join(stateDir, "logs", PIN_RECORD));
+  touch(join(stateDir, "logs", ACTIVITY_LOG_STORE_POLICY_FILE_NAME)); // #3554 store policy record
+  touch(join(stateDir, "logs", "activity-not-a-segment.jsonl")); // outside the grammar — retained
+  touch(join(stateDir, "logs", "operator-notes.txt")); // a foreign file — must be retained
+  mkdirSync(join(stateDir, "logs", "archive"), { recursive: true });
+  touch(join(stateDir, "logs", "archive", "old.log")); // nested dir — must be retained, not recursed
+  touch(join(stateDir, "support-incidents", INCIDENT_RECORD));
+  touch(join(stateDir, "support-incidents", "incident-draft.json")); // outside the grammar — retained
   touch(join(stateDir, "user-notes.txt")); // a customer file — must be retained
   return stateDir;
 }
+
+// Activity Log names come from the shared closed grammar (#3530), never a hand-written spelling.
+const SEGMENT_IDENTITY = {
+  startMs: Date.parse("2026-06-20T10:00:00.000Z"),
+  pid: 4242,
+  instanceId: "a1b2c3d4",
+  index: 1,
+};
+const SEALED_SEGMENT = activityLogSegmentFileName(SEGMENT_IDENTITY, "sealed");
+const ACTIVE_SEGMENT = activityLogSegmentFileName({ ...SEGMENT_IDENTITY, index: 2 }, "active");
+const PIN_RECORD = activityLogPinFileName("0123456789abcdef01234567");
+const INCIDENT_RECORD = supportIncidentFileName("0123456789abcdef0123456789abcdef");
 
 function categoryOf(
   scan: ReturnType<typeof scanRuntimeState>,
@@ -261,6 +391,7 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     const scan = scanRuntimeState(stateDir);
     expect(scan.present).toBe(true);
     expect(categoryOf(scan, "ui.pid")).toBe("lifecycle");
+    expect(categoryOf(scan, UI_SHUTDOWN_REQUEST_FILE)).toBe("lifecycle");
     expect(categoryOf(scan, "launcher-state.json")).toBe("launcher");
     expect(categoryOf(scan, "portable-install-state.json")).toBe("launcher");
     expect(categoryOf(scan, "keiko-ui.db")).toBe("ui-database");
@@ -321,6 +452,53 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(categoryOf(scan, "updates/runtime-state.json")).toBe("update-recovery");
     expect(categoryOf(scan, "updates/update-audit.jsonl")).toBe("update-recovery");
     expect(categoryOf(scan, "updates/snapshots/snap-1/manifest.json")).toBe("update-recovery");
+    expect(categoryOf(scan, "logs")).toBe("activity-log");
+    expect(categoryOf(scan, "logs/server.log")).toBe("activity-log");
+    expect(categoryOf(scan, "logs/server-2026-06-20.log")).toBe("activity-log");
+    expect(categoryOf(scan, `logs/${SEALED_SEGMENT}`)).toBe("activity-log");
+    expect(categoryOf(scan, `logs/${ACTIVE_SEGMENT}`)).toBe("activity-log");
+    expect(categoryOf(scan, `logs/${PIN_RECORD}`)).toBe("activity-log");
+    // #3554: the store's one governing policy record is owned (repair/uninstall must claim it)
+    // through the same shared grammar, never a second hand-written name here.
+    expect(categoryOf(scan, `logs/${ACTIVITY_LOG_STORE_POLICY_FILE_NAME}`)).toBe("activity-log");
+    // `logsSubtree` is classified, not `whole`: only the Activity Log's closed grammar (segments,
+    // pin records, legacy files) is owned. A foreign file, a near-miss name, or an unexpected nested
+    // directory under `logs/` must be retained, not claimed by `repair`/`uninstall` (#2902 PR review).
+    expect(categoryOf(scan, "logs/activity-not-a-segment.jsonl")).toBeUndefined();
+    expect(categoryOf(scan, "logs/operator-notes.txt")).toBeUndefined();
+    expect(categoryOf(scan, "logs/archive")).toBeUndefined();
+    const logsRetained = scan.retained.map((r) => r.relPath);
+    expect(logsRetained).toContain("logs/operator-notes.txt");
+    expect(logsRetained).toContain("logs/archive");
+    expect(logsRetained.some((relPath) => relPath.startsWith("logs/archive/"))).toBe(false);
+    // #3533: the local incident store is owned by its closed grammar, like `logs/`.
+    expect(categoryOf(scan, "support-incidents")).toBe("support-incident");
+    expect(categoryOf(scan, `support-incidents/${INCIDENT_RECORD}`)).toBe("support-incident");
+    expect(categoryOf(scan, "support-incidents/incident-draft.json")).toBeUndefined();
+    expect(scan.retained.map((r) => r.relPath)).toContain("support-incidents/incident-draft.json");
+  });
+
+  // #3531: the rebuildable segment-manifest store owns exactly `manifest-<segmentId>.json`.
+  it("owns only the closed segment-manifest grammar under activity-log-manifests/", () => {
+    const stateDir = join(makeRoot(), ".keiko");
+    const manifests = join(stateDir, "activity-log-manifests");
+    mkdirSync(join(manifests, "nested"), { recursive: true });
+    const manifestName = SEALED_SEGMENT.replace(/^activity-/u, "manifest-").replace(
+      /\.jsonl$/u,
+      ".json",
+    );
+    for (const name of [manifestName, "notes.txt", "manifest-bogus.json"]) {
+      touch(join(manifests, name));
+    }
+
+    const scan = scanRuntimeState(stateDir);
+
+    expect(categoryOf(scan, "activity-log-manifests")).toBe("activity-log");
+    expect(categoryOf(scan, `activity-log-manifests/${manifestName}`)).toBe("activity-log");
+    for (const foreign of ["notes.txt", "manifest-bogus.json", "nested"]) {
+      expect(categoryOf(scan, `activity-log-manifests/${foreign}`)).toBeUndefined();
+      expect(scan.retained.map((r) => r.relPath)).toContain(`activity-log-manifests/${foreign}`);
+    }
   });
 
   it("classifies quarantined .corrupt.<ts> database and sidecar copies as owned", () => {
@@ -330,6 +508,29 @@ describe("scanRuntimeState — runtime-state manifest", () => {
     expect(categoryOf(scan, "memory/keiko-memory.db-wal.corrupt.2026-06-20T12-00-00-000Z")).toBe(
       "memory-vault",
     );
+  });
+
+  it("retains a stray file dropped directly under a subtree that owns no files of its own", () => {
+    // `local-knowledge/` and `evidence/qi/figma-snapshots/` are classified subtrees that own
+    // NOTHING but their recognized child directories (`OWNS_NO_FILE`): a namespace/run-id
+    // directory is owned via `childSubtree`, but any plain FILE sitting directly inside them —
+    // which nothing in this manifest ever writes — must be retained, not silently swallowed.
+    const stateDir = join(makeRoot(), ".keiko");
+    mkdirSync(join(stateDir, "local-knowledge", "default"), { recursive: true });
+    touch(join(stateDir, "local-knowledge", "default", "capsules.db"));
+    touch(join(stateDir, "local-knowledge", "stray.txt"));
+
+    const scan = scanRuntimeState(stateDir);
+
+    expect(categoryOf(scan, "local-knowledge/default/capsules.db")).toBe("local-knowledge");
+    expect(categoryOf(scan, "local-knowledge/stray.txt")).toBeUndefined();
+    const retained = scan.retained.find((r) => r.relPath === "local-knowledge/stray.txt");
+    expect(retained).toEqual({
+      relPath: "local-knowledge/stray.txt",
+      absPath: join(stateDir, "local-knowledge", "stray.txt"),
+      reason: "unknown",
+      owned: false,
+    });
   });
 
   it("retains a customer file whose name only resembles a database (no prefix over-match)", () => {

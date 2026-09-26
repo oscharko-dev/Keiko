@@ -162,6 +162,12 @@ export interface VoiceAcousticEvalSummary {
   readonly negativeCaught: number;
   readonly coveredScenarios: readonly VoiceAcousticScenario[];
   readonly scenarioCoverageMet: boolean;
+  // Every scenario must also be exercised by at least one negative-polarity fixture — otherwise the
+  // gate cannot prove the adversarial path for that scenario is caught. Computed over negatives alone
+  // (mirroring `coveredScenarios`/`scenarioCoverageMet` on the other polarity). ANDed into `goNoGo`
+  // so a scenario with no negative coverage forces NO-GO (KEIKO-0171).
+  readonly negativeCoveredScenarios: readonly VoiceAcousticScenario[];
+  readonly negativeScenarioCoverageMet: boolean;
   readonly goNoGo: "GO" | "NO-GO";
 }
 

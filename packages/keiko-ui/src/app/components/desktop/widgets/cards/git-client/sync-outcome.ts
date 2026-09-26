@@ -17,7 +17,7 @@ import type { I18nTranslate } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-messages.en";
 import type { GitSyncOutcome } from "@/lib/types";
 import type { GitDeliveryMutationStatus } from "@/lib/api";
-import { isGitDeliveryRecoveryActionHint } from "@oscharko-dev/keiko-contracts";
+import { isGitDeliveryRecoveryActionHint } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-action-sheet";
 import type { GitMutationOutcome } from "./git-client-seam";
 
 export interface SyncOutcomeView {
@@ -40,6 +40,7 @@ const SYNC_OUTCOME: Readonly<Record<GitSyncOutcome, OutcomePresentation>> = {
   "detached-head": { labelKey: "gitClientWindow.sync.result.detachedHead", failed: true },
   "dirty-worktree": { labelKey: "gitClientWindow.sync.result.dirtyWorktree", failed: true },
   "not-fast-forward": { labelKey: "gitClientWindow.sync.result.notFastForward", failed: true },
+  "authority-denied": { labelKey: "gitClientWindow.sync.result.blockedByPolicy", failed: true },
   "auth-failed": { labelKey: "gitClientWindow.sync.result.authFailed", failed: true },
   "untrusted-host-key": { labelKey: "gitClientWindow.sync.result.untrustedHostKey", failed: true },
   "remote-unavailable": { labelKey: "gitClientWindow.sync.result.remoteUnavailable", failed: true },
@@ -78,6 +79,7 @@ const RECOVERY_HINT_LABEL: Readonly<Record<string, MessageKey>> = {
   retry: "gitClientWindow.sync.hint.retry",
   "stage-changes": "gitClientWindow.sync.hint.stageChanges",
   "configure-upstream": "gitClientWindow.sync.hint.configureUpstream",
+  "configure-signing": "gitClientWindow.sync.hint.configureSigning",
   "resolve-conflicts": "gitClientWindow.sync.hint.resolveConflicts",
   "abort-in-progress-operation": "gitClientWindow.sync.hint.abortInProgress",
   "request-approval": "gitClientWindow.sync.hint.requestApproval",

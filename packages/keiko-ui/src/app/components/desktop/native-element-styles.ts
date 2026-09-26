@@ -49,3 +49,6 @@ export const NATIVE_FIELDSET_RESET_STYLE: CSSProperties = {
   padding: 0,
   border: 0,
 };
+
+/** `<dialog>` is absolutely positioned and auto-margined by default; role-migrated dialogs remain grid children. */
+export const NATIVE_DIALOG_STYLE: CSSProperties = { margin: 0, position: "static" };

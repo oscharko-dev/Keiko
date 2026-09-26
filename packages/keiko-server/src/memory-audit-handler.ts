@@ -26,10 +26,9 @@
 // Corrupt audit manifests are never reset or overwritten; append attempts fail closed and
 // preserve the existing artifact for operator investigation.
 //
-// Known limitation: the `previousStatus` map is in-memory only. After a server restart the
-// first `memory:updated` for any record lacks transition context and is classified as a
-// plain `memory:updated` (not promoted to `memory:accepted` / `memory:archived` / etc.).
-// The downstream record is captured fully — only the kind classification is degraded.
+// The composition root seeds the in-memory pre-image cache from the vault's body-free metadata
+// before it accepts mutations. That preserves semantic transition classification across restarts
+// without loading or retaining memory bodies.
 //
 // Edge and embedding events are NOT bridged (out of audit scope per the audit invariant
 // in @oscharko-dev/keiko-contracts/memory: audit records carry no body or payload, and
@@ -40,9 +39,15 @@
 // helper exported below is the single emission point for those direct audit signals.
 
 import { createHash, randomUUID } from "node:crypto";
-import type { MemoryAuditEvent, MemoryId, MemoryStatus } from "@oscharko-dev/keiko-contracts";
+import type {
+  MemoryAuditEvent,
+  MemoryId,
+  MemoryRecord,
+  MemoryStatus,
+} from "@oscharko-dev/keiko-contracts";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { MemoryEvent } from "@oscharko-dev/keiko-memory-vault";
+import { isValidCorrelationId } from "./correlation.js";
 import {
   buildDeletedEvent,
   buildInsertedEvent,
@@ -58,6 +63,8 @@ import {
 import { sanitizeAuditEvent } from "./memory-scope-sanitizer.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
+
+type MemoryAuditSeedRecord = Pick<MemoryRecord, "id" | "status" | "pinned">;
 
 export interface MemoryAuditHandlerOptions {
   readonly evidenceStore: EvidenceStore;
@@ -91,16 +98,22 @@ interface AuditPersistFailureContext {
 function reportAuditPersistFailure(
   options: AuditPersistFailureContext,
   source: string,
+  runId: string,
   error: unknown,
 ): void {
   if (options.onPersistError !== undefined) {
     options.onPersistError(error);
     return;
   }
+  // Reuses the date-bucket runId the failed append targeted (ADR-0173 D5 / g12, mirroring
+  // gitDelivery/mutationEvidenceLedger.ts's `evidenceCorrelationId`) instead of a disconnected
+  // fresh mint, so an operator can join this diagnostic back to the SAME bucket's other audit
+  // evidence. Re-validated against `isValidCorrelationId` rather than trusted blindly.
+  const correlationId = isValidCorrelationId(runId) ? runId : randomUUID();
   emitServerDiagnostic(
     options.diagnostics,
     serverDiagnosticFromError({
-      correlationId: randomUUID(),
+      correlationId,
       operation: "memory.audit.persist",
       source,
       error,
@@ -110,7 +123,9 @@ function reportAuditPersistFailure(
   );
 }
 
-export type MemoryAuditHandler = (event: MemoryEvent) => void;
+export type MemoryAuditHandler = ((event: MemoryEvent) => void) & {
+  readonly seed: (records: readonly MemoryAuditSeedRecord[]) => void;
+};
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -171,7 +186,7 @@ function parseExistingEvents(json: string | undefined): PersistedMemoryAuditEven
   try {
     const parsed: unknown = JSON.parse(json);
     if (!Array.isArray(parsed)) {
-      throw new Error("memory audit manifest has unexpected shape");
+      throw new TypeError("memory audit manifest has unexpected shape");
     }
     return parsed as PersistedMemoryAuditEvent[];
   } catch (error) {
@@ -338,8 +353,11 @@ export function createMemoryAuditHandler(options: MemoryAuditHandlerOptions): Me
   const newEventId = options.newEventId ?? ((): string => randomUUID());
   const previousStatus = new Map<MemoryId, MemoryStatus>();
   const previousPinned = new Map<MemoryId, boolean>();
+  let seeded = false;
+  let processedEvent = false;
 
-  return (event: MemoryEvent): void => {
+  const handler = (event: MemoryEvent): void => {
+    processedEvent = true;
     const ctx: BuildContext = {
       occurredAt: now(),
       newEventId,
@@ -350,14 +368,37 @@ export function createMemoryAuditHandler(options: MemoryAuditHandlerOptions): Me
     if (auditEvent === undefined) {
       return;
     }
+    const runId = auditRunIdFor(auditEvent.occurredAt);
     try {
-      appendAuditEvents(options.evidenceStore, auditRunIdFor(auditEvent.occurredAt), [
+      appendAuditEvents(options.evidenceStore, runId, [
         sanitizeAuditEvent(auditEvent, options.redactString),
       ]);
     } catch (error) {
-      reportAuditPersistFailure(options, "memory-audit-handler.bridge", error);
+      reportAuditPersistFailure(options, "memory-audit-handler.bridge", runId, error);
     }
   };
+  return Object.assign(handler, {
+    seed: (records: readonly MemoryAuditSeedRecord[]): void => {
+      if (seeded || processedEvent) {
+        throw new Error("MemoryAuditHandler.seed() may only be called once before mutations.");
+      }
+      seeded = true;
+      seedStateCache(records, previousStatus, previousPinned);
+    },
+  });
+}
+
+function seedStateCache(
+  records: readonly MemoryAuditSeedRecord[],
+  previousStatus: Map<MemoryId, MemoryStatus>,
+  previousPinned: Map<MemoryId, boolean>,
+): void {
+  previousStatus.clear();
+  previousPinned.clear();
+  for (const record of records) {
+    previousStatus.set(record.id, record.status);
+    previousPinned.set(record.id, record.pinned);
+  }
 }
 
 function mapVaultEvent(
@@ -370,19 +411,11 @@ function mapVaultEvent(
     case "memory:inserted":
       return buildInsertedEvent(event.record, ctx);
     case "memory:updated":
-      return buildUpdatedEvent(
-        event.record,
-        previousStatus.get(event.record.id),
-        previousPinned.get(event.record.id),
-        ctx,
-      );
+      return mapUpdatedVaultEvent(event, previousStatus, previousPinned, ctx);
     case "memory:tombstoned":
       return buildTombstonedEvent(event.tombstone, ctx);
     case "memory:deleted":
-      if (event.tombstoned) {
-        return undefined;
-      }
-      return buildDeletedEvent(event.memoryId, event.scope, ctx);
+      return mapDeletedVaultEvent(event, ctx);
     case "edge:inserted":
     case "edge:deleted":
     case "embedding:upserted":
@@ -391,6 +424,27 @@ function mapVaultEvent(
     default:
       return undefined;
   }
+}
+
+function mapUpdatedVaultEvent(
+  event: Extract<MemoryEvent, { readonly kind: "memory:updated" }>,
+  previousStatus: ReadonlyMap<MemoryId, MemoryStatus>,
+  previousPinned: ReadonlyMap<MemoryId, boolean>,
+  ctx: BuildContext,
+): MemoryAuditEvent | undefined {
+  return buildUpdatedEvent(
+    event.record,
+    event.previous?.status ?? previousStatus.get(event.record.id),
+    event.previous?.pinned ?? previousPinned.get(event.record.id),
+    ctx,
+  );
+}
+
+function mapDeletedVaultEvent(
+  event: Extract<MemoryEvent, { readonly kind: "memory:deleted" }>,
+  ctx: BuildContext,
+): MemoryAuditEvent | undefined {
+  return event.tombstoned ? undefined : buildDeletedEvent(event.memoryId, event.scope, ctx);
 }
 
 function updateStateCache(
@@ -484,7 +538,7 @@ export function recordMemoryAudits(
       if (options.required === true) {
         throw error;
       }
-      reportAuditPersistFailure(options, "memory-audit-handler.direct", error);
+      reportAuditPersistFailure(options, "memory-audit-handler.direct", runId, error);
     }
   }
 }
@@ -540,5 +594,7 @@ export function createMemoryAuditDeleteCommitHandler(
 // `onMemoryEvent` port wired so the vault doesn't have to special-case undefined.
 
 export function createNoopMemoryAuditHandler(): MemoryAuditHandler {
-  return (): void => undefined;
+  return Object.assign((_: MemoryEvent): void => undefined, {
+    seed: (_records: readonly MemoryAuditSeedRecord[]): void => undefined,
+  });
 }

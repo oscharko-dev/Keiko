@@ -24,11 +24,11 @@ import type {
   CodingWorkbenchCodexSubscriptionProfile,
   CodingWorkbenchSidecarGatewayResult,
 } from "@oscharko-dev/keiko-contracts";
+import { isGatewayVerificationState } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import {
-  isGatewayVerificationState,
   validateCodingWorkbenchCodexAuthSetupPlan,
   validateCodingWorkbenchCodexSubscriptionProfile,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth";
 import { ApiError } from "./api";
 import { bffFetchJson } from "./http";
 
@@ -63,8 +63,14 @@ const CODING_WORKBENCH_SIDECAR_UNAVAILABLE_REASONS = new Set([
   "non-coding-capable",
   "deployment-policy-disabled",
   "subscription-source",
+  // #3390 closeout: an otherwise-configured, probed profile whose derived `maxPromptTokens` is
+  // below the coding runtime's minimum (epic #3384 readiness gap).
+  "model-context-window-insufficient",
+  // PR #3452 (F73): the coding model's forced tool-call proof has aged out or is missing.
+  "tool-calling-unverified",
+  // #3591 (1.1.7): the automatic verification is still running against a slow gateway.
+  "model-verification-pending",
 ]);
-
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -89,23 +95,7 @@ function validateSidecarRunMetadata(value: unknown, reasons: string[]): boolean 
   return reasons.length === 0;
 }
 
-function validateSidecarGatewayProfileResponse(
-  value: unknown,
-): CodingWorkbenchProviderValidation | CodingWorkbenchProviderValidationFailure {
-  const reasons: string[] = [];
-  if (!isObjectRecord(value)) return { ok: false, reasons: ["response must be an object"] };
-  if (value.status === "unavailable") {
-    if (
-      typeof value.reason !== "string" ||
-      !CODING_WORKBENCH_SIDECAR_UNAVAILABLE_REASONS.has(value.reason)
-    ) {
-      reasons.push("reason is invalid");
-    }
-    return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
-  }
-  if (value.status !== "available") {
-    return { ok: false, reasons: ["status is invalid"] };
-  }
+function collectSidecarAvailableReasons(value: Record<string, unknown>, reasons: string[]): void {
   if (typeof value.profileId !== "string" || value.profileId.length === 0) {
     reasons.push("profileId must be a non-empty string");
   }
@@ -128,6 +118,26 @@ function validateSidecarGatewayProfileResponse(
     reasons.push("verification must be a gateway verification state");
   }
   validateSidecarRunMetadata(value.runMetadata, reasons);
+}
+
+function validateSidecarGatewayProfileResponse(
+  value: unknown,
+): CodingWorkbenchProviderValidation | CodingWorkbenchProviderValidationFailure {
+  if (!isObjectRecord(value)) return { ok: false, reasons: ["response must be an object"] };
+  const reasons: string[] = [];
+  if (value.status === "unavailable") {
+    if (
+      typeof value.reason !== "string" ||
+      !CODING_WORKBENCH_SIDECAR_UNAVAILABLE_REASONS.has(value.reason)
+    ) {
+      reasons.push("reason is invalid");
+    }
+    return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
+  }
+  if (value.status !== "available") {
+    return { ok: false, reasons: ["status is invalid"] };
+  }
+  collectSidecarAvailableReasons(value, reasons);
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }
 
@@ -164,7 +174,7 @@ function readDeadlineSignal(): AbortSignal {
   return AbortSignal.timeout(DEFAULT_READ_TIMEOUT_MS);
 }
 
-export async function fetchCodingWorkbenchSidecarGatewayProfile(): Promise<CodingWorkbenchSidecarGatewayResult> {
+async function readSidecarGatewayProfile(): Promise<CodingWorkbenchSidecarGatewayResult> {
   return bffFetchJson(
     "/api/coding-sidecar/gateway/profile",
     { cache: "no-store", signal: readDeadlineSignal() },
@@ -174,6 +184,12 @@ export async function fetchCodingWorkbenchSidecarGatewayProfile(): Promise<Codin
       ),
     },
   );
+}
+
+export async function fetchCodingWorkbenchSidecarGatewayProfile(): Promise<CodingWorkbenchSidecarGatewayResult> {
+  // The client starts no probe. The server verifies what the Workbench needs on this read itself
+  // (an expired tool-call proof, an unproven context window), bounded and logged (ADR-0173).
+  return readSidecarGatewayProfile();
 }
 
 export async function fetchCodingWorkbenchCodexSubscriptionProfile(): Promise<CodingWorkbenchCodexSubscriptionProfile> {

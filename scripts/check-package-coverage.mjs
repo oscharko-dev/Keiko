@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { existsSync, mkdirSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, matchesGlob, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { KEIKO_REPOSITORY_GATE_CONTRACT } from "./sonar-quality-gate-contract.mjs";
+import { readJsonFile } from "./lib/json.mjs";
+import { PACKAGE_COVERAGE_GATE_SCRIPTS } from "./lib/package-coverage-gate-scripts.mjs";
 
 // ADR-0158 D3: the constitutional 85 has exactly one definition. The package ratchet target and
 // SonarCloud's `new_coverage` condition are the same number by construction rather than by two
@@ -52,13 +54,10 @@ const VALUE_OPTION_HANDLERS = new Map([
 const BOOLEAN_OPTIONS = new Map([
   ["strict", "strict"],
   ["enforce-file-floors", "enforceFileFloors"],
+  ["refresh-source-inventory", "refreshSourceInventory"],
   // ADR-0158 D2: evaluate lines, statements, branches and functions in one parse of the summaries.
   ["all-metrics", "allMetrics"],
 ]);
-
-function readJson(path) {
-  return JSON.parse(readFileSync(path, "utf8"));
-}
 
 function isPercent(value) {
   return Number.isFinite(value) && value >= 0 && value <= 100;
@@ -79,6 +78,7 @@ function defaultOptions() {
     strict: false,
     allMetrics: false,
     enforceFileFloors: false,
+    refreshSourceInventory: false,
     fileFloorThreshold: undefined,
   };
 }
@@ -142,6 +142,14 @@ function validateOptions(parsed) {
   if (parsed.fileFloorThreshold !== undefined && !isPercent(parsed.fileFloorThreshold)) {
     throw new Error(`Invalid --file-floor-threshold value: ${String(parsed.fileFloorThreshold)}`);
   }
+  if (
+    parsed.refreshSourceInventory &&
+    (parsed.baseline === undefined || parsed.writeBaseline === undefined)
+  ) {
+    throw new Error(
+      "--refresh-source-inventory requires --baseline and --write-baseline destinations",
+    );
+  }
 }
 
 export function parseArgs(argv) {
@@ -200,6 +208,130 @@ export function listPackages(root) {
   return readdirSync(packagesDir)
     .filter((name) => existsSync(join(packagesDir, name, "package.json")))
     .sort((left, right) => left.localeCompare(right));
+}
+
+// KEIKO-0125 — the baseline's `files` is derived from the v8 coverage summary, which only ever
+// contains files a test actually imported. A source file no test touches never appears in the
+// summary at all, so a package can silently record fewer files than it really has: keiko-sandbox
+// recorded 6 against 9 real sources, and every one of the 3 invisible files was ungated. These two
+// arrays are a duplicate of `coverage.include`/`coverage.exclude` in
+// `vitest.coverage.packages.config.ts` kept honest by a parity test
+// (`scripts/__tests__/check-package-coverage.test.mjs`), which imports the real config and asserts
+// they are identical — the config cannot be imported from a plain `.mjs` script without pulling in
+// vitest, so this is the "duplicate with a parity test" side of AGENTS.md's rule rather than a
+// second hand-written definition that could drift.
+export const PACKAGE_COVERAGE_INCLUDE = [
+  "packages/*/src/**/*.{ts,tsx}",
+  "src/**/*.{ts,tsx}",
+  ...PACKAGE_COVERAGE_GATE_SCRIPTS,
+];
+export const PACKAGE_COVERAGE_EXCLUDE = [
+  "packages/keiko-ui/**",
+  "**/*.test.*",
+  "**/*.bench.*",
+  "**/__tests__/**",
+  "**/_support.ts",
+  "**/test-support.ts",
+  // KEIKO-0130: shared per-package test-fixture modules live under `src/test-support/` and are
+  // never bundled into the package's public surface. Excluded from the coverage inventory for
+  // the same reason `**/test-support.ts` is.
+  "**/test-support/**",
+  "**/test-fixtures.ts",
+  "**/testing.ts",
+  "**/*.config.ts",
+  "**/*.generated.*",
+  "dist/**",
+  "node_modules/**",
+];
+
+// keiko-ui is excluded from the package coverage run because it is measured by its own
+// (packages/keiko-ui/vitest.coverage.config.ts) — not because it has no sources. Asking "what would
+// the coverage run measure here" therefore has to use the globs of the run that actually measures
+// that package, or keiko-ui's live inventory comes back 0 against a real 248-file entry.
+const UI_PACKAGE = "keiko-ui";
+export const UI_COVERAGE_INCLUDE = ["packages/keiko-ui/src/**/*.{ts,tsx}"];
+export const UI_COVERAGE_EXCLUDE = [
+  "**/*.test.*",
+  "**/__tests__/**",
+  "**/_support.ts",
+  "**/test-support.ts",
+  "**/test-fixtures.ts",
+  "**/testing.ts",
+  "packages/keiko-ui/.next/**",
+  "packages/keiko-ui/out/**",
+];
+
+function coverageGlobsFor(packageName) {
+  return packageName === UI_PACKAGE
+    ? { include: UI_COVERAGE_INCLUDE, exclude: UI_COVERAGE_EXCLUDE }
+    : { include: PACKAGE_COVERAGE_INCLUDE, exclude: PACKAGE_COVERAGE_EXCLUDE };
+}
+
+function isMeasuredSourcePath(repoRelativePath, { include, exclude }) {
+  if (exclude.some((glob) => matchesGlob(repoRelativePath, glob))) return false;
+  return include.some((glob) => matchesGlob(repoRelativePath, glob));
+}
+
+// A symlink entry reports neither isDirectory() nor isFile(), so a naive walk silently skips a
+// symlinked source file or directory — the live inventory would then undercount against a coverage
+// run that follows it, and the reality guard would fail with a mismatch that names no cause. v8
+// measures whatever the module graph resolves to, so this follows symlinks to match, and a broken
+// one fails loudly rather than disappearing.
+// `seen` holds the REAL path of every directory already walked. Following symlinks (above) without
+// it lets a link pointing at an ancestor recurse until the path or the stack is exhausted, and lets
+// two links to the same directory list its files twice — a hang or a double-count in a gate whose
+// whole job is to produce one honest number.
+function walkSourceFiles(directory, seen = new Set()) {
+  const real = realpathSync(directory);
+  if (seen.has(real)) return [];
+  seen.add(real);
+  const found = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const child = join(directory, entry.name);
+    const stats = entry.isSymbolicLink() ? statSync(child) : entry;
+    if (stats.isDirectory()) found.push(...walkSourceFiles(child, seen));
+    else if (stats.isFile()) found.push(child);
+  }
+  return found;
+}
+
+/** Repository-relative source files the coverage run would measure for one workspace package. */
+export function listPackageSourceFiles(root, packageName) {
+  const packageSrc = join(root, "packages", packageName, "src");
+  if (!existsSync(packageSrc)) return [];
+  const globs = coverageGlobsFor(packageName);
+  return walkSourceFiles(packageSrc)
+    .map((absolute) => relative(root, absolute).split(sep).join("/"))
+    .filter((repoRelativePath) => isMeasuredSourcePath(repoRelativePath, globs))
+    .sort((left, right) => left.localeCompare(right));
+}
+
+export function countPackageSourceFiles(root, packageName) {
+  return listPackageSourceFiles(root, packageName).length;
+}
+
+function assertInventoryPackageSet(root, baseline) {
+  const live = listPackages(root);
+  const recorded = Object.keys(baseline.packages);
+  const missing = live.filter((name) => !recorded.includes(name));
+  const stale = recorded.filter((name) => !live.includes(name));
+  if (missing.length === 0 && stale.length === 0) return;
+  throw new Error(
+    `Coverage baseline package inventory differs from the workspace: missing=${String(missing.length)}, stale=${String(stale.length)}`,
+  );
+}
+
+function refreshSourceInventoryBaseline(root, baseline) {
+  assertInventoryPackageSet(root, baseline);
+  return {
+    ...baseline,
+    packages: Object.fromEntries(
+      Object.entries(baseline.packages).map(([name, entry]) => [
+        name,
+        { ...entry, files: countPackageSourceFiles(root, name) },
+      ]),
+    ),
+  };
 }
 
 function normalizeCoverageFile(root, file) {
@@ -352,7 +484,7 @@ function loadCoverageSummaries(root, paths) {
     if (!existsSync(absolute)) {
       throw new Error(`Coverage summary not found: ${absolute}`);
     }
-    return readJson(absolute);
+    return readJsonFile(absolute);
   });
 }
 
@@ -648,7 +780,7 @@ function loadEvaluationContext(root, options) {
   });
   const filePercents = collectFilePercents(root, coverageSummaries);
   const existing =
-    options.baseline === undefined ? undefined : readJson(resolve(root, options.baseline));
+    options.baseline === undefined ? undefined : readJsonFile(resolve(root, options.baseline));
   const failures = baselineSchemaFailures(existing);
   if (failures.length > 0) {
     throw new Error(
@@ -748,6 +880,24 @@ export async function runCli(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   const scriptRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const root = resolve(options.root ?? scriptRoot);
+  if (options.refreshSourceInventory) {
+    const baseline = readJsonFile(resolve(root, options.baseline));
+    const failures = baselineSchemaFailures(baseline);
+    if (failures.length > 0) {
+      throw new Error(
+        `coverage baseline is not the governed schema:\n  - ${failures.join("\n  - ")}`,
+      );
+    }
+    const refreshed = refreshSourceInventoryBaseline(root, baseline);
+    const changed = Object.entries(baseline.packages).filter(
+      ([name, entry]) => entry.files !== refreshed.packages[name].files,
+    ).length;
+    writeJson(resolve(root, options.writeBaseline), refreshed);
+    console.log(
+      `coverage-source-inventory: refreshed ${String(Object.keys(refreshed.packages).length)} package count(s); ${String(changed)} changed.`,
+    );
+    return refreshed;
+  }
   const context = loadEvaluationContext(root, options);
   const evaluation = evaluateAll(options, context);
   writeReportOutputs(root, options, context, evaluation);
@@ -756,8 +906,10 @@ export async function runCli(argv = process.argv.slice(2)) {
 }
 
 if (process.argv[1] !== undefined && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  runCli().catch((error) => {
+  try {
+    await runCli();
+  } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
-  });
+  }
 }

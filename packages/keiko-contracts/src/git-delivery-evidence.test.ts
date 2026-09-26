@@ -5,13 +5,16 @@
 // structural guards fail closed on malformed records (the on-read tamper gate).
 
 import { describe, expect, it } from "vitest";
+import type {
+  GitDeliveryEvidenceOutcomeClass,
+  GitDeliveryEvidenceRecord,
+  GitDeliveryRecoveryDisposition,
+} from "./index.js";
 import {
   GIT_DELIVERY_AUDIT_PACKET_KNOWN_LIMITATIONS,
-  GIT_DELIVERY_BLOCK_REASONS,
   GIT_DELIVERY_EVIDENCE_LIFECYCLE_PHASES,
   GIT_DELIVERY_EVIDENCE_OUTCOME_CLASSES,
   GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION,
-  GIT_DELIVERY_EXECUTION_ERROR_CODES,
   GIT_DELIVERY_RECOVERY_DISPOSITIONS,
   buildGitDeliveryAuditPacket,
   gitDeliveryRecoveryDispositionForBlockReason,
@@ -21,10 +24,8 @@ import {
   isGitDeliveryEvidenceRecord,
   isGitDeliveryRecoveryDisposition,
   isGitDeliveryRecoveryMetadata,
-  type GitDeliveryEvidenceOutcomeClass,
-  type GitDeliveryEvidenceRecord,
-  type GitDeliveryRecoveryDisposition,
-} from "./index.js";
+} from "./git-delivery-evidence.js";
+import { GIT_DELIVERY_BLOCK_REASONS, GIT_DELIVERY_EXECUTION_ERROR_CODES } from "./git-delivery.js";
 
 function baseRecord(overrides: Partial<GitDeliveryEvidenceRecord> = {}): GitDeliveryEvidenceRecord {
   return {
@@ -95,6 +96,7 @@ describe("recovery-disposition derivations (AC3)", () => {
       "network-failure": "retryable",
       conflict: "user-fixable",
       "precondition-failed": "user-fixable",
+      "signature-failed": "user-fixable",
       timeout: "retryable",
       "internal-error": "retryable",
     };
@@ -106,10 +108,16 @@ describe("recovery-disposition derivations (AC3)", () => {
   it("classifies every block reason and never marks a policy denial retryable", () => {
     const expected: Record<string, GitDeliveryRecoveryDisposition> = {
       "policy-pack-blocked": "policy-forbidden",
+      "authority-denied": "policy-forbidden",
       "protected-branch": "policy-forbidden",
       "provider-capability-absent": "policy-forbidden",
       "approval-expired": "user-fixable",
+      // KEIKO-0147 / KEIKO-0154: both new block reasons are user-fixable — the operator obtains
+      // a fresh approval or refreshes the readiness read, respectively. Neither is retryable
+      // (unbounded retry cannot lift the denial) and neither is policy-forbidden (fix is at hand).
+      "approver-not-authorized": "user-fixable",
       "risk-class-ceiling": "policy-forbidden",
+      "head-hash-mismatch": "user-fixable",
       "no-applicable-rule": "policy-forbidden",
     };
     for (const reason of GIT_DELIVERY_BLOCK_REASONS) {

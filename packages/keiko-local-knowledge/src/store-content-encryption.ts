@@ -21,9 +21,27 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+
 import { KnowledgeStoreError } from "./errors.js";
+import {
+  emitKnowledgeLogEvent,
+  knowledgeErrorKind,
+  startKnowledgeLogTimer,
+  type KnowledgeLogSink,
+} from "./knowledge-log.js";
 import { sectionPathHashFromJson } from "./section-path-hash.js";
 import type { StoreContentCipher } from "./store-content-cipher.js";
+
+// Sentinel `fromScope` reported on a store that had never been encrypted before this migration —
+// there is no prior `content_encryption_scope` value to report, and this reads clearly next to
+// the real scope-version strings (`ENCRYPTION_SCOPE_VALUE` and its predecessors).
+const UNENCRYPTED_SCOPE_LABEL = "plaintext";
+// Reported when an already-encrypted store predates the scope-marker key entirely (pre-v2).
+const UNSCOPED_ENCRYPTED_SCOPE_LABEL = "unscoped";
 
 const ENCRYPTION_MARKER_KEY = "content_encryption";
 const ENCRYPTION_MARKER_VALUE = "aes-256-gcm/v1";
@@ -31,6 +49,60 @@ const ENCRYPTION_PROBE_KEY = "content_encryption_probe";
 const ENCRYPTION_SCOPE_KEY = "content_encryption_scope";
 const ENCRYPTION_SCOPE_VALUE = "reconstructive-columns/v3";
 const UPGRADEABLE_ENCRYPTION_SCOPE_VALUES = new Set<string>(["reconstructive-columns/v2"]);
+
+const STORE_ENCRYPTION_CHECKPOINT_DEGRADED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "store.encryption-checkpoint-degraded",
+  category: "diagnostic",
+  owner: "keiko-local-knowledge",
+  emitter: "store-content-encryption.reportCheckpointDegraded",
+  fields: {
+    attempts: { type: "integer", dataClass: "count", required: true },
+    checkpointState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["threw", "malformed", "busy", "partial"],
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["store-encryption-checkpoint"],
+  proofIds: ["store.encryption-checkpoint-degraded.state"],
+  releaseImpact: "patch",
+});
+
+const STORE_ENCRYPTION_MIGRATED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "store.encryption-migrated",
+  category: "diagnostic",
+  owner: "keiko-local-knowledge",
+  emitter: "store-content-encryption.logEncryptionMigrated",
+  fields: {
+    fromScope: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["plaintext", "unscoped", "reconstructive-columns/v2"],
+    },
+    toScope: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["reconstructive-columns/v3"],
+    },
+  },
+  causal: "none",
+  lifecycle: "end",
+  analyzerProjection: "capability",
+  failureClasses: ["store-encryption-migration"],
+  proofIds: ["store.encryption-migrated.scope"],
+  releaseImpact: "patch",
+});
 // Fixed, non-secret sentinel. Sealed at migration time and re-opened on every encrypted open to prove
 // the resolved key matches the one the store was sealed with. Never carries customer content.
 const ENCRYPTION_PROBE_PLAINTEXT = "keiko-local-knowledge-content-encryption-v1";
@@ -272,12 +344,160 @@ function sealReconstructiveContent(db: DatabaseSync, cipher: StoreContentCipher)
   sealBlobColumn(db, cipher);
 }
 
-function flushPlaintextResidue(db: DatabaseSync): void {
-  db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-  db.exec("VACUUM");
+// The number of times the post-migration WAL TRUNCATE checkpoint is retried when SQLite reports
+// `busy=1` (another connection holds an open read/write) or a partial checkpoint (fewer frames
+// checkpointed than the WAL holds). Bounded on purpose so a sustained contending reader cannot hang
+// the store-open call indefinitely; mirrors keiko-memory-vault's schema.ts retry bound (#2906
+// KEIKO-0877).
+const WAL_CHECKPOINT_MAX_ATTEMPTS = 3;
+
+interface WalCheckpointResult {
+  readonly busy: number;
+  readonly log: number;
+  readonly checkpointed: number;
 }
 
-function migrateToEncrypted(db: DatabaseSync, cipher: StoreContentCipher): void {
+type WalCheckpointAttempt =
+  | { readonly kind: "ok"; readonly result: WalCheckpointResult }
+  | { readonly kind: "threw"; readonly cause: unknown }
+  // #2906 round-3 review: an undefined row, `{}`, or non-numeric columns must fail closed into the
+  // retry/report path rather than being coerced to a trivially-satisfied 0/0/0 result -- otherwise
+  // `busy === 0 && checkpointed >= log` is vacuously true and migration can write the encryption
+  // marker without a verified WAL truncation. Mirrors keiko-memory-vault's schema.ts "malformed" kind.
+  | { readonly kind: "malformed" };
+
+function isWellFormedCheckpointRow(
+  row: Partial<WalCheckpointResult> | undefined,
+): row is WalCheckpointResult {
+  return (
+    Number.isInteger(row?.busy) && Number.isInteger(row?.log) && Number.isInteger(row?.checkpointed)
+  );
+}
+
+// The PRAGMA itself is also a possible failure mode, not only its returned `busy` row: depending on
+// the connection's busy-timeout configuration, SQLite can raise SQLITE_BUSY as a thrown error
+// instead of returning `{ busy: 1, ... }`. Both are transient-contention shapes and both are retried
+// identically below.
+function attemptWalCheckpointTruncate(db: DatabaseSync): WalCheckpointAttempt {
+  try {
+    const row = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as
+      Partial<WalCheckpointResult> | undefined;
+    if (!isWellFormedCheckpointRow(row)) return { kind: "malformed" };
+    return { kind: "ok", result: row };
+  } catch (cause) {
+    return { kind: "threw", cause };
+  }
+}
+
+function isCheckpointComplete(attempt: WalCheckpointAttempt): boolean {
+  return (
+    attempt.kind === "ok" &&
+    attempt.result.busy === 0 &&
+    attempt.result.checkpointed >= attempt.result.log
+  );
+}
+
+// #2906 round-3 review: evidence was previously present only when the PRAGMA itself threw, so the
+// two primary new failure modes -- a persistently busy/partial checkpoint and a malformed result
+// row -- had no closed, body-free detail to reconstruct through the structured log contract
+// (AGENTS.md §8). Every non-complete outcome now carries a stable `failureKind` beneath the closed
+// durability-failed envelope: the real cause's classified code/name when the statement threw, and
+// a literal identifier for each still-incomplete shape otherwise.
+function checkpointErrorKind(attempt: WalCheckpointAttempt): string {
+  if (attempt.kind === "threw") return knowledgeErrorKind(attempt.cause);
+  if (attempt.kind === "malformed") return "checkpoint-malformed";
+  return attempt.result.busy === 1 ? "checkpoint-busy" : "checkpoint-partial";
+}
+
+function checkpointState(last: WalCheckpointAttempt): "threw" | "malformed" | "busy" | "partial" {
+  if (last.kind !== "ok") return last.kind;
+  return last.result.busy === 1 ? "busy" : "partial";
+}
+
+function reportCheckpointDegraded(
+  logSink: KnowledgeLogSink | undefined,
+  attempts: number,
+  last: WalCheckpointAttempt,
+): void {
+  emitKnowledgeLogEvent(
+    logSink,
+    activityLogEvent(
+      STORE_ENCRYPTION_CHECKPOINT_DEGRADED_OPERATION,
+      { level: "error", errorKind: "durability-failed" },
+      {
+        attempts,
+        checkpointState: checkpointState(last),
+        failureKind: checkpointErrorKind(last),
+      },
+    ),
+  );
+}
+
+function checkpointDegradedError(last: WalCheckpointAttempt): KnowledgeStoreError {
+  const cause =
+    last.kind === "malformed"
+      ? "the checkpoint returned a missing or non-numeric result row"
+      : "a held-open reader prevented a full checkpoint";
+  const message =
+    "failed to flush plaintext residue from the Local Knowledge store WAL after encrypting " +
+    `content: ${cause} after ${String(WAL_CHECKPOINT_MAX_ATTEMPTS)} attempts`;
+  return last.kind === "threw"
+    ? new KnowledgeStoreError(message, { cause: last.cause })
+    : new KnowledgeStoreError(message);
+}
+
+// Per ADR-0047 D4, the encryption-scope marker must only be written after this rewrite has fully
+// completed. Unlike keiko-memory-vault's sibling flush (#2906 KEIKO-0713: warn-and-continue, because
+// its marker had already been committed before that flush runs), this package's callers write the
+// marker AFTER flushPlaintextResidue returns -- see migrateToEncrypted's and upgradeEncryptedScope's
+// phase-3 comments. So a persistently busy or partial TRUNCATE checkpoint here must fail the whole
+// migration CLOSED: throwing leaves the marker unset, and the next store-open retries the idempotent
+// migration instead of silently accepting a WAL that may still hold plaintext (AGENTS.md §7 forbids
+// swallowing this with an empty catch).
+//
+// Exported so store-content-encryption.test.ts can exercise the retry/report path directly against
+// a fake DatabaseSync, without reconstructing an end-to-end migration timeline. Not part of the
+// public package surface -- consumed only by migrateToEncrypted/upgradeEncryptedScope above and by
+// co-located tests.
+export function flushPlaintextResidue(
+  db: DatabaseSync,
+  logSink: KnowledgeLogSink | undefined,
+): void {
+  let last: WalCheckpointAttempt = { kind: "threw", cause: undefined };
+  for (let attempt = 1; attempt <= WAL_CHECKPOINT_MAX_ATTEMPTS; attempt += 1) {
+    last = attemptWalCheckpointTruncate(db);
+    if (isCheckpointComplete(last)) {
+      db.exec("VACUUM");
+      return;
+    }
+  }
+  reportCheckpointDegraded(logSink, WAL_CHECKPOINT_MAX_ATTEMPTS, last);
+  throw checkpointDegradedError(last);
+}
+
+// Fires only after the migration function it is called from has ALREADY returned without
+// throwing — never inside the transactional try/catch above it, and never for a branch of
+// `applyStoreContentEncryption` that migrates nothing (a store already at the current scope).
+// `durationMs` rides the envelope's own field, not `extra`, matching every other timed line this
+// package writes (`startKnowledgeLogTimer`, ADR-0019 seam).
+function logEncryptionMigrated(
+  logSink: KnowledgeLogSink | undefined,
+  fromScope: "plaintext" | "unscoped" | "reconstructive-columns/v2",
+  toScope: "reconstructive-columns/v3",
+  durationMs: number,
+): void {
+  emitKnowledgeLogEvent(
+    logSink,
+    activityLogEvent(STORE_ENCRYPTION_MIGRATED_OPERATION, { durationMs }, { fromScope, toScope }),
+  );
+}
+
+function migrateToEncrypted(
+  db: DatabaseSync,
+  cipher: StoreContentCipher,
+  logSink?: KnowledgeLogSink,
+): void {
+  const elapsed = startKnowledgeLogTimer();
   // Phase 1 (transactional): seal every content row and write the sealed key-verification probe. The
   // completion MARKER is deliberately NOT written here — see phase 2.
   db.exec("BEGIN");
@@ -300,12 +520,19 @@ function migrateToEncrypted(db: DatabaseSync, cipher: StoreContentCipher): void 
   // next open re-runs the idempotent migration instead of skipping it over a WAL that still holds
   // plaintext. The seal sweep is a no-op on the already-sealed rows, so the retry only re-checkpoints
   // and re-VACUUMs.
-  flushPlaintextResidue(db);
+  flushPlaintextResidue(db, logSink);
   writeSchemaMeta(db, ENCRYPTION_MARKER_KEY, ENCRYPTION_MARKER_VALUE);
   writeSchemaMeta(db, ENCRYPTION_SCOPE_KEY, ENCRYPTION_SCOPE_VALUE);
+  logEncryptionMigrated(logSink, UNENCRYPTED_SCOPE_LABEL, ENCRYPTION_SCOPE_VALUE, elapsed());
 }
 
-function upgradeEncryptedScope(db: DatabaseSync, cipher: StoreContentCipher): void {
+function upgradeEncryptedScope(
+  db: DatabaseSync,
+  cipher: StoreContentCipher,
+  fromScope: string,
+  logSink?: KnowledgeLogSink,
+): void {
+  const elapsed = startKnowledgeLogTimer();
   db.exec("BEGIN");
   try {
     ensureSectionPathHashes(db, cipher);
@@ -321,8 +548,11 @@ function upgradeEncryptedScope(db: DatabaseSync, cipher: StoreContentCipher): vo
       cause,
     });
   }
-  flushPlaintextResidue(db);
+  flushPlaintextResidue(db, logSink);
   writeSchemaMeta(db, ENCRYPTION_SCOPE_KEY, ENCRYPTION_SCOPE_VALUE);
+  const fromScopeClass =
+    fromScope === "reconstructive-columns/v2" ? fromScope : UNSCOPED_ENCRYPTED_SCOPE_LABEL;
+  logEncryptionMigrated(logSink, fromScopeClass, ENCRYPTION_SCOPE_VALUE, elapsed());
 }
 
 function verifyProbe(db: DatabaseSync, cipher: StoreContentCipher): void {
@@ -364,7 +594,11 @@ function assertSupportedEncryptionScope(scope: string | undefined): void {
 
 // Reconciles the store's on-disk encryption state with the resolved cipher. Called once from
 // openKnowledgeStore after migrations and before the handle is returned.
-export function applyStoreContentEncryption(db: DatabaseSync, cipher: StoreContentCipher): void {
+export function applyStoreContentEncryption(
+  db: DatabaseSync,
+  cipher: StoreContentCipher,
+  logSink?: KnowledgeLogSink,
+): void {
   const marker = readSchemaMeta(db, ENCRYPTION_MARKER_KEY);
   const probe = readSchemaMeta(db, ENCRYPTION_PROBE_KEY);
   const scope = readSchemaMeta(db, ENCRYPTION_SCOPE_KEY);
@@ -382,7 +616,7 @@ export function applyStoreContentEncryption(db: DatabaseSync, cipher: StoreConte
     verifyProbe(db, cipher);
     assertSupportedEncryptionScope(scope);
     if (scope !== ENCRYPTION_SCOPE_VALUE) {
-      upgradeEncryptedScope(db, cipher);
+      upgradeEncryptedScope(db, cipher, scope ?? UNSCOPED_ENCRYPTED_SCOPE_LABEL, logSink);
     }
     return;
   }
@@ -394,14 +628,27 @@ export function applyStoreContentEncryption(db: DatabaseSync, cipher: StoreConte
       );
     }
     verifyProbe(db, cipher);
-    migrateToEncrypted(db, cipher);
+    migrateToEncrypted(db, cipher, logSink);
     return;
   }
   if (!cipher.isEncrypted) {
     ensureSectionPathHashes(db, cipher);
     return;
   }
-  migrateToEncrypted(db, cipher);
+  migrateToEncrypted(db, cipher, logSink);
+}
+
+export type StoreContentEncryptionMode = "plaintext" | "encrypted" | "migrating";
+
+// Read-only snapshot of the store's on-disk encryption state, independent of any resolved cipher
+// and never throwing — used by `computeStoreFingerprint` (store.ts) to report `encryptionMode`
+// in the support-bundle manifest (Wave 4a, epic #3233 §6.2) without re-deriving the marker/probe
+// schema_meta keys a second time. Mirrors the case matrix documented at the top of this file: a
+// malformed marker VALUE is still reported as "encrypted" here — validating it is
+// `applyStoreContentEncryption`'s job, not a read-only reporter's.
+export function readStoreEncryptionMode(db: DatabaseSync): StoreContentEncryptionMode {
+  if (readSchemaMeta(db, ENCRYPTION_MARKER_KEY) !== undefined) return "encrypted";
+  return readSchemaMeta(db, ENCRYPTION_PROBE_KEY) !== undefined ? "migrating" : "plaintext";
 }
 
 export const STORE_CONTENT_ENCRYPTION_TEST_CONSTANTS = {

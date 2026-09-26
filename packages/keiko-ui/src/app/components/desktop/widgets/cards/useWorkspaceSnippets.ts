@@ -2,11 +2,11 @@
 
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 
-import {
-  EDITOR_M7_SNIPPET_COLLECTION_VERSION,
-  type EditorM7WorkspaceSnippetInput,
-  type EditorM7WorkspaceSnippetSnapshot,
+import type {
+  EditorM7WorkspaceSnippetInput,
+  EditorM7WorkspaceSnippetSnapshot,
 } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_M7_SNIPPET_COLLECTION_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-snippets";
 import { fetchWorkspaceSnippets, mutateWorkspaceSnippets } from "../../../../../lib/api";
 import { subscribeSharedEventSource } from "./sharedEventSource";
 

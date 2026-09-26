@@ -1,19 +1,33 @@
 import { EventEmitter } from "node:events";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createRuntimeGatewayConfinement,
+  currentPlatform,
+  probeBackends,
+} from "@oscharko-dev/keiko-sandbox";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
+import { createBufferedServerLogSink } from "../observability/index.js";
 
 import {
-  createDevLaneRuntimeProcessBackend,
+  createDevLaneRuntimeProcessBackend as createProductionDevLaneRuntimeProcessBackend,
   type DevLaneRuntimeChildProcess,
+  type DevLaneRuntimeProcessBackendOptions,
   type DevLaneRuntimeSpawn,
 } from "./devLaneRuntimeProcessBackend.js";
 import {
   CLOSED_RUNTIME_LAUNCH_PROFILE,
   type PreparedRuntimeSandboxLaunch,
+  type RuntimeProcessBackend,
+  type RuntimeProcessTree,
   type RuntimeSupervisorLaunchRequest,
 } from "./runtimeProcessSupervisor.js";
 
@@ -34,6 +48,29 @@ const SANDBOX: PreparedRuntimeSandboxLaunch = {
     policyDigest: "c".repeat(64),
   },
 };
+const LINUX_IDENTITY = {
+  platform: "linux",
+  arch: "x64",
+  backend: "linux-namespace-gateway",
+} as const;
+const TEST_GIT = { path: "/qualified/apple/git", sha256: "d".repeat(64) } as const;
+
+function createDevLaneRuntimeProcessBackend(
+  options: DevLaneRuntimeProcessBackendOptions,
+): RuntimeProcessBackend {
+  return createProductionDevLaneRuntimeProcessBackend({
+    probeAvailability: () => ({
+      bubblewrap: false,
+      unshare: false,
+      seatbelt: true,
+      docker: false,
+      podman: false,
+    }),
+    platform: "darwin",
+    resolveGitExecutable: () => TEST_GIT,
+    ...options,
+  });
+}
 
 const roots: string[] = [];
 
@@ -45,7 +82,7 @@ interface FakeChild extends DevLaneRuntimeChildProcess {
   settle(code: number | null): void;
 }
 
-function fakeChild(pid: number | undefined): FakeChild {
+function fakeChild(pid: number | undefined, launcherDiagnostics = false): FakeChild {
   const emitter = new EventEmitter();
   const kills: NodeJS.Signals[] = [];
   let reaped = false;
@@ -53,6 +90,7 @@ function fakeChild(pid: number | undefined): FakeChild {
     pid,
     stdout: new PassThrough(),
     stderr: new PassThrough(),
+    ...(launcherDiagnostics ? { launcherDiagnostics: new PassThrough() } : {}),
     emitter,
     kills,
     settled: (): boolean => reaped,
@@ -99,6 +137,17 @@ function stageFixture(): Fixture {
   return { runtimeRoot, executable, cwd, outside };
 }
 
+function gatewayConfinement(): ReturnType<typeof createRuntimeGatewayConfinement> {
+  return createRuntimeGatewayConfinement({
+    gatewayUrl: "http://127.0.0.1:1983/api/coding-sidecar/gateway",
+    runId: "run-2475",
+    treeBindingId: "f".repeat(64),
+    envelopeDigest: "a".repeat(64),
+    runtimeArtifactDigest: "b".repeat(64),
+    modelProfileDigest: "c".repeat(64),
+  });
+}
+
 function launchRequest(fixture: Fixture, executable?: string): RuntimeSupervisorLaunchRequest {
   return {
     runId: "run-2475",
@@ -125,15 +174,101 @@ afterEach(() => {
 });
 
 describe("dev-lane runtime process backend", () => {
-  it("spawns a detached child from inside the runtime root and reports its exit", async () => {
+  it("does not mistake a live child's error event for a completed process tree", async () => {
     const fixture = stageFixture();
-    const spawned: { executable: string; options: Parameters<DevLaneRuntimeSpawn>[2] }[] = [];
     const child = fakeChild(4711);
     const backend = createDevLaneRuntimeProcessBackend({
       identity: IDENTITY,
       runtimeRoot: fixture.runtimeRoot,
-      spawnRuntime: (executable, _args, options) => {
-        spawned.push({ executable, options });
+      gatewayConfinement: gatewayConfinement(),
+      spawnRuntime: () => child,
+    });
+    const tree = backend.spawnOwnedTree(launchRequest(fixture));
+    child.emitter.emit("error", new Error("failed signal"));
+    await expect(backend.reconcileTreeExit(tree)).resolves.toBe(false);
+    child.settle(0);
+    await expect(backend.reconcileTreeExit(tree)).resolves.toBe(true);
+  });
+
+  it.each(["runId", "treeBindingId"] as const)(
+    "rejects %s drift before spawn with body-free evidence",
+    (key) => {
+      const fixture = stageFixture();
+      const activityLog = createBufferedServerLogSink();
+      let spawns = 0;
+      const backend = createDevLaneRuntimeProcessBackend({
+        identity: IDENTITY,
+        runtimeRoot: fixture.runtimeRoot,
+        gatewayConfinement: gatewayConfinement(),
+        activityLog,
+        spawnRuntime: () => {
+          spawns += 1;
+          return fakeChild(4711);
+        },
+      });
+      const request = { ...launchRequest(fixture), [key]: "different" };
+      expect(() => backend.spawnOwnedTree(request)).toThrow("runtime-gateway-confinement-drift");
+      expect(spawns).toBe(0);
+      expect(activityLog.events).toContainEqual(
+        expect.objectContaining({
+          op: "runtime.confinement.failed",
+          correlationId: request.runId,
+          errorKind: "conflict",
+        }),
+      );
+      const confinementFailedLine = activityLog.events.find(
+        (event) => event.op === "runtime.confinement.failed",
+      );
+      if (confinementFailedLine === undefined) throw new Error("expected confinement.failed line");
+      const persistedConfinementFailure = expectActivityLogProof(
+        "runtime.confinement.failed.emitted-line",
+        formatActivityLogProofLine(confinementFailedLine),
+      );
+      expect(persistedConfinementFailure).toMatchObject({
+        op: "runtime.confinement.failed",
+        correlationId: request.runId,
+        errorKind: "conflict",
+      });
+      expect(JSON.stringify(activityLog.events)).not.toContain(fixture.runtimeRoot);
+    },
+  );
+
+  it("refuses a missing gateway confinement before spawning a sidecar (#2951)", () => {
+    const fixture = stageFixture();
+    const activityLog = createBufferedServerLogSink();
+    let spawns = 0;
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      runtimeRoot: fixture.runtimeRoot,
+      activityLog,
+      spawnRuntime: () => {
+        spawns += 1;
+        return fakeChild(4711);
+      },
+      killProcessGroup: () => undefined,
+    });
+    expect(() => backend.spawnOwnedTree(launchRequest(fixture))).toThrow(
+      "runtime-gateway-confinement-required",
+    );
+    expect(Array.isArray(activityLog.events[0]?.extra?.frames)).toBe(true);
+    expect(Array.isArray(activityLog.events[0]?.extra?.causeChain)).toBe(true);
+    expect(spawns).toBe(0);
+  });
+
+  it("spawns a detached child from inside the runtime root and reports its exit", async () => {
+    const fixture = stageFixture();
+    const spawned: {
+      executable: string;
+      args: readonly string[];
+      options: Parameters<DevLaneRuntimeSpawn>[2];
+    }[] = [];
+    const child = fakeChild(4711);
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      gatewayConfinement: gatewayConfinement(),
+      runtimeRoot: fixture.runtimeRoot,
+      spawnRuntime: (executable, args, options) => {
+        spawned.push({ executable, args, options });
         return child;
       },
       killProcessGroup: () => undefined,
@@ -141,6 +276,7 @@ describe("dev-lane runtime process backend", () => {
     const tree = backend.spawnOwnedTree(launchRequest(fixture), SANDBOX);
     expect(spawned).toHaveLength(1);
     expect(spawned[0]?.executable).toBe(SANDBOX.command);
+    expect(spawned[0]?.args).toEqual(SANDBOX.args);
     expect(spawned[0]?.options.detached).toBe(true);
     expect(spawned[0]?.options.shell).toBe(false);
     await expect(backend.reconcileTreeExit(tree)).resolves.toBe(false);
@@ -155,10 +291,184 @@ describe("dev-lane runtime process backend", () => {
     expect(observed).toBe(0);
   });
 
+  // The activity line exposes the bounded child-executable policy without logging either path.
+  it("records the runtime-and-attested-git executable boundary (#3390)", () => {
+    const fixture = stageFixture();
+    const activityLog = createBufferedServerLogSink();
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      gatewayConfinement: gatewayConfinement(),
+      runtimeRoot: fixture.runtimeRoot,
+      activityLog,
+      spawnRuntime: () => fakeChild(4711),
+      killProcessGroup: () => undefined,
+    });
+    backend.spawnOwnedTree(launchRequest(fixture));
+    expect(activityLog.events).toContainEqual(
+      expect.objectContaining({
+        category: "process",
+        op: "runtime.confinement.spawned",
+        correlationId: "run-2475",
+        extra: expect.objectContaining({
+          profile: "keiko-gateway",
+          childExecutablePolicy: "runtime-and-attested-git-only",
+          childExecutableDigest: expect.stringMatching(/^[a-f0-9]{64}$/u) as string,
+        }) as unknown,
+      }),
+    );
+    const spawnedLine = activityLog.events.find(
+      (event) => event.op === "runtime.confinement.spawned",
+    );
+    if (spawnedLine === undefined) throw new Error("expected confinement.spawned line");
+    expect(
+      expectActivityLogProof(
+        "runtime.confinement.spawned.emitted-line",
+        formatActivityLogProofLine(spawnedLine),
+      ),
+    ).toMatchObject({
+      profile: "keiko-gateway",
+      childExecutablePolicy: "runtime-and-attested-git-only",
+    });
+  });
+
+  it("routes Linux production launches through the namespace gateway without resolving macOS Git", () => {
+    const fixture = stageFixture();
+    const activityLog = createBufferedServerLogSink();
+    const spawned: Parameters<DevLaneRuntimeSpawn>[] = [];
+    const resolveGitExecutable = vi.fn(() => {
+      throw new Error("darwin-git-must-not-be-resolved");
+    });
+    const backend = createProductionDevLaneRuntimeProcessBackend({
+      identity: LINUX_IDENTITY,
+      gatewayConfinement: gatewayConfinement(),
+      runtimeRoot: fixture.runtimeRoot,
+      activityLog,
+      platform: "linux",
+      probeAvailability: () => ({
+        bubblewrap: true,
+        unshare: true,
+        seatbelt: false,
+        docker: false,
+        podman: false,
+      }),
+      resolveGitExecutable,
+      spawnRuntime: (...args) => {
+        spawned.push(args);
+        return fakeChild(4711, true);
+      },
+      killProcessGroup: () => undefined,
+    });
+
+    backend.spawnOwnedTree({
+      ...launchRequest(fixture),
+      qualification: {
+        ...LINUX_IDENTITY,
+        releaseReceipt: `sha256:${"0".repeat(64)}`,
+      },
+    });
+
+    expect(resolveGitExecutable).not.toHaveBeenCalled();
+    expect(spawned[0]?.[0]).toBe(process.execPath);
+    expect(spawned[0]?.[1].slice(1, 3)).toEqual(["host", "bubblewrap"]);
+    expect(spawned[0]?.[2].env.PATH).toBeUndefined();
+    expect(activityLog.events).toContainEqual(
+      expect.objectContaining({
+        op: "runtime.confinement.spawned",
+        correlationId: "run-2475",
+        extra: expect.objectContaining({
+          backend: "bubblewrap",
+          childExecutablePolicy: "namespace-inherited",
+        }) as unknown,
+      }),
+    );
+  });
+
+  it("records Linux gateway unavailability and refuses before spawning", () => {
+    const fixture = stageFixture();
+    const activityLog = createBufferedServerLogSink();
+    const spawnRuntime = vi.fn(() => fakeChild(4711, true));
+    const backend = createProductionDevLaneRuntimeProcessBackend({
+      identity: LINUX_IDENTITY,
+      gatewayConfinement: gatewayConfinement(),
+      runtimeRoot: fixture.runtimeRoot,
+      activityLog,
+      platform: "linux",
+      probeAvailability: () => ({
+        bubblewrap: false,
+        unshare: false,
+        seatbelt: false,
+        docker: true,
+        podman: true,
+      }),
+      spawnRuntime,
+      killProcessGroup: () => undefined,
+    });
+
+    expect(() =>
+      backend.spawnOwnedTree({
+        ...launchRequest(fixture),
+        qualification: {
+          ...LINUX_IDENTITY,
+          releaseReceipt: `sha256:${"0".repeat(64)}`,
+        },
+      }),
+    ).toThrow("runtime-gateway-confinement-unavailable");
+    expect(spawnRuntime).not.toHaveBeenCalled();
+    expect(activityLog.events).toContainEqual({
+      category: "process",
+      level: "info",
+      op: "runtime.confinement.unavailable",
+      correlationId: "run-2475",
+      extra: { ...LINUX_IDENTITY, completeness: "complete", loss: "none" },
+    });
+    const unavailableLine = activityLog.events.find(
+      (event) => event.op === "runtime.confinement.unavailable",
+    );
+    if (unavailableLine === undefined) throw new Error("expected confinement.unavailable line");
+    expect(
+      expectActivityLogProof(
+        "runtime.confinement.unavailable.emitted-line",
+        formatActivityLogProofLine(unavailableLine),
+      ),
+    ).toMatchObject({ ...LINUX_IDENTITY });
+  });
+
+  it("refuses when the injected platform drifts from the backend identity", () => {
+    const fixture = stageFixture();
+    const spawnRuntime = vi.fn(() => fakeChild(4711, true));
+    const backend = createProductionDevLaneRuntimeProcessBackend({
+      identity: LINUX_IDENTITY,
+      gatewayConfinement: gatewayConfinement(),
+      runtimeRoot: fixture.runtimeRoot,
+      platform: "darwin",
+      probeAvailability: () => ({
+        bubblewrap: true,
+        unshare: true,
+        seatbelt: false,
+        docker: false,
+        podman: false,
+      }),
+      spawnRuntime,
+      killProcessGroup: () => undefined,
+    });
+
+    expect(() =>
+      backend.spawnOwnedTree({
+        ...launchRequest(fixture),
+        qualification: {
+          ...LINUX_IDENTITY,
+          releaseReceipt: `sha256:${"0".repeat(64)}`,
+        },
+      }),
+    ).toThrow("runtime-gateway-platform-identity-drift");
+    expect(spawnRuntime).not.toHaveBeenCalled();
+  });
+
   it("refuses executables outside the runtime root and unsafe paths, fail closed", () => {
     const fixture = stageFixture();
     const backend = createDevLaneRuntimeProcessBackend({
       identity: IDENTITY,
+      gatewayConfinement: gatewayConfinement(),
       runtimeRoot: fixture.runtimeRoot,
       spawnRuntime: () => fakeChild(1),
       killProcessGroup: () => undefined,
@@ -178,6 +488,7 @@ describe("dev-lane runtime process backend", () => {
     let groupKillFails = false;
     const backend = createDevLaneRuntimeProcessBackend({
       identity: IDENTITY,
+      gatewayConfinement: gatewayConfinement(),
       runtimeRoot: fixture.runtimeRoot,
       spawnRuntime: () => child,
       killProcessGroup: (pid, signal) => {
@@ -210,6 +521,7 @@ describe("dev-lane runtime process backend", () => {
     const groupKills: NodeJS.Signals[] = [];
     const backend = createDevLaneRuntimeProcessBackend({
       identity: IDENTITY,
+      gatewayConfinement: gatewayConfinement(),
       runtimeRoot: fixture.runtimeRoot,
       spawnRuntime: () => child,
       killProcessGroup: (_pid, signal) => {
@@ -229,6 +541,7 @@ describe("dev-lane runtime process backend", () => {
     const child = fakeChild(undefined);
     const backend = createDevLaneRuntimeProcessBackend({
       identity: IDENTITY,
+      gatewayConfinement: gatewayConfinement(),
       runtimeRoot: fixture.runtimeRoot,
       spawnRuntime: () => child,
       killProcessGroup: () => {
@@ -244,6 +557,7 @@ describe("dev-lane runtime process backend", () => {
     const fixture = stageFixture();
     const backend = createDevLaneRuntimeProcessBackend({
       identity: IDENTITY,
+      gatewayConfinement: gatewayConfinement(),
       runtimeRoot: fixture.runtimeRoot,
       spawnRuntime: () => fakeChild(1),
       killProcessGroup: () => undefined,
@@ -265,6 +579,7 @@ describe("dev-lane runtime process backend", () => {
     const child = fakeChild(1);
     const backend = createDevLaneRuntimeProcessBackend({
       identity: IDENTITY,
+      gatewayConfinement: gatewayConfinement(),
       runtimeRoot: fixture.runtimeRoot,
       spawnRuntime: () => child,
       killProcessGroup: () => undefined,
@@ -273,14 +588,132 @@ describe("dev-lane runtime process backend", () => {
     await expect(backend.waitForCompleteTreeExit(tree, 10)).resolves.toBe(false);
   });
 
-  it.skipIf(process.platform === "win32")("spawns and reaps a real process group", async () => {
+  it.skipIf(process.platform !== "darwin")("spawns and reaps a real process group", async () => {
     const fixture = stageFixture();
     const backend = createDevLaneRuntimeProcessBackend({
       identity: IDENTITY,
+      gatewayConfinement: gatewayConfinement(),
       runtimeRoot: fixture.runtimeRoot,
     });
     const tree = backend.spawnOwnedTree(launchRequest(fixture), SANDBOX);
     await expect(backend.waitForCompleteTreeExit(tree, 10_000)).resolves.toBe(true);
     await expect(backend.reconcileTreeExit(tree)).resolves.toBe(true);
+  });
+});
+
+// LIVE OS-level proof through the production backend (#2951). runtime-gateway.test.ts proves the
+// wrapper builder in isolation; this proves createDevLaneRuntimeProcessBackend's real
+// spawnOwnedTree path actually applies it when spawning a real process, not only that it exits 0.
+// Both destinations are real, listening loopback servers on ephemeral ports -- never the internet.
+// It self-skips with a loud, recorded closed reason (never a silent green) off macOS or without
+// sandbox-exec on PATH.
+// Use the real interpreter installation as the read-only runtime payload. A script shebang
+// would require a second executable and be denied before the network probe; copying Homebrew
+// Node alone also loses its relative shared-library dependencies. The workspace stays temporary.
+function connectProbeScript(): string {
+  return [
+    "const net = require('net');",
+    "const port = parseInt(process.argv[1], 10);",
+    "const s = net.connect({ host: '127.0.0.1', port });",
+    "s.setTimeout(3000);",
+    "s.on('connect', () => { process.stdout.write('CONNECTED'); s.destroy(); process.exit(0); });",
+    "s.on('error', () => { process.stdout.write('BLOCKED'); process.exit(3); });",
+    "s.on('timeout', () => { process.stdout.write('TIMEOUT'); s.destroy(); process.exit(3); });",
+    "",
+  ].join("\n");
+}
+
+function stageProbeFixture(): Fixture {
+  const fixture = stageFixture();
+  const executable = realpathSync(process.execPath);
+  return { ...fixture, executable, runtimeRoot: dirname(executable) };
+}
+
+async function listenEphemeral(): Promise<{ server: Server; port: number }> {
+  return new Promise((resolve, reject) => {
+    const server = createServer((socket) => socket.end());
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (address === null || typeof address === "string") {
+        reject(new Error("ephemeral-listen-failed"));
+        return;
+      }
+      resolve({ server, port: address.port });
+    });
+  });
+}
+
+// Waits on the stdout pipe's own "end" (EOF), not the process "exit" event: exit can fire before
+// the last buffered chunk is delivered to a listener, which would otherwise race an empty read.
+function collectStdout(tree: RuntimeProcessTree): Promise<string> {
+  return new Promise((resolve) => {
+    let out = "";
+    tree.stdout.on("data", (chunk: Buffer) => {
+      out += chunk.toString("utf8");
+    });
+    tree.stdout.on("end", () => {
+      resolve(out);
+    });
+  });
+}
+
+describe("real OS-level gateway confinement through the production backend (#2951)", () => {
+  const canProveOnThisHost = currentPlatform() === "darwin" && probeBackends().seatbelt;
+
+  it.skipIf(!canProveOnThisHost)(
+    "denies a hostile loopback destination while permitting the gateway port via spawnOwnedTree",
+    async () => {
+      const fixture = stageProbeFixture();
+      const gateway = await listenEphemeral();
+      const hostile = await listenEphemeral();
+      try {
+        const backend = createProductionDevLaneRuntimeProcessBackend({
+          identity: IDENTITY,
+          runtimeRoot: fixture.runtimeRoot,
+          gatewayConfinement: createRuntimeGatewayConfinement({
+            gatewayUrl: `http://127.0.0.1:${String(gateway.port)}/gateway`,
+            runId: "run-2951-os",
+            treeBindingId: "f".repeat(64),
+            envelopeDigest: "a".repeat(64),
+            runtimeArtifactDigest: "b".repeat(64),
+            modelProfileDigest: "c".repeat(64),
+          }),
+        });
+        const deniedTree = backend.spawnOwnedTree({
+          ...launchRequest(fixture),
+          runId: "run-2951-os",
+          args: ["-e", connectProbeScript(), String(hostile.port)],
+        });
+        expect(["BLOCKED", "TIMEOUT"]).toContain(await collectStdout(deniedTree));
+
+        const allowedTree = backend.spawnOwnedTree({
+          ...launchRequest(fixture),
+          runId: "run-2951-os",
+          args: ["-e", connectProbeScript(), String(gateway.port)],
+        });
+        expect(await collectStdout(allowedTree)).toBe("CONNECTED");
+      } finally {
+        gateway.server.close();
+        hostile.server.close();
+      }
+    },
+    20_000,
+  );
+
+  it("records a closed skip reason when the real OS proof cannot run on this host", () => {
+    if (canProveOnThisHost) {
+      expect(canProveOnThisHost).toBe(true);
+      return;
+    }
+    const reason =
+      currentPlatform() !== "darwin"
+        ? `non-darwin platform (${currentPlatform()})`
+        : "sandbox-exec is not on PATH";
+    process.stderr.write(
+      `[gateway-confinement-proof] skipped: ${reason}. The real seatbelt OS-level proof runs on ` +
+        "macOS hosts only (ADR-0043/ADR-0140 macOS-only scope; Linux/Windows tracked separately).\n",
+    );
+    expect(canProveOnThisHost).toBe(false);
   });
 });

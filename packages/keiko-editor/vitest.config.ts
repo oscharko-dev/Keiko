@@ -13,5 +13,8 @@ export default defineConfig({
     setupFiles: ["./vitest.setup.ts"],
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
     exclude: ["**/node_modules/**", "**/dist/**"],
+    // GEN-TEST-FLAKE-001: align with the hardened 15s timeout; parity enforced by
+    // scripts/__tests__/vitest-config-parity.test.mjs.
+    testTimeout: 15_000,
   },
 });

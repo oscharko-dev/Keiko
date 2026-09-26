@@ -184,7 +184,13 @@ test(`Files window shows Git status and opens diff ${TAG}`, async ({ page }) => 
   const filesWindow = page.getByRole("region", { name: /^Files/u });
   await expect(filesWindow).toBeVisible();
   await expect(filesWindow.getByText(/Git main 1 changed file/u)).toBeVisible();
-  await expect(filesWindow.getByRole("treeitem", { name: /package\.json M/u })).toBeVisible();
+  // #2955 follow-up: the row's ACCESSIBLE NAME now spells the status out ("Git modified: …")
+  // instead of repeating the bare "M" glyph, which is only the visible short form. Matching the
+  // spelled-out name is both current and a stronger assertion — "M" alone also matches a file whose
+  // name happens to contain it.
+  await expect(
+    filesWindow.getByRole("treeitem", { name: /package\.json Git modified/u }),
+  ).toBeVisible();
 
   await filesWindow.getByRole("button", { name: "View Git diff for package.json" }).click();
   await expect(filesWindow.getByRole("region", { name: "Git diff: package.json" })).toContainText(
@@ -208,7 +214,7 @@ test(`Files window recognizes Git after entering a nested project ${TAG}`, async
   await filesWindow.getByRole("treeitem", { name: "SpringAI Showcase" }).click();
 
   await expect(filesWindow.getByText(/Git main 1 changed file/u)).toBeVisible();
-  await expect(filesWindow.getByRole("treeitem", { name: /pom\.xml M/u })).toBeVisible();
+  await expect(filesWindow.getByRole("treeitem", { name: /pom\.xml Git modified/u })).toBeVisible();
 
   await filesWindow
     .getByRole("button", { name: "View Git diff for SpringAI Showcase/pom.xml" })

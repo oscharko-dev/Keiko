@@ -368,7 +368,12 @@ export function ContainerStatusWidget(props: ContainerStatusWidgetProps): ReactN
       if (parsed.kind !== "run-started" && isOwnEvent(parsed, pendingRequestIdRef.current)) {
         setInFlightRunId((current) => (current === parsed.runId ? null : current));
       }
-      setEvents((current) => [parsed, ...current].slice(0, MAX_EVENT_LOG));
+      // KEIKO-0204 — the channel stays global (ADR-0018 D7); a foreign run's events are still
+      // processed above for Cancel-arming/clearing, but the visible "Recent events" log is scoped
+      // to this widget's own in-flight request so another window's run never shows up here.
+      if (isOwnEvent(parsed, pendingRequestIdRef.current)) {
+        setEvents((current) => [parsed, ...current].slice(0, MAX_EVENT_LOG));
+      }
     };
     return subscribeSharedEventSource(
       containerEventsUrl(),

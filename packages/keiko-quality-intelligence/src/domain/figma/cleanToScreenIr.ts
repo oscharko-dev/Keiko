@@ -6,7 +6,7 @@
 // is sorted by a stable structural key, and the result carries no timestamp, so the same input
 // yields a byte-identical IR. A malformed input (non-object) degrades to an empty result.
 
-import { compareStrings } from "@oscharko-dev/keiko-contracts";
+import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { asNode } from "./sourceNode.js";
 import { countSourceNodes, pruneNode } from "./prune.js";
 import { detectScreens } from "./screenDetect.js";

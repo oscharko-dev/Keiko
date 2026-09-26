@@ -2,7 +2,7 @@ import type { IncomingMessage } from "node:http";
 import {
   parseUpdateRemediationActionRequest,
   parseUpdateRemediationStatusRequest,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/update-remediation";
 import type { UiHandlerDeps } from "./deps.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import { UpdateRemediationError, type UpdateRemediationManager } from "./update-remediation.js";
@@ -124,6 +124,15 @@ export async function handleRunUpdateRemediationAction(
     if (!parsed.ok) {
       throw new UpdateRemediationError("BAD_REQUEST", parsed.errors.join("; "), 400);
     }
-    return { status: 200, body: await guard.runAction(parsed.value) };
+    const status = deps.updateSession?.getStatus();
+    const updateAttempt = [status?.activeSession, status?.lastSession].find(
+      (session) => session?.targetVersion === parsed.value.targetVersion,
+    );
+    // A remediation spawned by an update stays on the originating update attempt. Standalone
+    // remediation falls back to its own request correlation.
+    return {
+      status: 200,
+      body: await guard.runAction(parsed.value, updateAttempt?.correlationId ?? ctx.correlationId),
+    };
   });
 }

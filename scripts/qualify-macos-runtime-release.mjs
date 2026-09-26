@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -9,6 +8,10 @@ import {
   RUNTIME_ACTIVATION_RELATIVE_PATH,
   RUNTIME_QUALIFICATION_SUITE,
 } from "./runtime-activation-manifest.mjs";
+import { sha256File } from "./lib/digest.mjs";
+import { writeQualificationEvidenceReceipt } from "./lib/qualification-evidence-receipt.mjs";
+
+export { writeQualificationEvidenceReceipt };
 
 const COMMIT = /^[a-f0-9]{40}$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
@@ -50,10 +53,6 @@ function readJson(path, label) {
   }
 }
 
-function sha256(path) {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
-}
-
 function helperByName(activation, name) {
   const matches = Array.isArray(activation.nativeHelpers)
     ? activation.nativeHelpers.filter((helper) => helper?.name === name)
@@ -81,7 +80,7 @@ function componentDigest(resourceRoot, helper) {
     entry.isSymbolicLink() ||
     entry.nlink !== 1 ||
     entry.size !== helper.sizeBytes ||
-    sha256(path) !== helper.shippedSha256
+    sha256File(path) !== helper.shippedSha256
   ) {
     fail("activation helper bytes are invalid");
   }
@@ -112,9 +111,13 @@ function activationIdentityIsValid(activation, target, sourceCommitSha) {
       "runtime",
       "security",
       "nativeHelpers",
+      "nativeAddons",
       "sidecarRuntimes",
       "releaseImpact",
     ]) &&
+    // exactKeys only proves the key is present. Without this an activation manifest could
+    // declare nativeAddons: null or an object and still receive a qualification receipt.
+    Array.isArray(activation.nativeAddons) &&
     activation.schemaVersion === 1 &&
     activation.suiteVersion === RUNTIME_QUALIFICATION_SUITE &&
     activation.platformTarget === target &&
@@ -158,7 +161,7 @@ export function qualificationReceiptFor(input) {
     suiteVersion: RUNTIME_QUALIFICATION_SUITE,
     platformTarget: input.target,
     sourceCommitSha: input.sourceCommitSha,
-    activationManifestSha256: sha256(input.activationPath),
+    activationManifestSha256: sha256File(input.activationPath),
     supervisorSha256: componentDigest(
       input.resourceRoot,
       helperByName(activation, "keiko-runtime-supervisor"),
@@ -212,7 +215,7 @@ export function assertSameExecutable(stagedPath, executionPath, label) {
     execution.isSymbolicLink() ||
     execution.nlink !== 1 ||
     staged.size !== execution.size ||
-    sha256(stagedPath) !== sha256(executionPath)
+    sha256File(stagedPath) !== sha256File(executionPath)
   ) {
     fail(`${label} bytes are invalid`);
   }
@@ -231,6 +234,29 @@ export function executionAppRoot(options, lstat = lstatSync) {
     fail("execution app root is invalid");
   }
   return appRoot;
+}
+
+// #3390 audit F8: the platform launch driver's own real qualification receipt, translated into
+// the `<scenarioId>.receipt.json` + `.artifact` pair scripts/check-coding-issue-journey-evidence.mjs
+// and scripts/generate-coding-issue-journey-manifest.mjs already read -- so a real, passing macOS
+// qualification becomes #3390 evidence with no separate translation step once #2198 lands. The
+// artifact's bytes are the canonical qualification receipt itself; its digest is what the
+// manifest's `receiptDigest` binds to. While #2198 remains open this mode is simply never invoked
+// for the packaged-reference scenario; its manifest row instead carries the descriptor's own
+// closed `blocked` reason (docs/acceptance/coding-issue-journey-3390.json) -- a qualification
+// receipt is never fabricated in its place. The writer itself is shared with
+// qualify-windows-runtime-release.mjs via scripts/lib/qualification-evidence-receipt.mjs; see the
+// `import`/`export` above.
+
+function maybeWriteQualificationEvidence(options, receipt) {
+  const receiptsDir = options["qualification-receipts"];
+  if (receiptsDir === undefined) return;
+  writeQualificationEvidenceReceipt({
+    receiptsDir: resolve(receiptsDir),
+    scenarioId: required(options, "scenario-id"),
+    receipt,
+    recordedAt: new Date().toISOString(),
+  });
 }
 
 function verifyOnly(options) {
@@ -267,6 +293,7 @@ export function qualifyMacosRuntimeRelease(
     sourceCommitSha,
   });
   persistQualificationReceipt(resourceRoot, receipt, verifyOnly(options));
+  maybeWriteQualificationEvidence(options, receipt);
 }
 
 function qualifyExecutionApp({ appRoot, resourceRoot, stagedAppRoot }, { runFn, runQuietFn }) {

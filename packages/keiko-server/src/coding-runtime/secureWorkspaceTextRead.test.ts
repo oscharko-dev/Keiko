@@ -126,14 +126,14 @@ describe("SecureWorkspaceTextReadPort", () => {
     expect(roots).toEqual(["/workspace/one", "/workspace/two"]);
   });
 
-  it("fails closed for Linux and unknown targets before artifact verification or helper spawn", async () => {
+  it("fails closed for a mismatched Linux artifact and unknown targets before verification or spawn", async () => {
     const run = vi.fn(() => Promise.resolve(response(0, Buffer.from("text"))));
     const linux = createPort(run, { os: "linux", arch: "x64" });
     const unknown = createPort(run, { os: "plan9", arch: "amd64" });
 
     await expect(linux.port.readText({ relativePath: "src/a.ts" })).resolves.toEqual({
       ok: false,
-      reason: "unsupported-platform",
+      reason: "artifact-unverified",
     });
     await expect(unknown.port.readText({ relativePath: "src/a.ts" })).resolves.toEqual({
       ok: false,

@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   EDITOR_TEST_GENERATION_GATE_STATES,
+  EDITOR_TEST_GENERATION_MAX_OVERLAYS,
+  EDITOR_TEST_GENERATION_MAX_OVERLAY_TEXT_BYTES,
   EDITOR_TEST_GENERATION_SCHEMA_VERSION,
   EDITOR_TEST_GENERATION_STABILITY_RUNS,
   EDITOR_TEST_GENERATION_STATUSES,
@@ -120,6 +122,75 @@ describe("parseEditorTestGenerationRequest — rejections", () => {
         }),
       ).ok,
     ).toBe(false);
+  });
+
+  // KEIKO-0893: isOverlayArray previously accepted a changed-file-set documents array of ANY
+  // positive length with no density check and no per-overlay text byte bound.
+  it("accepts a changed-file-set documents array at exactly the max overlay count", () => {
+    const documents = Array.from({ length: EDITOR_TEST_GENERATION_MAX_OVERLAYS }, (_unused, i) => ({
+      path: `src/file-${String(i)}.ts`,
+      languageId: "typescript",
+      text: `export const v${String(i)} = ${String(i)};\n`,
+    }));
+    const parsed = parseEditorTestGenerationRequest(
+      fileRequest({ target: { kind: "changed-file-set", documents } }),
+    );
+    expect(parsed.ok).toBe(true);
+  });
+
+  it("rejects a changed-file-set documents array longer than the max overlay count", () => {
+    const documents = Array.from(
+      { length: EDITOR_TEST_GENERATION_MAX_OVERLAYS + 1 },
+      (_unused, i) => ({
+        path: `src/file-${String(i)}.ts`,
+        languageId: "typescript",
+        text: `export const v${String(i)} = ${String(i)};\n`,
+      }),
+    );
+    const parsed = parseEditorTestGenerationRequest(
+      fileRequest({ target: { kind: "changed-file-set", documents } }),
+    );
+    expect(parsed.ok).toBe(false);
+  });
+
+  it("rejects a sparse changed-file-set documents array", () => {
+    // A real hole (not a filled-in overlay) at index 1: Object.keys reports 2 entries while
+    // .length reports 3, which is exactly the density mismatch isOverlayArray must reject even
+    // though every PRESENT entry and the array's reported length are individually well-formed.
+    const documents: unknown[] = [OVERLAY, OVERLAY, OVERLAY];
+    Reflect.deleteProperty(documents, 1);
+    const parsed = parseEditorTestGenerationRequest(
+      fileRequest({ target: { kind: "changed-file-set", documents } }),
+    );
+    expect(parsed.ok).toBe(false);
+  });
+
+  it("accepts a changed-file-set documents entry whose text is exactly at the byte ceiling", () => {
+    const documents = [
+      {
+        path: "src/big.ts",
+        languageId: "typescript",
+        text: "a".repeat(EDITOR_TEST_GENERATION_MAX_OVERLAY_TEXT_BYTES),
+      },
+    ];
+    const parsed = parseEditorTestGenerationRequest(
+      fileRequest({ target: { kind: "changed-file-set", documents } }),
+    );
+    expect(parsed.ok).toBe(true);
+  });
+
+  it("rejects a changed-file-set documents entry whose text exceeds the byte ceiling", () => {
+    const documents = [
+      {
+        path: "src/big.ts",
+        languageId: "typescript",
+        text: "a".repeat(EDITOR_TEST_GENERATION_MAX_OVERLAY_TEXT_BYTES + 1),
+      },
+    ];
+    const parsed = parseEditorTestGenerationRequest(
+      fileRequest({ target: { kind: "changed-file-set", documents } }),
+    );
+    expect(parsed.ok).toBe(false);
   });
 
   it("rejects a negative budget, a bad context selector, and ambiguous capsule scope", () => {

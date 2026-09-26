@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
+import type { ContextCompactionRecord } from "@oscharko-dev/keiko-contracts";
 import {
   CONTEXT_COMPACTION_MODEL_SUMMARY_PROMPT_VERSION,
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
-  type ContextCompactionRecord,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   createInMemoryEvidenceStore,
   persistCompactionEvidence,
@@ -117,6 +117,32 @@ describe("buildChatCompactionResurfacingContext", () => {
     expect(context).toContain("src/a.ts:4-7");
     expect(context).toContain("src/b.ts:8-9");
     expect(context).toContain("re-verify");
+  });
+
+  it("labels inferred preserved facts instead of resurfacing them as pinned facts", () => {
+    const store = persist({
+      chatId: CHAT_ID,
+      turn: 5,
+      records: [
+        record({
+          preservedFacts: [
+            {
+              statement: "the repository uses deterministic manifests",
+              sourceRef: { kind: "message", stableId: "m1" },
+            },
+            { statement: "the deployment likely remains healthy", inferred: true },
+          ],
+        }),
+      ],
+    });
+
+    const context = buildChatCompactionResurfacingContext(store, CHAT_ID);
+
+    expect(context).toContain("Pinned facts:\n- the repository uses deterministic manifests");
+    expect(context).toContain(
+      "Inferred statements (not facts):\n- the deployment likely remains healthy",
+    );
+    expect(context).not.toContain("Pinned facts:\n- the deployment likely remains healthy");
   });
 
   it("ignores compaction manifests from other chats", () => {

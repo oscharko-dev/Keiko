@@ -11,6 +11,7 @@ import { Icons } from "../../Icons";
 import { FileIcon } from "../shared/projectTree";
 import { highlightLines, langOf, type Token } from "./shared/syntaxHighlight";
 import { NATIVE_BLOCK_STYLE } from "../../native-element-styles";
+import selectableTextStyles from "./shared/selectableText.module.css";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const BackIcon = Icons.back;
@@ -279,7 +280,10 @@ function TextFilePreview(props: TextFilePreviewProps): ReactNode {
         <div className="fpv-banner">{props.t("filePreview.syntaxHighlightDisabled")}</div>
       ) : null}
       <section
-        className="fpv-code mono"
+        className={`fpv-code mono ${selectableTextStyles["cmp-selectable-text"]}`}
+        // Issue #2710 — the preview text must be selectable (and its copy must
+        // stay native); data-text-selectable is the guard contract for both.
+        data-text-selectable="true"
         // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex -- WCAG 2.1.1 focusable scroll region
         tabIndex={0}
         aria-label={props.t("filePreview.previewRegionLabel", { name: props.preview.name })}
@@ -291,7 +295,9 @@ function TextFilePreview(props: TextFilePreviewProps): ReactNode {
       >
         {props.visibleLineRows.map((row) => (
           <div className="fpv-line" key={`line-${String(row.lineNumber)}`}>
-            <span className="fpv-num">{row.lineNumber}</span>
+            <span className={`fpv-num ${selectableTextStyles["cmp-selectable-text-chrome"]}`}>
+              {row.lineNumber}
+            </span>
             <span className="fpv-src">{highlightedTokenSpans(row.tokens)}</span>
           </div>
         ))}

@@ -14,13 +14,13 @@
 // reproduce exactly that, which is why this suite renders and therefore lives in a .tsx file.
 
 import type { ReactNode } from "react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import {
-  EDITOR_VERIFICATION_SCHEMA_VERSION,
-  WORKSPACE_TRUST_SCHEMA_VERSION,
-  workspaceChordKey,
-} from "@oscharko-dev/keiko-contracts";
+import { EDITOR_VERIFICATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
+import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
+import { workspaceChordKey } from "@oscharko-dev/keiko-contracts/runtime/workspace-ui";
+import { CLIENT_NOTE_MAX_LENGTH } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { EDITOR_M7_COMMAND_REGISTRY } from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
 
 import {
   readShellShortcutRefusalCount,
@@ -41,7 +41,7 @@ import { translate } from "@/lib/i18n";
 // and "en" is simply the locale under test here.
 const enTranslate = (key: Parameters<typeof translate>[1]): string => translate("en", key);
 
-// The six commands the shell itself dispatches. The label map is deliberately WIDER than this (it
+// The commands the shell itself dispatches. The label map is deliberately WIDER than this (it
 // covers every bound editor command too, see the palette suite below), so these are asserted as a
 // present subset rather than as the whole key set.
 const GLOBAL_SHELL_COMMAND_IDS = [
@@ -51,6 +51,7 @@ const GLOBAL_SHELL_COMMAND_IDS = [
   "focus-workspace-search",
   "quick-access.files",
   "quick-access.commands",
+  "open-editor-settings",
 ] as const;
 
 function paletteHost(): EditorPaletteHost {
@@ -125,6 +126,19 @@ describe("shellShortcutState — the live shell binding table", () => {
     expect(map.get("focus-workspace-search")).toEqual({ key: "f", mod: ["cmd", "shift"] });
     expect(map.get("quick-access.files")).toEqual({ key: "p", mod: ["cmd"] });
     expect(map.get("quick-access.commands")).toEqual({ key: "p", mod: ["cmd", "shift"] });
+    expect(map.get("open-editor-settings")).toEqual({ key: ",", mod: ["cmd"] });
+  });
+
+  // KEIKO-0164: the Keyboard Shortcuts panel advertises this chord, so the desktop shell must
+  // dispatch it through the same substrate that receives every other shell shortcut.
+  it("dispatches the advertised editor-settings chord from the desktop", () => {
+    const dispatch = vi.fn();
+    const view = render(<SubstrateHost overrides={[]} platform="other" onDispatch={dispatch} />);
+
+    fireEvent.keyDown(window, { key: ",", ctrlKey: true });
+
+    expect(dispatch).toHaveBeenCalledWith("open-editor-settings");
+    view.unmount();
   });
 
   it("contains no browser-reserved chord", () => {
@@ -523,6 +537,43 @@ describe("shellShortcutState — a refusal is reported, not swallowed", () => {
     expect(message).not.toContain("attacker.injected");
   });
 
+  // The activity log keeps a note verbatim only up to CLIENT_NOTE_MAX_LENGTH, so the refusals that
+  // do not fit are counted instead of costing the whole note (review on PR #3452).
+  it("folds the named refusals that do not fit the logged note into a count", () => {
+    const refusals = EDITOR_M7_COMMAND_REGISTRY.slice(0, 8).map((command) => ({
+      commandId: command.id,
+      reasonCode: "KEYBINDING_COLLISION" as const,
+    }));
+
+    const message = shellShortcutRefusalDiagnostic(refusals, "RESERVED_KEYBINDING") ?? "";
+
+    const shown = [...message.matchAll(/=KEYBINDING_COLLISION/gu)].length;
+    expect(message.length).toBeLessThanOrEqual(CLIENT_NOTE_MAX_LENGTH);
+    expect(shown).toBeLessThan(refusals.length);
+    expect(message).toContain(`more=${String(refusals.length - shown)}`);
+    expect(message).toContain("setting=RESERVED_KEYBINDING");
+  });
+
+  // Review on PR #3452: the bound holds for the note's own parts, not only for the named refusals.
+  // The whole-setting refusal and the unknown-command count used to be appended unchecked, so a long
+  // setting code beside a large unknown count overflowed the bound and the note was redacted whole.
+  it("keeps every note within the logged bound, the setting refusal and unknown count included", () => {
+    const unknown = Array.from({ length: 64 }, (_value, index) => ({
+      commandId: `outside.registry.${String(index)}`,
+      reasonCode: "UNKNOWN_COMMAND" as const,
+    }));
+    const named = EDITOR_M7_COMMAND_REGISTRY.slice(0, 8).map((command) => ({
+      commandId: command.id,
+      reasonCode: "KEYBINDING_COLLISION" as const,
+    }));
+    for (const refusals of [unknown, [...unknown, ...named], named, unknown.slice(0, 1)]) {
+      const message =
+        shellShortcutRefusalDiagnostic(refusals, "SECURITY_PREREQUISITE_MISSING") ?? "";
+      expect(message.length).toBeLessThanOrEqual(CLIENT_NOTE_MAX_LENGTH);
+      expect(message).toContain("setting=SECURITY_PREREQUISITE_MISSING");
+    }
+  });
+
   // A whole-setting refusal names no command: the record that caused it is never echoed back, so
   // the reason code is all the operator gets — and all they may be given.
   it("reports a whole-setting refusal by reason code alone", () => {
@@ -562,13 +613,10 @@ describe("shellShortcutState — palette chord labels", () => {
     expect(resolveShellShortcutState([]).labels.has("view.splitDown")).toBe(false);
   });
 
-  // Widening the map must not advertise a chord nobody dispatches — that is the same defect one
-  // command later. `open-editor-settings` is bound to CtrlOrMeta+, in the registry but its
-  // "settings" context has no keydown listener, so it stays out until one exists.
-  it("omits a bound command whose context has no dispatcher", () => {
+  it("labels the dispatched editor-settings command", () => {
     const labels = resolveShellShortcutState([]).labels;
 
-    expect(labels.has("open-editor-settings")).toBe(false);
+    expect(labels.get("open-editor-settings")).toMatch(/,$/u);
     // Monaco-owned chords ARE dispatched (by Monaco), so they stay in.
     expect(labels.has("editor.save")).toBe(true);
   });

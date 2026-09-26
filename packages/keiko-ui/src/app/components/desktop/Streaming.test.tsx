@@ -15,6 +15,7 @@ import { act, render, renderHook, screen, waitFor } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatWindow, sendStatusLabel } from "./ChatWindow";
+import { toUserErrorNotice } from "./format-error";
 import { ChatSessionProvider } from "./context/ChatSessionContext";
 import {
   canonicalTurnReferenceForClient,
@@ -23,10 +24,15 @@ import {
   type ChatSessionApi,
   type SendMessageOutcome,
 } from "./hooks/useChatSession";
+import { resetConversationMemorySettingsForTests } from "./hooks/memorySettings";
 import * as api from "@/lib/api";
 import type { Chat, ChatMessage, DesktopChatSendResponse, ModelCapability } from "@/lib/types";
 import type { StreamHandlers } from "@/lib/api";
 import { notifyGatewayConfigUpdated } from "./widgets/shared/gatewaySetupBus";
+
+afterEach(() => {
+  resetConversationMemorySettingsForTests();
+});
 
 // ─── UI test helpers ──────────────────────────────────────────────────────────
 
@@ -104,6 +110,7 @@ function chatModelCapability(id: string): ModelCapability {
   return {
     id,
     kind: "chat",
+    conversationReady: true,
     contextWindow: 0,
     maxOutputTokens: 0,
     toolCalling: true,
@@ -124,6 +131,7 @@ function embeddingCapability(id: string): ModelCapability {
   return {
     id,
     kind: "embedding",
+    conversationReady: false,
     contextWindow: 0,
     maxOutputTokens: 0,
     toolCalling: false,
@@ -144,6 +152,7 @@ function ocrVisionCapability(id: string): ModelCapability {
   return {
     id,
     kind: "ocr-vision",
+    conversationReady: false,
     contextWindow: 0,
     maxOutputTokens: 0,
     toolCalling: false,
@@ -205,9 +214,10 @@ describe("ChatWindow lifecycle status indicator (Issue #152)", () => {
     // uiux-fix F041 (C170, WCAG 4.1.3) — the live region must stay permanently in
     // the DOM (regions inserted together with their first message are unreliably
     // announced by VoiceOver/Safari and NVDA); while idle it says nothing.
-    // The bootstrap loading status is gated on session.loading=false, so the
-    // only role="status" in the tree is the lifecycle indicator.
-    const status = screen.getByRole("status");
+    // Other independently loading knowledge-work surfaces may also expose
+    // status regions, so select the persistent send lifecycle contract.
+    const status = document.querySelector('[data-send-status="idle"]');
+    expect(status).toHaveAttribute("role", "status");
     expect(status).toBeEmptyDOMElement();
   });
 
@@ -810,6 +820,7 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
     expect(view.result.current.activeChat?.connectedScope).toBeUndefined();
     expect(view.result.current.activeChat?.connectedScopes).toHaveLength(1);
 
+    act(() => view.result.current.setMemoryEnabled(true));
     act(() => view.result.current.setDraft("ground plural scope"));
     await act(async () => {
       await view.result.current.sendMessage();
@@ -834,6 +845,7 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
         },
       },
       expect.any(AbortSignal),
+      undefined,
     );
     expect(ungroundedSpy).not.toHaveBeenCalled();
     expect(view.result.current.sendStatus).toBe("completed");
@@ -979,6 +991,7 @@ describe("useChatSession sendStatus lifecycle (Issue #152)", () => {
         }),
       }),
       expect.any(AbortSignal),
+      undefined,
     );
     expect(fetchChatMessagesSpy).toHaveBeenLastCalledWith(groundedChat.id, canonicalChatPath);
     expect(fetchChatsSpy).toHaveBeenLastCalledWith(canonicalChatPath);
@@ -1118,7 +1131,11 @@ describe("useChatSession bootstrap eligibility filter (Issue #144 AC #1/#2)", ()
       expect(view.result.current.loading).toBe(false);
     });
 
-    expect(fetchChatsSpy).toHaveBeenCalledWith("/current-project");
+    // The list load carries its own correlation id, which binding evidence names (#3557).
+    expect(fetchChatsSpy).toHaveBeenCalledWith(
+      "/current-project",
+      expect.stringMatching(/^[A-Za-z0-9._-]{8,128}$/),
+    );
     expect(view.result.current.activeProject?.path).toBe("/current-project");
     expect(view.result.current.projects.map((project) => project.path)).toEqual([
       "/current-project",
@@ -1605,6 +1622,34 @@ describe("useChatSession Layer 3 SSE streaming (Issue #152)", () => {
     );
     const assistants = view.result.current.messages.filter((m) => m.role === "assistant");
     expect(assistants).toHaveLength(0);
+  });
+
+  // RB-6 / ADR-0173 D5 — the SSE "error" event's data payload carries the same correlation id as
+  // every other diagnostic for this request (DesktopChatStreamErrorEvent["data"].correlationId).
+  // Before the fix, onError's parameter type omitted the field, so it was silently dropped even
+  // though the wire event carried it.
+  it("keeps the correlationId from a 429 stream error event recoverable from the rendered notice", async () => {
+    vi.spyOn(api, "sendDesktopChatStream").mockImplementation(
+      async (_input, _signal, handlers): Promise<void> => {
+        handlers.onError({
+          code: "RATE_LIMITED",
+          message: "Too many requests. Slow down and retry.",
+          correlationId: "req-stream-429-000777",
+        });
+      },
+    );
+
+    const view = await bootStreamingHook();
+    act(() => view.result.current.setDraft("trigger rate limit"));
+    await act(async () => {
+      await view.result.current.sendMessage();
+    });
+
+    expect(view.result.current.sendStatus).toBe("failed");
+    expect(view.result.current.error).toBeDefined();
+    const notice = toUserErrorNotice(view.result.current.error, "Could not send message.");
+    expect(notice.code).toBe("RATE_LIMITED");
+    expect(notice.correlationId).toBe("req-stream-429-000777");
   });
 
   // ST-L3-6 — AbortError mid-stream: must NOT set state.error (cancel is not an error).

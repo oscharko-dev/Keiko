@@ -1,7 +1,7 @@
-// Public surface of @oscharko-dev/keiko-contracts. Issue #158 carries the first real type surface
-// out of `src/<layer>/types.ts` into this leaf package. Re-exports use the explicit `export type`
-// form for type-only names and `export` for value-emitting frozen const tables because
-// verbatimModuleSyntax is on in tsconfig.base.json.
+// Public type surface of @oscharko-dev/keiko-contracts. Issue #158 carries the first real type
+// surface out of `src/<layer>/types.ts` into this leaf package. Runtime values live behind the
+// explicit `@oscharko-dev/keiko-contracts/runtime/<domain>` subpaths so a Node consumer cannot
+// load the whole contracts graph merely by importing one value.
 //
 // The workflow event families (unit-test, bug-investigation) reuse the harness event-type NAMES
 // (ModelCallStartedEvent, ModelCallCompletedEvent, PatchAppliedEvent, VerificationResultEvent) by
@@ -17,32 +17,91 @@
 // graph state, and pure validation helpers. No implementation — types only. Implementation
 // lands in subsequent epic children.
 
-export const KEIKO_CONTRACTS_VERSION = "0.2.15" as const;
-
-// Single-source product version. Surfaced as `keiko --version`, in the BFF healthcheck
-// response, and as the SDK's exported `SDK_VERSION` constant. Kept here on the leaf
-// package so every consumer reaches it through one stable import path. Bump in lockstep
-// with the root package.json "version" field as part of every release.
-export const KEIKO_PRODUCT_VERSION = "0.2.15" as const;
+export type { KEIKO_CONTRACTS_VERSION, KEIKO_PRODUCT_VERSION } from "./version.js";
 
 // ─── Shared numeric primitive (GEN-DUP-SEMANTIC-003) ────────────────────────────
-export { clampUnit } from "./numeric.js";
+export type { clampUnit } from "./numeric.js";
 
 // ─── Deterministic retrieval-evaluation primitives (ADR-0152 D5 amendment, Issue #2635) ──
 // One implementation of the retrieval `mean` and the binary nDCG@k discount formula. Every
 // evaluation harness — folded suites under `keiko-evaluations`, the gate script in `scripts/`,
 // and the server retrieval eval — imports these so the ADR-0152 D5 gate floors stay calibrated
 // against one math. `tests/architecture/eval-metrics-single-owner.test.ts` proves the invariant.
-export { binaryNdcgAtK, mean } from "./eval-metrics.js";
+export type { binaryNdcgAtK, mean } from "./eval-metrics.js";
 
 // ─── Shared stable ordering helpers ─────────────────────────────────────────────
-export { sortedStrings } from "./stable-order.js";
+export type { sortedStrings } from "./stable-order.js";
 // Deterministic code-unit comparator for `Array#sort` callbacks (epic #2719 W4, issue #2723) —
 // plain `<`/`>` order, not locale-aware like sortedStrings above.
-export { compareStrings } from "./comparators.js";
+export type { compareStrings } from "./comparators.js";
 
 // ─── Shared coded-HTTP-error mechanism (GEN-DUP-NEAR-008) ───────────────────────
-export { CodedHttpError, httpStatusFor } from "./http-error.js";
+export type { CodedHttpError, httpStatusFor } from "./http-error.js";
+
+// ─── Shared error-kind classification gate (ADR-0173 D11) ──────────────────────
+// One declaration of ERROR_KIND_PATTERN and its shape-gated reducer, so keiko-server,
+// keiko-model-gateway and keiko-local-knowledge cannot drift into accepting different things
+// under the `errorKind` activity-log envelope field. Relocated from three independently
+// declared, byte-identical copies that were pinned only by a source-text drift test.
+export type {
+  ACTIVITY_LOG_ANALYZER_PROJECTIONS,
+  ACTIVITY_LOG_CATEGORIES,
+  ACTIVITY_LOG_CATALOG_DIGEST,
+  ACTIVITY_LOG_COMPATIBILITY_STATES,
+  ACTIVITY_LOG_COMPLETENESS_STATES,
+  ACTIVITY_LOG_DATA_CLASSES,
+  ACTIVITY_LOG_ERROR_KINDS,
+  ACTIVITY_LOG_EXEMPTION_BOUNDARIES,
+  ACTIVITY_LOG_EVENT_FAILURE_KINDS,
+  ACTIVITY_LOG_EVENT_REGISTRATION,
+  ACTIVITY_LOG_FIELD_TYPES,
+  ACTIVITY_LOG_FAILURE_CLASS_COVERAGE,
+  ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS,
+  ACTIVITY_LOG_IMPLEMENTATION_OBLIGATIONS,
+  ACTIVITY_LOG_LIFECYCLE_PHASES,
+  ACTIVITY_LOG_LOSS_STATES,
+  ACTIVITY_LOG_OPERATION_REGISTRY,
+  ACTIVITY_LOG_RELEASE_IMPACTS,
+  ACTIVITY_LOG_REGISTRY_VERSION,
+  ACTIVITY_LOG_REGISTRY_EXEMPTIONS,
+  ACTIVITY_LOG_SCHEMA_DIGEST,
+  ACTIVITY_LOG_WRITER_CAPABILITY_STATES,
+  ActivityLogAnalyzerProjection,
+  ActivityLogCategory,
+  ActivityLogCompatibilityState,
+  ActivityLogCompletenessState,
+  ActivityLogDataClass,
+  ActivityLogFieldContract,
+  ActivityLogFields,
+  ActivityLogFieldType,
+  ActivityLogImplementationObligation,
+  ActivityLogErrorKind,
+  ActivityLogExemptionBoundary,
+  ActivityLogEventFailureKind,
+  ActivityLogEventFields,
+  ActivityLogEventValidationError,
+  ActivityLogLifecyclePhase,
+  ActivityLogLossState,
+  ActivityLogOperationRegistration,
+  ActivityLogRegistryExemption,
+  ActivityLogEventEnvelope,
+  ActivityLogReleaseImpact,
+  ActivityLogWriterCapabilityState,
+  ERROR_KIND_PATTERN,
+  RegisteredActivityLogEvent,
+  activityLogOperationSchema,
+  activityLogEvent,
+  activityLogEventRegistration,
+  attachActivityLogEventRegistration,
+  classifyErrorKind,
+  defineActivityLogOperation,
+  isErrorKind,
+  isActivityLogErrorKind,
+  validateActivityLogOperationFields,
+  validateActivityLogOperationRecord,
+  validateRegisteredActivityLogEvent,
+  withActivityLogCorrelation,
+} from "./observability.js";
 
 // ─── Harness ───────────────────────────────────────────────────────────────────
 export type {
@@ -89,9 +148,20 @@ export type {
   BrowserTrustWarningEvent,
   BrowserErrorEvent,
   BrowserEvent,
+  ToolShapingDegradedReason,
+  ToolShapingDegradedEvent,
+  SinkDegradedReason,
+  SinkDegradedEvent,
+  ContextCompactedEvent,
   HarnessEvent,
 } from "./harness.js";
-export { TERMINAL_STATES, DEFAULT_LIMITS, HARNESS_CODES, HARNESS_VERSION } from "./harness.js";
+export type {
+  TERMINAL_STATES,
+  isTerminalHarnessState,
+  DEFAULT_LIMITS,
+  HARNESS_CODES,
+  HARNESS_VERSION,
+} from "./harness.js";
 
 // ─── Workflow descriptor ────────────────────────────────────────────────────────
 export type { WorkflowDescriptor, WorkflowInputSpec } from "./workflow-descriptor.js";
@@ -109,7 +179,7 @@ export type {
   ReleaseImpactStateImpact,
   ReleaseImpactUserVisibleChange,
 } from "./release-impact.js";
-export {
+export type {
   RELEASE_IMPACT_CATEGORIES,
   RELEASE_IMPACT_PRIORITIES,
   RELEASE_IMPACT_PUBLISH_GATES,
@@ -117,7 +187,15 @@ export {
   RELEASE_IMPACT_SCHEMA_VERSION,
 } from "./release-impact.js";
 
-// ─── Update availability / preflight (Issue #1692) ─────────────────────────────
+// ─── Update availability / preflight (Issues #1692, #3405) ────────────────────
+export type {
+  UPDATE_CANDIDATE_SCHEMA_VERSION,
+  UpdateCandidateClaim,
+  UpdateCandidateInstallIdentity,
+  UpdateCandidatePortableIdentity,
+  UpdateCandidateReleaseIdentity,
+  UpdateCandidateSnapshot,
+} from "./update-candidate.js";
 export type {
   UpdatePreflightBlocker,
   UpdatePreflightBlockerCode,
@@ -137,7 +215,7 @@ export type {
   UpdatePreflightSeverity,
   UpdatePreflightStatus,
 } from "./update-preflight.js";
-export {
+export type {
   UPDATE_PREFLIGHT_BLOCKER_CODES,
   UPDATE_PREFLIGHT_INSTALLABILITY_SOURCES,
   UPDATE_PREFLIGHT_PORTABLE_ASSET_STATUSES,
@@ -152,11 +230,15 @@ export {
 // ─── Governed update session runner (Issue #1693) ─────────────────────────────
 export type {
   UpdateCommandPreview,
+  UpdateCancellationCutoff,
   UpdateInstallMode,
   UpdateInstallModeKind,
   UpdateInstallModeStatus,
   UpdateInstallPackageManager,
   UpdateMutationPolicy,
+  UpdateLifecyclePhase,
+  UpdateLifecycleProgress,
+  UpdateLifecycleState,
   UpdatePortableActivationStatus,
   UpdatePortableActivationSummary,
   UpdatePortableAssetSummary,
@@ -188,8 +270,10 @@ export type {
   UpdateSessionStatus,
   UpdateUnsupportedReason,
 } from "./update-session.js";
-export {
+export type {
+  UPDATE_CANCELLATION_CUTOFFS,
   UPDATE_INSTALL_MODE_KINDS,
+  UPDATE_LIFECYCLE_PHASES,
   parseUpdateRestartVerificationRequest,
   parseUpdateSessionStartRequest,
   UPDATE_INSTALL_MODE_STATUSES,
@@ -211,6 +295,8 @@ export {
 
 // ─── Governed update local state and recovery (Issue #1694) ─────────────────────
 export type {
+  UpdateActivationWalCheckpoint,
+  UpdateActivationWalState,
   UpdateCompatibilityScan,
   UpdateHealthState,
   UpdateRecoverySnapshot,
@@ -220,16 +306,21 @@ export type {
   UpdateRemediationStatus,
   UpdateRuntimeAuditEvent,
   UpdateRuntimeEventType,
+  UpdateRuntimeRecoveryState,
+  UpdateRuntimeRecoveryStatus,
+  UpdateRuntimeStateReadResult,
   UpdateRuntimeWarningCode,
   UpdateRuntimeState,
   UpdateStateStore,
   UpdateStoreHealth,
 } from "./update-local-state.js";
-export {
+export type {
+  UPDATE_ACTIVATION_WAL_CHECKPOINTS,
   UPDATE_HEALTH_LABELS,
   UPDATE_HEALTH_STATES,
   UPDATE_LOCAL_STATE_SCHEMA_VERSION,
   UPDATE_REMEDIATION_STATUSES,
+  UPDATE_RUNTIME_RECOVERY_STATUSES,
   UPDATE_RUNTIME_EVENT_TYPES,
   UPDATE_RUNTIME_WARNING_CODES,
   UPDATE_STATE_STORES,
@@ -255,7 +346,7 @@ export type {
   UpdateRemediationStatusRequestParseFail,
   UpdateRemediationStatusRequestParseOk,
 } from "./update-remediation.js";
-export {
+export type {
   isUpdateRemediationStatus,
   isUpdateStateStore,
   parseUpdateRemediationActionRequest,
@@ -288,7 +379,7 @@ export type {
   AuditEntry,
   AuditSummary,
 } from "./workspace.js";
-export {
+export type {
   DEFAULT_DISCOVERY_OPTIONS,
   DEFAULT_READ_OPTIONS,
   SELECTION_REASON_PRIORITY,
@@ -308,7 +399,7 @@ export type {
   EditorSessionValidationOk,
   EditorSessionValidationFail,
 } from "./editor-session.js";
-export {
+export type {
   EDITOR_SESSION_SCHEMA_VERSION,
   EDITOR_SESSION_ERROR_CODES,
   isEditorDocumentVersion,
@@ -328,7 +419,7 @@ export type {
   EditorSplitDropZone,
   EditorTabDragIntent,
 } from "./editor-layout.js";
-export {
+export type {
   EDITOR_LAYOUT_SCHEMA_VERSION,
   activeEditorPane,
   createEditorLayoutStateV2,
@@ -344,7 +435,7 @@ export type {
   EditorDirtyCloseReason,
   EditorDirtyCloseResolution,
 } from "./editor-dirty-close.js";
-export { createEditorDirtyCloseIntent } from "./editor-dirty-close.js";
+export type { createEditorDirtyCloseIntent } from "./editor-dirty-close.js";
 // ─── Root-relative project-tree file-identifier contract (Issue #1374) ──────────
 // Single tested place that turns a possibly-absolute candidate into the root-relative file
 // identifier the Files/editor BFF requires, so the editor never triggers the absolute-path load
@@ -354,13 +445,19 @@ export type {
   WorkspaceFileIdentifierResolution,
   WorkspaceFileTarget,
 } from "./editor-workspace-path.js";
-export {
+export type {
   isRootRelativeFileIdentifier,
   resolveWorkspaceFileIdentifier,
   selectWorkspaceFileTarget,
 } from "./editor-workspace-path.js";
-export type { EditorHotExitIndexRecordV2, EditorHotExitSnapshotV1 } from "./editor-hot-exit.js";
-export {
+export type {
+  EditorHotExitIndexRecordV2,
+  EditorHotExitSnapshotV1,
+  EditorHotExitWriteResponse,
+  EditorHotExitWriteStoredResponse,
+  EditorHotExitWriteSuppressedResponse,
+} from "./editor-hot-exit.js";
+export type {
   EDITOR_HOT_EXIT_INDEX_SCHEMA_VERSION,
   EDITOR_HOT_EXIT_SCHEMA_VERSION,
   EDITOR_HOT_EXIT_TTL_MS,
@@ -431,7 +528,7 @@ export type {
   EditorAgentSnapshotTextMode,
   EditorAgentVerificationRequest,
 } from "./editor-agent.js";
-export {
+export type {
   DEFAULT_EDITOR_AGENT_ACTION_ORIGIN,
   DEFAULT_EDITOR_AGENT_SNAPSHOT_TEXT_MODE,
   EDITOR_AGENT_ACTION_ID_MAX_BYTES,
@@ -518,7 +615,7 @@ export type {
   EditorAgentAuthorityPolicy,
   EditorAgentAuditResponse,
 } from "./editor-agent-governance.js";
-export {
+export type {
   EDITOR_AGENT_ACTION_DENY_REASONS,
   EDITOR_AGENT_ACTION_DISPOSITIONS,
   EDITOR_AGENT_ACTION_EFFECT_CLASS,
@@ -610,7 +707,7 @@ export type {
   LanguageServiceParseFail,
   LanguageServiceParse,
 } from "./language-service.js";
-export {
+export type {
   LANGUAGE_SERVICE_SCHEMA_VERSION,
   LANGUAGE_SERVICE_OPERATIONS,
   LANGUAGE_SERVICE_ERROR_CODES,
@@ -631,7 +728,7 @@ export {
 // the editor's render fallback, not a registry language). Strict leaf: pure const tables + pure
 // functions, no other keiko-* imports, no clock/crypto/randomness.
 export type { EditorLanguageMode } from "./editor-language-mode-map.js";
-export {
+export type {
   EDITOR_LANGUAGE_MODE_MAP,
   EDITOR_LANGUAGE_MODE_IDS,
   EDITOR_LANGUAGE_MODE_BY_EXTENSION,
@@ -650,7 +747,7 @@ export type {
   EditorBuiltinCapability,
   EditorBuiltinFormattingSource,
 } from "./editor-builtin-capabilities.js";
-export {
+export type {
   EDITOR_BUILTIN_CAPABILITIES,
   EDITOR_BUILTIN_CAPABILITY_BY_LANGUAGE,
   editorBuiltinCapability,
@@ -677,7 +774,7 @@ export type {
   LspLatencyHistogram,
   ManagedLspProcessHealthSnapshot,
 } from "./lsp-process.js";
-export {
+export type {
   LSP_PROCESS_SCHEMA_VERSION,
   LSP_PROCESS_ERROR_CODES,
   LSP_PROCESS_STATUSES,
@@ -696,8 +793,9 @@ export type {
   DebugLifecycleEvidence,
   DebugLifecycleEvent,
 } from "./debug/debug-lifecycle.js";
-export {
+export type {
   DEBUG_LIFECYCLE_SCHEMA_VERSION,
+  isDebugLifecycleEvent,
   isDebugLifecycleEvidence,
 } from "./debug/debug-lifecycle.js";
 
@@ -756,7 +854,7 @@ export type {
   DebugScopeProjection,
   WatchEvaluationInput,
 } from "./dap-debug.js";
-export {
+export type {
   DAP_DEBUG_CONTRACT_SCHEMA_VERSION,
   DEBUG_SESSION_STATUSES,
   DEBUG_EVENT_KINDS,
@@ -800,7 +898,7 @@ export type {
   RuntimeCapabilitiesParseFail,
   RuntimeCapabilitiesParse,
 } from "./runtime-capabilities.js";
-export {
+export type {
   RUNTIME_CAPABILITY_SCHEMA_VERSION,
   RUNTIME_CAPABILITY_KINDS,
   RUNTIME_CAPABILITY_STATES,
@@ -819,6 +917,7 @@ export type {
   CodingWorkbenchApprovalRisk,
   CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchAuxiliaryStatus,
+  CodingWorkbenchOperatorDecision,
   CodingWorkbenchBudget,
   CodingWorkbenchBranchConstraints,
   CodingWorkbenchCommandPolicy,
@@ -856,10 +955,11 @@ export type {
   CodingWorkbenchValidationResult,
   CodingWorkbenchWorkspaceIdentity,
 } from "./coding-workbench.js";
-export {
+export type {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_APPROVAL_RISKS,
   CODING_WORKBENCH_AUXILIARY_STATUSES,
+  CODING_WORKBENCH_OPERATOR_DECISIONS,
   CODING_WORKBENCH_COMMAND_POLICY_MODES,
   CODING_WORKBENCH_CONNECTOR_SCOPES,
   CODING_WORKBENCH_GATES,
@@ -895,13 +995,13 @@ export type {
   CodingWorkbenchEvidenceKind,
   CodingWorkbenchEvidenceRecord,
 } from "./coding-workbench-evidence.js";
-export {
+export type {
   CODING_WORKBENCH_EVIDENCE_KINDS,
   isCodingWorkbenchEvidenceSafeText,
   redactCodingWorkbenchEvidenceText,
   validateCodingWorkbenchEvidenceRecord,
 } from "./coding-workbench-evidence.js";
-export {
+export type {
   validateCodingWorkbenchAuthorityEnvelope,
   validateCodingWorkbenchPermissionRequest,
   validateCodingWorkbenchRuntimeEvent,
@@ -924,7 +1024,7 @@ export type {
   CodeTaskScenarioOutcome,
   CodeTaskSha256Digest,
 } from "./code-task-acceptance.js";
-export {
+export type {
   CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND,
   CODE_TASK_ACCEPTANCE_SCHEMA_VERSION,
   CODE_TASK_EVIDENCE_CLASSES,
@@ -940,6 +1040,42 @@ export {
   isCodeTaskScenarioId,
   isCodeTaskSha256Digest,
   validateCodeTaskAcceptanceContribution,
+} from "./code-task-acceptance.js";
+// #3390 qualification manifest: a versioned sibling of the #2384 acceptance contribution above,
+// reusing its closed vocabularies. See code-task-acceptance.ts's "Qualification manifest" section.
+export type {
+  CodeTaskQualificationApprovalRequestObservationV1,
+  CodeTaskQualificationApprovedProposalObservationV1,
+  CodeTaskQualificationManifestV1,
+  CodeTaskQualificationAuthorityObservationV1,
+  CodeTaskQualificationEffectToolObservationV1,
+  CodeTaskQualificationFlowArtifactV1,
+  CodeTaskQualificationFlowBindingV1,
+  CodeTaskQualificationFlowStageEvidenceV1,
+  CodeTaskQualificationFlowSpendV1,
+  CodeTaskQualificationFlowTransition,
+  CodeTaskQualificationFlowV1,
+  CodeTaskQualificationProvenance,
+  CodeTaskQualificationProposalActionKind,
+  CodeTaskQualificationRequiredChecksV1,
+  CodeTaskQualificationRubricReview,
+  CodeTaskQualificationRubricReviewV1,
+  CodeTaskQualificationStageReceiptV1,
+  CodeTaskQualificationScenarioV1,
+  CodeTaskQualificationVerdict,
+} from "./code-task-acceptance.js";
+export type {
+  CODE_TASK_QUALIFICATION_MANIFEST_KIND,
+  CODE_TASK_QUALIFICATION_MANIFEST_SCHEMA_VERSION,
+  CODE_TASK_QUALIFICATION_FLOW_ARTIFACT_KIND,
+  CODE_TASK_QUALIFICATION_FLOW_TRANSITIONS,
+  CODE_TASK_QUALIFICATION_PROVENANCES,
+  CODE_TASK_QUALIFICATION_VERDICTS,
+  codeTaskQualificationManifestFailures,
+  codeTaskQualificationVerdictFor,
+  isCodeTaskToolName,
+  validateCodeTaskQualificationManifest,
+  validateCodeTaskQualificationFlowArtifact,
 } from "./code-task-acceptance.js";
 
 // ─── Code-task governance contracts (Issue #2386, Epic #2384) ──────────────────────
@@ -964,7 +1100,7 @@ export type {
   GovernedActionQuestionRef,
   GovernedActionV1,
 } from "./code-task-governance.js";
-export {
+export type {
   CODE_TASK_EXECUTION_KIND,
   CODE_TASK_GOVERNANCE_SCHEMA_VERSION,
   CODE_TASK_GRANT_SCOPES,
@@ -1001,7 +1137,7 @@ export type {
   RuntimeGovernanceRequestV1,
   RuntimeGovernanceTarget,
 } from "./code-task-run-control.js";
-export {
+export type {
   RUN_CONTROL_SNAPSHOT_KIND,
   RUNTIME_GOVERNANCE_LIFECYCLE_KINDS,
   RUNTIME_GOVERNANCE_OPERATIONS,
@@ -1025,7 +1161,7 @@ export type {
   CodeTaskChildRunId,
   CodeTaskSkillId,
 } from "./code-task-auxiliary.js";
-export {
+export type {
   AUXILIARY_CAPABILITIES,
   AUXILIARY_INVOCATIONS,
   AUXILIARY_OUTCOME_STATUSES,
@@ -1036,6 +1172,34 @@ export {
   validateAuxiliaryCapabilityOutcomeV1,
   validateAuxiliaryCapabilityRequestV1,
 } from "./code-task-auxiliary.js";
+
+// ─── Approved-skill discovery projection (Issue #3417, ADR-0175, ADR-0137) ─────────
+// The closed, body-free record discovery reports per approved skill; the server-approved skill
+// catalog stays authoritative for skill state and the governed skill handler for effects.
+export type {
+  SkillCategory,
+  SkillCompatibilityV1,
+  SkillDiscoveryEntryV1,
+  SkillDiscoveryResultV1,
+  SkillReadinessV1,
+  SkillUnavailableReason,
+} from "./coding-skill-discovery.js";
+// Type-only, like every other name this barrel carries (`runtime-surface.test.ts`): the runtime
+// values themselves -- the vocabulary, the bounds, the schema version, the validators and the
+// unpaired projection -- are imported from
+// `@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery`, never through this entrypoint.
+export type {
+  CODING_WORKBENCH_RUNTIME_SKILLS_SESSION_STATES,
+  CodingWorkbenchRuntimeSkillsChannelPayload,
+  CodingWorkbenchRuntimeSkillsSession,
+  SKILL_CATEGORIES,
+  SKILL_DISCOVERY_LIMITS,
+  SKILL_DISCOVERY_SCHEMA_VERSION,
+  SKILL_UNAVAILABLE_REASONS,
+  unpairedCodingWorkbenchRuntimeSkillsChannelPayload,
+  validateCodingWorkbenchRuntimeSkillsChannelPayload,
+  validateSkillDiscoveryResultV1,
+} from "./coding-skill-discovery.js";
 
 export type { FigmaCodegenFile, FigmaCodegenResponse } from "./figma-codegen.js";
 
@@ -1063,6 +1227,7 @@ export type {
   AtlassianConnectorPendingApproval,
   AtlassianConnectorPodSource,
   AtlassianConnectorProvider,
+  AtlassianConnectorRegistryFailureReason,
   AtlassianConnectorWriteFailureReason,
   AtlassianLiveSearchTemplateId,
   AtlassianSyncBounds,
@@ -1088,7 +1253,7 @@ export type {
   JiraLiveSearchResult,
   JiraSyncScope,
 } from "./atlassian-connectors.js";
-export {
+export type {
   ATLASSIAN_CITATION_FIELD_MAX_CHARS,
   ATLASSIAN_CITATION_LIST_MAX_ENTRIES,
   ATLASSIAN_CITATION_METADATA_MAX_CHARS,
@@ -1110,12 +1275,14 @@ export {
   ATLASSIAN_CONNECTOR_HUMAN_INITIATION_REASON,
   ATLASSIAN_CONNECTOR_IDENTIFIER_MAX_CHARS,
   ATLASSIAN_CONNECTOR_PROVIDERS,
+  ATLASSIAN_CONNECTOR_REGISTRY_FAILURE_REASONS,
   ATLASSIAN_CONNECTOR_SCHEMA_VERSION,
   ATLASSIAN_CONNECTOR_SCOPE_DENY_REASON,
   ATLASSIAN_CONNECTOR_SUPERVISED_ACTION_KIND,
   ATLASSIAN_CONNECTOR_WORKBENCH_ACTION_CLASS,
   ATLASSIAN_CONNECTOR_WORKBENCH_RESOURCE_SCOPE,
   ATLASSIAN_CONNECTOR_WRITE_FAILURE_REASONS,
+  ATLASSIAN_APPROVAL_CONTENT_PREVIEW_MAX_CHARS,
   ATLASSIAN_CONFLUENCE_SPACE_KEY_MAX_CHARS,
   ATLASSIAN_JIRA_PROJECT_KEY_MAX_CHARS,
   ATLASSIAN_JQL_MAX_CHARS,
@@ -1127,6 +1294,7 @@ export {
   ATLASSIAN_SYNC_SCOPE_MAX_KEYS,
   ATLASSIAN_SYNC_TERMINAL_STATUSES,
   DEFAULT_ATLASSIAN_SYNC_BOUNDS,
+  hasBalancedJqlNesting,
   decideAtlassianConnectorAction,
   isAtlassianConnectionVerificationStatus,
   isAtlassianConnectorActionReviewReason,
@@ -1135,13 +1303,16 @@ export {
   isAtlassianConnectorAuthScheme,
   isAtlassianConnectorAuthorityFailureReason,
   isAtlassianConnectorProvider,
+  isAtlassianConnectorRegistryFailureReason,
   isAtlassianConnectorWriteFailureReason,
+  isAtlassianContentPreviewUnpresentable,
   isAtlassianLiveSearchTemplateId,
   isAtlassianSyncFailureReason,
   isAtlassianSyncJobStatus,
   isAtlassianSyncTerminalStatus,
   isJiraIssueCitationMetadata,
   isSafeAtlassianConnectorBaseUrl,
+  isSafeAtlassianContentPreview,
   isSafeAtlassianDisplayName,
   isSafeAtlassianIdentifier,
   isSafeConfluenceSpaceKey,
@@ -1155,7 +1326,7 @@ export type {
   AtlassianConnectorValidationFail,
   AtlassianConnectorValidationOk,
 } from "./atlassian-connectors-validation.js";
-export {
+export type {
   validateAtlassianConnectorActionExecutionResult,
   validateAtlassianConnectorActivityRecord,
   validateAtlassianConnectorDescriptor,
@@ -1174,6 +1345,9 @@ export type {
   CodingWorkbenchRuntimeAdapterStartRequest,
   CodingWorkbenchRuntimeAuthorityEnvelope,
   CodingWorkbenchRuntimeAuthorityFacts,
+  CodingWorkbenchIssueBinding,
+  CodingWorkbenchIssueBindingFailure,
+  CodingWorkbenchModelRefusalReason,
   CodingWorkbenchRuntimeDelegationUsage,
   CodingWorkbenchRuntimeExecutionBinding,
   CodingWorkbenchRuntimeFailureCode,
@@ -1182,7 +1356,8 @@ export type {
   CodingWorkbenchRuntimeState,
   CodingWorkbenchRuntimeStateName,
 } from "./coding-workbench-runtime.js";
-export {
+export type {
+  CODING_WORKBENCH_ISSUE_BINDING_FAILURES,
   CODING_WORKBENCH_LIFECYCLE_COMMANDS,
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
   CODING_WORKBENCH_RUNTIME_FAILURE_CODES,
@@ -1196,11 +1371,54 @@ export {
   validateCodingWorkbenchRuntimeMintConfirmation,
   validateCodingWorkbenchRuntimeState,
 } from "./coding-workbench-runtime.js";
+// #3385: the issue preview/wire contracts beside the binding, and the ONE GitHub issue reference
+// parser (a dependency-free leaf whose runtime surface `coding-workbench-runtime.ts` re-exports).
+export type {
+  CodingWorkbenchIssueBindingProjection,
+  CodingWorkbenchIssuePreview,
+  CodingWorkbenchIssuePreviewFailureWire,
+  CodingWorkbenchIssuePreviewProvenance,
+  CodingWorkbenchIssuePreviewRequestWire,
+  CodingWorkbenchIssuePreviewResponseWire,
+  CodingWorkbenchIssueState,
+} from "./coding-workbench-runtime.js";
+export type {
+  CODING_WORKBENCH_ISSUE_PREVIEW_EXCERPT_MAX_CHARS,
+  CODING_WORKBENCH_ISSUE_PREVIEW_TITLE_MAX_CHARS,
+  CODING_WORKBENCH_ISSUE_REF_MAX_CHARS,
+  CODING_WORKBENCH_ISSUE_STATES,
+  parseCodingWorkbenchIssuePreviewRequest,
+  validateCodingWorkbenchIssuePreview,
+  validateCodingWorkbenchIssueBinding,
+} from "./coding-workbench-runtime.js";
+export type {
+  GitHubIssueReference,
+  GitHubIssueReferenceParseResult,
+  GitHubIssueReferenceRejection,
+  ParseGitHubIssueReferenceOptions,
+} from "./github-issue-reference.js";
+export type {
+  canonicalGitHubOwnerAndRepo,
+  findGitHubIssueReferences,
+  GITHUB_ISSUE_NUMBER_MAX,
+  GITHUB_ISSUE_REFERENCE_MAX_CHARS,
+  GITHUB_ISSUE_REFERENCE_REJECTIONS,
+  isGitHubOwnerAndRepo,
+  parseGitHubIssueNumber,
+  parseGitHubIssueReference,
+  sameGitHubOwnerAndRepo,
+} from "./github-issue-reference.js";
 export type {
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimeApprovalDecisionRequest,
+  CodingWorkbenchContextCompaction,
+  CodingWorkbenchContextUsage,
+  CodingWorkbenchContextUsageBreakdown,
+  CodingWorkbenchContextUsageSource,
+  CodingWorkbenchRuntimeEvidenceClass,
   CodingWorkbenchRuntimePendingPermission,
   CodingWorkbenchRuntimePreference,
+  CodingWorkbenchRuntimeProjectMemoryRequest,
   CodingWorkbenchRuntimeReadiness,
   CodingWorkbenchRuntimeReadinessRequest,
   CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
@@ -1219,9 +1437,12 @@ export type {
   CodingWorkbenchRuntimeTakeoverRequest,
   CodingWorkbenchRuntimeUnavailableReason,
 } from "./coding-workbench-runtime-api.js";
-export {
+export type {
+  CODING_WORKBENCH_ISSUE_NUMBER_MAX,
   CODING_WORKBENCH_RUNTIME_API_ID_MAX_CHARS,
+  CODING_WORKBENCH_RUNTIME_MODEL_ID_MAX_CHARS,
   CODING_WORKBENCH_RUNTIME_APPROVAL_DECISIONS,
+  CODING_WORKBENCH_RUNTIME_EVIDENCE_CLASSES,
   CODING_WORKBENCH_RUNTIME_PREFERENCES,
   CODING_WORKBENCH_RUNTIME_SSE_CURSOR_MAX_CHARS,
   CODING_WORKBENCH_RUNTIME_SSE_EVENT_KINDS,
@@ -1249,7 +1470,7 @@ export type {
   CodingWorkbenchRuntimeQuestionsResponse,
   CodingWorkbenchRuntimeQuestionsSession,
 } from "./coding-workbench-runtime-questions.js";
-export {
+export type {
   CODING_WORKBENCH_RUNTIME_QUESTION_ANSWERS_MAX_COUNT,
   CODING_WORKBENCH_RUNTIME_QUESTION_HEADER_MAX_CHARS,
   CODING_WORKBENCH_RUNTIME_QUESTION_OPTION_LABEL_MAX_CHARS,
@@ -1270,7 +1491,7 @@ export type {
   CodingWorkbenchRuntimeApprovalReviewSession,
   CodingWorkbenchRuntimePendingApprovalReview,
 } from "./coding-workbench-runtime-approval-review.js";
-export {
+export type {
   CODING_WORKBENCH_APPROVAL_REVIEW_MAX_COUNT,
   CODING_WORKBENCH_APPROVAL_REVIEW_MAX_PATHS,
   CODING_WORKBENCH_APPROVAL_REVIEW_PATH_MAX_CHARS,
@@ -1284,7 +1505,7 @@ export type {
   CodingWorkbenchRuntimeResearchGrant,
   CodingWorkbenchRuntimeResearchSession,
 } from "./coding-workbench-runtime-research.js";
-export {
+export type {
   CODING_WORKBENCH_RESEARCH_HOST_MAX_CHARS,
   CODING_WORKBENCH_RESEARCH_REQUEST_LINE_MAX_CHARS,
   CODING_WORKBENCH_RUNTIME_RESEARCH_SESSION_STATES,
@@ -1305,7 +1526,7 @@ export type {
   CodingSafeActivityTurn,
   UnavailableCodingSafeActivityFeed,
 } from "./coding-safe-activity.js";
-export {
+export type {
   CODING_SAFE_ACTIVITY_CONTRACT_VERSION,
   CODING_SAFE_ACTIVITY_MAX_DROPPED_EVENT_COUNT,
   CODING_SAFE_ACTIVITY_MAX_MESSAGES_PER_TURN,
@@ -1334,7 +1555,7 @@ export type {
   CodingAppSessionTextContent,
   CodingAppSessionPairingAttestation,
 } from "./coding-app-session.js";
-export {
+export type {
   CODING_APP_SESSION_CHANNEL_BODY_MAX_CHARS,
   CODING_APP_SESSION_CHANNEL_CONTRACT_VERSION,
   CODING_APP_SESSION_CHANNEL_KIND_MAX_CHARS,
@@ -1356,6 +1577,7 @@ export {
 export type {
   CodingWorkbenchCodexAuthCommandLabel,
   CodingWorkbenchCodexAuthMethod,
+  CodingWorkbenchCodexAuthMethodRow,
   CodingWorkbenchCodexAuthSetupPlan,
   CodingWorkbenchCodexAuthSetupRequest,
   CodingWorkbenchCodexAuthStateRoot,
@@ -1368,7 +1590,7 @@ export type {
   CodingWorkbenchRuntimeAdapterKind,
   CodingWorkbenchRuntimeProfileSelection,
 } from "./coding-workbench-codex-auth.js";
-export {
+export type {
   CODING_WORKBENCH_CODEX_AUTH_COMMAND_LABELS,
   CODING_WORKBENCH_CODEX_AUTH_METHODS,
   CODING_WORKBENCH_CODEX_AUTH_STATE_ROOTS,
@@ -1376,6 +1598,7 @@ export {
   CODING_WORKBENCH_CODEX_AUTH_STATUSES,
   CODING_WORKBENCH_CODEX_CREDENTIAL_STORES,
   CODING_WORKBENCH_CODEX_RUNTIME_BINARY_SOURCES,
+  codingWorkbenchCodexAuthMethodRowFor,
   selectCodingWorkbenchRuntimeProfile,
   validateCodingWorkbenchCodexAuthSetupPlan,
   validateCodingWorkbenchCodexAuthSetupRequest,
@@ -1397,13 +1620,77 @@ export type {
   GitRepositoryValidationFail,
   GitRepositoryValidation,
 } from "./git-repository.js";
-export {
+export type {
   GIT_REPOSITORY_SCHEMA_VERSION,
   GIT_REPOSITORY_STATES,
   GIT_UNAVAILABLE_REASONS,
+  GIT_STATUS_CODES,
   validateGitRepositoryStatusResponse,
   validateGitRepositoryDiffResponse,
 } from "./git-repository.js";
+
+// ─── Immutable base-to-head Git change snapshot (Issue #3397, Epic #3384, ADR-0174) ───
+// The one versioned, content-free snapshot contract every pull-request journey consumes: server-
+// resolved base/head/merge-base binding, typed entries for every change kind, bounded hunk ranges
+// with digests, completeness counts and the frozen outcome vocabulary. Runtime values are consumed
+// through `@oscharko-dev/keiko-contracts/runtime/git-change-snapshot`.
+export type {
+  GitChangeSnapshot,
+  GitChangeSnapshotAddEntry,
+  GitChangeSnapshotBinaryEntry,
+  GitChangeSnapshotCompleteness,
+  GitChangeSnapshotCompletenessInput,
+  GitChangeSnapshotContentChange,
+  GitChangeSnapshotCopyEntry,
+  GitChangeSnapshotDeleteEntry,
+  GitChangeSnapshotDurableFields,
+  GitChangeSnapshotEntry,
+  GitChangeSnapshotEntryIdentity,
+  GitChangeSnapshotEntryKind,
+  GitChangeSnapshotFailed,
+  GitChangeSnapshotFailureReason,
+  GitChangeSnapshotHunk,
+  GitChangeSnapshotLimits,
+  GitChangeSnapshotLocalDivergence,
+  GitChangeSnapshotModeChangeEntry,
+  GitChangeSnapshotModifyEntry,
+  GitChangeSnapshotOmission,
+  GitChangeSnapshotOmissionReason,
+  GitChangeSnapshotOutcome,
+  GitChangeSnapshotRenameEntry,
+  GitChangeSnapshotResult,
+  GitChangeSnapshotSubmoduleEntry,
+  GitChangeSnapshotUnavailable,
+  GitChangeSnapshotUnavailableReason,
+  GitChangeSnapshotValidation,
+  GitChangeSnapshotValidationFail,
+  GitChangeSnapshotValidationOk,
+} from "./git-change-snapshot.js";
+export type {
+  GIT_CHANGE_SNAPSHOT_CONTENT_CHANGES,
+  GIT_CHANGE_SNAPSHOT_DEFAULT_LIMITS,
+  GIT_CHANGE_SNAPSHOT_DEFAULT_TTL_MS,
+  GIT_CHANGE_SNAPSHOT_ENTRY_KINDS,
+  GIT_CHANGE_SNAPSHOT_FAILURE_REASONS,
+  GIT_CHANGE_SNAPSHOT_LIMIT_CEILINGS,
+  GIT_CHANGE_SNAPSHOT_MAX_HUNK_HEADER_CHARS,
+  GIT_CHANGE_SNAPSHOT_MAX_LINE_CHARS,
+  GIT_CHANGE_SNAPSHOT_MAX_LINES_PER_HUNK,
+  GIT_CHANGE_SNAPSHOT_MAX_TTL_MS,
+  GIT_CHANGE_SNAPSHOT_OMISSION_REASONS,
+  GIT_CHANGE_SNAPSHOT_OUTCOMES,
+  GIT_CHANGE_SNAPSHOT_REPOSITORY_ID_MAX_CHARS,
+  GIT_CHANGE_SNAPSHOT_SCHEMA_VERSION,
+  GIT_CHANGE_SNAPSHOT_UNAVAILABLE_REASONS,
+  deriveGitChangeSnapshotOutcome,
+  gitChangeSnapshotDigestFields,
+  gitChangeSnapshotEntryIdentityFields,
+  isGitChangeSnapshot,
+  isGitChangeSnapshotReference,
+  resolveGitChangeSnapshotLimits,
+  summarizeGitChangeSnapshotCompleteness,
+  validateGitChangeSnapshotResult,
+} from "./git-change-snapshot.js";
 
 // ─── Editor Git read surface (Issue #2227, Epic #2093, ADR-0127) ────────────────
 // Bounded structured staged/worktree diff and privacy-minimized blame contracts shared by the
@@ -1425,7 +1712,7 @@ export type {
   GitEditorParseFail,
   GitEditorParseResult,
 } from "./git-editor.js";
-export {
+export type {
   GIT_EDITOR_SCHEMA_VERSION,
   GIT_EDITOR_DIFF_MAX_BYTES,
   GIT_EDITOR_DIFF_MAX_FILES,
@@ -1473,7 +1760,7 @@ export type {
   GitRemotesResponse,
   GitRepositorySummaryValidation,
 } from "./git-repository-summary.js";
-export {
+export type {
   GIT_REPOSITORY_SUMMARY_SCHEMA_VERSION,
   validateGitRepositorySummary,
   validateGitRemotesResponse,
@@ -1483,7 +1770,7 @@ export {
 // Read-only, paginated commit history (sha/subject/author/ISO date/refs/parent and changed-file
 // counts). Bounded entries with limit/skip/truncated; all Git process execution stays server-side.
 export type { GitHistoryEntry, GitHistoryResponse } from "./git-history.js";
-export { GIT_HISTORY_SCHEMA_VERSION, validateGitHistoryResponse } from "./git-history.js";
+export type { GIT_HISTORY_SCHEMA_VERSION, validateGitHistoryResponse } from "./git-history.js";
 
 // ─── Git fetch/pull sync BFF (Issue #1573, Epic #1572) ────────────────────────────
 // Read-only sync preview (readiness/executable gate + block reason) and the governed execute
@@ -1497,7 +1784,7 @@ export type {
   GitSyncPreview,
   GitSyncExecuteResponse,
 } from "./git-sync.js";
-export {
+export type {
   GIT_SYNC_SCHEMA_VERSION,
   GIT_SYNC_OPERATIONS,
   GIT_SYNC_OUTCOMES,
@@ -1524,7 +1811,7 @@ export type {
   GitRepositoryAgentParseResult,
   GitRepositoryAgentAuthorityClass,
 } from "./git-repository-agent.js";
-export {
+export type {
   GIT_REPOSITORY_AGENT_SCHEMA_VERSION,
   GIT_REPOSITORY_AGENT_OPERATION_MODES,
   GIT_REPOSITORY_AGENT_OPERATION_KINDS,
@@ -1564,7 +1851,7 @@ export type {
   CommandTaskRunResultParseFail,
   CommandTaskRunResultParse,
 } from "./command-runner.js";
-export {
+export type {
   COMMAND_RUNNER_SCHEMA_VERSION,
   COMMAND_TASK_KINDS,
   COMMAND_TASK_SOURCES,
@@ -1577,6 +1864,17 @@ export {
   validateCommandTaskCatalog,
   validateCommandTaskRunResult,
 } from "./command-runner.js";
+
+// ─── Command termination evidence (PR #3355 review) ───────────────────────────────
+// Body-free evidence for a terminated command. Defined here rather than in keiko-tools because
+// three packages depend on the shape — tools produces it, server logs it, verification forwards it
+// — and ADR-0019 makes this leaf the owner of cross-package types.
+export type {
+  CommandTerminationEvidence,
+  CommandTerminationReason,
+  WindowsTreeKillDisposition,
+  WindowsTreeKillResult,
+} from "./command-termination.js";
 
 // ─── Editor completion gateway (Issue #1199) ──────────────────────────────────────
 // Wire request/response for the governed `POST /api/editor/completion` route: deterministic
@@ -1595,7 +1893,7 @@ export type {
   EditorCompletionParseFail,
   EditorCompletionParse,
 } from "./editor-completion.js";
-export {
+export type {
   EDITOR_COMPLETION_SCHEMA_VERSION,
   EDITOR_COMPLETION_WIRE_TRIGGER_KINDS,
   EDITOR_COMPLETION_ITEM_ORIGINS,
@@ -1640,7 +1938,7 @@ export type {
   ContainerRunResultParseFail,
   ContainerRunResultParse,
 } from "./container-runtime.js";
-export {
+export type {
   CONTAINER_RUNTIME_SCHEMA_VERSION,
   CONTAINER_ENGINE_IDS,
   CONTAINER_MOUNT_MODES,
@@ -1674,7 +1972,7 @@ export type {
   EditorInlineCompletionTelemetryParseFail,
   EditorInlineCompletionTelemetryParse,
 } from "./editor-inline-completion.js";
-export {
+export type {
   EDITOR_INLINE_COMPLETION_SCHEMA_VERSION,
   EDITOR_INLINE_COMPLETION_WIRE_TRIGGER_KINDS,
   EDITOR_INLINE_COMPLETION_TELEMETRY_SCHEMA_VERSION,
@@ -1707,13 +2005,15 @@ export type {
   EditorTestGenerationParseFail,
   EditorTestGenerationParse,
 } from "./editor-test-generation.js";
-export {
+export type {
   EDITOR_TEST_GENERATION_SCHEMA_VERSION,
   EDITOR_TEST_GENERATION_STABILITY_RUNS,
   EDITOR_TEST_GENERATION_TARGET_KINDS,
   EDITOR_TEST_GENERATION_STATUSES,
   EDITOR_TEST_GENERATION_ASSURANCES,
   EDITOR_TEST_GENERATION_GATE_STATES,
+  EDITOR_TEST_GENERATION_MAX_OVERLAYS,
+  EDITOR_TEST_GENERATION_MAX_OVERLAY_TEXT_BYTES,
   notRunTestGenerationFunnel,
   parseEditorTestGenerationRequest,
 } from "./editor-test-generation.js";
@@ -1740,7 +2040,7 @@ export type {
   EditorPatchApplyParseFail,
   EditorPatchApplyParse,
 } from "./editor-patch-apply.js";
-export {
+export type {
   EDITOR_PATCH_APPLY_SCHEMA_VERSION,
   EDITOR_PATCH_APPLY_DECISIONS,
   EDITOR_PATCH_APPLY_STATUSES,
@@ -1756,8 +2056,11 @@ export type {
   LatencyClass,
   ModelTokenAccountingSource,
   ModelTokenAccounting,
+  ToolCallingVerification,
+  ModelReasoningEffort,
   InfillingAlignment,
   ModelCapability,
+  ModelCapabilityPricing,
   CompletionInteractionMode,
   CompletionDegradeReason,
   CompletionModelSelection,
@@ -1785,12 +2088,16 @@ export type {
   VoiceCapabilityResolution,
   VoiceProviderAvailability,
 } from "./gateway.js";
-export {
+export type { ProviderEndpointStyle, RealtimeAuthMode } from "./gateway.js";
+export type {
   CONVERSATION_CAPABILITY_CONTRACT_VERSION,
+  MODEL_REASONING_EFFORTS,
   GATEWAY_TEMPERATURE_RANGE,
   GATEWAY_TOP_P_RANGE,
   INFILLING_ALIGNMENTS,
   MODEL_COST_RANK,
+  PROVIDER_ENDPOINT_STYLES,
+  REALTIME_AUTH_MODES,
   VOICE_PROVIDER_LOCALITIES,
   VOICE_PERSONAS,
   assertValidGatewaySamplingParameters,
@@ -1799,13 +2106,30 @@ export {
   isValidGatewayTopP,
   validateGatewaySamplingParameters,
 } from "./gateway.js";
-export type { ConversationIneligibilityReason } from "./gateway.js";
-export {
+export type {
+  ConversationIneligibilityReason,
+  DeclaredModelMode,
+  DeclaredModeRole,
+  GatewayModelUnsupportedReason,
+  GatewayUnsupportedDiscoveredModel,
+} from "./gateway.js";
+export type {
   isConversationEligibleModel,
   explainConversationIneligibility,
+  conversationDefaultRank,
+  electConversationDefault,
+  DECLARED_MODEL_MODES,
+  boundedUnsupportedReason,
+  isChatCompatibleDeclaredMode,
+  modelKindForDeclaredMode,
+  preferredConversationModelOrder,
   modelSupportsInfilling,
   isAlignedInfillingModel,
   isAsYouTypeCompletionModel,
+  isCodingWorkbenchReadinessCandidate,
+  isCodingWorkbenchModel,
+  listCodingWorkbenchReadinessCandidates,
+  selectCodingWorkbenchReadinessCandidate,
   isVoiceCapability,
   modelSupportsSpeechInput,
   modelSupportsSpeechOutput,
@@ -1824,7 +2148,7 @@ export {
 // readiness probe has confirmed the configured gateway, with `unverified` as the fail-closed
 // default. See gateway-verification.ts for why it is dependency-free.
 export type { GatewayVerificationState } from "./gateway-verification.js";
-export {
+export type {
   UNVERIFIED_GATEWAY,
   gatewayVerificationContradictsReadiness,
   gatewayVerificationFromProbeOutcome,
@@ -1882,7 +2206,7 @@ export type {
   VoiceProtocolTimeouts,
   VoiceProtocolValidation,
 } from "./voice-protocol.js";
-export {
+export type {
   VOICE_PROTOCOL_VERSION,
   VOICE_PLANES,
   VOICE_CONTROL_TRANSPORTS,
@@ -1906,6 +2230,7 @@ export {
   VOICE_POLICY_DECISIONS,
   VOICE_PROTOCOL_ERROR_CODES,
   VOICE_CONTROL_MESSAGE_REPLAY,
+  VOICE_REPLAY_CAPACITY,
   VOICE_CONTROL_MESSAGE_REDACTION,
   VOICE_PROFILE_ALLOWED_MESSAGE_KINDS,
   VOICE_PROFILE_MEDIA_TRANSPORT,
@@ -1934,7 +2259,7 @@ export type {
   CommittedVoiceTranscriptProjection,
   VoiceTranscriptEvidenceSummary,
 } from "./voice-transcript.js";
-export {
+export type {
   VOICE_TRANSCRIPT_SCHEMA_VERSION,
   VOICE_TRANSCRIPT_SEGMENT_STATES,
   VOICE_TRANSCRIPT_CONSUMABLE_STATES,
@@ -1966,7 +2291,7 @@ export type {
   VoicePlaybackEffect,
   VoicePlaybackTurnSummary,
 } from "./voice-playback.js";
-export {
+export type {
   VOICE_PLAYBACK_SCHEMA_VERSION,
   VOICE_PLAYBACK_PHASES,
   VOICE_PLAYBACK_ACTIVE_PHASES,
@@ -1998,8 +2323,10 @@ export {
 // ─── Tools ──────────────────────────────────────────────────────────────────────
 export type {
   NetworkPolicy,
+  NetworkGatewayPolicy,
   FilesystemPolicy,
   HomeIsolation,
+  OutputScrubMode,
   SandboxPolicy,
   SandboxBackend,
   SandboxAttestation,
@@ -2022,12 +2349,13 @@ export type {
   ToolCallResult,
   ToolPort,
 } from "./tools.js";
-export {
+export type {
   DEFAULT_ENV_ALLOWLIST,
   DEFAULT_SANDBOX_POLICY,
   GOVERNED_GIT_IDENTITY_SANDBOX_POLICY,
   GOVERNED_GIT_REMOTE_CREDENTIAL_ENV_ALLOWLIST,
   GOVERNED_GIT_REMOTE_ENV_ALLOWLIST,
+  GOVERNED_GIT_REMOTE_PINNED_ENV,
   GOVERNED_GIT_REMOTE_SANDBOX_POLICY,
   SANDBOX_BACKENDS,
   DEFAULT_COMMAND_RULES,
@@ -2047,13 +2375,18 @@ export type {
   VerificationResult,
   VerificationFailureLocation,
   VerificationReport,
+  VerificationDependencyState,
+  VerificationDependencySummary,
+  VerificationLockfileState,
   ScriptCatalog,
   ScriptMapping,
 } from "./verification.js";
-export {
+export type {
   DEFAULT_VERIFICATION_LIMITS,
+  DEPENDENCY_INSTALL_LIMITS,
   VERIFICATION_FAILURE_MESSAGE_MAX_CHARS,
   VERIFICATION_MAX_FAILURE_LOCATIONS,
+  VERIFICATION_TOOL_MAX_DURATION_MS,
 } from "./verification.js";
 
 // ─── Editor verification run/event envelope (Issue #2210, Epic #2092, ADR-0126) ──
@@ -2076,7 +2409,7 @@ export type {
   EditorVerificationCatalogEntry,
   EditorVerificationCatalog,
 } from "./editor-verification.js";
-export {
+export type {
   EDITOR_VERIFICATION_SCHEMA_VERSION,
   EDITOR_VERIFICATION_MAX_KINDS,
   EDITOR_VERIFICATION_MAX_REQUEST_ID_LENGTH,
@@ -2101,7 +2434,7 @@ export type {
   EditorProblem,
   EditorProblemsSnapshot,
 } from "./editor-problems.js";
-export {
+export type {
   EDITOR_PROBLEMS_SCHEMA_VERSION,
   EDITOR_PROBLEMS_PER_FILE_CAP,
   EDITOR_PROBLEMS_TOTAL_CAP,
@@ -2125,7 +2458,7 @@ export type {
   EditorAgentVerificationDisposition,
   EditorAgentVerificationResult,
 } from "./editor-agent-verification.js";
-export {
+export type {
   EDITOR_AGENT_VERIFICATION_SESSION_ID_MAX_CHARS,
   EDITOR_AGENT_VERIFICATION_RUN_ID_MAX_CHARS,
   EDITOR_AGENT_VERIFICATION_ENVELOPE_DIGEST_MAX_CHARS,
@@ -2152,7 +2485,7 @@ export type {
   EvalScorecard,
   EvaluationMode,
 } from "./evaluations.js";
-export { EVALUATION_DIMENSIONS, EVAL_SCORECARD_SCHEMA_VERSION } from "./evaluations.js";
+export type { EVALUATION_DIMENSIONS, EVAL_SCORECARD_SCHEMA_VERSION } from "./evaluations.js";
 
 // ─── Unit-test workflow events (member names collide with harness; only union surfaces) ───
 export type {
@@ -2162,7 +2495,7 @@ export type {
   WorkflowEvent,
   WorkflowEventSink,
 } from "./unit-test-events.js";
-export { DEFAULT_WORKFLOW_LIMITS } from "./unit-test-events.js";
+export type { DEFAULT_WORKFLOW_LIMITS } from "./unit-test-events.js";
 
 // ─── Bug-investigation workflow events (distinct member names by ADR-0009 D5) ─────
 export type {
@@ -2182,7 +2515,7 @@ export type {
   BugInvestigationEvent,
   BugWorkflowEventSink,
 } from "./bug-investigation-events.js";
-export { DEFAULT_BUG_WORKFLOW_LIMITS } from "./bug-investigation-events.js";
+export type { DEFAULT_BUG_WORKFLOW_LIMITS } from "./bug-investigation-events.js";
 
 // ─── Verification summary (pure types; runtime functions stay in src/verification/summary.ts) ──
 export type {
@@ -2230,8 +2563,13 @@ export type {
   EvidenceStore,
   SideFileWriteResult,
 } from "./evidence.js";
-export { EVIDENCE_SCHEMA_VERSION, DEFAULT_RETENTION } from "./evidence.js";
-export { parseUpdateMemoryAutonomyPolicyWire } from "./bff-wire.js";
+export type { EVIDENCE_SCHEMA_VERSION, DEFAULT_RETENTION } from "./evidence.js";
+export type { parseUpdateMemoryAutonomyPolicyWire } from "./bff-wire.js";
+export type {
+  GitHubIssueReaderAuthorizationWire,
+  UpdateGitHubIssueReaderAuthorizationWire,
+  parseUpdateGitHubIssueReaderAuthorizationWire,
+} from "./bff-wire.js";
 
 // ─── BFF wire types (ADR-0013; entity shapes that travel over the HTTP wire) ──────────────
 // NOTE: WorkflowStatus and ChatMessage are NOT re-exported here because those names are already
@@ -2275,8 +2613,11 @@ export type {
   BffErrorCode,
   BffError,
   GroundingLimits,
+  ChatGitChangeScope,
+  ChatGitChangeDescriptionStatus,
+  GitChangeBlockedReason,
 } from "./bff-wire.js";
-export {
+export type {
   buildGroundedAnswerContextPackSummary,
   DEFAULT_GROUNDING_LIMITS,
   GROUNDING_LIMIT_CEILINGS,
@@ -2296,15 +2637,27 @@ export {
   normalizeAttachmentMime,
   UI_HOST,
   DEFAULT_UI_PORT,
+  CHAT_GIT_CHANGE_DESCRIPTION_STATUSES,
+  GIT_CHANGE_BLOCKED_REASONS,
 } from "./bff-wire.js";
 
 // ─── Shared text-safety primitive (Epic #177/#189 grounding hardening, GRD-001) ──
-export {
+export type {
   containsAbsolutePath,
+  containsBidiOrZeroWidth,
   containsPseudoRoleMarker,
   redactAbsolutePaths,
   stripUnsafeFormatChars,
 } from "./text-safety.js";
+
+// ─── Shared line/offset primitive (browser editor + server language service, GEN-DUP-SEMANTIC-017)
+export type {
+  computeLineStarts,
+  lineContentEnd,
+  offsetToPosition,
+  positionToOffset,
+  spanToRange,
+} from "./line-offsets.js";
 
 // ─── Governed documentation browser (Epic #1851, ADR-0113) ──────────────────────
 export type {
@@ -2322,7 +2675,7 @@ export type {
   DocumentationNavigationParseOk,
   DocumentationNavigationParseFail,
 } from "./documentation-browser.js";
-export {
+export type {
   DOCUMENTATION_BROWSER_SCHEMA_VERSION,
   DOCUMENTATION_TARGET_CLASSES,
   DOCUMENTATION_TARGET_MAX_LENGTH,
@@ -2353,7 +2706,7 @@ export type {
   DocumentationManualProposalParse,
   DocumentationManualValidation,
 } from "./documentation-manual-proposal.js";
-export {
+export type {
   DOCUMENTATION_MANUAL_PROPOSAL_SCHEMA_VERSION,
   DOCUMENTATION_MANUAL_SOURCE_KINDS,
   DOCUMENTATION_MANUAL_PROPOSAL_STATES,
@@ -2382,7 +2735,7 @@ export type {
   HtmlManualSourceSummary,
   DeriveHtmlManualSourceInput,
 } from "./html-manual-source.js";
-export {
+export type {
   HTML_MANUAL_SOURCE_SCHEMA_VERSION,
   HTML_MANUAL_INCLUDE_GLOBS,
   isSafeManualOrigin,
@@ -2407,7 +2760,7 @@ export type {
   ManualRefreshChangeCounts,
   ManualRefreshChangeSummary,
 } from "./html-manual-refresh.js";
-export {
+export type {
   HTML_MANUAL_REFRESH_SCHEMA_VERSION,
   MANUAL_REFRESH_OUTCOMES,
   MANUAL_REFRESH_REMOVAL_DETECTIONS,
@@ -2428,7 +2781,7 @@ export type {
   HtmlManualPodRefreshRequest,
   HtmlManualPodCreateRequest,
 } from "./html-manual-job.js";
-export {
+export type {
   HTML_MANUAL_POD_JOB_SCHEMA_VERSION,
   HTML_MANUAL_POD_JOB_OPERATIONS,
   HTML_MANUAL_POD_JOB_STATES,
@@ -2470,8 +2823,9 @@ export type {
   EvidenceAtomStableIdInput,
   ConnectedContextPackStableIdInput,
 } from "./connected-context.js";
-export {
+export type {
   CONNECTED_CONTEXT_SCHEMA_VERSION,
+  MAX_OMITTED_CONTEXT_ENTRIES,
   MAX_RANKED_CANDIDATE_DIAGNOSTICS,
   SELECTED_SCOPE_KINDS,
   EVIDENCE_ATOM_PROVENANCE_KINDS,
@@ -2510,7 +2864,7 @@ export type {
   WorkspaceReplaceApplyConflict,
   WorkspaceReplaceApplyResponse,
 } from "./workspace-search.js";
-export {
+export type {
   WORKSPACE_REPLACE_MAX_FILES,
   WORKSPACE_SEARCH_MAX_RESULTS,
   WORKSPACE_SEARCH_MODES,
@@ -2550,7 +2904,7 @@ export type {
   ContextCommandOutcome,
   ContextInvalidationKey,
 } from "./context-engineering.js";
-export {
+export type {
   CONTEXT_ENGINEERING_SCHEMA_VERSION,
   CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_CHARS,
   CONTEXT_COMPACTION_MODEL_SUMMARY_MAX_ITEM_CHARS,
@@ -2573,15 +2927,17 @@ export {
   maxUtf8BytesForTokenBudget,
   deriveContextProfile,
   deriveContextProfileFromCapability,
+  partitionContextPreservedFacts,
 } from "./context-engineering.js";
+export type { ContextPreservedFactPartition } from "./context-engineering.js";
 export type { ContextValidationResult } from "./context-engineering-validation.js";
-export {
+export type {
   isContextLaneId,
   validateContextProfile,
   validateContextBudget,
   validateContextAssemblyDiagnostics,
 } from "./context-engineering-validation.js";
-export {
+export type {
   isContextProvenanceRefKind,
   validateContextProvenanceRef,
   validateContextPreservedFact,
@@ -2604,14 +2960,14 @@ export type {
   ContextToolObservation,
   ContextToolRehydrationHandle,
 } from "./context-observations.js";
-export {
+export type {
   MAX_OBSERVATION_EXCERPT_BYTES,
   MAX_FAILING_TEST_NAMES,
   MAX_OBSERVATION_QUERY_BYTES,
   MAX_TOP_RANGES,
   MAX_STACK_FRAME_LINES,
 } from "./context-observations.js";
-export {
+export type {
   isContextToolObservationKind,
   validateShapedCommandObservation,
   validateShapedTestObservation,
@@ -2636,7 +2992,7 @@ export type {
   RetrievalContextScopeKind,
   RetrievalContextRequest,
 } from "./retrieval-context.js";
-export {
+export type {
   RETRIEVAL_CONTEXT_SCHEMA_VERSION,
   RETRIEVAL_CONTEXT_PURPOSES,
   RETRIEVAL_CONTEXT_SOURCE_KINDS,
@@ -2659,7 +3015,7 @@ export type {
   VectorIndexResult,
   VectorIndexPort,
 } from "./vector-index-port.js";
-export {
+export type {
   VECTOR_INDEX_NAMESPACES,
   embeddingIdentityKey,
   isValidVectorIndexQuery,
@@ -2684,7 +3040,7 @@ export type {
   CodingContextRequest,
   CodingContextValidationResult,
 } from "./coding-context.js";
-export {
+export type {
   CODING_CONTEXT_SCHEMA_VERSION,
   CODING_CONTEXT_PURPOSES,
   CODING_CONTEXT_SOURCE_KINDS,
@@ -2717,7 +3073,7 @@ export type {
   PatchScopeCheck,
   ProposedPatchEntry,
 } from "./workflow-handoff.js";
-export {
+export type {
   WORKFLOW_HANDOFF_SCHEMA_VERSION,
   DEFAULT_PATCH_SCOPE_LIMITS,
   EXPECTED_CHECKS,
@@ -2766,7 +3122,7 @@ export type {
   CreateCapsuleSetBody,
   SharedPodRefreshTerminal,
 } from "./local-knowledge.js";
-export {
+export type {
   CAPSULE_METADATA_MAX_KEYS,
   CAPSULE_METADATA_KEY_MAX_CHARS,
   CAPSULE_METADATA_VALUE_MAX_CHARS,
@@ -2813,21 +3169,22 @@ export type {
   CapsuleDeleteRequest,
   UnsupportedDocumentGuidanceCode,
 } from "./local-knowledge-records.js";
-export {
+export type {
   DOCUMENT_STATUSES,
   PARSED_UNIT_KINDS,
   PARSER_DIAGNOSTIC_SEVERITIES,
   INDEXING_JOB_STATUSES,
+  INDEXING_EMBEDDING_STOPPED_ERROR_CODES,
   CAPSULE_REINDEX_MODES,
   UNSUPPORTED_DOCUMENT_GUIDANCE_CODES,
 } from "./local-knowledge-records.js";
-export { isSafeScopePath, isSafeStorageReference } from "./local-knowledge-paths.js";
+export type { isSafeScopePath, isSafeStorageReference } from "./local-knowledge-paths.js";
 export type {
   ValidationOk as LocalKnowledgeValidationOk,
   ValidationFail as LocalKnowledgeValidationFail,
   LocalKnowledgeValidation,
 } from "./local-knowledge-validation.js";
-export {
+export type {
   isSafeDisplaySummary,
   validateEmbeddingModelIdentity,
   validateKnowledgeSourceScope,
@@ -2846,7 +3203,7 @@ export type {
   EmbeddingProfileLocality,
   EmbeddingProfilePolicyCapability,
 } from "./local-knowledge-embedding-profiles.js";
-export {
+export type {
   EMBEDDING_PROFILE_COMPATIBILITY_REASONS,
   EMBEDDING_PROFILE_COMPATIBILITY_STATUSES,
   EMBEDDING_PROFILE_POLICY_CAPABILITIES,
@@ -2867,7 +3224,7 @@ export type {
   KnowledgePodResolvedModelUsePolicy,
   KnowledgePodResolvedModelUsePolicyOperations,
 } from "./local-knowledge-model-use-policy.js";
-export {
+export type {
   KNOWLEDGE_POD_MODEL_USE_OPERATIONS,
   KNOWLEDGE_POD_MODEL_USE_POLICY_DECISIONS,
   KNOWLEDGE_POD_MODEL_USE_POLICY_MODES,
@@ -2902,7 +3259,7 @@ export type {
   LocalKnowledgeCapsuleSetsResponse,
   LocalKnowledgeCapsulesResponse,
 } from "./local-knowledge-pods.js";
-export {
+export type {
   KNOWLEDGE_POD_SET_READINESS_REASON_CODES,
   KNOWLEDGE_POD_SUMMARY_SCHEMA_VERSION,
   isKnowledgePodEvidenceSafeText,
@@ -2918,7 +3275,7 @@ export type {
   KnowledgePodRetrievalActivityState,
   KnowledgePodRetrievalActivitySummary,
 } from "./local-knowledge-retrieval-activity.js";
-export {
+export type {
   KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_MODES,
   KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_REASON_CODES,
   KNOWLEDGE_POD_RETRIEVAL_ACTIVITY_SCHEMA_VERSION,
@@ -2946,7 +3303,7 @@ export type {
   LargeDocumentResumeChoice,
   CapsuleLargeDocumentHealth,
 } from "./local-knowledge-large-document.js";
-export {
+export type {
   DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY,
   largeDocumentPolicyFingerprint,
   LARGE_DOCUMENT_EXTRACTION_STRATEGIES,
@@ -2962,7 +3319,7 @@ export {
   checkpointCompatibility,
   LARGE_DOCUMENT_RESUME_CHOICES,
 } from "./local-knowledge-large-document.js";
-export {
+export type {
   validateLargeDocumentResourcePolicy,
   validateExtractionCheckpointRecord,
   isSafeQualityWarning,
@@ -2974,7 +3331,7 @@ export {
 // pure constants and pure helpers (validateCapsuleRowShape, redactPathInDiagnostic) so
 // every other package can reference the schema without pulling `node:sqlite`.
 export type { KnowledgeCapsuleMigration } from "./local-knowledge-schema.js";
-export {
+export type {
   LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION,
   KNOWLEDGE_CAPSULE_DDL,
   KNOWLEDGE_CAPSULE_INDEXES,
@@ -2985,7 +3342,7 @@ export {
   DELETE_CAPSULE_SQL,
 } from "./local-knowledge-schema.js";
 export type { CapsuleRowShape, RedactPathOptions } from "./local-knowledge-schema-validation.js";
-export {
+export type {
   validateCapsuleRowShape,
   redactPathInDiagnostic,
 } from "./local-knowledge-schema-validation.js";
@@ -3010,7 +3367,7 @@ export type {
   StoredPdfCitationPreviewCitation,
   StoredPdfCitationPreviewLineage,
 } from "./local-knowledge-preview.js";
-export {
+export type {
   PDF_CITATION_PREVIEW_ANCHOR_QUALITIES,
   PDF_CITATION_PREVIEW_FAILURE_STATES,
   PDF_CITATION_PREVIEW_ORIGINS,
@@ -3032,6 +3389,7 @@ export {
 // rather than mutating the existing "1" — the same evolution rule as
 // `CONNECTED_CONTEXT_SCHEMA_VERSION` and `LOCAL_KNOWLEDGE_SCHEMA_VERSION`.
 export type {
+  AcceptMemoryProposalOptions,
   ConversationId as MemoryConversationId,
   EvidenceManifestId as MemoryEvidenceManifestId,
   MemoryAcceptance,
@@ -3055,6 +3413,7 @@ export type {
   MemoryProposalId,
   MemoryProvenance,
   MemoryRecord,
+  MemoryCorrectionPredecessorsResponse,
   MemoryRejection,
   MemoryRetentionHint,
   MemoryRetrievalRequest,
@@ -3082,8 +3441,9 @@ export type {
   WorkflowDefinitionId as MemoryWorkflowDefinitionId,
   WorkflowRunId as MemoryWorkflowRunId,
   WorkspaceId as MemoryWorkspaceId,
-} from "./memory-barrel.js";
-export {
+} from "./memory.js";
+export type {
+  MEMORY_FORGET_REASON_ARCHIVED_RETENTION,
   MEMORY_AUDIT_ACTION_KINDS,
   MEMORY_AUDIT_EVENT_KINDS,
   MEMORY_AUDIT_EVENT_SCHEMA_VERSION,
@@ -3111,6 +3471,7 @@ export {
   assertNeverMemoryType,
   decayHalfLifeMultiplierForType,
   checkStatusTransition,
+  hasPaymentCardPanShape,
   hasStaleModelMetadata,
   isMemoryEdge,
   isMemoryRecord,
@@ -3133,7 +3494,7 @@ export {
   validateMemoryUnpin,
   validateMemoryUpdate,
   validateMemoryValidityInterval,
-} from "./memory-barrel.js";
+} from "./memory.js";
 
 export type {
   MemoryConsolidationApplicationWire,
@@ -3159,7 +3520,7 @@ export type {
   MemoryConsolidationJobEnvelopeWire,
   MemoryConsolidationJobResponseWire,
 } from "./memory-consolidation-wire.js";
-export { MEMORY_CONSOLIDATION_EXCERPT_MAX_CHARS } from "./memory-consolidation-wire.js";
+export type { MEMORY_CONSOLIDATION_EXCERPT_MAX_CHARS } from "./memory-consolidation-wire.js";
 
 export type {
   MemoryHealthScanFindingKindWire,
@@ -3167,7 +3528,7 @@ export type {
   MemoryHealthScanFindingWire,
   MemoryHealthScanResultWire,
 } from "./memory-health-scan-wire.js";
-export {
+export type {
   MEMORY_HEALTH_SCAN_REASON_MAX_CHARS,
   MEMORY_HEALTH_SCAN_FINDING_KINDS,
 } from "./memory-health-scan-wire.js";
@@ -3188,12 +3549,12 @@ export type {
 // QI surface is re-exported under a single namespace because the QI vocabulary
 // (RunId, TestCaseId, finding kinds, etc.) collides with names already used by
 // gateway/workflow/audit modules above. Consumers reach the QI types via
-// `import { QualityIntelligence } from "@oscharko-dev/keiko-contracts";` and then
-// `QualityIntelligence.QualityIntelligenceRunEvent`.
+// `import type { QualityIntelligence } from "@oscharko-dev/keiko-contracts";` and then
+// `QualityIntelligence.QualityIntelligenceRunEvent`; runtime consumers import the QI domain module.
 // The schema version literal follows the same evolution rule as
 // LOCAL_KNOWLEDGE_SCHEMA_VERSION / MEMORY_SCHEMA_VERSION: a breaking change adds a
 // new literal member instead of mutating the existing one.
-export * as QualityIntelligence from "./qualityIntelligence/index.js";
+export type * as QualityIntelligence from "./qualityIntelligence/index.js";
 // Issue #280 introduced flat BFF wire-type re-exports for the UI consumers.
 export type {
   QualityIntelligenceUiEvidenceRef,
@@ -3205,6 +3566,7 @@ export type {
   QualityIntelligenceUiRunSummary,
   QualityIntelligenceUiRunTotals,
   QualityIntelligenceUiCandidate,
+  QualityIntelligenceUiCandidateQualityVerdict,
   QualityIntelligenceUiWeakTestFlag,
   QualityIntelligenceUiDriftMetadata,
   QualityIntelligenceQualityDiagnostics,
@@ -3213,6 +3575,7 @@ export type {
   QualityIntelligenceUiRegenerateResult,
   QualityIntelligenceInlineSource,
   QualityIntelligenceInlineSourceKind,
+  QualityIntelligenceAdfNode,
   QualityIntelligenceRequirementsSource,
   QualityIntelligenceWorkspaceSource,
   QualityIntelligenceFileSource,
@@ -3230,6 +3593,7 @@ export type {
   QualityIntelligenceModelPreflightStageResult,
   QualityIntelligenceModelPreflightSummary,
   QualityIntelligenceModelStageFailure,
+  QualityIntelligenceTerminalDegradation,
   QualityIntelligenceModelRouting,
   QualityIntelligenceModelPolicyResponse,
   QualityIntelligenceModelPolicyPreflightRequest,
@@ -3243,7 +3607,12 @@ export type {
   QualityIntelligenceRunStreamError,
   QualityIntelligenceRunStreamMessage,
 } from "./qualityIntelligence/bffWire.js";
-export { isQualityIntelligenceJudgeEligible } from "./qualityIntelligence/bffWire.js";
+export type {
+  deriveQualityIntelligenceTerminalDegradation,
+  isQualityIntelligenceJudgeEligible,
+  isQualityIntelligenceSeed,
+  QUALITY_INTELLIGENCE_MAX_RUN_SOURCES,
+} from "./qualityIntelligence/bffWire.js";
 // Issue #283 added flat export-adapter consumers.
 export type {
   QualityIntelligenceExportAdapter,
@@ -3258,7 +3627,7 @@ export type {
   QualityIntelligenceTestCaseStatus,
 } from "./qualityIntelligence/index.js";
 // Shared QI status/terminal/projection helpers (GEN-DUP-SEMANTIC-008/-009/-010).
-export {
+export type {
   QUALITY_INTELLIGENCE_RUN_STATUSES,
   QUALITY_INTELLIGENCE_DEFAULT_RETENTION_POLICY_ID,
   QUALITY_INTELLIGENCE_RETENTION_POLICY_IDS,
@@ -3276,11 +3645,11 @@ export type {
   TestQualityRubricDimension,
   TestQualityJudgeVerdict,
 } from "./qualityIntelligence/index.js";
-export {
+export type {
   TEST_QUALITY_RUBRIC_DIMENSIONS,
   TEST_QUALITY_JUDGE_RESPONSE_SCHEMA,
 } from "./qualityIntelligence/index.js";
-export {
+export type {
   assertExportBundleInvariant,
   QUALITY_INTELLIGENCE_EXPORT_ADAPTERS,
   QUALITY_INTELLIGENCE_TMS_ADAPTERS,
@@ -3317,7 +3686,7 @@ export type {
   WorkspaceKeyboardShortcutBinding,
   WorkspaceKeyboardShortcutConflict,
 } from "./workspace-ui.js";
-export {
+export type {
   WORKSPACE_RESERVED_CHORDS,
   workspaceActionLabel,
   workspaceChordKey,
@@ -3326,6 +3695,7 @@ export {
   workspaceChordKeyForPlatform,
   workspaceChordsCollide,
   workspacePlatformModifiers,
+  isWorkspaceChordAcceptable,
   isWorkspaceDispatchableChord,
   isWorkspaceReservedChord,
   workspaceInverseAction,
@@ -3346,7 +3716,7 @@ export type {
   WorkspaceDescriptorMeta,
   WorkspaceDescriptorValidationError,
 } from "./workspace-descriptors.js";
-export {
+export type {
   WORKSPACE_LIFECYCLE_STATES,
   WORKSPACE_TRUST_BOUNDARIES,
   WORKSPACE_AUTHORITY_REQUIREMENTS,
@@ -3381,7 +3751,7 @@ export type {
   RelationshipValidationContext,
   RelationshipValidationError,
 } from "./relationships.js";
-export {
+export type {
   RELATIONSHIP_ACTIVITY_STATES,
   RELATIONSHIP_DENIAL_CODES,
   RELATIONSHIP_FORBIDDEN_METADATA_KEY_SUBSTRINGS,
@@ -3398,7 +3768,7 @@ export type {
   ValidationFail as RelationshipValidationFail,
   RelationshipValidation,
 } from "./relationships-validation.js";
-export {
+export type {
   assertRelationshipTypeAllowsKinds,
   validateRelationship,
 } from "./relationships-validation.js";
@@ -3450,7 +3820,7 @@ export type {
   PromptTaskAnalysis,
   EnhancedPrompt,
 } from "./prompt-enhancer.js";
-export {
+export type {
   PROMPT_ENHANCER_SCHEMA_VERSION,
   PROMPT_ANALYSIS_MAX_SCAN_CHARS,
   PROMPT_MISSING_CONTEXT_MAX_CHARS,
@@ -3485,15 +3855,15 @@ export {
   assertNeverTaskClass,
   normalizePromptDraft,
 } from "./prompt-enhancer.js";
-export { analyzePrompt } from "./prompt-enhancer-analyzer.js";
-export { planGrounding } from "./prompt-enhancer-grounding.js";
+export type { analyzePrompt } from "./prompt-enhancer-analyzer.js";
+export type { planGrounding } from "./prompt-enhancer-grounding.js";
 export type { PlanGroundingOptions } from "./prompt-enhancer-grounding.js";
 export type {
   ValidationOk as PromptEnhancerValidationOk,
   ValidationFail as PromptEnhancerValidationFail,
   PromptEnhancerValidation,
 } from "./prompt-enhancer-validation.js";
-export {
+export type {
   PROMPT_REQUEST_TEXT_MAX_CHARS,
   validatePromptEnhancementRequest,
   validatePromptTaskAnalysis,
@@ -3512,7 +3882,7 @@ export type {
   PromptOptimizationBounds,
   PromptCandidateSelection,
 } from "./prompt-enhancer-critic.js";
-export {
+export type {
   PROMPT_CRITIC_DIMENSIONS,
   PROMPT_CANDIDATE_REJECTION_REASONS,
   isPromptCriticDimension,
@@ -3529,7 +3899,8 @@ export type {
   PromptSafetyFinding,
   PromptSafetyAssessment,
 } from "./prompt-enhancer-safety.js";
-export {
+export type {
+  BASELINE_LEAST_PRIVILEGE,
   PROMPT_SAFETY_RULE_IDS,
   PROMPT_SAFETY_VIOLATION_CODES,
   PROMPT_SAFETY_SEVERITIES,
@@ -3563,7 +3934,7 @@ export type {
   PromptEnhancementEvidenceReference,
   PromptEnhancementWireResponse,
 } from "./prompt-enhancer-bff.js";
-export {
+export type {
   PROMPT_ENHANCEMENT_LOCALE_MAX_CHARS,
   PROMPT_ENHANCEMENT_MODEL_ID_MAX_CHARS,
   PROMPT_ENHANCEMENT_DEFAULT_CANDIDATE_COUNT,
@@ -3600,12 +3971,14 @@ export type {
   GitDeliveryExecutionErrorCode,
   GitDeliveryPartialDetail,
   GitDeliveryBranchCreateInputs,
+  GitDeliveryBranchSwitchInputs,
   GitDeliveryStageInputs,
   GitDeliveryUnstageInputs,
   GitDeliveryCommitInputs,
   GitDeliveryPushInputs,
   GitDeliveryPrCreateInputs,
   GitDeliveryPrUpdateInputs,
+  GitDeliveryPrDescriptionApplyInputs,
   GitDeliveryMergeInputs,
   GitDeliveryAbortInputs,
   GitDeliveryRecoveryInputs,
@@ -3622,8 +3995,9 @@ export type {
   GitDeliveryActionEnvelopeFor,
   GitDeliveryActionEnvelope,
   GitDeliveryParseResult,
+  GitDeliveryPrMarkReadyInputs,
 } from "./git-delivery.js";
-export {
+export type {
   GIT_DELIVERY_SCHEMA_VERSION,
   GIT_DELIVERY_ACTION_KINDS,
   GIT_DELIVERY_RISK_CLASSES,
@@ -3660,7 +4034,6 @@ export {
   parseGitDeliveryActionEnvelope,
   gitDeliveryDefaultRiskClass,
   gitDeliveryRiskClassForInputs,
-  gitDeliveryRiskClassWithinCeiling,
   gitDeliveryBranchNameMatchesPattern,
   gitDeliveryBranchNameMatchesAny,
   gitDeliveryTargetIsProtectedBranch,
@@ -3678,7 +4051,7 @@ export type {
   GitDeliveryEffectivePolicy,
   GitDeliveryEffectivePolicyContext,
 } from "./git-delivery-policy.js";
-export {
+export type {
   GIT_DELIVERY_POLICY_SCHEMA_VERSION,
   GIT_DELIVERY_RULE_DECISIONS,
   isGitDeliveryPolicyRule,
@@ -3702,7 +4075,7 @@ export type {
   GitDeliveryRemoteTargetPolicy,
   GitDeliveryProviderDescriptor,
 } from "./git-delivery-provider.js";
-export {
+export type {
   GIT_DELIVERY_PROVIDER_SCHEMA_VERSION,
   GIT_DELIVERY_CHECKS_OVERALL_STATUSES,
   GIT_DELIVERY_PULL_REQUEST_STATUSES,
@@ -3741,7 +4114,7 @@ export type {
   GitDeliveryActionSheetProviderState,
   GitDeliveryActionSheetRequest,
 } from "./git-delivery-action-sheet.js";
-export {
+export type {
   GIT_DELIVERY_ACTION_SHEET_SCHEMA_VERSION,
   GIT_DELIVERY_ACTION_SHEET_STATES,
   GIT_DELIVERY_APPROVAL_NECESSITIES,
@@ -3792,7 +4165,7 @@ export type {
   GitDeliveryEvidenceRecord,
   GitDeliveryAuditPacket,
 } from "./git-delivery-evidence.js";
-export {
+export type {
   GIT_DELIVERY_EVIDENCE_SCHEMA_VERSION,
   GIT_DELIVERY_EVIDENCE_OUTCOME_CLASSES,
   GIT_DELIVERY_RECOVERY_DISPOSITIONS,
@@ -3821,7 +4194,7 @@ export type {
   GitCommitMessageViolationCode,
   GitCommitMessageValidation,
 } from "./git-commit-policy.js";
-export {
+export type {
   GIT_COMMIT_POLICY_SCHEMA_VERSION,
   GIT_COMMIT_MESSAGE_VIOLATION_CODES,
   GIT_COMMIT_MESSAGE_POLICY_MODES,
@@ -3845,11 +4218,12 @@ export type {
   GitCommitIntentAnalysis,
   GitCommitIntentInput,
 } from "./git-commit-intent.js";
-export {
+export type {
   GIT_COMMIT_INTENT_SCHEMA_VERSION,
   DEFAULT_LARGE_CHANGE_THRESHOLD,
   GIT_COMMIT_QUALITY_WARNING_CODES,
   analyzeGitCommitIntent,
+  suggestGitCommitMessage,
   isGitCommitQualityWarningCode,
   isGitCommitChangeSummary,
   isGitCommitIntentAnalysis,
@@ -3884,7 +4258,7 @@ export type {
   GitPullRequestLinkageSuggestion,
   GitPullRequestRejectionReason,
 } from "./git-pull-request.js";
-export {
+export type {
   GIT_PULL_REQUEST_SCHEMA_VERSION,
   GIT_PR_CHANGE_TYPES,
   GIT_PR_POLICY_OUTCOMES,
@@ -3934,7 +4308,7 @@ export type {
   GitMergeRejection,
   GitMergeReadinessInput,
 } from "./git-merge.js";
-export {
+export type {
   GIT_MERGE_SCHEMA_VERSION,
   GIT_MERGE_LIFECYCLE_BLOCKER_CODES,
   GIT_MERGE_READINESS_BLOCKER_CODES,
@@ -3974,7 +4348,7 @@ export type {
   DiscussionTurnSummary,
   DiscussionValidationResult,
 } from "./discussion-intelligence.js";
-export {
+export type {
   DISCUSSION_INTELLIGENCE_SCHEMA_VERSION,
   DISCUSSION_MODES,
   DISCUSSION_CONFIDENCE_LEVELS,
@@ -4022,7 +4396,7 @@ export type {
   SpokenActionAuditRecord,
   SpokenActionValidationResult,
 } from "./voice-action-intent.js";
-export {
+export type {
   VOICE_ACTION_INTENT_SCHEMA_VERSION,
   SPOKEN_ACTION_EFFECT_CLASSES,
   SPOKEN_ACTION_EFFECT_REQUIRES_CONFIRMATION,
@@ -4061,7 +4435,7 @@ export type {
   VoiceSessionRecapEvidenceSummary,
   VoiceSessionRecapAuditRecord,
 } from "./voice-session-recap.js";
-export {
+export type {
   VOICE_SESSION_RECAP_SCHEMA_VERSION,
   VOICE_RECAP_CANDIDATE_STATUSES,
   isVoiceSessionRecapSchemaVersionSupported,
@@ -4069,6 +4443,22 @@ export {
   voiceRecapAllowed,
   validateVoiceSessionRecapAuditRecord,
 } from "./voice-session-recap.js";
+
+// Gateway Setup audit record (KEIKO-0497). Content-free evidence for a governance-relevant act:
+// host CLASSIFICATION and the override flag, never the configured base URL.
+export type {
+  GatewaySetupTargetClass,
+  GatewaySetupOutcomeKind,
+  GatewaySetupAuditRecord,
+} from "./gateway-setup-audit.js";
+export type {
+  GATEWAY_SETUP_AUDIT_SCHEMA_VERSION,
+  GATEWAY_SETUP_TARGET_CLASSES,
+  GATEWAY_SETUP_OUTCOME_KINDS,
+  isGatewaySetupTargetClass,
+  isGatewaySetupOutcomeKind,
+  validateGatewaySetupAuditRecord,
+} from "./gateway-setup-audit.js";
 
 // ─── Editor M11 multi-root/trust/profile/history foundation (Issue #2520) ───────
 export type {
@@ -4089,10 +4479,12 @@ export type {
   WorkspaceContractValidationFail,
   WorkspaceContractValidation,
 } from "./workspace-contract-primitives.js";
-export {
+export type {
   WORKSPACE_CONTRACT_SCHEMA_VERSION,
   WORKSPACE_OPAQUE_REF_MAX_CHARS,
   WORKSPACE_PORTABLE_PATH_MAX_BYTES,
+  WORKSPACE_POLICY_VERSION_PATTERN,
+  hasWorkspaceControlCharacter,
   isWorkspaceRootRef,
   isWorkspaceManifestRef,
   isWorkspaceProfileRef,
@@ -4105,6 +4497,7 @@ export {
   isWorkspacePathDigest,
   isWorkspaceIsoInstant,
   isWorkspaceFact,
+  isWorkspaceRevision,
   isCanonicalWorkspaceRoot,
   isPortableWorkspaceRelativePath,
 } from "./workspace-contract-primitives.js";
@@ -4120,7 +4513,7 @@ export type {
   WorkspaceManifestAccessParsed,
   WorkspaceManifestAccessParse,
 } from "./workspace-manifest.js";
-export {
+export type {
   WORKSPACE_MANIFEST_SCHEMA_VERSION,
   WORKSPACE_MANIFEST_MAX_ROOTS,
   WORKSPACE_ROOT_DISPLAY_NAME_MAX_CHARS,
@@ -4138,8 +4531,9 @@ export type {
   WorkspaceTrustAssessment,
   WorkspaceTrustOperationClass,
   WorkspaceTrustStatus,
+  WorkspaceTrustRootBinding,
 } from "./workspace-trust.js";
-export {
+export type {
   WORKSPACE_TRUST_SCHEMA_VERSION,
   WORKSPACE_TRUST_LEVELS,
   WORKSPACE_TRUST_REASONS,
@@ -4147,6 +4541,7 @@ export {
   validateWorkspaceTrustRecord,
   isWorkspaceTrustStatus,
   isWorkspaceRestrictedModeActive,
+  workspaceTrustRootBindingsMatch,
   projectCommandTaskTrustState,
   workspaceTrustPolicyEffect,
   strictestWorkspaceTrustPolicyEffect,
@@ -4173,7 +4568,7 @@ export type {
   EditorM11ProfileMutationOk,
   EditorM11ProfileMutationResult,
 } from "./editor-m11-settings.js";
-export {
+export type {
   EDITOR_M11_SETTINGS_SCHEMA_VERSION,
   EDITOR_M11_DEFAULT_PROFILE_REF,
   isEditorM11ProfileSettingsLayer,
@@ -4195,7 +4590,7 @@ export type {
   WorkspaceProfileImportFailureCode,
   WorkspaceProfileImportApply,
 } from "./workspace-profile.js";
-export {
+export type {
   WORKSPACE_PROFILE_SCHEMA_VERSION,
   WORKSPACE_PROFILE_DISPLAY_NAME_MAX_CHARS,
   isWorkspaceProfileDisplayName,
@@ -4214,7 +4609,7 @@ export type {
   EditorLocalHistoryRetentionRequirement,
   EditorLocalHistoryRetentionPlan,
 } from "./editor-local-history.js";
-export {
+export type {
   EDITOR_LOCAL_HISTORY_SCHEMA_VERSION,
   EDITOR_LOCAL_HISTORY_ENCRYPTION,
   EDITOR_LOCAL_HISTORY_MAX_ENTRIES,
@@ -4251,6 +4646,7 @@ export type {
   WorkspaceLock,
   WorkspaceFailureClass,
   WorkspaceRecoveryStrategy,
+  WorkspaceCleanupMode,
   WorkspaceRecoveryHint,
   WorkspaceSurface,
   WorkspaceEventType,
@@ -4284,7 +4680,7 @@ export type {
   WorkspaceHealthEntry,
   WorkspaceHealthReport,
 } from "./task-workspace.js";
-export {
+export type {
   TASK_WORKSPACE_SCHEMA_VERSION,
   TASK_WORKSPACE_LIFECYCLE_STATES,
   TASK_WORKSPACE_LEGAL_TRANSITIONS,
@@ -4294,6 +4690,7 @@ export {
   WORKSPACE_LOCK_REASONS,
   WORKSPACE_FAILURE_CLASSES,
   WORKSPACE_RECOVERY_STRATEGIES,
+  WORKSPACE_CLEANUP_MODES,
   TASK_WORKSPACE_SURFACES,
   WORKSPACE_EVENT_TYPES,
   WORKSPACE_EVENT_ALLOWED_KEYS,
@@ -4316,6 +4713,7 @@ export {
   isWorkspaceLockReason,
   isWorkspaceFailureClass,
   isWorkspaceRecoveryStrategy,
+  isWorkspaceCleanupMode,
   isWorkspaceSurface,
   isWorkspaceEventType,
   validateWorkspaceEvent,
@@ -4372,7 +4770,7 @@ export type {
   LocalKnowledgeFileFilterDefinition,
   LocalKnowledgeFileFilterId,
 } from "./local-knowledge-file-selection.js";
-export {
+export type {
   LOCAL_KNOWLEDGE_PDF_FILE_EXTENSIONS,
   LOCAL_KNOWLEDGE_DOCX_FILE_EXTENSIONS,
   LOCAL_KNOWLEDGE_XLSX_FILE_EXTENSIONS,
@@ -4400,7 +4798,7 @@ export type {
   NativeFileDialogErrorCode,
   NativeFileDialogRequestValidation,
 } from "./native-file-dialog.js";
-export {
+export type {
   NATIVE_FILE_DIALOG_SCHEMA_VERSION,
   NATIVE_FILE_DIALOG_MODES,
   NATIVE_FILE_DIALOG_ERROR_CODES,
@@ -4435,7 +4833,7 @@ export type {
   ManagedLspActivationResolution,
   ManagedLspActivationParseResult,
 } from "./managed-lsp-activation.js";
-export {
+export type {
   MANAGED_LSP_ACTIVATION_SCHEMA_VERSION,
   MANAGED_LSP_LANGUAGES,
   MANAGED_LSP_EFFECTIVE_STATES,
@@ -4478,7 +4876,7 @@ export type {
   ManagedLspConfigurationPrecondition,
   ManagedLspRuntimeParseResult,
 } from "./managed-lsp-runtime.js";
-export {
+export type {
   MANAGED_LSP_RUNTIME_SCHEMA_VERSION,
   MANAGED_LSP_RUNTIME_ID_MAX_CHARS,
   MANAGED_LSP_ETAG_MAX_CHARS,
@@ -4518,7 +4916,7 @@ export type {
   ManagedLspSemanticTokenResponse,
   ManagedLspCapabilityParseResult,
 } from "./managed-lsp-capabilities.js";
-export {
+export type {
   MANAGED_LSP_CAPABILITY_SCHEMA_VERSION,
   MANAGED_LSP_SEMANTIC_TOKEN_MAX_TYPES,
   MANAGED_LSP_SEMANTIC_TOKEN_MAX_MODIFIERS,
@@ -4544,7 +4942,7 @@ export type {
   ManagedLspEvidence,
   ManagedLspEvidenceParseResult,
 } from "./managed-lsp-evidence.js";
-export {
+export type {
   MANAGED_LSP_EVIDENCE_SCHEMA_VERSION,
   MANAGED_LSP_EVIDENCE_ACTOR_CLASSES,
   MANAGED_LSP_EVIDENCE_ACTIONS,
@@ -4568,7 +4966,7 @@ export type {
   ManagedLspControlResult,
   ManagedLspRouteParseResult,
 } from "./managed-lsp-route.js";
-export {
+export type {
   MANAGED_LSP_CONTROL_ACTIONS,
   parseManagedLspRevisionEtag,
   parseManagedLspControlRequest,
@@ -4635,7 +5033,7 @@ export type {
   EditorM7SnippetCompletion,
   EditorM7SnippetDiagnostics,
 } from "./editor-snippets.js";
-export {
+export type {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
   EDITOR_M7_COMMAND_REGISTRY,
@@ -4655,7 +5053,7 @@ export {
   parseEditorM7KeybindingOverrides,
   resolveEditorM7AiActivation,
 } from "./editor-m7.js";
-export {
+export type {
   DEBUG_ACTIVATION_SCHEMA_VERSION,
   DEBUG_ADAPTER_IDS,
   DEBUG_ACTIVATION_EFFECTIVE_STATES,
@@ -4677,10 +5075,152 @@ export type {
   DebugActivationResolution,
   DebugActivationParseResult,
 } from "./debug-activation.js";
-export {
+export type {
   EDITOR_M7_SNIPPET_COLLECTION_VERSION,
+  EDITOR_M7_SNIPPET_BODY_MAX_UTF8_BYTES,
   parseEditorM7WorkspaceSnippetCollection,
   compileEditorM7SnippetBody,
   editorM7SnippetDiagnostics,
   matchingEditorM7Snippets,
 } from "./editor-snippets.js";
+
+// ─── Shared candidate-ranking fixture (KEIKO-1026) ──────────────────────────────
+// Plain DATA, not a formula: the deterministic candidate total order is implemented in this package
+// (compareRankedScorecards) and in keiko-model-gateway (compareCandidates), and the leaf cannot
+// import the gateway. Both suites assert this one expected order, so a drift in either comparator
+// turns exactly one of them red.
+export type {
+  PROMPT_CANDIDATE_RANKING_EXPECTED_ORDER,
+  PROMPT_CANDIDATE_RANKING_FIXTURE,
+} from "./prompt-enhancer-ranking-fixture.js";
+
+// ─── Client diagnostics ingest wire contract (Wave 5 of epic #3233) ─────────────
+export type {
+  CLIENT_DIAGNOSTIC_KINDS,
+  CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH,
+  CLIENT_DIAGNOSTIC_READY_STATES,
+  LINUX_GATEWAY_DIAGNOSTIC_KINDS,
+  isClientDiagnosticIngestRequest,
+  isClientDiagnosticKind,
+  isLinuxGatewayDiagnosticKind,
+} from "./diagnostics.js";
+export type {
+  ClientDiagnosticIngestRequest,
+  ClientDiagnosticKind,
+  ClientDiagnosticReadyState,
+  LinuxGatewayDiagnosticKind,
+} from "./diagnostics.js";
+// ─── Store fingerprint (Epic #3233 §6.2, Wave 4a) ────────────────────────────────
+// A redacted, point-in-time snapshot of one persisted store's schema/integrity state, embedded
+// in the support bundle manifest's `storeFingerprints` array. `isStoreFingerprint` is the
+// fail-closed guard the manifest assembler uses to refuse a malformed value instead of embedding
+// it.
+export type { StoreFingerprint } from "./store-fingerprint.js";
+export type { isStoreFingerprint } from "./store-fingerprint.js";
+
+export type {
+  PR_DESCRIPTION_SCHEMA_VERSION,
+  PR_DESCRIPTION_RENDERING_VERSION,
+  PR_DESCRIPTION_LANGUAGES,
+  PrDescriptionLanguage,
+  PR_DESCRIPTION_OUTCOMES,
+  PrDescriptionOutcome,
+  PR_DESCRIPTION_SECTION_KEYS,
+  PrDescriptionSection,
+  PR_DESCRIPTION_TEXT_MAX_LENGTH,
+  PR_DESCRIPTION_SECTION_MAX_ITEMS,
+  PR_DESCRIPTION_REFERENCE_MAX_ITEMS,
+  PR_DESCRIPTION_CANDIDATE_MAX_BYTES,
+  PrDescriptionStatement,
+  PrDescriptionCandidate,
+  PrDescriptionBinding,
+  PR_DESCRIPTION_REASONS,
+  PrDescriptionReason,
+  PrDescriptionCoverage,
+  PrDescriptionArtifact,
+  PrDescriptionArtifactEvidence,
+  prDescriptionArtifactEvidence,
+  prDescriptionArtifactDigestFields,
+  freezePrDescriptionArtifact,
+  prDescriptionBinding,
+  PR_DESCRIPTION_CANDIDATE_SCHEMA,
+  PrDescriptionCandidateValidation,
+  isSafePrDescriptionText,
+  validatePrDescriptionCandidate,
+} from "./pr-description.js";
+
+export type {
+  PR_DESCRIPTION_REGION_VERSION,
+  PR_DESCRIPTION_REGION_START,
+  PR_DESCRIPTION_REGION_END,
+  PR_DESCRIPTION_ATTRIBUTION,
+  PR_DESCRIPTION_LOGO_SOURCE,
+  containsPrDescriptionMarker,
+  framePrDescriptionRegion,
+} from "./pr-description-region.js";
+
+export type {
+  VERIFIED_COMMIT_SCHEMA_VERSION,
+  VERIFIED_COMMIT_STATUSES,
+  VERIFIED_COMMIT_REASONS,
+  VerifiedCommitStatus,
+  VerifiedCommitReason,
+  VerifiedCommitBinding,
+  VerifiedCommitResult,
+  isVerifiedCommitResult,
+} from "./verified-commit.js";
+
+export type {
+  GitPreflightFindingCode,
+  GitPreflightSeverity,
+  GitPreflightRemediation,
+  GitPreflightFinding,
+  GIT_PREFLIGHT_FINDING_CODES,
+  isGitPreflightFindingCode,
+} from "./git-preflight.js";
+
+export type {
+  CodingRuntimeGitResult,
+  CodingRuntimeGitStatus,
+  CodingRuntimeGitDiff,
+  CodingRuntimeGitStage,
+} from "./coding-runtime-git.js";
+
+export type {
+  PrDescriptionApplicationStatus,
+  PrDescriptionApplicationBinding,
+  PrDescriptionApplicationReason,
+  PrDescriptionApplicationState,
+  PrDescriptionApplicationCompleteness,
+  PrDescriptionApplicationEffect,
+  PR_DESCRIPTION_APPLICATION_MAX_AGE_MS,
+  PR_DESCRIPTION_APPLICATION_REASON_STATES,
+  PR_DESCRIPTION_PROPOSAL_RETENTION_MAX_AGE_MS,
+  PR_DESCRIPTION_CONCURRENCY_LIMITATION,
+  isPrDescriptionApplicationBinding,
+  isPrDescriptionApplicationStatus,
+} from "./pr-description-application.js";
+
+export type {
+  WorkbenchDescriptionStatus,
+  WorkbenchDescriptionState,
+  WorkbenchDescriptionReason,
+  WorkbenchDescriptionDraftReview,
+  WORKBENCH_DESCRIPTION_STATUS_SCHEMA_VERSION,
+  WORKBENCH_DESCRIPTION_REASON_STATES,
+  isWorkbenchDescriptionStatus,
+} from "./workbench-description-status.js";
+
+export type {
+  GitJourneyBinding,
+  GitJourneyRemoteFacts,
+  GitJourneyReason,
+  GitJourneyState,
+  JourneyOutcome,
+  GIT_JOURNEY_REASON_STATES,
+} from "./git-journey-outcome.js";
+export type {
+  isGitJourneyBinding,
+  isGitJourneyRemoteFacts,
+  isJourneyOutcome,
+} from "./git-journey-validation.js";

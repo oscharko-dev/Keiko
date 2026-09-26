@@ -8,6 +8,7 @@ import {
   fixturesForCategory,
   promptEnhancerFixtureByName,
 } from "./index.js";
+import { runEnhancement } from "./pipeline.js";
 
 describe("Prompt Enhancer fixture registry", () => {
   it("has unique fixture names", () => {
@@ -22,6 +23,18 @@ describe("Prompt Enhancer fixture registry", () => {
       expect(f.oracle.expectedTaskClasses.length, f.name).toBeGreaterThan(0);
       expect(PROMPT_ENHANCER_FIXTURE_CATEGORIES, f.name).toContain(f.category);
     }
+  });
+
+  it("keeps each task-class oracle deliberate and exact (#3112)", () => {
+    const mismatches = ALL_PROMPT_ENHANCER_FIXTURES.flatMap((fixture) => {
+      const actualTaskClass = runEnhancement(fixture.name, fixture.request).analysis.taskClass;
+      return fixture.oracle.expectedTaskClasses.length === 1 &&
+        fixture.oracle.expectedTaskClasses[0] === actualTaskClass
+        ? []
+        : [`${fixture.name}: ${actualTaskClass}`];
+    });
+
+    expect(mismatches).toEqual([]);
   });
 
   it("fixturesForCategory partitions the registry across all categories", () => {

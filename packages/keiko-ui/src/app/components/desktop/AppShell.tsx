@@ -11,15 +11,12 @@ import { ChatSessionProvider } from "./context/ChatSessionContext";
 import { ActiveWorkspaceProvider } from "./context/ActiveWorkspaceContext";
 import { AnnouncerProvider } from "./context/AnnouncerContext";
 import { useActiveWorkspaceState } from "./hooks/useActiveWorkspaceState";
-import { TwinProvider, useTwin } from "./context/TwinContext";
 import { WsContext, type WsContextValue } from "./context/WsContext";
-import { Footer } from "./Footer";
 import { Header, type HeaderStatusTone } from "./Header";
 import { LeftRail } from "./LeftRail";
 import { RightRail } from "./RightRail";
 import { Workspace } from "./Workspace";
 import { useLinkRevision } from "./hooks/useLinkRevision";
-import { useUnhandledRejectionLog } from "./hooks/useUnhandledRejectionLog";
 import {
   readWorkspaceCameraSmoothness,
   WORKSPACE_CAMERA_SMOOTHNESS_EVENT,
@@ -41,24 +38,35 @@ import {
   boundScopeOf,
   filesChatBindScope,
   totalSourceCap,
+  type GitChangeBindSelection,
 } from "./hooks/workspaceActions";
-import { fetchConfig, updateChatConnectedScopes, updateChatLocalKnowledgeScopes } from "@/lib/api";
-import { newClientCorrelationId } from "@/lib/http";
+import {
+  connectGitChangeToChat,
+  fetchChats,
+  fetchConfig,
+  updateChatConnectedScopes,
+  updateChatGitChangeScopes,
+  updateChatLocalKnowledgeScopes,
+} from "@/lib/api";
+import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { I18nProvider, useTranslate } from "@/lib/i18n";
 import type { I18nTranslate } from "@/lib/i18n";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import type {
   Chat,
   ChatConnectedScope,
+  ChatGitChangeScope,
   ChatLocalKnowledgeScope,
   GroundingLimits,
 } from "@/lib/types";
 import { recordReadsContextRelationship } from "../../relationships/connector-relationship";
-import type { ChatBindingTarget, WorkspaceApi } from "./hooks/useWorkspace.types";
+import type { ChatBindingTarget, ChatUnbindTarget, WorkspaceApi } from "./hooks/useWorkspace.types";
 import { useUndoStack } from "./hooks/useUndoStack";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
+import { useModalInteractionLockState } from "./hooks/useModalInteractionLock";
 import type { WorkspaceUiAction, WorkspaceUndoStackApi } from "@oscharko-dev/keiko-contracts";
-import { resolveWorkspaceFileIdentifier } from "@oscharko-dev/keiko-contracts";
+import { resolveWorkspaceFileIdentifier } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import { applyShellUndoAction, shellPanelIsOpen } from "./shell-undo-bindings";
 import type { ShellShortcutState } from "./shellShortcutState";
 import { WORKSPACE_SEARCH_FOCUS_EVENT } from "./widgets/panels/searchPanelEvents";
@@ -77,21 +85,46 @@ import {
 import "./widgets";
 import { localizedWindowTitle, WIN_TYPES, type WindowType } from "./windows/WindowsRegistry";
 import type { AppWindow, Connection } from "./windows/types";
+import { chatWindowRuntimeTarget } from "./windows/chatWindowActivity";
 import { registerSw } from "./install/registerSw";
 import { workspaceRootTargets } from "./workspaceRootTargets";
+import { workspaceInteractionLocked } from "./interactionGuards";
 import styles from "./AppShell.module.css";
 
 const APP_BOOT_RECOVERY_RELOAD_KEY = "keiko.app-boot-recovery-reload-count";
 const EMPTY_SHELL_SHORTCUT_STATE: ShellShortcutState = { labels: new Map(), bindings: [] };
 
+function validProjectPath(value: Cfg[string]): string | undefined {
+  if (typeof value !== "string") return undefined;
+  return value.trim().length > 0 ? value : undefined;
+}
+
+function cloneCfg(cfg: Cfg): Cfg {
+  const cloned: Cfg = {};
+  for (const [key, value] of Object.entries(cfg)) {
+    cloned[key] = Array.isArray(value) ? [...value] : value;
+  }
+  return cloned;
+}
+
+function normalizedNewChatCfg(cfg: Cfg, activeProjectPath: string | undefined): Cfg {
+  const next = cloneCfg(cfg);
+  delete next["projectPath"];
+  const configuredProjectPath = validProjectPath(cfg["projectPath"]);
+  const selectedProjectPath = validProjectPath(activeProjectPath);
+  const projectPath = configuredProjectPath ?? selectedProjectPath;
+  return projectPath === undefined ? next : { ...next, projectPath };
+}
+
 export function prepareNewWindowCfg(
   type: WindowType,
   cfg: Cfg,
   newChatRequestId = crypto.randomUUID(),
+  activeProjectPath?: string,
 ): Cfg {
   return type === "chat"
     ? {
-        ...cfg,
+        ...normalizedNewChatCfg(cfg, activeProjectPath),
         chatId: undefined,
         selectionHandoffId: undefined,
         newChatRequestId,
@@ -174,8 +207,12 @@ const GatewaySetupDialog = dynamic(
   { ssr: false, loading: GatewaySetupLoading },
 );
 
-const TaskWorkspaceSwitcher = dynamic(
-  () => import("./TaskWorkspaceSwitcher").then((mod) => mod.TaskWorkspaceSwitcher),
+const RepositoryFolderSwitcher = dynamic(
+  () => import("./RepositoryFolderSwitcher").then((mod) => mod.RepositoryFolderSwitcher),
+  { ssr: false, loading: () => null },
+);
+const RepositoryBranchSwitcher = dynamic(
+  () => import("./RepositoryBranchSwitcher").then((mod) => mod.RepositoryBranchSwitcher),
   { ssr: false, loading: () => null },
 );
 
@@ -183,6 +220,18 @@ const UnifiedQuickAccessPalette = dynamic(
   () => import("./modals/UnifiedQuickAccessPalette").then((mod) => mod.UnifiedQuickAccessPalette),
   { ssr: false, loading: () => null },
 );
+
+function FooterLoading(): ReactNode {
+  return <div className="footer mono" aria-hidden="true" />;
+}
+
+// The status footer is not required to make the initial workspace interactive. Keep its stable
+// layout slot in the shell while loading its health probe and window-palette implementation in a
+// separate chunk, just like the other non-critical desktop controls below.
+const Footer = dynamic(() => import("./Footer").then((mod) => mod.Footer), {
+  ssr: false,
+  loading: FooterLoading,
+});
 
 // Issue #1207 (ADR-0042 D3.6) — the new-window dialog is reached only by an explicit gesture
 // (`pending !== null`), exactly like the quick-access palette and the gateway setup dialog above, so
@@ -284,11 +333,44 @@ export function frontmostSearchRootOwner(wins: readonly AppWindow[] | null): App
   return owner;
 }
 
+function panelBindingRoot(
+  wins: readonly AppWindow[] | null,
+  panel: "search" | "governedGit",
+): string | undefined {
+  const win = wins
+    ?.filter((candidate) => candidate.type === panel && candidate.minimized !== true)
+    .sort((left, right) => right.z - left.z)[0];
+  if (win === undefined) return undefined;
+  return panel === "search" ? resolveSearchRoot(null, win) : gitWindowRoot(win);
+}
+
 export function openOrFocusSearchWindow(api: WorkspaceApi, root: string | undefined): void {
   // WorkspaceApi.add is the singleton-aware open/focus operation. Passing an explicit undefined
   // clears a stale persisted root, so an unowned or ambiguous Search fails visibly before routing.
   api.add("search", { root });
   dispatchWorkspaceSearchFocus();
+}
+
+function openShellTool(
+  api: WorkspaceApi,
+  panel: WindowType,
+  opensSearch: boolean,
+  opensProjectGit: boolean,
+  searchRoot: string | undefined,
+  projectRoot: string | undefined,
+): void {
+  if (opensSearch) {
+    openOrFocusSearchWindow(api, searchRoot);
+    return;
+  }
+  if (opensProjectGit) {
+    api.add("governedGit", {
+      projectPath: projectRoot,
+      rootBinding: projectRoot === undefined ? undefined : "coding-repository",
+    });
+    return;
+  }
+  api.toggleTool(panel);
 }
 
 // GEN-PERF-WORKSPACE-008 — cheap signature of exactly the window fields the
@@ -308,34 +390,6 @@ export function chromeWindowsSignatureOf(wins: readonly AppWindow[] | null): str
     .join("|");
 }
 
-function branchLabelOrFallback(label: string | undefined): string {
-  return label !== undefined && label.trim().length > 0 ? label : "No branch selected";
-}
-
-function projectNameOrFallback(name: string | undefined, loading: boolean): string {
-  // uiux-fix F039 C401 — typographic ellipsis ("…", matching the footer's "You · manual"
-  // typography level) instead of three ASCII dots.
-  if (loading) return "Loading project…";
-  return name !== undefined && name.trim().length > 0 ? name : "No project selected";
-}
-
-function shellStatusLabel(args: {
-  readonly loading: boolean;
-  readonly error: string | undefined;
-  readonly hasProject: boolean;
-  readonly projectAvailable: boolean;
-  readonly noEligibleModels: boolean;
-}): string {
-  // uiux-fix F039 C401 — "Loading shell…" matches the header tab's "Loading project…" style
-  // (both visible at the same moment during boot).
-  if (args.loading) return "Loading shell…";
-  if (args.error !== undefined) return "Shell error";
-  if (!args.hasProject) return "No project selected";
-  if (!args.projectAvailable) return "Project unavailable";
-  if (args.noEligibleModels) return "Gateway setup required";
-  return "Ready";
-}
-
 // uiux-fix F008 C043/C118 — derive the header status pill from the real session state instead of
 // a hardcoded "connected" literal. Exported for unit tests.
 export function headerStatus(args: {
@@ -351,17 +405,6 @@ export function headerStatus(args: {
   }
   if (!args.hasProject || args.noEligibleModels) return { label: "Setup required", tone: "warn" };
   return { label: "Connected", tone: "ok" };
-}
-
-function evidenceStatusLabel(wins: readonly AppWindow[] | null): string {
-  const reviewWindows = (wins ?? []).filter((win) => win.type === "review");
-  // uiux-fix F008 C060 — the idle label was the imperative "Open review", which reads like a
-  // control but renders as static text in the footer status strip. Descriptive labels instead,
-  // consistent with "No branch selected" / "No model selected".
-  if (reviewWindows.length === 0) return "No review open";
-  return reviewWindows.some((win) => typeof win.cfg.runId === "string" && win.cfg.runId.length > 0)
-    ? "Evidence ready"
-    : "Review window open";
 }
 
 // `/\/+$/u`, `/^\/+/u`, `/^\/+|\/+$/gu`, and `/^\/+$/u` (leading/trailing slash-run stripping,
@@ -398,6 +441,25 @@ function connectedScopeKey(scope: ChatConnectedScope | null): string | null {
 
 // S3358 — prefer the bind-time snapshot on the Connection; fall back to whichever
 // endpoint is the chat window. Mirrors connectionChatWindowId in useWorkspace.ts.
+// GEN-UI-A11Y-003 — applies/removes the background modal lock on `.app`. Exported for the direct
+// unit test: the ORDER is load-bearing. Focus must leave the background before aria-hidden lands,
+// because Chrome refuses (and logs a violation for) aria-hidden on an ancestor of the focused
+// element — exactly the state right after clicking the FAB that opened the dialog. The dialog's
+// own mount focus then takes over; blurring here never steals focus from outside the background.
+export function applyBackgroundModalLock(background: HTMLElement, locked: boolean): void {
+  if (!locked) {
+    background.removeAttribute("inert");
+    background.removeAttribute("aria-hidden");
+    return;
+  }
+  const active = background.ownerDocument.activeElement;
+  if (active instanceof HTMLElement && background.contains(active)) {
+    active.blur();
+  }
+  background.setAttribute("inert", "");
+  background.setAttribute("aria-hidden", "true");
+}
+
 export function chatWindowIdOf(conn: Connection, a: AppWindow, b: AppWindow): string | null {
   if (conn.boundChatWindowId !== undefined) return conn.boundChatWindowId;
   if (a.type === "chat") return a.id;
@@ -411,9 +473,15 @@ function chatIdFromWindow(win: AppWindow | undefined): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
+export function persistedChatProjectPath(win: AppWindow | undefined): string | undefined {
+  if (win?.type !== "chat") return undefined;
+  const value = win.cfg["projectPath"];
+  if (typeof value !== "string") return undefined;
+  return value.trim().length > 0 ? value : undefined;
+}
+
 class ChatBindingCompensationFailure extends Error {}
 class ChatMutationTimeoutFailure extends Error {}
-class ChatMutationQueueBlockedFailure extends Error {}
 
 interface ChatMutationQueue {
   readonly blocked: Set<string>;
@@ -424,22 +492,64 @@ interface ChatMutationAttempt {
   readonly isCurrent: () => boolean;
 }
 
+type ChatLookupTarget = ChatBindingTarget | ChatUnbindTarget;
+
+function runtimeProjectPathForChat(chatWindowId: string, chatId: string): string | undefined {
+  const runtimeTarget = chatWindowRuntimeTarget(chatWindowId);
+  return runtimeTarget?.conversationId === chatId ? runtimeTarget.projectPath : undefined;
+}
+
 export const CHAT_MUTATION_TIMEOUT_MS = 15_000;
 
-function reportChatBindingCompensationFailure(): void {
-  const correlationId = newClientCorrelationId();
-  window.reportError(
-    new Error(`Chat binding compensation failed. Correlation ID: ${correlationId}`),
+function reportGroundingMutationFailure(message: string, error: unknown): void {
+  const correlationId = correlationIdOf(error);
+  reportClientDiagnostic(
+    `[keiko] ${message}: ${clientErrorSummary(error)}`,
+    correlationId === undefined ? undefined : { correlationId },
   );
 }
 
-function reportGroundingMutationFailure(message: string): void {
-  const correlationId = newClientCorrelationId();
-  window.reportError(new Error(`${message} Correlation ID: ${correlationId}`));
+class ChatLookupFailure extends Error {
+  constructor() {
+    super("Chat lookup failed.");
+    this.name = "ChatLookupFailure";
+  }
 }
 
-async function persistCurrentChatBinding<T>(
-  target: ChatBindingTarget | undefined,
+function chatLookupTargetIsCurrent(target: ChatLookupTarget | undefined): boolean {
+  return target === undefined || !("isCurrent" in target) || target.isCurrent();
+}
+
+function chatLookupRequiresMountedWindow(target: ChatLookupTarget | undefined): boolean {
+  return target !== undefined && "isCurrent" in target;
+}
+
+function groundingMutationFailureKey(
+  error: unknown,
+  mutationFailedKey:
+    | "chat.grounding.connectSourceFailed"
+    | "chat.grounding.connectKnowledgeFailed"
+    | "chat.grounding.connectGitChangeFailed"
+    | "scope.disconnectError",
+): "chat.grounding.recoveryRequired" | "chat.grounding.timeoutBlocked" | typeof mutationFailedKey {
+  if (error instanceof ChatLookupFailure) {
+    reportGroundingMutationFailure("Chat lookup failed", error);
+    return mutationFailedKey;
+  }
+  if (error instanceof ChatBindingCompensationFailure) {
+    reportGroundingMutationFailure("Chat binding compensation failed", error);
+    return "chat.grounding.recoveryRequired";
+  }
+  if (error instanceof ChatMutationTimeoutFailure) {
+    reportGroundingMutationFailure("Chat grounding timeout", error);
+    return "chat.grounding.timeoutBlocked";
+  }
+  reportGroundingMutationFailure("Chat grounding mutation failed", error);
+  return mutationFailedKey;
+}
+
+async function persistCurrentChatScopes<T>(
+  target: ChatLookupTarget | undefined,
   attempt: ChatMutationAttempt,
   chatId: string,
   previous: readonly T[],
@@ -447,10 +557,10 @@ async function persistCurrentChatBinding<T>(
   persist: (id: string, scopes: readonly T[] | null) => Promise<{ readonly chat: Chat }>,
   remember: (chat: Chat) => void,
 ): Promise<Chat | undefined> {
-  if (!attempt.isCurrent() || (target !== undefined && !target.isCurrent())) return undefined;
-  const response = await persist(chatId, next);
+  if (!attempt.isCurrent() || !chatLookupTargetIsCurrent(target)) return undefined;
+  const response = await persist(chatId, next.length > 0 ? next : null);
   remember(response.chat);
-  if (attempt.isCurrent() && (target === undefined || target.isCurrent())) return response.chat;
+  if (attempt.isCurrent() && chatLookupTargetIsCurrent(target)) return response.chat;
   try {
     const compensation = await persist(chatId, previous.length > 0 ? previous : null);
     remember(compensation.chat);
@@ -484,10 +594,10 @@ async function serializeChatMutation<T>(
   chatKey: string,
   mutation: (attempt: ChatMutationAttempt) => Promise<T>,
 ): Promise<T> {
-  if (queue.blocked.has(chatKey)) throw new ChatMutationQueueBlockedFailure();
+  if (queue.blocked.has(chatKey)) throw new ChatMutationTimeoutFailure();
   const preceding = queue.tails.get(chatKey) ?? Promise.resolve();
   const execute = async (): Promise<T> => {
-    if (queue.blocked.has(chatKey)) throw new ChatMutationQueueBlockedFailure();
+    if (queue.blocked.has(chatKey)) throw new ChatMutationTimeoutFailure();
     try {
       return await mutationWithTimeout(mutation);
     } catch (error: unknown) {
@@ -514,7 +624,7 @@ function isConversationGroundingConnection(
 ): boolean {
   const otherWindowId = connection.a === chatWindowId ? connection.b : connection.a;
   const otherType = winsById.get(otherWindowId)?.type;
-  return otherType === "files" || otherType === "connector";
+  return otherType === "files" || otherType === "connector" || otherType === "governedGit";
 }
 
 function relationshipPathForScope(scope: ChatConnectedScope): string | null {
@@ -527,6 +637,22 @@ function relationshipPathForScope(scope: ChatConnectedScope): string | null {
   if (relativePath === undefined || relativePath.length === 0) return scope.root;
   const root = stripTrailingSlashRun(scope.root.replaceAll("\\", "/"));
   return `${root}/${relativePath}`;
+}
+
+function appendGitChangeScope(
+  current: readonly ChatGitChangeScope[],
+  scope: ChatGitChangeScope,
+): readonly ChatGitChangeScope[] {
+  return current.some((candidate) => candidate.relationshipId === scope.relationshipId)
+    ? current
+    : [...current, scope];
+}
+
+function removeGitChangeScope(
+  current: readonly ChatGitChangeScope[],
+  relationshipId: string,
+): readonly ChatGitChangeScope[] {
+  return current.filter((scope) => scope.relationshipId !== relationshipId);
 }
 
 // Root-relative file-identifier contract (Issue #1374). The editor-window cfg-persistence layer is
@@ -715,12 +841,7 @@ export function buildAppShellCommands(
     label: t("command.openEditorSettings"),
     group: t("command.group.tools"),
     icon: "settings",
-    run: () => {
-      toggleTool("settings");
-      if (typeof window !== "undefined") {
-        window.dispatchEvent(new CustomEvent(OPEN_EDITOR_SETTINGS_EVENT));
-      }
-    },
+    run: () => openEditorSettingsPanel(toggleTool),
   };
   return [
     ...createCommands,
@@ -731,6 +852,13 @@ export function buildAppShellCommands(
   ];
 }
 
+function openEditorSettingsPanel(toggleTool: (type: WindowType) => void): void {
+  toggleTool("settings");
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(OPEN_EDITOR_SETTINGS_EVENT));
+  }
+}
+
 // S3358 — the two deep-linked tool routes each map to a fixed singleton window type.
 export function deepLinkToolFor(path: string): "relationships" | "localKnowledge" | null {
   if (path === "/relationships") return "relationships";
@@ -738,15 +866,26 @@ export function deepLinkToolFor(path: string): "relationships" | "localKnowledge
   return null;
 }
 
+export function focusedModalOpener(): HTMLElement | null {
+  const activeElement = document.activeElement;
+  // `document.body` is the browser's no-focus sentinel, not a restore target. Capturing it would
+  // make the modal cleanup skip its deterministic window/FAB fallback.
+  return activeElement instanceof HTMLElement && activeElement !== document.body
+    ? activeElement
+    : null;
+}
+
 function AppShellInner(): ReactNode {
   const t = useTranslate();
   const { theme, toggle: toggleTheme } = useTheme();
-  const twin = useTwin();
   const session = useChatSession({ autoCreate: false });
   // Issue #446 (ADR-0090) — the active task-workspace binding state machine. It is provided to the
   // whole shell so the Header switcher and every window's render context read one source of truth.
   const activeWorkspace = useActiveWorkspaceState();
   const shortcutRoot = activeWorkspace.activeRoot ?? session.activeProject?.path ?? undefined;
+  // Git is repository control, not task-worktree content. Opening it from shell chrome must therefore
+  // use the selected repository root and must not borrow `activeWorkspace.activeRoot`.
+  const repositoryShortcutRoot = session.activeProject?.path ?? undefined;
   const [shellShortcutState, setShellShortcutState] = useState<ShellShortcutState>(
     EMPTY_SHELL_SHORTCUT_STATE,
   );
@@ -757,7 +896,7 @@ function AppShellInner(): ReactNode {
       if (!active) return;
       cleanup = subscribeShellShortcutState(shortcutRoot, setShellShortcutState);
     });
-    return () => {
+    return (): void => {
       active = false;
       cleanup?.();
     };
@@ -772,13 +911,15 @@ function AppShellInner(): ReactNode {
       .then((res) => setGroundingLimits(res.effectiveGroundingLimits))
       .catch(() => undefined);
   }, []);
-  // Issue #446 — load the task-workspace inventory + active binding for the launched project, and
-  // re-list whenever the active project changes. Best-effort: a server without the binding routes
-  // degrades to an empty inventory and an unbound state (the switcher then shows "no active workspace").
+  // Issue #446 — load the task-workspace inventory + active binding on launch, and re-read them
+  // whenever the active project changes. The inventory itself spans every repository (the active
+  // pointer is global, so a switch may target any of them); the project path only triggers the
+  // re-read. Best-effort: a server without the binding routes degrades to an empty inventory and
+  // an unbound state (the switcher then shows "no active workspace").
   const refreshActiveWorkspace = activeWorkspace.refresh;
   const activeProjectPath = session.activeProject?.path;
   useEffect(() => {
-    void refreshActiveWorkspace(activeProjectPath);
+    void refreshActiveWorkspace();
   }, [refreshActiveWorkspace, activeProjectPath]);
   // Release 0.2.0 — user-visible feedback when a connect gesture is rejected because the
   // per-chat source limit is reached. Cleared on the next accepted bind and auto-dismissed.
@@ -786,7 +927,7 @@ function AppShellInner(): ReactNode {
   useEffect(() => {
     if (sourceConnectionNotice === null) return undefined;
     const timer = window.setTimeout(() => setSourceConnectionNotice(null), 10_000);
-    return () => window.clearTimeout(timer);
+    return (): void => window.clearTimeout(timer);
   }, [sourceConnectionNotice]);
   const rejectForLimit = useCallback(
     (connectedCount: number, cap: number): false => {
@@ -799,16 +940,24 @@ function AppShellInner(): ReactNode {
     setSourceConnectionNotice(message);
     return false;
   }, []);
+  const reportWindowLimit = useCallback(
+    (limit: number): void => {
+      setSourceConnectionNotice(t("workspace.windowLimitReached", { limit }));
+    },
+    [t],
+  );
   const confirmedGroundingChatsRef = useRef(new Map<string, Chat>());
   const rememberGroundingChat = useCallback((chat: Chat): void => {
     confirmedGroundingChatsRef.current.set(chat.id, chat);
   }, []);
-  const chatForWindow = useCallback(
-    (chatWindowId: string): Chat | undefined => {
-      const chatId = chatIdFromWindow(
-        wsWinsForBindingRef.current?.find((win) => win.id === chatWindowId),
-      );
+  const resolveChatForWindow = useCallback(
+    async (chatWindowId: string, target?: ChatLookupTarget): Promise<Chat | undefined> => {
+      const windowSnapshot = wsWinsForBindingRef.current?.find((win) => win.id === chatWindowId);
+      const runtimeTarget = chatWindowRuntimeTarget(chatWindowId);
+      const chatId =
+        target?.conversationId ?? chatIdFromWindow(windowSnapshot) ?? runtimeTarget?.conversationId;
       if (chatId === undefined) return undefined;
+      if (!chatLookupTargetIsCurrent(target)) return undefined;
       const sessionChat =
         session.chats.find((chat) => chat.id === chatId) ??
         (session.activeChat?.id === chatId ? session.activeChat : undefined);
@@ -818,18 +967,39 @@ function AppShellInner(): ReactNode {
         (sessionChat === undefined || confirmed.updatedAt >= sessionChat.updatedAt)
           ? confirmed
           : sessionChat;
-      return chat?.status === "closed" ? undefined : chat;
+      if (chat !== undefined) return chat.status === "closed" ? undefined : chat;
+      const projectPath =
+        target?.projectPath ??
+        persistedChatProjectPath(windowSnapshot) ??
+        runtimeProjectPathForChat(chatWindowId, chatId);
+      if (projectPath === undefined) return undefined;
+      try {
+        const response = await fetchChats(projectPath);
+        if (!chatLookupTargetIsCurrent(target)) return undefined;
+        if (chatLookupRequiresMountedWindow(target)) {
+          const currentWindow = wsWinsForBindingRef.current?.find((win) => win.id === chatWindowId);
+          if (chatIdFromWindow(currentWindow) !== chatId) return undefined;
+        }
+        const resolved = response.chats.find((candidate) => candidate.id === chatId);
+        if (resolved === undefined || resolved.status === "closed") return undefined;
+        rememberGroundingChat(resolved);
+        return resolved;
+      } catch {
+        throw new ChatLookupFailure();
+      }
     },
-    [session.activeChat, session.chats],
+    [rememberGroundingChat, session.activeChat, session.chats],
   );
   const groundingMutationQueueRef = useRef<ChatMutationQueue>({
     blocked: new Set(),
     tails: new Map(),
   });
   const groundingMutationKey = useCallback(
-    (chatWindowId: string, target?: ChatBindingTarget): string =>
-      target?.conversationId ?? chatForWindow(chatWindowId)?.id ?? `window:${chatWindowId}`,
-    [chatForWindow],
+    (chatWindowId: string, target?: ChatLookupTarget): string =>
+      target?.conversationId ??
+      chatIdFromWindow(wsWinsForBindingRef.current?.find((win) => win.id === chatWindowId)) ??
+      `window:${chatWindowId}`,
+    [],
   );
   // Files↔Chat edges bind the Files window's visible scope: repository root, opened folder, or
   // previewed file. The green edge is now the only UI affordance for this binding.
@@ -840,15 +1010,15 @@ function AppShellInner(): ReactNode {
     async (
       chatWindowId: string,
       nextScope: ChatConnectedScope,
-      previousScope: ChatConnectedScope | null = null,
       attempt: ChatMutationAttempt,
+      previousScope: ChatConnectedScope | null = null,
       target?: ChatBindingTarget,
     ): Promise<boolean> => {
-      const chat = chatForWindow(chatWindowId);
+      const chat = await resolveChatForWindow(chatWindowId, target);
       if (chat === undefined) {
         return rejectForConnectionFailure(t("chat.grounding.readyChatRequired"));
       }
-      if (target !== undefined && chat.id !== target.conversationId) return false;
+      if ((target?.conversationId ?? chat.id) !== chat.id) return false;
       const current =
         previousScope === null
           ? effectiveScopes(chat)
@@ -875,7 +1045,7 @@ function AppShellInner(): ReactNode {
         return rejectForLimit(current.length + lkScopes.length, cap);
       }
       try {
-        const persisted = await persistCurrentChatBinding(
+        const persisted = await persistCurrentChatScopes(
           target,
           attempt,
           chat.id,
@@ -894,19 +1064,9 @@ function AppShellInner(): ReactNode {
         if (relationshipPath !== null) recordReadsContextRelationship(chat.id, relationshipPath);
         return true;
       } catch (error: unknown) {
-        if (error instanceof ChatBindingCompensationFailure) {
-          reportChatBindingCompensationFailure();
-          return rejectForConnectionFailure(t("chat.grounding.recoveryRequired"));
-        }
-        if (
-          error instanceof ChatMutationTimeoutFailure ||
-          error instanceof ChatMutationQueueBlockedFailure
-        ) {
-          reportGroundingMutationFailure("Chat grounding mutation timed out.");
-          return rejectForConnectionFailure(t("chat.grounding.timeoutBlocked"));
-        }
-        reportGroundingMutationFailure("Chat grounding mutation failed.");
-        return rejectForConnectionFailure(t("chat.grounding.connectSourceFailed"));
+        return rejectForConnectionFailure(
+          t(groundingMutationFailureKey(error, "chat.grounding.connectSourceFailed")),
+        );
       }
     },
     // GEN-PERF-RENDER-001 — depend on the stable `session.replaceChat` useCallback (the only member
@@ -917,7 +1077,7 @@ function AppShellInner(): ReactNode {
     // the whole session object (see comment above).
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
-      chatForWindow,
+      resolveChatForWindow,
       session.replaceChat,
       groundingLimits,
       rejectForLimit,
@@ -938,18 +1098,12 @@ function AppShellInner(): ReactNode {
           groundingMutationQueueRef.current,
           groundingMutationKey(chatWindowId, target),
           async (attempt): Promise<boolean> =>
-            replaceFilesScopeNow(chatWindowId, nextScope, previousScope, attempt, target),
+            replaceFilesScopeNow(chatWindowId, nextScope, attempt, previousScope, target),
         );
       } catch (error: unknown) {
-        if (
-          error instanceof ChatMutationTimeoutFailure ||
-          error instanceof ChatMutationQueueBlockedFailure
-        ) {
-          reportGroundingMutationFailure("Chat grounding mutation timed out.");
-          return rejectForConnectionFailure(t("chat.grounding.timeoutBlocked"));
-        }
-        reportGroundingMutationFailure("Chat grounding mutation failed.");
-        return rejectForConnectionFailure(t("chat.grounding.connectSourceFailed"));
+        return rejectForConnectionFailure(
+          t(groundingMutationFailureKey(error, "chat.grounding.connectSourceFailed")),
+        );
       }
     },
     [groundingMutationKey, rejectForConnectionFailure, replaceFilesScopeNow, t],
@@ -963,29 +1117,52 @@ function AppShellInner(): ReactNode {
     [replaceFilesScope],
   );
   const handleScopeUnbind = useCallback(
-    (chatWindowId: string, scope: ChatConnectedScope): void => {
-      const chatKey = groundingMutationKey(chatWindowId);
-      void serializeChatMutation(
-        groundingMutationQueueRef.current,
-        chatKey,
-        async (): Promise<void> => {
-          const chat = chatForWindow(chatWindowId);
-          if (chat === undefined) return;
-          const next = removeConnectedScope(effectiveScopes(chat), scope);
-          try {
-            const res = await updateChatConnectedScopes(chat.id, next.length > 0 ? next : null);
-            rememberGroundingChat(res.chat);
-            session.replaceChat(res.chat);
-          } catch {
-            reportGroundingMutationFailure("Connected-scope unbind failed.");
-          }
-        },
-      ).catch((): void => {
-        reportGroundingMutationFailure("Connected-scope unbind timed out.");
-      });
+    async (
+      chatWindowId: string,
+      scope: ChatConnectedScope,
+      target?: ChatUnbindTarget,
+    ): Promise<boolean> => {
+      try {
+        return await serializeChatMutation(
+          groundingMutationQueueRef.current,
+          groundingMutationKey(chatWindowId, target),
+          async (attempt): Promise<boolean> => {
+            const chat = await resolveChatForWindow(chatWindowId, target);
+            if (chat === undefined) {
+              return rejectForConnectionFailure(t("scope.disconnectError"));
+            }
+            const current = effectiveScopes(chat);
+            const next = removeConnectedScope(current, scope);
+            const persisted = await persistCurrentChatScopes(
+              target,
+              attempt,
+              chat.id,
+              current,
+              next,
+              updateChatConnectedScopes,
+              rememberGroundingChat,
+            );
+            if (persisted === undefined) return false;
+            session.replaceChat(persisted);
+            setSourceConnectionNotice(null);
+            return true;
+          },
+        );
+      } catch (error: unknown) {
+        return rejectForConnectionFailure(
+          t(groundingMutationFailureKey(error, "scope.disconnectError")),
+        );
+      }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
-    [chatForWindow, groundingMutationKey, rememberGroundingChat, session.replaceChat],
+    [
+      groundingMutationKey,
+      rememberGroundingChat,
+      rejectForConnectionFailure,
+      resolveChatForWindow,
+      session.replaceChat,
+      t,
+    ],
   );
   // Epic #189 Slice 3 M3 — a Connector↔Chat relationship edge binds/unbinds the connector scope
   // on the active chat's localKnowledgeScopes, so the gesture grounds the chat via vector search.
@@ -998,11 +1175,11 @@ function AppShellInner(): ReactNode {
       attempt: ChatMutationAttempt,
       target?: ChatBindingTarget,
     ): Promise<boolean> => {
-      const chat = chatForWindow(chatWindowId);
+      const chat = await resolveChatForWindow(chatWindowId, target);
       if (chat === undefined) {
         return rejectForConnectionFailure(t("chat.grounding.readyChatRequired"));
       }
-      if (target !== undefined && chat.id !== target.conversationId) return false;
+      if ((target?.conversationId ?? chat.id) !== chat.id) return false;
       const current = effectiveLocalKnowledgeScopes(chat);
       const folderScopes = effectiveScopes(chat);
       if (isConnectorScopeConnected(current, scope)) return true;
@@ -1016,7 +1193,7 @@ function AppShellInner(): ReactNode {
         return rejectForLimit(folderScopes.length + current.length, cap);
       }
       try {
-        const persisted = await persistCurrentChatBinding(
+        const persisted = await persistCurrentChatScopes(
           target,
           attempt,
           chat.id,
@@ -1030,24 +1207,14 @@ function AppShellInner(): ReactNode {
         setSourceConnectionNotice(null);
         return true;
       } catch (error: unknown) {
-        if (error instanceof ChatBindingCompensationFailure) {
-          reportChatBindingCompensationFailure();
-          return rejectForConnectionFailure(t("chat.grounding.recoveryRequired"));
-        }
-        if (
-          error instanceof ChatMutationTimeoutFailure ||
-          error instanceof ChatMutationQueueBlockedFailure
-        ) {
-          reportGroundingMutationFailure("Chat grounding mutation timed out.");
-          return rejectForConnectionFailure(t("chat.grounding.timeoutBlocked"));
-        }
-        reportGroundingMutationFailure("Chat grounding mutation failed.");
-        return rejectForConnectionFailure(t("chat.grounding.connectKnowledgeFailed"));
+        return rejectForConnectionFailure(
+          t(groundingMutationFailureKey(error, "chat.grounding.connectKnowledgeFailed")),
+        );
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
     [
-      chatForWindow,
+      resolveChatForWindow,
       session.replaceChat,
       groundingLimits,
       rejectForLimit,
@@ -1070,48 +1237,163 @@ function AppShellInner(): ReactNode {
             handleConnectorBindNow(chatWindowId, scope, attempt, target),
         );
       } catch (error: unknown) {
-        if (
-          error instanceof ChatMutationTimeoutFailure ||
-          error instanceof ChatMutationQueueBlockedFailure
-        ) {
-          reportGroundingMutationFailure("Chat grounding mutation timed out.");
-          return rejectForConnectionFailure(t("chat.grounding.timeoutBlocked"));
-        }
-        reportGroundingMutationFailure("Chat grounding mutation failed.");
-        return rejectForConnectionFailure(t("chat.grounding.connectKnowledgeFailed"));
+        return rejectForConnectionFailure(
+          t(groundingMutationFailureKey(error, "chat.grounding.connectKnowledgeFailed")),
+        );
       }
     },
     [groundingMutationKey, handleConnectorBindNow, rejectForConnectionFailure, t],
   );
   const handleConnectorUnbind = useCallback(
-    (chatWindowId: string, scope: ChatLocalKnowledgeScope): void => {
-      const chatKey = groundingMutationKey(chatWindowId);
-      void serializeChatMutation(
-        groundingMutationQueueRef.current,
-        chatKey,
-        async (): Promise<void> => {
-          const chat = chatForWindow(chatWindowId);
-          if (chat === undefined) return;
-          const key =
-            scope.kind === "capsule" ? `capsule:${scope.capsuleId}` : `set:${scope.capsuleSetId}`;
-          const next = removeConnectorScope(effectiveLocalKnowledgeScopes(chat), key);
-          try {
-            const res = await updateChatLocalKnowledgeScopes(
+    async (
+      chatWindowId: string,
+      scope: ChatLocalKnowledgeScope,
+      target?: ChatUnbindTarget,
+    ): Promise<boolean> => {
+      try {
+        return await serializeChatMutation(
+          groundingMutationQueueRef.current,
+          groundingMutationKey(chatWindowId, target),
+          async (attempt): Promise<boolean> => {
+            const chat = await resolveChatForWindow(chatWindowId, target);
+            if (chat === undefined) {
+              return rejectForConnectionFailure(t("scope.disconnectError"));
+            }
+            const key =
+              scope.kind === "capsule" ? `capsule:${scope.capsuleId}` : `set:${scope.capsuleSetId}`;
+            const current = effectiveLocalKnowledgeScopes(chat);
+            const next = removeConnectorScope(current, key);
+            const persisted = await persistCurrentChatScopes(
+              target,
+              attempt,
               chat.id,
-              next.length > 0 ? next : null,
+              current,
+              next,
+              updateChatLocalKnowledgeScopes,
+              rememberGroundingChat,
             );
-            rememberGroundingChat(res.chat);
-            session.replaceChat(res.chat);
-          } catch {
-            reportGroundingMutationFailure("Local knowledge scope unbind failed.");
-          }
-        },
-      ).catch((): void => {
-        reportGroundingMutationFailure("Local knowledge scope unbind timed out.");
-      });
+            if (persisted === undefined) return false;
+            session.replaceChat(persisted);
+            setSourceConnectionNotice(null);
+            return true;
+          },
+        );
+      } catch (error: unknown) {
+        return rejectForConnectionFailure(
+          t(groundingMutationFailureKey(error, "scope.disconnectError")),
+        );
+      }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
-    [chatForWindow, groundingMutationKey, rememberGroundingChat, session.replaceChat],
+    [
+      groundingMutationKey,
+      rememberGroundingChat,
+      rejectForConnectionFailure,
+      resolveChatForWindow,
+      session.replaceChat,
+      t,
+    ],
+  );
+  const handleGitChangeBind = useCallback(
+    async (
+      chatWindowId: string,
+      selection: GitChangeBindSelection,
+      target?: ChatBindingTarget,
+    ): Promise<ChatGitChangeScope | false> => {
+      try {
+        return await serializeChatMutation(
+          groundingMutationQueueRef.current,
+          groundingMutationKey(chatWindowId, target),
+          async (attempt): Promise<ChatGitChangeScope | false> => {
+            const chat = await resolveChatForWindow(chatWindowId, target);
+            if (chat === undefined) {
+              rejectForConnectionFailure(t("chat.grounding.readyChatRequired"));
+              return false;
+            }
+            if ((target?.conversationId ?? chat.id) !== chat.id) return false;
+            const result = await connectGitChangeToChat({
+              chatId: chat.id,
+              mode: "comparison",
+              ...selection,
+            });
+            if (result.status === "blocked") {
+              rejectForConnectionFailure(t("chat.grounding.connectGitChangeFailed"));
+              return false;
+            }
+            if (!attempt.isCurrent() || !chatLookupTargetIsCurrent(target)) return false;
+            const updated = {
+              ...chat,
+              gitChangeScopes: appendGitChangeScope(chat.gitChangeScopes ?? [], result.scope),
+              updatedAt: Date.now(),
+            };
+            rememberGroundingChat(updated);
+            session.replaceChat(updated);
+            setSourceConnectionNotice(null);
+            return result.scope;
+          },
+        );
+      } catch (error: unknown) {
+        rejectForConnectionFailure(
+          t(groundingMutationFailureKey(error, "chat.grounding.connectGitChangeFailed")),
+        );
+        return false;
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
+    [
+      groundingMutationKey,
+      rememberGroundingChat,
+      rejectForConnectionFailure,
+      resolveChatForWindow,
+      session.replaceChat,
+      t,
+    ],
+  );
+  const handleGitChangeUnbind = useCallback(
+    async (
+      chatWindowId: string,
+      relationshipId: string,
+      target?: ChatUnbindTarget,
+    ): Promise<boolean> => {
+      try {
+        return await serializeChatMutation(
+          groundingMutationQueueRef.current,
+          groundingMutationKey(chatWindowId, target),
+          async (attempt): Promise<boolean> => {
+            const chat = await resolveChatForWindow(chatWindowId, target);
+            if (chat === undefined) return true;
+            const current = chat.gitChangeScopes ?? [];
+            const next = removeGitChangeScope(current, relationshipId);
+            const persisted = await persistCurrentChatScopes(
+              target,
+              attempt,
+              chat.id,
+              current,
+              next,
+              updateChatGitChangeScopes,
+              rememberGroundingChat,
+            );
+            if (persisted === undefined) return false;
+            session.replaceChat(persisted);
+            setSourceConnectionNotice(null);
+            return true;
+          },
+        );
+      } catch (error: unknown) {
+        return rejectForConnectionFailure(
+          t(groundingMutationFailureKey(error, "scope.disconnectError")),
+        );
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
+    [
+      groundingMutationKey,
+      rememberGroundingChat,
+      rejectForConnectionFailure,
+      resolveChatForWindow,
+      session.replaceChat,
+      t,
+    ],
   );
   const [cameraSmoothness, setCameraSmoothness] = useState<number>(readWorkspaceCameraSmoothness);
 
@@ -1121,7 +1403,7 @@ function AppShellInner(): ReactNode {
       setCameraSmoothness(typeof detail === "number" ? detail : 0);
     };
     window.addEventListener(WORKSPACE_CAMERA_SMOOTHNESS_EVENT, onCameraSmoothness);
-    return () => {
+    return (): void => {
       window.removeEventListener(WORKSPACE_CAMERA_SMOOTHNESS_EVENT, onCameraSmoothness);
     };
   }, []);
@@ -1132,6 +1414,9 @@ function AppShellInner(): ReactNode {
     onScopeUnbind: handleScopeUnbind,
     onConnectorBind: handleConnectorBind,
     onConnectorUnbind: handleConnectorUnbind,
+    onGitChangeBind: handleGitChangeBind,
+    onGitChangeUnbind: handleGitChangeUnbind,
+    onWindowLimitReached: reportWindowLimit,
   });
   wsWinsForBindingRef.current = ws.wins;
 
@@ -1194,7 +1479,9 @@ function AppShellInner(): ReactNode {
 
   const [palOpen, setPalOpen] = useState(false);
   const [pending, setPending] = useState<WindowType | null>(null);
+  const [newWindowOpener, setNewWindowOpener] = useState<HTMLElement | null>(null);
   const [quickAccessMode, setQuickAccessMode] = useState<"files" | "commands" | null>(null);
+  const [quickAccessOpener, setQuickAccessOpener] = useState<HTMLElement | null>(null);
   const [windowPaletteOpen, setWindowPaletteOpen] = useState(false);
   const [editorHosts, setEditorHosts] = useState<ReadonlyMap<string, EditorPaletteHost>>(
     () => new Map(),
@@ -1218,23 +1505,34 @@ function AppShellInner(): ReactNode {
     [chromeWindowsSignature, workspaceLinkRevision],
   );
   const wsContextValue: WsContextValue = useMemo(() => ({ active, winCount }), [active, winCount]);
-  // GEN-PERF-RENDER-002 — Header is memoized, but passing a freshly-constructed <TaskWorkspaceSwitcher/>
-  // element inline defeated that memo (new element identity every AppShell render). Memoizing the
-  // element keeps Header's props referentially stable so it only re-renders on real input changes.
-  const contextControl = useMemo(() => <TaskWorkspaceSwitcher />, []);
+  // GEN-PERF-RENDER-002 — Header is memoized, but passing a freshly-constructed
+  // Building the context controls inline defeated Header's memoization (new element identities on
+  // every AppShell render). Project and repository branch stay distinct controls with one shared
+  // design-system gap; managed Task Workspace lifecycle belongs to Coding Workbench context.
+  const contextControl = useMemo(
+    () => (
+      <div className={styles.cmpContextControls}>
+        <RepositoryFolderSwitcher />
+        <RepositoryBranchSwitcher />
+      </div>
+    ),
+    [],
+  );
 
   const openPalette = useCallback((): void => setPalOpen(true), []);
   const closePalette = useCallback((): void => setPalOpen(false), []);
-  const openQuickAccessFiles = useCallback((): void => setQuickAccessMode("files"), []);
-  const openQuickAccessCommands = useCallback((): void => setQuickAccessMode("commands"), []);
-  const closeQuickAccess = useCallback((): void => setQuickAccessMode(null), []);
-  // Lets the editor's own capturing keydown listener (EditorWidget.tsx) open the unified
-  // quick-access palette directly, so Cmd/Ctrl+P still works while the cursor is inside a file —
-  // see EditorQuickAccessTriggerContext.tsx for why this must bypass useKeyboardShortcuts.
-  const editorQuickAccessTrigger = useMemo(
-    () => ({ openFiles: openQuickAccessFiles, openCommands: openQuickAccessCommands }),
-    [openQuickAccessFiles, openQuickAccessCommands],
-  );
+  const openQuickAccessFiles = useCallback((): void => {
+    setQuickAccessOpener(focusedModalOpener());
+    setQuickAccessMode("files");
+  }, []);
+  const openQuickAccessCommands = useCallback((): void => {
+    setQuickAccessOpener(focusedModalOpener());
+    setQuickAccessMode("commands");
+  }, []);
+  const closeQuickAccess = useCallback((): void => {
+    setQuickAccessMode(null);
+    setQuickAccessOpener(null);
+  }, []);
   const registerEditorHost = useCallback(
     (windowId: string, host: EditorPaletteHost): (() => void) => {
       setEditorHosts((current) => {
@@ -1269,6 +1567,7 @@ function AppShellInner(): ReactNode {
         if (createdId !== null) focusCreatedWindow(createdId);
         return;
       }
+      setNewWindowOpener(focusedModalOpener());
       setPending(type);
     },
     [ws.api],
@@ -1280,10 +1579,16 @@ function AppShellInner(): ReactNode {
       // dialog only renders while `pending` is non-null, so reading it from the closure is safe.
       const current = pending;
       setPending(null);
+      setNewWindowOpener(null);
       if (current === null) return;
       const normalizedCfg = current === "editor" ? normalizeEditorWindowCfg(cfg) : cfg;
       const { __connectFilesId, ...windowCfg } = normalizedCfg;
-      const targetWindowCfg = prepareNewWindowCfg(current, windowCfg);
+      const targetWindowCfg = prepareNewWindowCfg(
+        current,
+        windowCfg,
+        undefined,
+        session.activeProject?.path,
+      );
       const createdId = ws.api.add(current, targetWindowCfg);
       if (
         current === "agents" &&
@@ -1303,9 +1608,12 @@ function AppShellInner(): ReactNode {
         focusCreatedWindow(createdId);
       }
     },
-    [pending, ws.api],
+    [pending, session.activeProject?.path, ws.api],
   );
-  const closeDialog = useCallback((): void => setPending(null), []);
+  const closeDialog = useCallback((): void => {
+    setPending(null);
+    setNewWindowOpener(null);
+  }, []);
   const statusRef = useRef<HTMLElement | null>(null);
   const setStatusRef = useCallback((node: HTMLElement | null): void => {
     statusRef.current = node;
@@ -1336,23 +1644,41 @@ function AppShellInner(): ReactNode {
       // state are one rule (shellPanelIsOpen) rather than two copies that can drift.
       const before = shellPanelIsOpen(ws.wins, panel);
       const opensSearch = panel === "search" && !before;
-      const searchRoot = opensSearch
-        ? resolveSearchRoot(activeWorkspace.activeRoot, searchOwner)
-        : undefined;
-      if (opensSearch) {
-        openOrFocusSearchWindow(ws.api, searchRoot);
-      } else {
-        ws.api.toggleTool(panel);
+      const opensProjectGit = panel === "governedGit" && !before;
+      let searchRoot: string | undefined;
+      if (panel === "search") {
+        searchRoot = before
+          ? panelBindingRoot(ws.wins, "search")
+          : resolveSearchRoot(activeWorkspace.activeRoot, searchOwner);
       }
+      let projectRoot: string | undefined;
+      if (panel === "governedGit") {
+        projectRoot = before ? panelBindingRoot(ws.wins, "governedGit") : repositoryShortcutRoot;
+      }
+      openShellTool(ws.api, panel, opensSearch, opensProjectGit, searchRoot, projectRoot);
       undoStack.push({
         kind: "ui.panel.toggle",
         panel,
         before,
-        after: opensSearch || !before,
-        ...(opensSearch ? { searchRoot } : {}),
+        after: !before,
+        ...(panel === "search" ? { searchRoot } : {}),
+        ...(panel === "governedGit" ? { projectRoot } : {}),
       });
     },
-    [activeWorkspace.activeRoot, searchOwner, undoStack, ws.api, ws.wins],
+    [activeWorkspace.activeRoot, repositoryShortcutRoot, searchOwner, undoStack, ws.api, ws.wins],
+  );
+
+  const openEditorSettings = useCallback((): void => openEditorSettingsPanel(onTool), [onTool]);
+  // Lets the editor's own capturing keydown listener (EditorWidget.tsx) invoke the shell action
+  // directly, so Cmd/Ctrl+P and Cmd/Ctrl+, work while the cursor is inside Monaco. The shell keeps
+  // ownership of opening the window and selecting its tab; the editor only owns chord recognition.
+  const editorQuickAccessTrigger = useMemo(
+    () => ({
+      openFiles: openQuickAccessFiles,
+      openCommands: openQuickAccessCommands,
+      openEditorSettings,
+    }),
+    [openEditorSettings, openQuickAccessCommands, openQuickAccessFiles],
   );
 
   const onNewChat = useCallback((): void => pick("chat"), [pick]);
@@ -1375,6 +1701,7 @@ function AppShellInner(): ReactNode {
   // and editable-target guards apply to the unified quick-access surface.
   const dispatchShortcut = useCallback(
     (commandId: string): void => {
+      if (workspaceInteractionLocked()) return;
       if (commandId === "undo") undoStack.undo();
       else if (commandId === "redo") undoStack.redo();
       else if (commandId === "focus-status") statusRef.current?.focus();
@@ -1382,9 +1709,11 @@ function AppShellInner(): ReactNode {
         openOrFocusSearchWindow(ws.api, resolveSearchRoot(activeWorkspace.activeRoot, searchOwner));
       } else if (commandId === "quick-access.files") openQuickAccessFiles();
       else if (commandId === "quick-access.commands") openQuickAccessCommands();
+      else if (commandId === "open-editor-settings") openEditorSettings();
     },
     [
       activeWorkspace.activeRoot,
+      openEditorSettings,
       openQuickAccessCommands,
       openQuickAccessFiles,
       searchOwner,
@@ -1409,7 +1738,7 @@ function AppShellInner(): ReactNode {
     window.addEventListener("pointerdown", setPointerModality, true);
     window.addEventListener("mousedown", setPointerModality, true);
     window.addEventListener("keydown", setKeyboardModality, true);
-    return () => {
+    return (): void => {
       window.removeEventListener("pointerdown", setPointerModality, true);
       window.removeEventListener("mousedown", setPointerModality, true);
       window.removeEventListener("keydown", setKeyboardModality, true);
@@ -1435,20 +1764,9 @@ function AppShellInner(): ReactNode {
     () => workspaceRootTargets(quickAccessRoot, quickAccessWorkspace.manifest),
     [quickAccessRoot, quickAccessWorkspace.manifest],
   );
+  const configuredModelsAvailable = session.configuredModelsAvailable ?? session.models.length > 0;
   const needsGatewaySetup =
-    !session.loading && session.error === undefined && session.models.length === 0;
-  const projectName = projectNameOrFallback(session.activeProject?.name, session.loading);
-  const hasProject = session.activeProject !== undefined;
-  const projectAvailable = session.activeProject?.available === true;
-  const footerShellStatusLabel = shellStatusLabel({
-    loading: session.loading,
-    error: session.error,
-    hasProject,
-    projectAvailable,
-    noEligibleModels: session.noEligibleModels,
-  });
-  const footerEvidenceStatusLabel = evidenceStatusLabel(ws.wins);
-  const branchLabel = branchLabelOrFallback(session.activeChat?.branchLabel);
+    !session.loading && session.error === undefined && !configuredModelsAvailable;
   const updateStartupReady = ws.wins !== null && !session.loading && !needsGatewaySetup;
   const openUpdatesFromStartup = useCallback((): void => {
     const createdId = ws.api.add("updates", { entrypoint: "startup" });
@@ -1459,24 +1777,23 @@ function AppShellInner(): ReactNode {
     <Palette types={WIN_TYPES} order={paletteWindowOrder()} onAdd={pick} onClose={closePalette} />
   ) : null;
 
-  // GEN-UI-A11Y-003 — while a genuinely modal dialog is open, take the background window layer out of
-  // the accessibility tree and the tab order. These dialogs (NewWindowDialog / UnifiedQuickAccessPalette /
-  // GatewaySetupDialog) are each aria-modal and render as later siblings OUTSIDE `.stage`, so inerting
-  // `.stage` leaves them fully operable while nothing behind them can be tabbed to or read by AT. The
-  // non-modal `Palette` (palOpen) deliberately does NOT count here: it renders INSIDE `.stage` and is
-  // designed to keep the workspace behind it interactive, so inerting on `palOpen` would disable the
-  // Palette itself. `inert` implies aria-hidden in modern engines; the explicit aria-hidden is a
-  // fallback for older assistive tech that has not yet adopted inert.
-  const modalOpen = pending !== null || quickAccessMode !== null || needsGatewaySetup;
-  // GEN-UI-A11Y-003 — toggle `inert` imperatively so the modal lifecycle owns the exact presence of
-  // the boolean attribute across supported renderers: set it while a modal dialog is open and remove
-  // it otherwise. `aria-hidden` pairs with `inert` for older assistive technology.
-  const stageRef = useRef<HTMLDivElement>(null);
+  // GEN-UI-A11Y-003 — while a genuinely modal dialog is open, take the complete background shell out
+  // of the accessibility tree and tab order. The modal dialogs render as later siblings OUTSIDE
+  // `.app`, so inerting `.app` leaves them fully operable while the header, rails, workspace, and
+  // footer are all unavailable. The non-modal `Palette` deliberately stays inside the workspace and
+  // does not count here because it is designed to keep the shell interactive.
+  const nestedModalOpen = useModalInteractionLockState();
+  const modalOpen =
+    pending !== null || quickAccessMode !== null || needsGatewaySetup || nestedModalOpen;
+  // GEN-UI-A11Y-003 — toggle `inert` AND `aria-hidden` imperatively so the modal lifecycle owns
+  // the exact presence of both attributes across supported renderers. aria-hidden must not live in
+  // JSX: React would commit it while the dialog's trigger (e.g. the workspace FAB) still holds
+  // focus inside `.app`, and Chrome blocks aria-hidden on an ancestor of the focused element.
+  const backgroundRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const stage = stageRef.current;
-    if (stage === null) return;
-    if (modalOpen) stage.setAttribute("inert", "");
-    else stage.removeAttribute("inert");
+    const background = backgroundRef.current;
+    if (background === null) return;
+    applyBackgroundModalLock(background, modalOpen);
   }, [modalOpen]);
 
   return (
@@ -1490,7 +1807,7 @@ function AppShellInner(): ReactNode {
             renders its role="status"/role="alert" regions as siblings of `.app`, OUTSIDE the window
             layer, so they never unmount and any surface can post an outcome via useAnnouncer(). */}
                 <AnnouncerProvider>
-                  <div className="app">
+                  <div ref={backgroundRef} className="app">
                     {/* WCAG 2.4.1 — bypass blocks: the first focusable element jumps keyboard
               users past the header/rail straight to the workspace (design/accessibility.html §04). */}
                     <a className="skip-link" href="#main">
@@ -1515,15 +1832,7 @@ function AppShellInner(): ReactNode {
                           onToggleTheme={toggleTheme}
                         />
                       )}
-                      <div
-                        ref={stageRef}
-                        className="stage"
-                        id="main"
-                        tabIndex={-1}
-                        // GEN-UI-A11Y-003 — `inert` is toggled imperatively via stageRef (see effect above);
-                        // aria-hidden pairs with it for older AT while a modal dialog is open.
-                        aria-hidden={modalOpen ? true : undefined}
-                      >
+                      <div className="stage" id="main" tabIndex={-1}>
                         <Workspace
                           ws={ws}
                           wsRef={wsRef}
@@ -1543,7 +1852,7 @@ function AppShellInner(): ReactNode {
                             <button
                               type="button"
                               className="source-limit-alert-dismiss"
-                              aria-label="Dismiss source connection notice"
+                              aria-label={t("workspace.notice.dismiss")}
                               onClick={() => setSourceConnectionNotice(null)}
                             >
                               ×
@@ -1562,36 +1871,31 @@ function AppShellInner(): ReactNode {
                       onToggleWindowPalette={toggleWindowPalette}
                       onSelectWindow={selectFooterWindow}
                       onCloseWindowPalette={closeWindowPalette}
-                      mode={twin.mode}
-                      selectedModel={session.selectedModel}
-                      projectName={projectName}
-                      branchLabel={branchLabel}
-                      shellStatusLabel={footerShellStatusLabel}
-                      evidenceStatusLabel={footerEvidenceStatusLabel}
                       statusRef={setStatusRef}
                     />
-
-                    {pending !== null && (
-                      <NewWindowDialog
-                        type={pending}
-                        types={WIN_TYPES}
-                        filesContext={ws.api.currentFilesContext()}
-                        onConfirm={confirmNew}
-                        onClose={closeDialog}
-                      />
-                    )}
-                    {quickAccessMode !== null ? (
-                      <UnifiedQuickAccessPalette
-                        initialMode={quickAccessMode}
-                        root={quickAccessRoot}
-                        roots={quickAccessRoots}
-                        commands={quickAccessCommands}
-                        openEditorFile={ws.api.openEditorFile}
-                        onClose={closeQuickAccess}
-                      />
-                    ) : null}
-                    {needsGatewaySetup ? <GatewaySetupDialog /> : null}
                   </div>
+                  {pending !== null && (
+                    <NewWindowDialog
+                      type={pending}
+                      types={WIN_TYPES}
+                      filesContext={ws.api.currentFilesContext()}
+                      opener={newWindowOpener}
+                      onConfirm={confirmNew}
+                      onClose={closeDialog}
+                    />
+                  )}
+                  {quickAccessMode !== null ? (
+                    <UnifiedQuickAccessPalette
+                      initialMode={quickAccessMode}
+                      root={quickAccessRoot}
+                      roots={quickAccessRoots}
+                      commands={quickAccessCommands}
+                      openEditorFile={ws.api.openEditorFile}
+                      opener={quickAccessOpener}
+                      onClose={closeQuickAccess}
+                    />
+                  ) : null}
+                  {needsGatewaySetup ? <GatewaySetupDialog /> : null}
                 </AnnouncerProvider>
               </WsContext.Provider>
             </WorkspaceReplaceBufferProvider>
@@ -1620,9 +1924,8 @@ export function AppShell(): ReactNode {
   useEffect(() => {
     registerSw();
   }, []);
-  // GEN-STAB-WINDOW-002 — surface (bounded) unhandled promise rejections; the shell had
-  // no listener, so escaped async failures degraded long sessions with zero signal.
-  useUnhandledRejectionLog();
+  // GEN-STAB-WINDOW-002 — unhandled promise rejections are surfaced once for every route by the
+  // root layout's `ClientDiagnosticsRoot` (#3532); a second listener here reported each twice.
   // uiux-fix F039 C402 — the gate used to be a completely empty .app: from first paint until
   // hydration finished the user saw a bare surface colour with zero loading feedback. A pure-CSS
   // placeholder (pulsing logo, reduced-motion-safe) gives that feedback. The hydration guarantee
@@ -1633,7 +1936,7 @@ export function AppShell(): ReactNode {
       <div className="app" aria-hidden="true">
         <div className="app-boot">
           {/* eslint-disable-next-line @next/next/no-img-element -- design CSS sizes the raw SVG; next/image would inject a wrapper that breaks the centered placeholder */}
-          <img className="app-boot-logo" src="/assets/keiko-logo.svg" alt="" />
+          <img className="app-boot-logo" src="/keiko-logo.svg" alt="" />
         </div>
       </div>
     );
@@ -1655,9 +1958,7 @@ export function AppShell(): ReactNode {
 export function AppShellFrame({ children }: { readonly children: ReactNode }): ReactNode {
   return (
     <I18nProvider>
-      <AppShellBoundary>
-        <TwinProvider>{children}</TwinProvider>
-      </AppShellBoundary>
+      <AppShellBoundary>{children}</AppShellBoundary>
     </I18nProvider>
   );
 }

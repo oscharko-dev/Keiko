@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  validateCodingWorkbenchRuntimeEvent,
-  type GovernedActionV1,
-} from "@oscharko-dev/keiko-contracts";
+import type { GovernedActionV1 } from "@oscharko-dev/keiko-contracts";
+import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 
 import {
   RESEARCH_APPROVAL_TTL_MS,
@@ -185,7 +183,9 @@ describe("buildResearchPermissionEvent", () => {
     expect(event).toBeDefined();
     expect(validateCodingWorkbenchRuntimeEvent(event).ok).toBe(true);
     expect(event?.kind).toBe("permission-requested");
+    // #3610 (W12): the research card named no policy reason; its scope is the destination block.
     expect(event?.permissionRequest).toMatchObject({
+      policyReason: "approval-required",
       requestId: "research-approval-1",
       kind: "network-egress",
       actionClass: "network-egress",

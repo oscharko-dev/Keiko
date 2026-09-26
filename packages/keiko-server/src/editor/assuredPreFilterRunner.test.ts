@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -135,6 +135,64 @@ describe("relativizeCoverageSummary", () => {
 describe("candidateFileText", () => {
   it("concatenates the edit newText fragments", () => {
     expect(candidateFileText([{ newText: "a" }, { newText: "b\n" }])).toBe("ab\n");
+  });
+});
+
+describe("isolationProven", () => {
+  // assuredIsolationProof is process-lifetime module state; vi.resetModules() + a dynamic import
+  // gives each test its own fresh instance instead of leaking a prior test's cached result.
+  async function freshModule(): Promise<typeof import("./assuredPreFilterRunner.js")> {
+    vi.resetModules();
+    return import("./assuredPreFilterRunner.js");
+  }
+
+  it("does not permanently cache a negative probe (KEIKO-0124)", async () => {
+    const mod = await freshModule();
+    let calls = 0;
+    const prove = vi.fn((): Promise<boolean> => {
+      calls += 1;
+      // Fails on the first probe (e.g. a caller's request disconnected mid-probe), then a later,
+      // independent call finds the host genuinely enforces the sandbox.
+      return Promise.resolve(calls > 1);
+    });
+
+    const first = await mod.isolationProven("/disposable/root", prove);
+    const second = await mod.isolationProven("/disposable/root", prove);
+
+    expect(first).toBe(false);
+    expect(second).toBe(true);
+    expect(calls).toBe(2);
+  });
+
+  it("memoizes a confirmed pass and never re-probes afterward", async () => {
+    const mod = await freshModule();
+    const prove = vi.fn((): Promise<boolean> => Promise.resolve(true));
+
+    const first = await mod.isolationProven("/disposable/root", prove);
+    const second = await mod.isolationProven("/disposable/root", prove);
+    const third = await mod.isolationProven("/disposable/root", prove);
+
+    expect([first, second, third]).toStrictEqual([true, true, true]);
+    expect(prove).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one in-flight probe across concurrent callers instead of starting a duplicate", async () => {
+    const mod = await freshModule();
+    let resolveProbe: ((value: boolean) => void) | undefined;
+    const prove = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolveProbe = resolve;
+        }),
+    );
+
+    const first = mod.isolationProven("/disposable/root", prove);
+    const second = mod.isolationProven("/disposable/root", prove);
+    expect(prove).toHaveBeenCalledTimes(1);
+    resolveProbe?.(true);
+
+    expect(await first).toBe(true);
+    expect(await second).toBe(true);
   });
 });
 

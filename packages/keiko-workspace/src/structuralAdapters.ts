@@ -14,11 +14,24 @@ import { importGraphAdapter } from "./importGraph.js";
 import { endpointContractAdapter } from "./endpointContractAdapter.js";
 import { gitHistoryAdapter } from "./gitHistory.js";
 import { ECOSYSTEMS, type Ecosystem } from "./ecosystems.js";
+import {
+  createStructuralAdapterRequestContext,
+  type StructuralAdapterRequestContext,
+} from "./structuralAdapterRequestContext.js";
+import {
+  createStructuralExecutionControl,
+  executionControlledWorkspaceFs,
+  structuralExecutionStopped,
+  type StructuralExecutionControl,
+} from "./structuralExecution.js";
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
 export interface StructuralAdapterDeps {
   readonly nowMs?: () => number;
+  readonly deadlineAtMs?: number | undefined;
+  readonly signal?: AbortSignal | undefined;
+  readonly requestContext?: StructuralAdapterRequestContext | undefined;
 }
 
 export interface StructuralAdapter {
@@ -65,6 +78,7 @@ export interface StructuralCoverageDiagnostics {
   readonly filesIndexed: number;
   readonly filesSkipped: number;
   readonly filesPartiallyIndexed?: number | undefined;
+  readonly candidateLimitReached?: boolean | undefined;
   readonly parserCoverage: readonly StructuralParserCoverage[];
 }
 
@@ -127,17 +141,119 @@ interface AvailabilityRow {
   readonly available: boolean;
 }
 
+type StructuralStageResult<T> =
+  { readonly status: "completed"; readonly value: T } | { readonly status: "stopped" };
+
+interface StructuralStopWait {
+  readonly promise: Promise<StructuralStageResult<never>>;
+  readonly removeListener: () => void;
+}
+
+interface StructuralRunnerExecution {
+  readonly control: StructuralExecutionControl;
+  readonly finish: () => void;
+}
+
+function structuralStopWait(signal: AbortSignal): StructuralStopWait {
+  let removeListener = (): void => undefined;
+  const promise = new Promise<StructuralStageResult<never>>((resolve) => {
+    const onAbort = (): void => {
+      resolve({ status: "stopped" });
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    removeListener = (): void => {
+      signal.removeEventListener("abort", onAbort);
+    };
+    if (signal.aborted) onAbort();
+  });
+  return { promise, removeListener };
+}
+
+async function awaitStructuralStage<T>(
+  control: StructuralExecutionControl,
+  operation: () => Promise<T>,
+): Promise<StructuralStageResult<T>> {
+  if (structuralExecutionStopped(control)) return { status: "stopped" };
+  const signal = control.signal;
+  if (signal === undefined) throw new TypeError("structural runner signal is unavailable");
+  const stopped = structuralStopWait(signal);
+  const completed = Promise.resolve()
+    .then(operation)
+    .then((value): StructuralStageResult<T> => ({ status: "completed", value }));
+  try {
+    const result = await Promise.race([completed, stopped.promise]);
+    return structuralExecutionStopped(control) ? { status: "stopped" } : result;
+  } finally {
+    stopped.removeListener();
+  }
+}
+
+function createStructuralRunnerExecution(
+  elapsedMsMax: number,
+  nowMs: () => number,
+  signal: AbortSignal | undefined,
+  deadlineAtMs: number | undefined,
+): StructuralRunnerExecution {
+  const deadlineController = new AbortController();
+  const effectiveSignal =
+    signal === undefined
+      ? deadlineController.signal
+      : AbortSignal.any([signal, deadlineController.signal]);
+  const control = createStructuralExecutionControl(
+    elapsedMsMax,
+    nowMs,
+    effectiveSignal,
+    deadlineAtMs,
+  );
+  const remainingMs = control.deadlineAtMs - control.nowMs();
+  if (remainingMs <= 0) deadlineController.abort();
+  const timeout =
+    remainingMs <= 0
+      ? undefined
+      : setTimeout(
+          () => {
+            deadlineController.abort();
+          },
+          Math.min(Math.ceil(remainingMs), 2_147_483_647),
+        );
+  timeout?.unref();
+  return {
+    control,
+    finish: (): void => {
+      if (timeout !== undefined) clearTimeout(timeout);
+      deadlineController.abort();
+    },
+  };
+}
+
+async function adapterAvailable(
+  adapter: StructuralAdapter,
+  scope: SearchScope,
+  fs: WorkspaceFs,
+): Promise<boolean> {
+  try {
+    return await adapter.isAvailable(scope, fs);
+  } catch {
+    return false;
+  }
+}
+
 async function probeAvailability(
   adapters: readonly StructuralAdapter[],
   scope: SearchScope,
   fs: WorkspaceFs,
+  control: StructuralExecutionControl,
 ): Promise<readonly AvailabilityRow[]> {
-  return Promise.all(
-    adapters.map(async (adapter) => ({
-      adapter,
-      available: await adapter.isAvailable(scope, fs).catch(() => false),
-    })),
+  const rows = await Promise.all(
+    adapters.map(async (adapter): Promise<AvailabilityRow | undefined> => {
+      if (structuralExecutionStopped(control)) return undefined;
+      const result = await awaitStructuralStage(control, () =>
+        adapterAvailable(adapter, scope, fs),
+      );
+      return result.status === "stopped" ? undefined : { adapter, available: result.value };
+    }),
   );
+  return rows.filter((row): row is AvailabilityRow => row !== undefined);
 }
 
 function isTypedAdapterError(error: unknown): boolean {
@@ -157,21 +273,61 @@ interface LookupOutcome {
   readonly coverage: StructuralCoverageDiagnostics | undefined;
 }
 
+function stoppedLookupOutcome(name: string): LookupOutcome {
+  return { name, atoms: [], error: undefined, coverage: undefined };
+}
+
 async function coverageFor(
   adapter: StructuralAdapter,
   scope: SearchScope,
   limits: SearchLimits,
   fs: WorkspaceFs,
   deps: StructuralAdapterDeps | undefined,
+  control: StructuralExecutionControl,
 ): Promise<StructuralCoverageDiagnostics | undefined> {
-  if (adapter.coverage === undefined) {
+  const coverage = adapter.coverage;
+  if (coverage === undefined || structuralExecutionStopped(control)) {
     return undefined;
   }
   try {
-    return await adapter.coverage(scope, limits, fs, deps);
+    const result = await awaitStructuralStage(control, () => coverage(scope, limits, fs, deps));
+    return result.status === "stopped" ? undefined : result.value;
   } catch {
+    deps?.requestContext?.assertGraphBinding(scope, limits, fs);
     return undefined;
   }
+}
+
+async function completedLookupOutcome(
+  adapter: StructuralAdapter,
+  scope: SearchScope,
+  query: RetrievalQuery,
+  limits: SearchLimits,
+  fs: WorkspaceFs,
+  deps: StructuralAdapterDeps | undefined,
+  control: StructuralExecutionControl,
+): Promise<LookupOutcome> {
+  const lookup = await awaitStructuralStage(control, () =>
+    adapter.lookup(scope, query, limits, fs, deps),
+  );
+  if (lookup.status === "stopped") return stoppedLookupOutcome(adapter.name);
+  const atoms = lookup.value;
+  deps?.requestContext?.assertGraphBinding(scope, limits, fs);
+  if (structuralExecutionStopped(control)) return stoppedLookupOutcome(adapter.name);
+  const coverage = await coverageFor(adapter, scope, limits, fs, deps, control);
+  deps?.requestContext?.assertGraphBinding(scope, limits, fs);
+  return structuralExecutionStopped(control)
+    ? stoppedLookupOutcome(adapter.name)
+    : { name: adapter.name, atoms, error: undefined, coverage };
+}
+
+function failedLookupOutcome(adapter: StructuralAdapter, error: unknown): LookupOutcome {
+  return {
+    name: adapter.name,
+    atoms: [],
+    error: { name: adapter.name, message: describeError(error) },
+    coverage: undefined,
+  };
 }
 
 async function runOne(
@@ -181,21 +337,16 @@ async function runOne(
   limits: SearchLimits,
   fs: WorkspaceFs,
   deps: StructuralAdapterDeps | undefined,
+  control: StructuralExecutionControl,
 ): Promise<LookupOutcome> {
+  if (structuralExecutionStopped(control)) return stoppedLookupOutcome(adapter.name);
   try {
-    const atoms = await adapter.lookup(scope, query, limits, fs, deps);
-    const coverage = await coverageFor(adapter, scope, limits, fs, deps);
-    return { name: adapter.name, atoms, error: undefined, coverage };
+    return await completedLookupOutcome(adapter, scope, query, limits, fs, deps, control);
   } catch (error) {
-    if (isTypedAdapterError(error)) {
-      throw error;
-    }
-    return {
-      name: adapter.name,
-      atoms: [],
-      error: { name: adapter.name, message: describeError(error) },
-      coverage: undefined,
-    };
+    deps?.requestContext?.assertGraphBinding(scope, limits, fs);
+    if (structuralExecutionStopped(control)) return stoppedLookupOutcome(adapter.name);
+    if (isTypedAdapterError(error)) throw error;
+    return failedLookupOutcome(adapter, error);
   }
 }
 
@@ -217,6 +368,59 @@ function mergeAtoms(outcomes: readonly LookupOutcome[], cap: number): readonly E
   return merged;
 }
 
+function effectiveStructuralDeps(
+  scope: SearchScope,
+  limits: SearchLimits,
+  fs: WorkspaceFs,
+  deps: StructuralAdapterDeps | undefined,
+  control: StructuralExecutionControl,
+): StructuralAdapterDeps {
+  return {
+    ...deps,
+    nowMs: control.nowMs,
+    deadlineAtMs: control.deadlineAtMs,
+    ...(control.signal === undefined ? {} : { signal: control.signal }),
+    requestContext:
+      deps?.requestContext ??
+      createStructuralAdapterRequestContext(scope, limits, fs, {
+        nowMs: control.nowMs,
+        deadlineAtMs: control.deadlineAtMs,
+        ...(control.signal === undefined ? {} : { signal: control.signal }),
+      }),
+  };
+}
+
+interface AvailableAdapters {
+  readonly available: readonly StructuralAdapter[];
+  readonly unavailable: readonly string[];
+}
+
+function availableAdapters(rows: readonly AvailabilityRow[]): AvailableAdapters {
+  const available: StructuralAdapter[] = [];
+  const unavailable: string[] = [];
+  for (const row of rows) {
+    if (row.available) available.push(row.adapter);
+    else unavailable.push(row.adapter.name);
+  }
+  return { available, unavailable };
+}
+
+function outcomeErrors(outcomes: readonly LookupOutcome[]): readonly AdapterError[] {
+  return outcomes
+    .map((outcome) => outcome.error)
+    .filter((error): error is AdapterError => error !== undefined);
+}
+
+function outcomeCoverage(
+  outcomes: readonly LookupOutcome[],
+): readonly StructuralCoverageDiagnostics[] {
+  return outcomes
+    .map((outcome) => outcome.coverage)
+    .filter(
+      (diagnostics): diagnostics is StructuralCoverageDiagnostics => diagnostics !== undefined,
+    );
+}
+
 export async function runStructuralAdapters(
   registry: StructuralAdapterRegistry,
   scope: SearchScope,
@@ -226,35 +430,38 @@ export async function runStructuralAdapters(
   deps?: StructuralAdapterDeps,
 ): Promise<RunAllResult> {
   const nowMs = deps?.nowMs ?? Date.now;
-  const startMs = nowMs();
-  const availability = await probeAvailability(registry.adapters, scope, fs);
-  const unavailable: string[] = [];
-  const available: StructuralAdapter[] = [];
-  for (const row of availability) {
-    if (row.available) {
-      available.push(row.adapter);
-    } else {
-      unavailable.push(row.adapter.name);
-    }
-  }
-  const outcomes = await Promise.all(
-    available.map((adapter) => runOne(adapter, scope, query, limits, fs, deps)),
+  const execution = createStructuralRunnerExecution(
+    limits.elapsedMsMax,
+    nowMs,
+    deps?.signal,
+    deps?.deadlineAtMs,
   );
-  const errored = outcomes
-    .map((outcome) => outcome.error)
-    .filter((error): error is AdapterError => error !== undefined);
-  const coverage = outcomes
-    .map((outcome) => outcome.coverage)
-    .filter(
-      (diagnostics): diagnostics is StructuralCoverageDiagnostics => diagnostics !== undefined,
+  const { control } = execution;
+  const controlledFs = executionControlledWorkspaceFs(fs, control);
+  const effectiveDeps = effectiveStructuralDeps(scope, limits, controlledFs, deps, control);
+  try {
+    // A request context contains scope-bound filesystem evidence. Validate once at the runner
+    // boundary so no adapter can accidentally re-label cached atoms for another scope or limit set.
+    effectiveDeps.requestContext?.assertGraphBinding(scope, limits, controlledFs);
+    const startMs = nowMs();
+    const availability = await probeAvailability(registry.adapters, scope, controlledFs, control);
+    effectiveDeps.requestContext?.assertGraphBinding(scope, limits, controlledFs);
+    const partitioned = availableAdapters(availability);
+    const outcomes = await Promise.all(
+      partitioned.available.map((adapter) =>
+        runOne(adapter, scope, query, limits, controlledFs, effectiveDeps, control),
+      ),
     );
-  const cap = Math.min(limits.maxMatchesReturned, query.maxResults);
-  const atoms = mergeAtoms(outcomes, cap);
-  return {
-    atoms,
-    unavailable,
-    errored,
-    coverage,
-    elapsedMs: nowMs() - startMs,
-  };
+    effectiveDeps.requestContext?.assertGraphBinding(scope, limits, controlledFs);
+    const cap = Math.min(limits.maxMatchesReturned, query.maxResults);
+    return {
+      atoms: mergeAtoms(outcomes, cap),
+      unavailable: partitioned.unavailable,
+      errored: outcomeErrors(outcomes),
+      coverage: outcomeCoverage(outcomes),
+      elapsedMs: nowMs() - startMs,
+    };
+  } finally {
+    execution.finish();
+  }
 }

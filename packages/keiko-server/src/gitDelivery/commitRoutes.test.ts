@@ -6,23 +6,30 @@
 //   * AC4 — a governed commit records evidence; outcomes are content-free.
 //   * AC5 — commit execution cannot bypass the kernel: a policy/preflight block executes nothing.
 
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
-import type { Server, IncomingMessage, ServerResponse } from "node:http";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import {
-  GIT_DELIVERY_POLICY_SCHEMA_VERSION,
-  GIT_DELIVERY_SCHEMA_VERSION,
-  type GitDeliveryApprovalClaim,
-  type GitDeliveryExecutionResult,
-  type GitDeliveryRepoPolicyPack,
-  type WorkspaceInstance,
+import type { Server, IncomingMessage } from "node:http";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  GitDeliveryApprovalClaim,
+  GitDeliveryExecutionResult,
+  GitDeliveryRepoPolicyPack,
+  WorkspaceInstance,
 } from "@oscharko-dev/keiko-contracts";
+import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import type { GitLocalMutationAdapter, GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import {
+  CancelledError,
+  ProviderOutputExhaustedError,
+  TimeoutError,
+} from "@oscharko-dev/keiko-security";
 import { UI_HOST } from "../server.js";
+import { mockResponse } from "../_support.js";
 import { buildCspHeader } from "../csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import { startUiTestServer } from "../ui-test-server/_support.js";
@@ -30,22 +37,46 @@ import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import { createWorkspaceMutexRegistry } from "../task-workspace/mutex.js";
 import { createEditorSettingsControlService } from "../editor/settings/editorSettingsControl.js";
 import { createEditorSettingsStore } from "../editor/settings/editorSettingsStore.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import type { ServerLogEvent } from "../observability/server-log.js";
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import type { RouteContext } from "../routes.js";
+import type {
+  GatewayCallRequest,
+  GatewayConfig,
+  ModelCapability,
+  NormalizedResponse,
+} from "@oscharko-dev/keiko-model-gateway";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
+  createHandleCommitApprove,
+  COMMIT_DRAFT_MAX_OUTPUT_TOKENS,
+  createHandleCommitDraft,
   createHandleCommitExecute,
   createHandleCommitPreview,
+  type GitDeliveryCommitApproveResponseBody,
+  type GitDeliveryCommitDraftBody,
   type GitDeliveryCommitPreviewBody,
 } from "./commitRoutes.js";
+import { gatewayRouteDeadlineMs } from "../gateway-route-deadline.js";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryExecutionSeams } from "./execution.js";
+import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 import {
   deriveManagedWorktreePath,
   deriveRepositoryId,
   deriveTaskBranchName,
   deriveWorkspaceId,
 } from "../task-workspace/naming.js";
+import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
+import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
 
 const PREVIEW = "/api/git-delivery/commit/preview";
+const DRAFT = "/api/git-delivery/commit/draft";
 const EXECUTE = "/api/git-delivery/commit/execute";
 
 const SNAPSHOT: GitWorktreeSnapshot = {
@@ -77,6 +108,68 @@ const BLOCK_ALL_PACK: GitDeliveryRepoPolicyPack = {
   rules: [],
   defaultRule: { decision: "blocked" },
 };
+
+const DRAFT_MODEL_CAPABILITY: ModelCapability = {
+  id: "draft-model",
+  kind: "chat",
+  contextWindow: 128_000,
+  maxOutputTokens: 4_096,
+  toolCalling: false,
+  structuredOutput: true,
+  streaming: false,
+  supportsImageInput: false,
+  supportsDocumentInput: false,
+  workflowEligible: true,
+  costClass: "low",
+  latencyClass: "fast",
+  throughputHint: "test",
+  preferredUseCases: [],
+  knownLimitations: [],
+  supportsResponseFormat: true,
+};
+
+const DRAFT_GATEWAY_CONFIG: GatewayConfig = {
+  providers: [
+    {
+      modelId: "draft-model",
+      baseUrl: "https://gateway.example.invalid/v1",
+      apiKey: "test-key",
+      timeoutMs: 1_000,
+      maxRetries: 0,
+      retryBaseDelayMs: 0,
+    },
+  ],
+  circuitBreaker: { failureThreshold: 3, cooldownMs: 1_000, halfOpenProbes: 1 },
+  capabilities: [DRAFT_MODEL_CAPABILITY],
+};
+
+// The route deadline the draft arms for this fixture's model, taken from the production derivation.
+const DRAFT_ROUTE_DEADLINE_MS = gatewayRouteDeadlineMs(DRAFT_GATEWAY_CONFIG, "draft-model", [
+  "buffered",
+]);
+
+function draftResponse(candidate: Readonly<Record<string, string>>): NormalizedResponse {
+  return {
+    modelId: "draft-model",
+    content: JSON.stringify(candidate),
+    finishReason: "stop",
+    toolCalls: [],
+    structuredOutput: candidate,
+    usage: {
+      requestId: "draft-model-request",
+      promptTokens: 100,
+      completionTokens: 40,
+      latencyMs: 12,
+      costClass: "low",
+    },
+  };
+}
+
+function draftModelPort(respond: (request: GatewayCallRequest) => NormalizedResponse): ModelPort {
+  return {
+    call: (request): Promise<NormalizedResponse> => Promise.resolve(respond(request)),
+  };
+}
 
 interface RecordingAdapter {
   readonly adapter: GitLocalMutationAdapter;
@@ -148,8 +241,34 @@ function deps(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
     registry: createRunRegistry(),
     modelPortFactory: () => undefined,
     store,
+    gitDeliveryAuthority: permittedGitDeliveryAuthority(() => projectId),
     ...overrides,
   };
+}
+
+// #3347 managed-worktree identity: resolveRegisteredOrManagedWorkspaceRoot now composes
+// resolveManagedWorkspaceRootAccess, which re-proves a REAL Git linked-worktree pointer
+// (gitdir-identity.ts) instead of trusting path shape alone -- a plain mkdir with a placeholder
+// gitdirIdentity no longer admits. Builds a genuine `git worktree add` linkage rooted at
+// `sourceRepo` at `worktreePath` and returns its real gitdir identity for the fixture instance.
+function buildManagedGitWorktree(
+  sourceRepo: string,
+  worktreePath: string,
+  taskBranch: string,
+): string {
+  execFileSync("git", ["init", "-q"], { cwd: sourceRepo });
+  execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: sourceRepo });
+  execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: sourceRepo });
+  execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "fixture"], { cwd: sourceRepo });
+  mkdirSync(dirname(worktreePath), { recursive: true });
+  execFileSync("git", ["worktree", "add", "-q", "-b", taskBranch, worktreePath, "HEAD"], {
+    cwd: sourceRepo,
+  });
+  const inspection = inspectManagedGitdirIdentity(worktreePath, sourceRepo);
+  if (inspection === undefined) {
+    throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
+  }
+  return inspection.identity;
 }
 
 function managedWorkspaceDeps(taskId = "task-443"): {
@@ -159,10 +278,15 @@ function managedWorkspaceDeps(taskId = "task-443"): {
 } {
   const managedRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-commit-managed-")));
   const repoRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-commit-repo-")));
+  // Ownership must be established BEFORE anything creates a directory under the managed root: a
+  // recursive mkdir of the worktree parent would materialize the root itself under the ambient
+  // umask, and the marker initialization would then see "already exists" and never apply.
+  assertManagedRootOwned(managedRoot);
   const repositoryId = deriveRepositoryId(repoRoot);
   const workspaceId = deriveWorkspaceId({ repositoryId, taskId });
   const managedWorktreePath = deriveManagedWorktreePath({ managedRoot, repositoryId, workspaceId });
-  mkdirSync(managedWorktreePath, { recursive: true });
+  const taskBranch = deriveTaskBranchName({ taskId });
+  const gitdirIdentity = buildManagedGitWorktree(repoRoot, managedWorktreePath, taskBranch);
   const instance: WorkspaceInstance = {
     schemaVersion: "1",
     workspaceId,
@@ -170,9 +294,9 @@ function managedWorkspaceDeps(taskId = "task-443"): {
     repositoryId,
     repositoryRoot: repoRoot,
     baseBranch: "main",
-    taskBranch: deriveTaskBranchName({ taskId }),
+    taskBranch,
     managedWorktreePath,
-    gitdirIdentity: "gitdir-hash",
+    gitdirIdentity,
     lifecycleState: "active",
     health: "healthy",
     lock: null,
@@ -204,7 +328,18 @@ function ctxFor(path: string, body: unknown): RouteContext {
   const req = Readable.from([Buffer.from(raw, "utf8")]) as IncomingMessage;
   req.method = "POST";
   req.headers = { "content-type": "application/json", "x-keiko-csrf": "1" };
-  return { req, res: {} as ServerResponse, params: {}, url: new URL(`http://127.0.0.1${path}`) };
+  return {
+    correlationId: undefined,
+    req,
+    // A real EventEmitter-backed stream (#3591): the commit-draft route now listens for
+    // `req.once("aborted", ...)` / `res.once("close", ...)` to cancel an in-flight model call on
+    // client disconnect (commitDraftCancellation), which a plain `{} as ServerResponse` cannot
+    // support. mockResponse() is the repository's existing genuine-stream fake (_support.ts),
+    // already used for this exact pattern elsewhere (coding-sidecar-gateway.test.ts).
+    res: mockResponse().res,
+    params: {},
+    url: new URL(`http://127.0.0.1${path}`),
+  };
 }
 
 function seams(overrides: Partial<GitDeliveryExecutionSeams> = {}): GitDeliveryExecutionSeams {
@@ -244,6 +379,11 @@ async function repositoryNativeSettings(): Promise<
   return control;
 }
 
+// #3386: the execute route now binds the consumed claim to the admitted run's identity
+// (runId/envelopeDigest), exactly as the merge route already does — a claim minted without them no
+// longer matches. "test-run" / "c".repeat(64) are `permittedGitDeliveryAuthority`'s fixed values
+// (runBoundAuthority.test-support.ts), the authority every test in this file admits through by
+// default.
 function issueCommitApproval(
   approvalStore: ReturnType<typeof createInMemoryGitDeliveryApprovalStore>,
   message: string,
@@ -254,6 +394,8 @@ function issueCommitApproval(
       projectId,
       operation: "commit",
       command: { kind: "commit", message, allowEmpty },
+      runId: "test-run",
+      envelopeDigest: "c".repeat(64),
     },
     approvedByUserId: "u-1",
     nowMs: 1_700_000_000_000,
@@ -393,7 +535,7 @@ describe("commit preview — read-only verification context (AC3)", () => {
         deps(managed.override),
       );
       expect(res.status).toBe(200);
-      expect((res.body as GitDeliveryCommitPreviewBody).policyOutcome).toBe("constrained");
+      expect((res.body as GitDeliveryCommitPreviewBody).policyOutcome).toBe("allowed");
     } finally {
       managed.cleanup();
     }
@@ -412,7 +554,52 @@ describe("commit preview — read-only verification context (AC3)", () => {
     expect(body.intent.warnings).toContain("wip-marker");
     expect(body.intent.isWip).toBe(true);
     expect(body.messageValidation.ok).toBe(false);
-    expect(body.policyOutcome).toBe("constrained");
+    expect(body.policyOutcome).toBe("allowed");
+    expect(body.suggestedMessage).toBeUndefined();
+  });
+
+  it("records a content-free preview summary and never the drafted message", async () => {
+    const events: ServerLogEvent[] = [];
+    const handler = createHandleCommitPreview({
+      execution: seams(),
+      activityLog: {
+        write(event): void {
+          events.push(event);
+        },
+      },
+    });
+
+    await handler(
+      { ...ctxFor(PREVIEW, { schemaVersion: "1", projectId }), correlationId: "commit-preview-1" },
+      deps(),
+    );
+
+    expect(events).toContainEqual({
+      category: "diagnostic",
+      op: "git.commit.preview.completed",
+      correlationId: "commit-preview-1",
+      status: 200,
+      extra: {
+        completeness: "complete",
+        loss: "none",
+        stagedFileCount: 2,
+        areaCount: 2,
+        touchesTests: false,
+        draftSuggested: false,
+        policyOutcome: "allowed",
+      },
+    });
+    expect(JSON.stringify(events)).not.toContain("update staged changes");
+    const preview = events.find((event) => event.op === "git.commit.preview.completed");
+    const persisted = expectActivityLogProof(
+      "git.commit.preview.completed.emitted-line",
+      formatActivityLogProofLine(preview ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      stagedFileCount: 2,
+      areaCount: 2,
+      policyOutcome: "allowed",
+    });
   });
 
   it("discloses a trusted signed-commit requirement before commit", async () => {
@@ -487,7 +674,8 @@ describe("commit preview — read-only verification context (AC3)", () => {
   it("uses one persisted Repository Native selection for preview and execute", async () => {
     const editorSettingsControl = await repositoryNativeSettings();
     const adapter = recordingAdapter();
-    const routeSeams = seams({ adapterFactory: () => adapter.adapter });
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const routeSeams = seams({ adapterFactory: () => adapter.adapter, approvalStore });
     const preview = await createHandleCommitPreview({ execution: routeSeams })(
       ctxFor(PREVIEW, {
         schemaVersion: "1",
@@ -498,16 +686,690 @@ describe("commit preview — read-only verification context (AC3)", () => {
     );
     expect((preview.body as GitDeliveryCommitPreviewBody).messageValidation).toEqual({ ok: true });
 
+    const message = "repository native subject";
     const execute = await createHandleCommitExecute({ execution: routeSeams })(
       ctxFor(EXECUTE, {
         schemaVersion: "1",
         projectId,
-        message: "repository native subject",
+        message,
+        approval: issueCommitApproval(approvalStore, message),
       }),
       deps({ editorSettingsControl }),
     );
     expect(execute.body).toMatchObject({ status: "succeeded" });
     expect(adapter.calls()).toEqual(["commit"]);
+  });
+
+  it("does not offer a draft when no changes are staged", async () => {
+    const handler = createHandleCommitPreview({
+      execution: seams({
+        snapshotReader: () => Promise.resolve({ ...SNAPSHOT, stagedFileCount: 0 }),
+        stagedPathsReader: () => Promise.resolve([]),
+      }),
+    });
+
+    const res = await handler(ctxFor(PREVIEW, { schemaVersion: "1", projectId }), deps());
+
+    expect((res.body as GitDeliveryCommitPreviewBody).suggestedMessage).toBeUndefined();
+  });
+
+  it("does not invent a draft when the snapshot and staged path read disagree", async () => {
+    const handler = createHandleCommitPreview({
+      execution: seams({ stagedPathsReader: () => Promise.resolve([]) }),
+    });
+
+    const res = await handler(ctxFor(PREVIEW, { schemaVersion: "1", projectId }), deps());
+
+    const body = res.body as GitDeliveryCommitPreviewBody;
+    expect(body.summary.stagedFileCount).toBe(0);
+    expect(body.preflightFindingCodes).toContain("nothing-staged-to-commit");
+    expect(body.suggestedMessage).toBeUndefined();
+  });
+
+  it("never calls the model while refreshing the read-only preview", async () => {
+    let modelFactoryCalls = 0;
+    const handler = createHandleCommitPreview({ execution: seams() });
+
+    const res = await handler(
+      ctxFor(PREVIEW, { schemaVersion: "1", projectId, messageDraft: "" }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () => {
+          modelFactoryCalls += 1;
+          return draftModelPort(() => draftResponse({ subject: "feat: x", body: "Body." }));
+        },
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(modelFactoryCalls).toBe(0);
+    expect((res.body as GitDeliveryCommitPreviewBody).suggestedMessage).toBeUndefined();
+  });
+});
+
+describe("commit draft — explicit model-backed generation", () => {
+  it("generates a draft from the staged diff only when requested", async () => {
+    const stagedDiff = [
+      "diff --git a/packages/keiko-ui/src/CommitComposer.tsx b/packages/keiko-ui/src/CommitComposer.tsx",
+      "+render an explicit Keiko draft button",
+      "+pass the operator instruction through the draft request",
+    ].join("\n");
+    let seenRequest: GatewayCallRequest | undefined;
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedPathsReader: () =>
+          Promise.resolve([
+            "packages/keiko-ui/src/CommitComposer.tsx",
+            "packages/keiko-ui/src/CommitComposer.test.tsx",
+          ]),
+        stagedDiffReader: () => Promise.resolve(stagedDiff),
+      }),
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, {
+        schemaVersion: "1",
+        projectId,
+        instruction: "Keep the explanation detailed.",
+      }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () =>
+          draftModelPort((request) => {
+            seenRequest = request;
+            return draftResponse({
+              subject: "feat(ui): add explicit commit drafting",
+              body: [
+                "Add a user-triggered Keiko draft action for staged Git changes.",
+                "Keep automatic previews limited to validation and policy context.",
+              ].join("\n"),
+            });
+          }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const body = res.body as GitDeliveryCommitDraftBody;
+    expect(body.source).toBe("model");
+    expect(body.summary).toMatchObject({ stagedFileCount: 2, touchesTests: true });
+    expect(body.suggestedMessage).toBe(
+      [
+        "feat(ui): add explicit commit drafting",
+        "",
+        "Add a user-triggered Keiko draft action for staged Git changes.",
+        "Keep automatic previews limited to validation and policy context.",
+        "",
+        "🤖 Generated with [Keiko](https://github.com/oscharko-dev/Keiko)",
+      ].join("\n"),
+    );
+    const requestJson = JSON.stringify(seenRequest);
+    expect(requestJson).toContain("render an explicit Keiko draft button");
+    expect(requestJson).toContain("Keep the explanation detailed.");
+    expect(requestJson).toContain("untrusted data");
+  });
+
+  it("fails visibly instead of calling the model when no staged changes are selected", async () => {
+    let modelFactoryCalls = 0;
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedPathsReader: () => Promise.resolve([]),
+      }),
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () => {
+          modelFactoryCalls += 1;
+          return draftModelPort(() => draftResponse({ subject: "feat: x", body: "Body." }));
+        },
+      }),
+    );
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({
+      error: { code: "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES" },
+    });
+    expect(modelFactoryCalls).toBe(0);
+  });
+
+  it("fails visibly when no compatible model is configured", async () => {
+    const events: ServerLogEvent[] = [];
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+      activityLog: {
+        write(event): void {
+          events.push(event);
+        },
+      },
+    });
+
+    const res = await handler(ctxFor(DRAFT, { schemaVersion: "1", projectId }), deps());
+
+    expect(res.status).toBe(503);
+    expect(res.body).toMatchObject({
+      error: { code: "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE" },
+    });
+    expect(events).toContainEqual({
+      category: "diagnostic",
+      op: "git.commit.draft.completed",
+      correlationId: UNKNOWN_CORRELATION_ID,
+      status: 503,
+      errorKind: "unavailable",
+      extra: {
+        completeness: "complete",
+        loss: "none",
+        stagedFileCount: 2,
+        areaCount: 2,
+        touchesTests: false,
+        outcome: "failed",
+        failureCode: "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE",
+      },
+    });
+    const draftCompleted = events.find((event) => event.op === "git.commit.draft.completed");
+    const persisted = expectActivityLogProof(
+      "git.commit.draft.completed.emitted-line",
+      formatActivityLogProofLine(draftCompleted ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      outcome: "failed",
+      failureCode: "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE",
+    });
+  });
+
+  it("rejects invalid model output without falling back to a generic commit message", async () => {
+    const events: ServerLogEvent[] = [];
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+      activityLog: {
+        write(event): void {
+          events.push(event);
+        },
+      },
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () =>
+          draftModelPort(() => draftResponse({ subject: "", body: "Body without subject." })),
+      }),
+    );
+
+    expect(res.status).toBe(502);
+    expect(res.body).toMatchObject({
+      error: { code: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT" },
+    });
+    expect(JSON.stringify(res.body)).not.toContain("update staged changes");
+    expect(events).toContainEqual({
+      category: "diagnostic",
+      op: "git.commit.draft.completed",
+      correlationId: UNKNOWN_CORRELATION_ID,
+      status: 502,
+      errorKind: "validation-failed",
+      extra: {
+        completeness: "complete",
+        loss: "none",
+        stagedFileCount: 2,
+        areaCount: 2,
+        touchesTests: false,
+        outcome: "failed",
+        failureCode: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT",
+        maxOutputTokens: COMMIT_DRAFT_MAX_OUTPUT_TOKENS,
+        deadlineMs: DRAFT_ROUTE_DEADLINE_MS,
+      },
+    });
+  });
+
+  // #3591: the field customer's LiteLLM-fronted vLLM gateway takes 30-120s+ to answer at peak load.
+  // The route used to pass a flat `AbortSignal.timeout(30_000)` as the buffered call's own
+  // `cancellationSignal`, capping the WHOLE call (including the gateway's own retries) well under a
+  // healthy slow answer. `AbortSignal.timeout`'s internal timer is not one vitest's fake timers can
+  // intercept (it does not run through the public `setTimeout` fake timers patch), so the deadline
+  // is pinned by spying on the constructor call itself rather than by simulating elapsed time. Fails
+  // before the fix: old code calls `AbortSignal.timeout(30_000)` directly as the request signal, so
+  // the spy would record 30_000 and never the route deadline derived from the gateway's own retry
+  // budget for the resolved model (`gatewayRouteDeadlineMs`, PR #3602 review: a fixed 300 s
+  // backstop sat under the 600 s buffered attempt the gateway now allows).
+  // The draft only buffers: its backstop is the buffered budget (600 s floor for this fixture's
+  // `maxRetries: 0`, plus the route's grace), never the streamed read's, which would let a stalled
+  // model port that only the route's signal can stop hang for the 30-minute stream floor
+  // (PR #3602 review).
+  it("derives the draft's route deadline from the buffered budget alone", () => {
+    expect(DRAFT_ROUTE_DEADLINE_MS).toBe(601_000);
+    expect(DRAFT_ROUTE_DEADLINE_MS).toBeLessThan(
+      gatewayRouteDeadlineMs(DRAFT_GATEWAY_CONFIG, "draft-model", ["buffered", "streamed"]),
+    );
+  });
+
+  it("arms the route deadline behind the gateway's own retry budget for the resolved model", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    try {
+      const handler = createHandleCommitDraft({
+        execution: seams({
+          stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+        }),
+      });
+      const result = await handler(
+        ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+        deps({
+          config: DRAFT_GATEWAY_CONFIG,
+          modelPortFactory: () =>
+            draftModelPort(() => draftResponse({ subject: "fix: repair", body: "Detail." })),
+        }),
+      );
+
+      expect(result.status).toBe(200);
+      expect(timeoutSpy).toHaveBeenCalledWith(DRAFT_ROUTE_DEADLINE_MS);
+      expect(DRAFT_ROUTE_DEADLINE_MS).toBeGreaterThan(300_000);
+      expect(timeoutSpy).not.toHaveBeenCalledWith(30_000);
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("requests the raised reasoning-model output budget under the coding-workbench latency profile", async () => {
+    let captured: GatewayCallRequest | undefined;
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () =>
+          draftModelPort((request) => {
+            captured = request;
+            return draftResponse({ subject: "fix: repair", body: "Detail." });
+          }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(captured?.maxOutputTokens).toBe(COMMIT_DRAFT_MAX_OUTPUT_TOKENS);
+    expect(captured?.latencyProfile).toBe("coding-workbench");
+  });
+
+  // Review of #3591: the raised budget must not exceed what the model declares — the spend-budget
+  // port refuses a request above `capability.maxOutputTokens` before any provider call. A model
+  // that declares no limit keeps the full budget.
+  it.each([
+    ["clamps to a smaller declared limit", 2_048, 2_048],
+    ["keeps the budget under a larger declared limit", 8_192, COMMIT_DRAFT_MAX_OUTPUT_TOKENS],
+    ["keeps the budget when the model declares no limit", 0, COMMIT_DRAFT_MAX_OUTPUT_TOKENS],
+  ])("%s", async (_label, declared, expected) => {
+    let captured: GatewayCallRequest | undefined;
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: {
+          ...DRAFT_GATEWAY_CONFIG,
+          capabilities: [{ ...DRAFT_MODEL_CAPABILITY, maxOutputTokens: declared }],
+        },
+        modelPortFactory: () =>
+          draftModelPort((request) => {
+            captured = request;
+            return draftResponse({ subject: "fix: repair", body: "Detail." });
+          }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(captured?.maxOutputTokens).toBe(expected);
+  });
+
+  // Review of #3591: the route deadline can fire while the gateway sleeps before a retry, which
+  // the gateway reports as CancelledError. The composed signal's reason still names the deadline,
+  // so the draft must report the timeout code, not the generic failure.
+  it("classifies a route deadline that fired during retry backoff as a timeout", async () => {
+    const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+    const timeoutSpy = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockImplementation((ms) =>
+        ms === DRAFT_ROUTE_DEADLINE_MS
+          ? AbortSignal.abort(new DOMException("route deadline", "TimeoutError"))
+          : nativeTimeout(ms),
+      );
+    try {
+      const handler = createHandleCommitDraft({
+        execution: seams({
+          stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+        }),
+      });
+      const res = await handler(
+        ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+        deps({
+          config: DRAFT_GATEWAY_CONFIG,
+          modelPortFactory: () => ({
+            call: (): Promise<never> =>
+              Promise.reject(new CancelledError("cancelled while waiting to retry")),
+          }),
+        }),
+      );
+      expect(res.status).toBe(504);
+      expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT" } });
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("classifies a provider timeout as GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT, not a generic failure", async () => {
+    const events: ServerLogEvent[] = [];
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+      activityLog: {
+        write(event): void {
+          events.push(event);
+        },
+      },
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () => ({
+          call: (): Promise<never> =>
+            Promise.reject(new TimeoutError("provider did not answer in time")),
+        }),
+      }),
+    );
+
+    expect(res.status).toBe(504);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT" } });
+    const draftCompleted = events.find((event) => event.op === "git.commit.draft.completed");
+    expect(draftCompleted).toMatchObject({
+      status: 504,
+      errorKind: "timeout",
+      // The bounds the call ran under travel with the failure (#3591 review).
+      extra: {
+        outcome: "failed",
+        failureCode: "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT",
+        maxOutputTokens: COMMIT_DRAFT_MAX_OUTPUT_TOKENS,
+        deadlineMs: DRAFT_ROUTE_DEADLINE_MS,
+      },
+    });
+    const persisted = expectActivityLogProof(
+      "git.commit.draft.completed.emitted-line",
+      formatActivityLogProofLine(draftCompleted ?? {}),
+    );
+    expect(persisted).toMatchObject({
+      outcome: "failed",
+      failureCode: "GIT_DELIVERY_COMMIT_DRAFT_TIMED_OUT",
+    });
+  });
+
+  it("classifies a thrown ProviderOutputExhaustedError as output-exhausted, not a generic failure", async () => {
+    const events: ServerLogEvent[] = [];
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+      activityLog: {
+        write(event): void {
+          events.push(event);
+        },
+      },
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () => ({
+          call: (): Promise<never> =>
+            Promise.reject(new ProviderOutputExhaustedError("draft-model")),
+        }),
+      }),
+    );
+
+    expect(res.status).toBe(502);
+    expect(res.body).toMatchObject({
+      error: { code: "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED" },
+    });
+    const draftCompleted = events.find((event) => event.op === "git.commit.draft.completed");
+    expect(draftCompleted).toMatchObject({
+      status: 502,
+      errorKind: "validation-failed",
+      extra: { outcome: "failed", failureCode: "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED" },
+    });
+  });
+
+  // The adapter only THROWS ProviderOutputExhaustedError when content is empty; a reasoning model
+  // that produced a partial fragment before running out of budget instead returns normally with
+  // `finishReason: "length"` and truncated content. That fragment must never be trusted as a real
+  // answer even though it happens to look content-bearing.
+  it("classifies a truncated finishReason=length response as output-exhausted, never a trusted draft", async () => {
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () =>
+          draftModelPort(() => ({
+            modelId: "draft-model",
+            content: '{"subject":"fix: rep',
+            finishReason: "length",
+            toolCalls: [],
+            structuredOutput: null,
+            usage: {
+              requestId: "draft-model-request",
+              promptTokens: 100,
+              completionTokens: 4_000,
+              latencyMs: 12,
+              costClass: "low",
+            },
+          })),
+      }),
+    );
+
+    expect(res.status).toBe(502);
+    expect(res.body).toMatchObject({
+      error: { code: "GIT_DELIVERY_COMMIT_DRAFT_OUTPUT_EXHAUSTED" },
+    });
+  });
+
+  it("aborts the in-flight model call when the client disconnects", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const port: ModelPort = {
+      call: (_request, signal): Promise<NormalizedResponse> => {
+        capturedSignal = signal;
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              reject(new CancelledError("client cancelled"));
+            },
+            { once: true },
+          );
+        });
+      },
+    };
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+    });
+    const ctx = ctxFor(DRAFT, { schemaVersion: "1", projectId });
+
+    const pending = handler(
+      ctx,
+      deps({ config: DRAFT_GATEWAY_CONFIG, modelPortFactory: () => port }),
+    );
+    await vi.waitFor(() => {
+      expect(capturedSignal).toBeDefined();
+    });
+    ctx.req.emit("aborted");
+
+    // A client that left is reported as cancelled (499), never as an internal draft failure.
+    const result = await pending;
+    expect(result.status).toBe(499);
+    expect(result.body).toMatchObject({ error: { code: "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED" } });
+  });
+
+  // PR #3602 review: a client that leaves while a worktree read is pending must get no further
+  // read and no model call, and the completion line must carry the counts the route actually
+  // observed by then.
+  it("stops after the staged-paths read when the client left during it", async () => {
+    const ctx = ctxFor(DRAFT, { schemaVersion: "1", projectId });
+    const stagedPathsReader = vi.fn((): Promise<string[]> => {
+      ctx.req.emit("aborted");
+      return Promise.resolve(["packages/keiko-ui/a.ts", "docs/b.md"]);
+    });
+    const stagedDiffReader = vi.fn(() =>
+      Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+    );
+    const modelCall = vi.fn((): Promise<NormalizedResponse> =>
+      Promise.reject(new CancelledError("client cancelled")),
+    );
+    const events: ServerLogEvent[] = [];
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedPathsReader,
+        stagedDiffReader,
+        activityLog: { write: (event): void => void events.push(event) },
+      }),
+    });
+
+    const result = await handler(
+      ctx,
+      deps({ config: DRAFT_GATEWAY_CONFIG, modelPortFactory: () => ({ call: modelCall }) }),
+    );
+    expect(result.status).toBe(499);
+    expect(result.body).toMatchObject({ error: { code: "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED" } });
+    expect(stagedDiffReader).not.toHaveBeenCalled();
+    expect(modelCall).not.toHaveBeenCalled();
+    expect(events.find((event) => event.op === "git.commit.draft.completed")).toMatchObject({
+      status: 499,
+      errorKind: "cancelled",
+      extra: {
+        outcome: "failed",
+        failureCode: "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED",
+        stagedFileCount: 2,
+        areaCount: 2,
+      },
+    });
+  });
+
+  it("stops after the staged-diff read when the client left during it", async () => {
+    const ctx = ctxFor(DRAFT, { schemaVersion: "1", projectId });
+    const stagedDiffReader = vi.fn((): Promise<string> => {
+      ctx.req.emit("aborted");
+      return Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change");
+    });
+    const modelCall = vi.fn((): Promise<NormalizedResponse> =>
+      Promise.reject(new CancelledError("client cancelled")),
+    );
+    const events: ServerLogEvent[] = [];
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader,
+        activityLog: { write: (event): void => void events.push(event) },
+      }),
+    });
+
+    const result = await handler(
+      ctx,
+      deps({ config: DRAFT_GATEWAY_CONFIG, modelPortFactory: () => ({ call: modelCall }) }),
+    );
+    expect(result.status).toBe(499);
+    expect(result.body).toMatchObject({ error: { code: "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED" } });
+    expect(stagedDiffReader).toHaveBeenCalledTimes(1);
+    expect(modelCall).not.toHaveBeenCalled();
+    expect(events.find((event) => event.op === "git.commit.draft.completed")).toMatchObject({
+      status: 499,
+      errorKind: "cancelled",
+      extra: { outcome: "failed", failureCode: "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED" },
+    });
+  });
+
+  // PR #3602 review: the disconnect listeners used to be registered only after the commit policy
+  // had been resolved, so a client that left DURING that lookup was never recorded, and the
+  // worktree reads and the model call that followed ran for nobody. The cancellation is now armed
+  // before the lookup and checked right after it: neither reader nor the model port is reached,
+  // and the completion line records the cancelled draft.
+  it("skips the worktree reads and the model call when the client left during the policy lookup", async () => {
+    let policyLookupStarted = false;
+    let releasePolicyLookup: (() => void) | undefined;
+    const policyLookup = new Promise<undefined>((resolve) => {
+      releasePolicyLookup = (): void => {
+        resolve(undefined);
+      };
+    });
+    // Only `read` is reached: the route resolves the policy through the settings control and
+    // nothing else on it, so the seam stands in for exactly that one call.
+    const editorSettingsControl = {
+      read: (): Promise<undefined> => {
+        policyLookupStarted = true;
+        return policyLookup;
+      },
+    } as unknown as NonNullable<UiHandlerDeps["editorSettingsControl"]>;
+    const stagedPathsReader = vi.fn(() => Promise.resolve(["packages/keiko-ui/a.ts"]));
+    const stagedDiffReader = vi.fn(() =>
+      Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+    );
+    const modelCall = vi.fn((): Promise<NormalizedResponse> =>
+      Promise.reject(new CancelledError("client cancelled")),
+    );
+    const port: ModelPort = { call: modelCall };
+    const events: ServerLogEvent[] = [];
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedPathsReader,
+        stagedDiffReader,
+        activityLog: { write: (event): void => void events.push(event) },
+      }),
+    });
+    const ctx = ctxFor(DRAFT, { schemaVersion: "1", projectId });
+
+    const pending = handler(
+      ctx,
+      deps({ config: DRAFT_GATEWAY_CONFIG, modelPortFactory: () => port, editorSettingsControl }),
+    );
+    await vi.waitFor(() => {
+      expect(policyLookupStarted).toBe(true);
+    });
+    ctx.req.emit("aborted");
+    releasePolicyLookup?.();
+
+    const result = await pending;
+    expect(result.status).toBe(499);
+    expect(result.body).toMatchObject({ error: { code: "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED" } });
+    expect(stagedPathsReader).not.toHaveBeenCalled();
+    expect(stagedDiffReader).not.toHaveBeenCalled();
+    expect(modelCall).not.toHaveBeenCalled();
+    // Nothing was read, so the line carries no staged counts — absent, not zero.
+    const completed = events.find((event) => event.op === "git.commit.draft.completed");
+    expect(completed).toMatchObject({
+      status: 499,
+      errorKind: "cancelled",
+      extra: { outcome: "failed", failureCode: "GIT_DELIVERY_COMMIT_DRAFT_CANCELLED" },
+    });
+    expect(completed?.extra).not.toHaveProperty("stagedFileCount");
+    expect(completed?.extra).not.toHaveProperty("areaCount");
+    expect(completed?.extra).not.toHaveProperty("touchesTests");
   });
 });
 
@@ -558,6 +1420,7 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
 
   it("fails closed (409) when the conflict-marker read itself cannot be completed", async () => {
     const adapter = recordingAdapter();
+    const records: ServerDiagnosticRecord[] = [];
     const handler = createHandleCommitExecute({
       execution: seams({
         adapterFactory: () => adapter.adapter,
@@ -566,20 +1429,41 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
     });
     const res = await handler(
       ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat(ui): add governed flow" }),
-      deps(),
+      deps({
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+      }),
     );
     expect(res.status).toBe(409);
     expect(adapter.calls()).toEqual([]);
+    expect(records).toEqual([
+      expect.objectContaining({
+        correlationId: UNKNOWN_CORRELATION_ID,
+        operation: "git.commit.execute.conflict-scan",
+        source: "git-delivery.commit-routes",
+        errorClass: "Error",
+      }),
+    ]);
   });
 
   it("executes a valid conventional commit and records evidence (AC4)", async () => {
     const adapter = recordingAdapter();
     const cap = capturingEvidenceStore();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandleCommitExecute({
-      execution: seams({ adapterFactory: () => adapter.adapter }),
+      execution: seams({ adapterFactory: () => adapter.adapter, approvalStore }),
     });
+    const message = "feat(ui): add governed flow";
     const res = await handler(
-      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat(ui): add governed flow" }),
+      ctxFor(EXECUTE, {
+        schemaVersion: "1",
+        projectId,
+        message,
+        approval: issueCommitApproval(approvalStore, message),
+      }),
       deps({ evidenceStore: cap.store }),
     );
     expect((res.body as { status: string }).status).toBe("succeeded");
@@ -587,16 +1471,27 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
     expect(cap.count()).toBe(1);
   });
 
+  // #3386: proves the mandatory-approval check runs before the message-policy/conflict/branch
+  // guards but AFTER those, the kernel's OWN preflight/policy still runs unbypassed — a granted
+  // approval is not itself authority to skip preflight, policy, or branch protection.
   it("cannot bypass the kernel: a valid message is still policy-blocked, executing nothing (AC5)", async () => {
     const adapter = recordingAdapter();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandleCommitExecute({
       execution: seams({
         adapterFactory: () => adapter.adapter,
         policyPacks: { repoPack: BLOCK_ALL_PACK },
+        approvalStore,
       }),
     });
+    const message = "feat(ui): add governed flow";
     const res = await handler(
-      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat(ui): add governed flow" }),
+      ctxFor(EXECUTE, {
+        schemaVersion: "1",
+        projectId,
+        message,
+        approval: issueCommitApproval(approvalStore, message),
+      }),
       deps(),
     );
     expect((res.body as { status: string }).status).toBe("blocked");
@@ -606,14 +1501,22 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
 
   it("cannot bypass preflight: nothing staged blocks the commit (AC5)", async () => {
     const adapter = recordingAdapter();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandleCommitExecute({
       execution: seams({
         adapterFactory: () => adapter.adapter,
         snapshotReader: () => Promise.resolve({ ...SNAPSHOT, stagedFileCount: 0 }),
+        approvalStore,
       }),
     });
+    const message = "feat(ui): add governed flow";
     const res = await handler(
-      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat(ui): add governed flow" }),
+      ctxFor(EXECUTE, {
+        schemaVersion: "1",
+        projectId,
+        message,
+        approval: issueCommitApproval(approvalStore, message),
+      }),
       deps(),
     );
     expect((res.body as { status: string }).status).toBe("blocked");
@@ -623,24 +1526,85 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
     expect(adapter.calls()).toEqual([]);
   });
 
-  it("commits with allowEmpty and honours a granted approval object", async () => {
+  it("blocks direct commits to dev under the default local policy", async () => {
     const adapter = recordingAdapter();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandleCommitExecute({
-      execution: seams({ adapterFactory: () => adapter.adapter }),
+      execution: seams({
+        adapterFactory: () => adapter.adapter,
+        snapshotReader: () => Promise.resolve({ ...SNAPSHOT, currentBranchName: "dev" }),
+        policyPacks: undefined,
+        approvalStore,
+      }),
     });
+    const message = "chore: update staged changes";
     const res = await handler(
       ctxFor(EXECUTE, {
         schemaVersion: "1",
         projectId,
-        message: "chore: empty",
+        message,
+        approval: issueCommitApproval(approvalStore, message),
+      }),
+      deps(),
+    );
+    expect((res.body as { status: string }).status).toBe("blocked");
+    expect((res.body as { blockReason?: string }).blockReason).toBe("protected-branch");
+    expect(adapter.calls()).toEqual([]);
+  });
+
+  // #3386: previously "honoured" `{ required: false }` — a request-supplied claim of NO approval —
+  // as sufficient to commit. That was exactly the unapproved-commit bypass this change closes: an
+  // active run's commit now requires an actually consumed, server-issued claim, never a
+  // browser-asserted "not required".
+  it("commits with allowEmpty once a real server-issued claim is consumed", async () => {
+    const adapter = recordingAdapter();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const handler = createHandleCommitExecute({
+      execution: seams({ adapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const message = "chore: empty";
+    const res = await handler(
+      ctxFor(EXECUTE, {
+        schemaVersion: "1",
+        projectId,
+        message,
         allowEmpty: true,
-        approval: { required: false },
+        approval: issueCommitApproval(approvalStore, message, true),
       }),
       deps(),
     );
     expect((res.body as { status: string }).status).toBe("succeeded");
     expect(adapter.calls()).toEqual(["commit"]);
   });
+
+  // Pins the actual bypass this change closes (#3386, ADR-0138 D2): an accepted autonomous-delivery
+  // run plus a direct HTTP commit carrying no approval at all must NOT commit. Before this change,
+  // BOTH an entirely absent `approval` field and an explicit `{ required: false }` executed
+  // unconditionally.
+  it.each([
+    ["an absent approval field", undefined],
+    ["an explicit { required: false }", { required: false }],
+  ] as const)(
+    "does not commit an accepted run's direct HTTP request that carries %s",
+    async (_label, approval) => {
+      const adapter = recordingAdapter();
+      const handler = createHandleCommitExecute({
+        execution: seams({ adapterFactory: () => adapter.adapter }),
+      });
+      const res = await handler(
+        ctxFor(EXECUTE, {
+          schemaVersion: "1",
+          projectId,
+          message: "chore: empty",
+          allowEmpty: true,
+          ...(approval === undefined ? {} : { approval }),
+        }),
+        deps(),
+      );
+      expect((res.body as { status: string }).status).toBe("approval-required");
+      expect(adapter.calls()).toEqual([]);
+    },
+  );
 
   it("holds for approval when the trusted pack is approval-gated", async () => {
     const adapter = recordingAdapter();
@@ -664,13 +1628,19 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
     expect(adapter.calls()).toEqual([]);
   });
 
+  // What this pins is BINDING integrity: a claim is redeemable only if its recorded binding
+  // (project + operation + command) matches the request. The approver IDENTITY is a separate
+  // concern, gated by KEIKO-0147 and pinned by the test below — so this rule uses
+  // `requiredApprovers: []`, which ADR-0080 D5 defines as "at least one approver of any
+  // identity". Previously it named `["lead"]` while the store minted `u-1`, which only passed
+  // because nothing checked membership.
   it("executes an approval-gated commit only with a matching server-issued claim", async () => {
     const adapter = recordingAdapter();
     const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const approvalGated: GitDeliveryRepoPolicyPack = {
       schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
       repoId: "repo",
-      rules: [{ actionKind: "commit", decision: "approval-gated", requiredApprovers: ["lead"] }],
+      rules: [{ actionKind: "commit", decision: "approval-gated", requiredApprovers: [] }],
       defaultRule: { decision: "blocked" },
     };
     const message = "feat(ui): add flow";
@@ -692,6 +1662,43 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
     );
     expect((res.body as { status: string }).status).toBe("succeeded");
     expect(adapter.calls()).toEqual(["commit"]);
+  });
+
+  // KEIKO-0147: a valid, correctly-bound, server-issued claim is still not authority when the
+  // pack names a required-approver set the granting identity is not in. This is fail-closed by
+  // design: Keiko mints every claim as the single local principal (`GIT_DELIVERY_LOCAL_OPERATOR_ID`
+  // — approvalStore.ts), so a pack naming any other approver describes an authority this product
+  // cannot produce, and blocking says so instead of silently proceeding over a policy it did not
+  // satisfy. `requiredApprovers: []` remains "any identity" per ADR-0080 D5 (pinned above).
+  it("blocks an approval-gated commit when the claim's approver is not in requiredApprovers", async () => {
+    const adapter = recordingAdapter();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const message = "feat(ui): add flow";
+    const namedApprover: GitDeliveryRepoPolicyPack = {
+      schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+      repoId: "repo",
+      // The store's helper mints `u-1`; this pack demands `lead`, which it can never be.
+      rules: [{ actionKind: "commit", decision: "approval-gated", requiredApprovers: ["lead"] }],
+      defaultRule: { decision: "blocked" },
+    };
+    const handler = createHandleCommitExecute({
+      execution: seams({
+        adapterFactory: () => adapter.adapter,
+        policyPacks: { repoPack: namedApprover },
+        approvalStore,
+      }),
+    });
+    const res = await handler(
+      ctxFor(EXECUTE, {
+        schemaVersion: "1",
+        projectId,
+        message,
+        approval: issueCommitApproval(approvalStore, message),
+      }),
+      deps(),
+    );
+    expect((res.body as { status: string }).status).toBe("blocked");
+    expect(adapter.calls()).toEqual([]);
   });
 
   it("rejects a forged browser-supplied approval object before commit execution", async () => {
@@ -718,14 +1725,39 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
   });
 
   it("returns 409 worktree-unavailable when the live snapshot cannot be read", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
     const handler = createHandleCommitExecute({
-      execution: seams({ snapshotReader: () => Promise.reject(new Error("not a git repo")) }),
+      execution: seams({
+        snapshotReader: () => Promise.reject(new Error("not a git repo")),
+        approvalStore,
+      }),
     });
+    const message = "feat(ui): add flow";
     const res = await handler(
-      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat(ui): add flow" }),
-      deps(),
+      ctxFor(EXECUTE, {
+        schemaVersion: "1",
+        projectId,
+        message,
+        approval: issueCommitApproval(approvalStore, message),
+      }),
+      deps({
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+      }),
     );
     expect(res.status).toBe(409);
+    expect(records).toEqual([
+      expect.objectContaining({
+        correlationId: UNKNOWN_CORRELATION_ID,
+        operation: "git.commit.execute.mutation",
+        source: "git-delivery.commit-routes",
+        errorClass: "Error",
+      }),
+    ]);
   });
 
   it("rejects a malformed approval and an oversized/invalid body", async () => {
@@ -743,7 +1775,315 @@ describe("commit execute — message policy gate + no-bypass (AC2/AC4/AC5)", () 
   });
 });
 
+describe("commit approve (mints the approval execute consumes) — #3386, ADR-0138 D2", () => {
+  // Before this route existed, MINTABLE_ACTION_KINDS excluded "commit" and no HTTP surface could
+  // ever satisfy a commit's approval requirement — mirrors mergeRoutes.test.ts's own "previously
+  // unreachable" framing for the identical gap on merge.
+  it("mints a claim that execute accepts for the exact same commit, letting an approval-required commit proceed", async () => {
+    const adapter = recordingAdapter();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approveHandler = createHandleCommitApprove({
+      execution: seams({ adapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const message = "feat(ui): add governed flow";
+    const approveRes = await approveHandler(
+      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message }),
+      deps(),
+    );
+    expect(approveRes.status).toBe(200);
+    const approveBody = approveRes.body as GitDeliveryCommitApproveResponseBody;
+    expect(approveBody.approval.approvalId).toBeTruthy();
+    expect(approveBody.approval.approvalToken).toBeTruthy();
+    expect(new Date(approveBody.expiresAt).getTime()).toBeGreaterThan(1_700_000_000_000);
+
+    const executeHandler = createHandleCommitExecute({
+      execution: seams({ adapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const executeRes = await executeHandler(
+      ctxFor(EXECUTE, {
+        schemaVersion: "1",
+        projectId,
+        message,
+        approval: approveBody.approval,
+      }),
+      deps(),
+    );
+    expect((executeRes.body as { status: string }).status).toBe("succeeded");
+    expect(adapter.calls()).toEqual(["commit"]);
+  });
+
+  it("mints a claim redeemable only for the exact message it was issued against", async () => {
+    const adapter = recordingAdapter();
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const approveHandler = createHandleCommitApprove({ execution: seams({ approvalStore }) });
+    const approveRes = await approveHandler(
+      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat(ui): add flow" }),
+      deps(),
+    );
+    const approveBody = approveRes.body as GitDeliveryCommitApproveResponseBody;
+
+    const executeHandler = createHandleCommitExecute({
+      execution: seams({ adapterFactory: () => adapter.adapter, approvalStore }),
+    });
+    const executeRes = await executeHandler(
+      ctxFor(EXECUTE, {
+        schemaVersion: "1",
+        projectId,
+        message: "feat(ui): a different message entirely",
+        approval: approveBody.approval,
+      }),
+      deps(),
+    );
+    expect(executeRes.status).toBe(400);
+    expect(adapter.calls()).toEqual([]);
+  });
+
+  it("404s for an unknown project instead of minting an approval", async () => {
+    const approveHandler = createHandleCommitApprove({ execution: seams() });
+    const res = await approveHandler(
+      ctxFor(EXECUTE, { schemaVersion: "1", projectId: "/no/such/project", message: "feat: x" }),
+      deps(),
+    );
+    expect(res.status).toBe(404);
+  });
+
+  it("denies the mint itself when no accepted run authority is active", async () => {
+    const approveHandler = createHandleCommitApprove({ execution: seams() });
+    const res = await approveHandler(
+      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat: x" }),
+      deps({ gitDeliveryAuthority: { current: () => undefined } }),
+    );
+    expect(res.status).toBe(403);
+  });
+
+  it("admits a user-initiated Git widget commit without accepted run authority", async () => {
+    const adapter = recordingAdapter();
+    const events: ServerLogEvent[] = [];
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const localUserDeps = deps({ gitDeliveryAuthority: { current: () => undefined } });
+    const execution = seams({
+      adapterFactory: () => adapter.adapter,
+      approvalStore,
+      activityLog: { write: (event) => events.push(event) },
+    });
+    const message = [
+      "chore: update generated commit footer",
+      "",
+      "Update the staged commit draft handling.",
+      "",
+      "🤖 Generated with [Keiko](https://github.com/oscharko-dev/Keiko)",
+    ].join("\n");
+    const request = { schemaVersion: "1", projectId, message, userInitiated: true } as const;
+    const approveHandler = createHandleCommitApprove({ execution });
+    const approveRes = await approveHandler(ctxFor(EXECUTE, request), localUserDeps);
+    expect(approveRes.status).toBe(200);
+    const approval = (approveRes.body as GitDeliveryCommitApproveResponseBody).approval;
+
+    const executeHandler = createHandleCommitExecute({ execution });
+    const executeRes = await executeHandler(
+      ctxFor(EXECUTE, { ...request, approval }),
+      localUserDeps,
+    );
+
+    expect((executeRes.body as { status: string }).status).toBe("succeeded");
+    expect(adapter.calls()).toEqual(["commit"]);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          op: "git.delivery.authority.admitted",
+          extra: {
+            completeness: "complete",
+            loss: "none",
+            operation: "commit",
+            phase: "admission",
+            source: "local-user",
+          },
+        }),
+        expect.objectContaining({
+          op: "git.delivery.commit.approval.minted",
+          extra: {
+            completeness: "complete",
+            loss: "none",
+            operation: "commit",
+            runId: "local-user-git-widget",
+          },
+        }),
+      ]),
+    );
+    expect(JSON.stringify(events)).not.toContain("generated commit footer");
+  });
+
+  it("keeps managed task worktrees bound to run authority for user-initiated commits", async () => {
+    const managed = managedWorkspaceDeps();
+    const adapter = recordingAdapter();
+    try {
+      const approveHandler = createHandleCommitApprove({
+        execution: seams({ adapterFactory: () => adapter.adapter }),
+      });
+      const res = await approveHandler(
+        ctxFor(EXECUTE, {
+          schemaVersion: "1",
+          projectId: managed.instance.managedWorktreePath,
+          message: "feat(ui): add flow",
+          userInitiated: true,
+        }),
+        deps({ ...managed.override, gitDeliveryAuthority: { current: () => undefined } }),
+      );
+      expect(res.status).toBe(403);
+      expect(adapter.calls()).toEqual([]);
+    } finally {
+      managed.cleanup();
+    }
+  });
+});
+
+// Final-audit F2/#3390 (ADR-0138 D2): before this fix, the coarse admission gate hard-denied both
+// commit/approve and commit/execute with "approval-required" below `autonomous-delivery` and no
+// production path ever redeemed it — a governed-assist or supervised-coding commit was permanently
+// unreachable regardless of the approval this exact describe block already proves works at
+// `autonomous-delivery`. FAILING BEFORE THE FIX: `approveHandler` returned 403
+// GIT_DELIVERY_AUTHORITY_DENIED at the `gitDeliveryAuthorityGate` call inside
+// `createHandleCommitApprove`, never reaching `store.issue()`.
+describe("commit approve + execute reachable regardless of mode — final-audit F2/#3390", () => {
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "mints and consumes a commit approval end to end at %s",
+    async (mode) => {
+      const adapter = recordingAdapter();
+      const approvalStore = createInMemoryGitDeliveryApprovalStore();
+      const modeDeps = deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          mode,
+        ),
+      });
+      const message = "feat(ui): add governed flow";
+      const approveHandler = createHandleCommitApprove({
+        execution: seams({ adapterFactory: () => adapter.adapter, approvalStore }),
+      });
+      const approveRes = await approveHandler(
+        ctxFor(EXECUTE, { schemaVersion: "1", projectId, message }),
+        modeDeps,
+      );
+      expect(approveRes.status).toBe(200);
+      const approveBody = approveRes.body as GitDeliveryCommitApproveResponseBody;
+
+      const executeHandler = createHandleCommitExecute({
+        execution: seams({ adapterFactory: () => adapter.adapter, approvalStore }),
+      });
+      const executeRes = await executeHandler(
+        ctxFor(EXECUTE, {
+          schemaVersion: "1",
+          projectId,
+          message,
+          approval: approveBody.approval,
+        }),
+        modeDeps,
+      );
+      expect((executeRes.body as { status: string }).status).toBe("succeeded");
+      expect(adapter.calls()).toEqual(["commit"]);
+    },
+  );
+
+  it.each(["governed-assist", "supervised-coding"] as const)(
+    "still returns approval-required (never mode-denied) at %s when execute carries no approval",
+    async (mode) => {
+      const modeDeps = deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          mode,
+        ),
+      });
+      const executeHandler = createHandleCommitExecute({ execution: seams() });
+      const executeRes = await executeHandler(
+        ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat(ui): add flow" }),
+        modeDeps,
+      );
+      expect(executeRes.status).toBe(200);
+      expect(executeRes.body).toMatchObject({ status: "approval-required", actionKind: "commit" });
+    },
+  );
+});
+
+describe("commit approval evidence — body-free activity-log lines (#3386)", () => {
+  it("logs a body-free line when the mint issues a claim", async () => {
+    const events: ServerLogEvent[] = [];
+    const approveHandler = createHandleCommitApprove({
+      execution: seams({ activityLog: { write: (event) => events.push(event) } }),
+    });
+    await approveHandler(
+      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat(ui): add flow" }),
+      deps(),
+    );
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          category: "security",
+          op: "git.delivery.commit.approval.minted",
+          status: 200,
+          extra: {
+            completeness: "complete",
+            loss: "none",
+            operation: "commit",
+            runId: "test-run",
+          },
+        }),
+      ]),
+    );
+    expect(JSON.stringify(events)).not.toContain("feat(ui): add flow");
+  });
+
+  it("logs a body-free line when an active run's commit is refused for lacking a consumed approval", async () => {
+    const events: ServerLogEvent[] = [];
+    const handler = createHandleCommitExecute({
+      execution: seams({ activityLog: { write: (event) => events.push(event) } }),
+    });
+    await handler(
+      ctxFor(EXECUTE, { schemaVersion: "1", projectId, message: "feat(ui): add flow" }),
+      deps(),
+    );
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          category: "security",
+          op: "git.delivery.commit.approval.required",
+          status: 200,
+          extra: {
+            completeness: "complete",
+            loss: "none",
+            operation: "commit",
+            runId: "test-run",
+          },
+        }),
+      ]),
+    );
+    expect(JSON.stringify(events)).not.toContain("feat(ui): add flow");
+  });
+});
+
 describe("commit preview — default draft, policy block, and worktree failure", () => {
+  it("reports a protected-branch block for a default dev-branch commit preview", async () => {
+    const handler = createHandleCommitPreview({
+      execution: seams({
+        snapshotReader: () => Promise.resolve({ ...SNAPSHOT, currentBranchName: "dev" }),
+        policyPacks: undefined,
+      }),
+    });
+    const res = await handler(
+      ctxFor(PREVIEW, {
+        schemaVersion: "1",
+        projectId,
+        messageDraft: "chore: update staged changes",
+      }),
+      deps(),
+    );
+    const body = res.body as GitDeliveryCommitPreviewBody;
+    expect(body.policyOutcome).toBe("blocked");
+    expect(body.policyBlockReason).toBe("protected-branch");
+    expect(body.messageValidation.ok).toBe(true);
+  });
+
   it("defaults an absent messageDraft to empty and reports a policy block reason", async () => {
     const handler = createHandleCommitPreview({
       execution: seams({ policyPacks: { repoPack: BLOCK_ALL_PACK } }),
@@ -756,13 +2096,64 @@ describe("commit preview — default draft, policy block, and worktree failure",
   });
 
   it("returns 409 when the worktree cannot be read", async () => {
+    const records: ServerDiagnosticRecord[] = [];
     const handler = createHandleCommitPreview({
       execution: seams({ snapshotReader: () => Promise.reject(new Error("not a git repo")) }),
     });
     const res = await handler(
-      ctxFor(PREVIEW, { schemaVersion: "1", projectId, messageDraft: "feat: x" }),
-      deps(),
+      {
+        ...ctxFor(PREVIEW, { schemaVersion: "1", projectId, messageDraft: "feat: x" }),
+        correlationId: "123e4567-e89b-12d3-a456-426614174000",
+      },
+      deps({
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+      }),
     );
     expect(res.status).toBe(409);
+    expect(records).toEqual([
+      expect.objectContaining({
+        correlationId: "123e4567-e89b-12d3-a456-426614174000",
+        operation: "git.commit.preview.worktree",
+        source: "git-delivery.commit-routes",
+        errorClass: "Error",
+      }),
+    ]);
+  });
+
+  it("degrades branch-protection inspection visibly and records the failure", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const handler = createHandleCommitPreview({
+      execution: seams({
+        branchProtectionReader: () => Promise.reject(new Error("provider unavailable")),
+      }),
+    });
+    const res = await handler(
+      {
+        ...ctxFor(PREVIEW, { schemaVersion: "1", projectId }),
+        correlationId: "123e4567-e89b-12d3-a456-426614174001",
+      },
+      deps({
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect((res.body as GitDeliveryCommitPreviewBody).signatureRequirement).toBe("unavailable");
+    expect(records).toEqual([
+      expect.objectContaining({
+        correlationId: "123e4567-e89b-12d3-a456-426614174001",
+        operation: "git.commit.preview.branch-protection",
+        source: "git-delivery.commit-routes",
+        errorClass: "Error",
+      }),
+    ]);
   });
 });

@@ -1,7 +1,14 @@
-import { act, renderHook, waitFor } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
+import { useEffect, type ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
-import type { Chat, ChatMessage, ModelCapability, ProjectWithAvailability } from "@/lib/types";
+import type {
+  Chat,
+  ChatGitChangeScope,
+  ChatMessage,
+  ModelCapability,
+  ProjectWithAvailability,
+} from "@/lib/types";
 import {
   ApiError,
   askGrounded,
@@ -13,6 +20,7 @@ import {
   fetchRunReport,
   fetchModels,
   fetchProjects,
+  patchChatMessage,
   regenerateDesktopChat,
   resetModelRequestCache,
   sendDesktopChat,
@@ -20,30 +28,39 @@ import {
 } from "@/lib/api";
 import {
   CONTEXT_OVERSIZED_USER_MESSAGE,
+  DESKTOP_CHAT_INPUT_TOO_LARGE_ERROR,
+  GROUNDED_ATTACHMENT_DROPPED_NOTICE,
   GROUNDED_ATTACHMENT_NOTICE,
   MAX_ATTACHMENT_BYTES,
   canonicalVoicePageOutboxRetainsPlaintextForTests,
   clearCanonicalVoicePageOutboxForTests,
   clearChatSessionBootstrapCacheForTests,
   canonicalTurnReferenceForClient,
+  chatListCorrelationId,
   isInFlight,
   notifyChatDeleted,
   notifyChatUpsert,
   pickChatModelId,
+  RUN_SUMMARY_SYNC_INTERVAL_MS,
   resolveSelectedModelId,
   type SendMessageOutcome,
+  type ChatSessionApi,
   useChatSession,
 } from "./useChatSession";
 import {
   resetConversationMemorySettingsForTests,
   useConversationMemorySettings,
 } from "./memorySettings";
-import { loadMemoryAutonomyMode } from "@/lib/memory-api";
+import { loadMemoryAutonomyMode } from "@/lib/memory-session-api";
 import {
   clearCanonicalVoiceHasherForTests,
   prepareCanonicalVoiceHasher,
 } from "./canonical-voice-hasher";
-import { notifyGatewayConfigUpdated } from "../widgets/shared/gatewaySetupBus";
+import {
+  notifyGatewayConfigUpdated,
+  requestGatewayModelCatalogRefresh,
+  notifyGatewayModelReadinessUpdated,
+} from "../widgets/shared/gatewaySetupBus";
 
 beforeAll(async () => {
   await prepareCanonicalVoiceHasher();
@@ -95,7 +112,7 @@ vi.mock("@/lib/api", () => ({
   updateChat: vi.fn(),
 }));
 
-vi.mock("@/lib/memory-api", () => ({
+vi.mock("@/lib/memory-session-api", () => ({
   acceptMemoryProposal: vi.fn(),
   forgetMemory: vi.fn(),
   rejectMemoryProposal: vi.fn(),
@@ -118,6 +135,7 @@ function model(patch: Partial<ModelCapability> = {}): ModelCapability {
   return {
     id: "chat-a",
     kind: "chat",
+    conversationReady: true,
     contextWindow: 16_000,
     maxOutputTokens: 2_000,
     toolCalling: false,
@@ -163,6 +181,28 @@ function chat(patch: Partial<Chat> = {}): Chat {
     groundingScopeIdentity: `gsi-v1:${"a".repeat(64)}`,
     ...patch,
   } as Chat;
+}
+
+function gitChangeScope(patch: Partial<ChatGitChangeScope> = {}): ChatGitChangeScope {
+  return {
+    kind: "git-change",
+    relationshipId: "rel-git-1",
+    remoteDigest: "d".repeat(64),
+    comparisonLabel: "main...feature/x",
+    baseRef: "main",
+    headRef: "feature/x",
+    baseSha: "a".repeat(40),
+    headSha: "b".repeat(40),
+    mergeBaseSha: "c".repeat(40),
+    snapshotDigest: "e".repeat(64),
+    fileCount: 2,
+    totalFiles: 2,
+    omittedFiles: 0,
+    truncatedFiles: 0,
+    descriptionStatus: "current",
+    connectedAtMs: 1,
+    ...patch,
+  };
 }
 
 function canonicalVoiceTurn(
@@ -217,18 +257,124 @@ function deferred<T>(): {
 
 describe("useChatSession pure guards", () => {
   it("resolves request state and model eligibility deterministically", () => {
+    const unready = { ...model({ id: "chat-unready" }), conversationReady: false };
     const eligible = model({ id: "chat-live" });
     const ineligible = model({ id: "embed", kind: "embedding" });
 
     expect(isInFlight("queued")).toBe(true);
     expect(isInFlight("completed")).toBe(false);
-    expect(pickChatModelId([ineligible, eligible])).toBe("chat-live");
-    expect(resolveSelectedModelId("missing", [ineligible, eligible])).toBe("chat-live");
+    expect(pickChatModelId([unready, ineligible, eligible])).toBe("chat-live");
+    expect(resolveSelectedModelId("chat-unready", [unready, ineligible, eligible])).toBe(
+      "chat-live",
+    );
     expect(resolveSelectedModelId("chat-live", [eligible])).toBe("chat-live");
   });
 });
 
+function ImmediateChatBinding({
+  session,
+  target,
+}: {
+  readonly session: ChatSessionApi;
+  readonly target: Chat;
+}): ReactNode {
+  const { activeChat, loading, openChat } = session;
+  useEffect((): void => {
+    if (!loading && activeChat?.id !== target.id) void openChat(target);
+  }, [activeChat?.id, loading, openChat, target]);
+  return <output data-testid="immediate-chat-binding">{activeChat?.id ?? "none"}</output>;
+}
+
+function ImmediateChatBindingHarness({ target }: { readonly target: Chat }): ReactNode {
+  const session = useChatSession({ autoCreate: false });
+  return <ImmediateChatBinding session={session} target={target} />;
+}
+
 describe("useChatSession bootstrap", () => {
+  it("keeps configured catalog presence distinct from conversation-ready selection", async () => {
+    vi.mocked(fetchModels).mockResolvedValue({
+      models: [model({ id: "chat-unready", conversationReady: false })],
+    });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.configuredModelsAvailable).toBe(true);
+    expect(result.current.models).toEqual([]);
+    expect(result.current.selectedModel).toBeUndefined();
+    expect(result.current.noEligibleModels).toBe(true);
+  });
+
+  it("keeps configured gateway presence while a catalog refresh is pending", async () => {
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.configuredModelsAvailable).toBe(true);
+
+    // The refresh hangs: the synchronous pending publish empties the picker (no stale model
+    // selectable mid-refresh) but must NOT flip configuredModelsAvailable — AppShell reads
+    // (loading=false, error=undefined, available=false) as "gateway missing" and would mount
+    // the modal setup dialog over a fully configured workspace for the whole catalog read.
+    vi.mocked(fetchModels).mockImplementation(
+      () => new Promise(() => undefined) as ReturnType<typeof fetchModels>,
+    );
+    act(() => {
+      requestGatewayModelCatalogRefresh();
+    });
+
+    expect(result.current.models).toEqual([]);
+    expect(result.current.configuredModelsAvailable).toBe(true);
+    // Pinned invalidation: no stale id is sendable mid-refresh — restoration is the success
+    // path's job (see the restore pin below).
+    expect(result.current.selectedModel).toBeUndefined();
+  });
+
+  it("restores a non-default model selection once the refreshed catalog confirms it", async () => {
+    const catalog = [model({ id: "chat-live" }), model({ id: "chat-alt" })];
+    vi.mocked(fetchModels).mockResolvedValue({ models: catalog });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.models).toHaveLength(2));
+    act(() => {
+      result.current.setSelectedModel("chat-alt");
+    });
+    expect(result.current.selectedModel).toBe("chat-alt");
+
+    act(() => {
+      requestGatewayModelCatalogRefresh();
+    });
+    // The pending clear invalidates the selection (pinned above) …
+    expect(result.current.selectedModel).toBeUndefined();
+
+    await waitFor(() => expect(result.current.models).toHaveLength(2));
+    // … but the success path must restore the user's choice instead of silently falling
+    // back to the first ready model just because the picker was opened.
+    expect(result.current.selectedModel).toBe("chat-alt");
+  });
+
+  it("honors a child window binding immediately after bootstrap", async () => {
+    const bootstrapChat = chat({ id: "chat-bootstrap", updatedAt: 20 });
+    const boundChat = chat({ id: "chat-bound", updatedAt: 10 });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [bootstrapChat, boundChat] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+
+    render(<ImmediateChatBindingHarness target={boundChat} />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("immediate-chat-binding")).toHaveTextContent(boundChat.id),
+    );
+    expect(fetchChatMessages).toHaveBeenCalledWith(boundChat.id, boundChat.projectPath);
+  });
+
   it("loads the newest existing chat and falls back from a stale selected model", async () => {
     const latest = chat({ id: "chat-latest", selectedModel: "stale-model", updatedAt: 20 });
     vi.mocked(fetchModels).mockResolvedValue({
@@ -245,11 +391,39 @@ describe("useChatSession bootstrap", () => {
     const { result } = renderHook(() => useChatSession({ autoCreate: false }));
 
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(fetchChats).toHaveBeenCalledWith("/repo");
+    expect(fetchChats).toHaveBeenCalledWith("/repo", expect.any(String));
+    // The list load carries its own correlation id, remembered for evidence the load decides (#3557).
+    const [, listCorrelationId] = vi.mocked(fetchChats).mock.calls[0] ?? [];
+    expect(chatListCorrelationId("/repo")).toBe(listCorrelationId);
     expect(fetchChatMessages).toHaveBeenCalledWith("chat-latest", "/repo");
     expect(result.current.activeChat?.id).toBe("chat-latest");
     expect(result.current.selectedModel).toBe("chat-live");
     expect(result.current.messages).toHaveLength(1);
+  });
+
+  it("surfaces a project catalog bootstrap failure instead of treating it as empty", async () => {
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockRejectedValue(new TypeError("project catalog unavailable"));
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toContain("project catalog unavailable");
+    expect(fetchChats).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a chat catalog bootstrap failure instead of treating it as empty", async () => {
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockRejectedValue(new TypeError("chat catalog unavailable"));
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toContain("chat catalog unavailable");
+    // A failed load decides nothing, so no evidence may name it.
+    expect(chatListCorrelationId("/repo")).toBeUndefined();
+    expect(result.current.activeProject).toBeUndefined();
   });
 
   it("shares concurrent cold bootstrap requests across session instances", async () => {
@@ -320,8 +494,11 @@ describe("useChatSession bootstrap", () => {
     const { result } = renderHook(() => useChatSession());
 
     await waitFor(() => expect(result.current.loading).toBe(false));
+    // Relocated pin (review finding on #3220): the bootstrap default is an AUTOMATIC election,
+    // so the create request OMITS modelId — the server's bounded readiness walk owns the
+    // election and can route around a failing preferred model. An explicit modelId here would
+    // turn the automatic default into an explicit request the server must not walk away from.
     expect(createDesktopChat).toHaveBeenCalledWith({
-      modelId: "chat-live",
       title: "New chat",
       projectPath: "/repo",
     });
@@ -356,14 +533,104 @@ describe("useChatSession bootstrap", () => {
       opened = await result.current.openNewChat(project("/other"), "  Grounding release check  ");
     });
 
+    // Relocated pin (review finding on #3221): with no chats and no user pick, the bootstrap
+    // default is an ELECTED selection — the create request omits modelId so the server's
+    // bounded walk owns the election, exactly like the auto-create pin above.
     expect(createDesktopChat).toHaveBeenCalledWith({
-      modelId: "chat-live",
       title: "Grounding release check",
       projectPath: "/other",
     });
     expect(opened?.id).toBe("chat-project-override");
     expect(result.current.activeProject?.path).toBe("/other");
     expect(result.current.messages[0]?.id).toBe("created-msg");
+  });
+
+  it("omits modelId when a stale persisted selection resolved to an elected fallback", async () => {
+    // Review finding on #3221: hydration used to store the RESOLVED fallback id, so a stale
+    // persisted model laundered into a \"deliberate\" selection and the next create sent it as
+    // an explicit modelId — bypassing the server's bounded readiness walk. Provenance now
+    // travels with the selection: an elected fallback keeps the create request AUTOMATIC.
+    const resumed = chat({ id: "chat-stale", selectedModel: "model-retired", updatedAt: 40 });
+    const created = chat({ id: "chat-next", title: "New chat", updatedAt: 50 });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [resumed] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    vi.mocked(createDesktopChat).mockResolvedValue({
+      chat: created,
+      project: project("/repo"),
+      projects: [project("/repo")],
+      chats: [created, resumed],
+      messages: [],
+    });
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    // The stale persisted id resolved to the live fallback for display purposes…
+    expect(result.current.selectedModel).toBe("chat-live");
+
+    await act(async () => {
+      await result.current.openNewChat();
+    });
+
+    // …but the create request must NOT claim it as an explicit choice.
+    expect(createDesktopChat).toHaveBeenCalledWith({
+      title: "New chat",
+      projectPath: "/repo",
+    });
+  });
+
+  it("keeps an elected selection automatic across a chat upsert of the same model", async () => {
+    // Review finding on #3221 (round 2): the server persists the ELECTED model on an
+    // auto-created chat, so the next upsert of that chat (title rename, message PATCH echo)
+    // used to launder the elected default into a \"deliberate\" selection — the following
+    // create then sent an explicit modelId, bypassing the server's bounded walk.
+    const created = chat({
+      id: "chat-created",
+      title: "New chat",
+      updatedAt: 30,
+      selectedModel: "chat-live",
+    });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+    vi.mocked(createDesktopChat).mockResolvedValue({
+      chat: created,
+      project: project("/repo"),
+      projects: [project("/repo")],
+      chats: [created],
+      messages: [],
+    });
+
+    const { result } = renderHook(() => useChatSession());
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.activeChat?.id).toBe("chat-created");
+
+    // An upsert echo of the SAME chat with the SAME persisted (elected) model id.
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("keiko:chat-upsert", { detail: { ...created, title: "Renamed" } }),
+      );
+    });
+
+    vi.mocked(createDesktopChat).mockClear();
+    const next = chat({ id: "chat-next", title: "New chat", updatedAt: 40 });
+    vi.mocked(createDesktopChat).mockResolvedValue({
+      chat: next,
+      project: project("/repo"),
+      projects: [project("/repo")],
+      chats: [next, created],
+      messages: [],
+    });
+    await act(async () => {
+      await result.current.openNewChat();
+    });
+
+    // Still automatic: the create omits modelId.
+    expect(createDesktopChat).toHaveBeenCalledWith({
+      title: "New chat",
+      projectPath: "/repo",
+    });
   });
 
   it("returns a persisted chat without replacing a project selected during creation", async (): Promise<void> => {
@@ -374,6 +641,8 @@ describe("useChatSession bootstrap", () => {
     });
     const otherChat = chat({ id: "chat-other", projectPath: "/other", title: "Other chat" });
     const creation = deferred<Awaited<ReturnType<typeof createDesktopChat>>>();
+    const upsertListener = vi.fn();
+    window.addEventListener("keiko:chat-upsert", upsertListener);
     vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
     vi.mocked(fetchProjects).mockResolvedValue({
       projects: [project("/repo"), project("/other")],
@@ -407,6 +676,9 @@ describe("useChatSession bootstrap", () => {
     await expect(creationPromise!).resolves.toEqual(created);
     expect(result.current.activeProject?.path).toBe("/other");
     expect(result.current.activeChat?.id).toBe(otherChat.id);
+    expect(upsertListener).toHaveBeenCalledOnce();
+    expect((upsertListener.mock.calls[0]?.[0] as CustomEvent<Chat>).detail).toEqual(created);
+    window.removeEventListener("keiko:chat-upsert", upsertListener);
   });
 
   it("selects a newly added folder even when no conversation model can create a chat", async () => {
@@ -505,6 +777,35 @@ describe("useChatSession bootstrap", () => {
     expect(rendered.result.current.messages).toEqual([pendingSummary]);
   });
 
+  it("keeps a shared run-summary poll alive while another session remains subscribed", async () => {
+    const pendingSummary = message({
+      id: "shared-run-summary",
+      role: "system",
+      runId: "run-shared",
+      workflowStatus: "running",
+    });
+    const completedSummary = { ...pendingSummary, workflowStatus: "completed" as const };
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [chat()] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [pendingSummary] });
+    vi.mocked(fetchRunReport)
+      .mockResolvedValueOnce({ report: { status: "running" } })
+      .mockResolvedValueOnce({ report: { status: "completed" } });
+    vi.mocked(patchChatMessage).mockResolvedValue({ message: completedSummary });
+
+    const first = renderHook(() => useChatSession({ autoCreate: false }));
+    const second = renderHook(() => useChatSession({ autoCreate: false }));
+    await vi.waitFor(() => expect(fetchRunReport).toHaveBeenCalledOnce());
+
+    first.unmount();
+    await vi.waitFor(() => expect(fetchRunReport).toHaveBeenCalledTimes(2), {
+      timeout: RUN_SUMMARY_SYNC_INTERVAL_MS + 1_000,
+    });
+    await vi.waitFor(() => expect(second.result.current.messages).toEqual([completedSummary]));
+    expect(patchChatMessage).toHaveBeenCalledOnce();
+  });
+
   it("surfaces regeneration failures and releases the owned send state", async () => {
     vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
     vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
@@ -555,10 +856,31 @@ describe("useChatSession bootstrap", () => {
     notifyChatUpsert(chat({ id: "chat-new", selectedModel: "chat-live", updatedAt: 40 }));
     await waitFor(() => expect(result.current.chats[0]?.id).toBe("chat-new"));
 
+    const memory = renderHook(() => useConversationMemorySettings("chat-new"));
+    act(() => memory.result.current.setMemoryEnabled(true));
+
     notifyChatDeleted("chat-new");
     await waitFor(() =>
       expect(result.current.chats.some((item) => item.id === "chat-new")).toBe(false),
     );
+    expect(memory.result.current.memoryEnabled).toBe(false);
+  });
+
+  it("keeps chat mutation broadcasts inside their owning project catalog", async () => {
+    const projectBChat = chat({ id: "chat-b", projectPath: "/repo-b", updatedAt: 20 });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo-b")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [projectBChat] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => {
+      notifyChatUpsert(chat({ id: "chat-a", projectPath: "/repo-a", updatedAt: 40 }));
+    });
+
+    expect(result.current.chats.map((candidate) => candidate.id)).toEqual(["chat-b"]);
+    expect(result.current.activeProject?.path).toBe("/repo-b");
   });
 
   it("drops the API model cache before refreshing after a gateway update", async () => {
@@ -581,6 +903,137 @@ describe("useChatSession bootstrap", () => {
     await waitFor(() =>
       expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-after"]),
     );
+    expect(fetchModels).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes conversation-ready models after a same-page readiness result", async () => {
+    vi.mocked(fetchModels)
+      .mockResolvedValueOnce({
+        models: [model({ id: "chat-live", conversationReady: false })],
+      })
+      .mockResolvedValueOnce({ models: [model({ id: "chat-live", conversationReady: true })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.configuredModelsAvailable).toBe(true);
+    expect(result.current.models).toEqual([]);
+
+    act(() => {
+      notifyGatewayModelReadinessUpdated();
+    });
+
+    await waitFor(() =>
+      expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-live"]),
+    );
+    expect(result.current.configuredModelsAvailable).toBe(true);
+    expect(resetModelRequestCache).toHaveBeenCalledOnce();
+    expect(fetchModels).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ["configuration replacement", notifyGatewayConfigUpdated],
+    ["readiness update", notifyGatewayModelReadinessUpdated],
+    ["picker refresh", requestGatewayModelCatalogRefresh],
+  ])(
+    "invalidates selectable models synchronously during a %s and only restores them after a later current success",
+    async (_label, refreshCatalog) => {
+      const pending = deferred<{ models: ModelCapability[] }>();
+      vi.mocked(fetchModels)
+        .mockResolvedValueOnce({ models: [model({ id: "chat-before" })] })
+        .mockImplementationOnce(() => pending.promise)
+        .mockResolvedValueOnce({ models: [model({ id: "chat-recovered" })] });
+      vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+      vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+
+      const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+      await waitFor(() =>
+        expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-before"]),
+      );
+      expect(result.current.selectedModel).toBe("chat-before");
+
+      act(() => {
+        refreshCatalog();
+      });
+
+      expect(result.current.models).toEqual([]);
+      expect(result.current.selectedModel).toBeUndefined();
+
+      await act(async () => {
+        pending.reject(new Error("gateway unavailable"));
+        try {
+          await pending.promise;
+        } catch {
+          // The refresh path intentionally reports the failure through hook state.
+        }
+      });
+      await waitFor(() => expect(result.current.error).toBe("gateway unavailable"));
+      expect(result.current.models).toEqual([]);
+      expect(result.current.selectedModel).toBeUndefined();
+
+      act(() => {
+        refreshCatalog();
+      });
+      await waitFor(() =>
+        expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-recovered"]),
+      );
+      expect(result.current.selectedModel).toBe("chat-recovered");
+    },
+  );
+
+  it("refreshes the eligible model catalog without emitting a configuration replacement", async () => {
+    vi.mocked(fetchModels)
+      .mockResolvedValueOnce({ models: [model({ id: "chat-before" })] })
+      .mockResolvedValueOnce({ models: [model({ id: "chat-after" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+    const onConfigUpdated = vi.fn();
+    window.addEventListener("keiko:gateway-config-updated", onConfigUpdated);
+    try {
+      const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+      await waitFor(() =>
+        expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-before"]),
+      );
+
+      act(() => {
+        requestGatewayModelCatalogRefresh();
+      });
+
+      await waitFor(() =>
+        expect(result.current.models.map((entry) => entry.id)).toEqual(["chat-after"]),
+      );
+      expect(resetModelRequestCache).toHaveBeenCalledOnce();
+      expect(fetchModels).toHaveBeenCalledTimes(2);
+      expect(onConfigUpdated).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("keiko:gateway-config-updated", onConfigUpdated);
+    }
+  });
+
+  it("shares one gateway model refresh across concurrent chat sessions", async () => {
+    vi.mocked(fetchModels)
+      .mockResolvedValueOnce({ models: [model({ id: "chat-before" })] })
+      .mockResolvedValueOnce({ models: [model({ id: "chat-after" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [] });
+
+    const first = renderHook(() => useChatSession({ autoCreate: false }));
+    const second = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => {
+      expect(first.result.current.models.map((entry) => entry.id)).toEqual(["chat-before"]);
+      expect(second.result.current.models.map((entry) => entry.id)).toEqual(["chat-before"]);
+    });
+
+    act(() => {
+      notifyGatewayConfigUpdated();
+    });
+
+    await waitFor(() => {
+      expect(first.result.current.models.map((entry) => entry.id)).toEqual(["chat-after"]);
+      expect(second.result.current.models.map((entry) => entry.id)).toEqual(["chat-after"]);
+    });
+    expect(resetModelRequestCache).toHaveBeenCalledOnce();
     expect(fetchModels).toHaveBeenCalledTimes(2);
   });
 
@@ -691,13 +1144,46 @@ describe("useChatSession bootstrap", () => {
     expect(result.current.activeChat?.id).toBe("other-open");
     expect(result.current.chats.map((item) => item.id)).toEqual(["other-trashed", "other-open"]);
   });
+
+  it("does not create a replacement chat when an isolated window opens an empty project", async () => {
+    const groundedChat = chat({
+      id: "chat-boot",
+      selectedModel: "chat-live",
+      connectedScopes: [
+        { kind: "workspace-root", root: "/repo", relativePaths: [], connectedAtMs: 1 },
+      ],
+    });
+    vi.mocked(fetchModels).mockResolvedValue({ models: [model({ id: "chat-live" })] });
+    vi.mocked(fetchProjects).mockResolvedValue({ projects: [project("/repo")] });
+    vi.mocked(fetchChats).mockResolvedValue({ chats: [groundedChat] });
+    vi.mocked(fetchChatMessages).mockResolvedValue({ messages: [] });
+    vi.mocked(askGrounded).mockResolvedValue({
+      answer: "grounded reply",
+      citations: [],
+    } as unknown as Awaited<ReturnType<typeof askGrounded>>);
+    const { result } = renderHook(() => useChatSession({ autoCreate: false }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await act(async (): Promise<void> => {
+      await result.current.sendMessage({ text: "Ground this first." });
+    });
+    expect(result.current.latestGrounded).toBeDefined();
+    vi.mocked(fetchChats).mockResolvedValueOnce({ chats: [] });
+
+    await act(async (): Promise<void> => {
+      await result.current.openProject(project("/empty"));
+    });
+
+    expect(result.current.activeProject?.path).toBe("/empty");
+    expect(result.current.activeChat).toBeUndefined();
+    expect(result.current.messages).toEqual([]);
+    expect(result.current.latestGrounded).toBeUndefined();
+    expect(createDesktopChat).not.toHaveBeenCalled();
+  });
 });
 
-// 0.3.0 release audit — the composer draft and the staged attachment queue are one app-wide
-// slot (the chat window is a singleton). Switching conversations reset the stream bubble, the
-// grounded answer and the document note, but never the composer: a document attached in chat A
-// was extracted and sent into chat B, possibly under a different model and provider. Content a
-// user staged in one conversation must never ride along into another.
+// 0.3.0 release audit — a session's composer draft and staged attachments must stay bound to its
+// conversation. ADR-0114 now mounts one session per chat window; switching a session still clears
+// its own composer, while sibling windows have independent session instances.
 describe("useChatSession conversation switch — composer isolation", () => {
   async function setupTwoChatSession(): Promise<
     ReturnType<typeof renderHook<ReturnType<typeof useChatSession>, never>>
@@ -1210,12 +1696,14 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
   // Helper: bootstrap the hook with a grounded chat and a model that accepts documents.
   async function setupGroundedSession(
     initialMessages: readonly ChatMessage[] = [],
+    chatPatch: Partial<Chat> = {},
   ): Promise<ReturnType<typeof renderHook<ReturnType<typeof useChatSession>, never>>> {
     const groundedChat = chat({
       id: "chat-grounded",
       selectedModel: "chat-doc",
       // connectedScopes is non-empty → hasGroundingScope returns true
       connectedScopes: [{ kind: "files" as const, relativePaths: ["README.md"], connectedAtMs: 1 }],
+      ...chatPatch,
     });
     vi.mocked(fetchModels).mockResolvedValue({
       models: [model({ id: "chat-doc", supportsDocumentInput: true })],
@@ -1256,6 +1744,29 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
     expect(result.current.messages).toHaveLength(0);
   });
 
+  it("treats git-change scopes as grounded when attachments are staged", async () => {
+    const { result } = await setupGroundedSession([], {
+      connectedScopes: [],
+      gitChangeScopes: [gitChangeScope()],
+    });
+
+    await act(async () => {
+      const outcome = await result.current.addPendingAttachment(
+        new File(["hello"], "notes.txt", { type: "text/plain" }),
+      );
+      expect(outcome).toEqual({ ok: true });
+    });
+    act(() => {
+      result.current.setDraft("Summarise this Git change.");
+    });
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+
+    expect(result.current.error).toBe(GROUNDED_ATTACHMENT_NOTICE);
+    expect(askGrounded).not.toHaveBeenCalled();
+  });
+
   // GEN-PERF-CHAT-008 (keiko-ui side) — a grounded turn must issue EXACTLY ONE messages fetch and
   // EXACTLY ONE chats fetch to reconcile after the ask (no duplicate refetch storm). The deeper fix
   // (server returning the {chat, messages} delta so the client applies it locally with zero
@@ -1263,6 +1774,12 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
   // never regresses to more than one of each per grounded turn.
   it("issues exactly one messages fetch and one chats fetch per grounded turn", async () => {
     const { result } = await setupGroundedSession();
+
+    // Privacy default is off. This explicit action models the user's Brain-icon activation and
+    // proves that the enabled retrieval request still receives the standard 1,200-token budget.
+    act(() => {
+      result.current.setMemoryEnabled(true);
+    });
 
     // Reset the boot-time fetch counts so we measure only the grounded turn's traffic.
     vi.mocked(fetchChatMessages).mockClear();
@@ -1327,6 +1844,7 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
       outcome = await result.current.sendMessage({
         text: "ground this voice turn",
         clientTurnId: "grounded-voice-1",
+        correlationId: "voice-grounded-correlation",
         reportOutcome: true,
       });
     });
@@ -1341,15 +1859,19 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
         expectedGroundingScopeIdentity: `gsi-v1:${"a".repeat(64)}`,
       }),
       expect.any(AbortSignal),
+      "voice-grounded-correlation",
     );
   });
 
   // #2843 — the grounded route has no attachment channel, so a grounded chat drops staged attachments
   // for typed AND spoken turns. A typed send is rejected before admission; a settled final transcript
-  // must never be discarded (ADR-0154 D1), so the spoken turn proceeds and the SAME notice states that
-  // the staged attachments were not part of it. Before this pin the spoken turn was silent: the user
-  // saw an answer with no indication their attachment had been ignored.
-  it("surfaces the grounded attachment notice for a spoken turn instead of dropping it silently", async (): Promise<void> => {
+  // must never be discarded (ADR-0154 D1), so the spoken turn proceeds and a DISTINCT notice states
+  // that the staged attachments were not part of it (KEIKO-0793: this used to reuse the typed path's
+  // full-reject GROUNDED_ATTACHMENT_NOTICE verbatim, describing two materially different outcomes —
+  // "nothing was sent" vs. "the turn was sent, attachments dropped" — identically). Before the #2843
+  // pin, the spoken turn was silent: the user saw an answer with no indication their attachment had
+  // been ignored.
+  it("surfaces a distinct dropped-attachment notice for a spoken turn instead of dropping it silently", async (): Promise<void> => {
     const { result } = await setupGroundedSession();
     vi.mocked(fetchChatMessages).mockResolvedValue({
       messages: [
@@ -1391,7 +1913,10 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
 
     expect(outcome).toEqual({ status: "completed", assistantMessageId: "grounded-assistant" });
     expect(askGrounded).toHaveBeenCalledTimes(1);
-    expect(result.current.error).toBe(GROUNDED_ATTACHMENT_NOTICE);
+    // KEIKO-0793: the voice admit-and-drop notice must be distinct from the typed path's true
+    // pre-admission full-reject notice — they describe materially different outcomes.
+    expect(result.current.error).toBe(GROUNDED_ATTACHMENT_DROPPED_NOTICE);
+    expect(result.current.error).not.toBe(GROUNDED_ATTACHMENT_NOTICE);
     // Nothing was consumed, so the file stays staged and the user can remove it or move it to a
     // non-grounded chat rather than silently losing it.
     expect(result.current.pendingAttachments).toHaveLength(1);
@@ -2037,6 +2562,44 @@ describe("useChatSession sendMessage — explicit text option (Issue #1561)", ()
 
     expect(sendDesktopChat).not.toHaveBeenCalled();
     expect(result.current.messages).toHaveLength(0);
+  });
+
+  // KEIKO-0608: resolveSendMessageAdmission (typed path) used to perform no check against
+  // MAX_DESKTOP_CHAT_INPUT_CHARS/BYTES at all — only enqueueCanonicalVoiceTurn (voice) did. An
+  // oversized typed paste was accepted client-side, discovered only after a wasted round trip when
+  // the server's own cap rejected it, by which point the draft had already been cleared.
+  it("rejects an oversized typed draft client-side without a network round trip or clearing the draft", async () => {
+    const { result } = await setupUngroundedSession();
+    const oversized = "x".repeat(MAX_DESKTOP_CHAT_INPUT_CHARS + 1);
+    act(() => {
+      result.current.setDraft(oversized);
+    });
+
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+
+    expect(sendDesktopChat).not.toHaveBeenCalled();
+    expect(result.current.error).toBe(DESKTOP_CHAT_INPUT_TOO_LARGE_ERROR);
+    // The oversized draft must survive the rejected attempt so the user can trim and resend
+    // instead of retyping it from scratch.
+    expect(result.current.draft).toBe(oversized);
+    expect(result.current.messages).toHaveLength(0);
+  });
+
+  it("accepts a draft at exactly MAX_DESKTOP_CHAT_INPUT_CHARS", async () => {
+    const { result } = await setupUngroundedSession();
+    const maximal = "x".repeat(MAX_DESKTOP_CHAT_INPUT_CHARS);
+    act(() => {
+      result.current.setDraft(maximal);
+    });
+
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+
+    expect(sendDesktopChat).toHaveBeenCalledTimes(1);
+    expect(result.current.error).toBeUndefined();
   });
 
   it("is idempotent for the explicit-text path — a same-tick double send fires once", async () => {
@@ -2840,6 +3403,113 @@ describe("useChatSession canonical Voice FIFO", () => {
       "multi-window-turn",
     ]);
     windowA.unmount();
+  });
+
+  it("reconciles a fallback delivery into the remounted target chat session", async () => {
+    const chatA = chat({ id: "chat-a", updatedAt: 2 });
+    const chatB = chat({ id: "chat-b", updatedAt: 1 });
+    const firstRequest = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    const fallbackRequest = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    vi.mocked(sendDesktopChat)
+      .mockImplementationOnce((_request, signal) => {
+        signal?.addEventListener(
+          "abort",
+          () => firstRequest.reject(new DOMException("cancelled", "AbortError")),
+          { once: true },
+        );
+        return firstRequest.promise;
+      })
+      .mockReturnValueOnce(fallbackRequest.promise);
+    const fallbackWindow = await setupVoiceQueueSession([chatA, chatB]);
+    const targetWindow = await setupVoiceQueueSession([chatA, chatB]);
+    await act(async () => targetWindow.result.current.openChat(chatB));
+    let delivery: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      delivery = targetWindow.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("survives remount", "voice-remount", chatB),
+      );
+    });
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledOnce());
+
+    targetWindow.unmount();
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledTimes(2));
+    const replacementA = await setupVoiceQueueSession([chatA, chatB]);
+    const replacementB = await setupVoiceQueueSession([chatA, chatB]);
+    await act(async () => {
+      await Promise.all([
+        replacementA.result.current.openChat(chatB),
+        replacementB.result.current.openChat(chatB),
+      ]);
+    });
+    vi.mocked(fetchChatMessages).mockResolvedValue({
+      messages: [
+        message({ id: "voice-remount-user", chatId: chatB.id, content: "survives remount" }),
+        message({
+          id: "voice-remount-assistant",
+          chatId: chatB.id,
+          content: "Answer: survives remount",
+          role: "assistant",
+        }),
+      ],
+    });
+    vi.mocked(fetchChatMessages).mockClear();
+    vi.mocked(fetchChats).mockClear();
+
+    fallbackRequest.resolve(completedTurn("survives remount", "voice-remount-assistant", chatB.id));
+    await act(async () => {
+      await delivery;
+    });
+
+    for (const replacement of [replacementA, replacementB]) {
+      expect(replacement.result.current.messages).toContainEqual(
+        expect.objectContaining({ id: "voice-remount-assistant", chatId: chatB.id }),
+      );
+      replacement.unmount();
+    }
+    expect(fetchChatMessages).toHaveBeenCalledOnce();
+    expect(fetchChats).toHaveBeenCalledOnce();
+    fallbackWindow.unmount();
+  });
+
+  it("delivers each queued turn through the chat session that accepted it", async () => {
+    const chatA = chat({ id: "chat-a", updatedAt: 2 });
+    const chatB = chat({ id: "chat-b", updatedAt: 1 });
+    const firstRequest = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    vi.mocked(sendDesktopChat)
+      .mockReturnValueOnce(firstRequest.promise)
+      .mockResolvedValueOnce(completedTurn("voice from B", "assistant-b", chatB.id));
+    const windowA = await setupVoiceQueueSession([chatA, chatB]);
+    const windowB = await setupVoiceQueueSession([chatA, chatB]);
+    await act(async () => windowB.result.current.openChat(chatB));
+
+    let first: Promise<SendMessageOutcome> | undefined;
+    let second: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      first = windowA.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("voice from A", "voice-owner-a", chatA),
+      );
+    });
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledOnce());
+    act(() => {
+      second = windowB.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("voice from B", "voice-owner-b", chatB),
+      );
+    });
+
+    firstRequest.resolve(completedTurn("voice from A", "assistant-a", chatA.id));
+    await act(async () => {
+      await first;
+      await second;
+    });
+
+    expect(windowA.result.current.messages).toContainEqual(
+      expect.objectContaining({ id: "assistant-a", chatId: chatA.id }),
+    );
+    expect(windowB.result.current.messages).toContainEqual(
+      expect.objectContaining({ id: "assistant-b", chatId: chatB.id }),
+    );
+    windowA.unmount();
+    windowB.unmount();
   });
 
   it("keeps a final bound to its chat project while another project is opening", async () => {
@@ -3924,6 +4594,85 @@ describe("useChatSession canonical Voice FIFO", () => {
     expect(sendDesktopChat).not.toHaveBeenCalled();
     expect(askGrounded).not.toHaveBeenCalled();
   });
+
+  // KEIKO-0485 — ADR-0154 D1 characterization pin. The canonical Voice FIFO captures the memory
+  // request at enqueue time and delivers it verbatim; a memory-settings change made after the turn
+  // was queued does NOT retroactively rewrite the queued turn's memory (or its target modelId).
+  // This test exists so a future change cannot silently start re-deriving settings at drain time —
+  // that would directly contradict ADR-0154 D1's accepted "immutable target captured during
+  // handoff" text and needs an ADR amendment, not a quiet behavior change.
+  it("pins the memory request captured at enqueue time even if settings change before drain", async () => {
+    const rendered = await setupVoiceQueueSession();
+    const settings = renderHook(() => useConversationMemorySettings());
+    await waitFor(() => expect(rendered.result.current.loading).toBe(false));
+
+    // Initial settings at ENQUEUE time for the target turn.
+    act(() => {
+      settings.result.current.setMemoryEnabled(true);
+      settings.result.current.setMemoryBudgetTokens(1234);
+      settings.result.current.setMemoryMode("supervised-coding");
+    });
+
+    // Codex on PR #3089 (3764952038): to actually catch a regression that moves memory capture
+    // from enqueue time to drain time, the target turn has to sit in the FIFO — behind an earlier
+    // turn — while settings change. A deferred sendDesktopChat delays only the RESPONSE, not
+    // queue advancement, so the target's request object was constructed pre-mutation regardless
+    // of when the derivation actually runs. Block the FIFO with a prior turn instead.
+    const blockerGate = deferred<Awaited<ReturnType<typeof sendDesktopChat>>>();
+    vi.mocked(sendDesktopChat)
+      .mockImplementationOnce(async () => blockerGate.promise as never)
+      .mockImplementationOnce(async () =>
+        completedTurn("pinned memory turn", "memory-pin-assistant"),
+      );
+
+    let blocker: Promise<SendMessageOutcome> | undefined;
+    let target: Promise<SendMessageOutcome> | undefined;
+    act(() => {
+      blocker = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("blocker turn", "voice-memory-blocker"),
+      );
+      target = rendered.result.current.enqueueCanonicalVoiceTurn?.(
+        canonicalVoiceTurn("pinned memory turn", "voice-memory-pin"),
+      );
+    });
+    // The FIFO drains one at a time; the target must still be queued behind the blocker.
+    await waitFor(() => expect(sendDesktopChat).toHaveBeenCalledTimes(1));
+
+    // Mutate every memory input WHILE the target sits in the FIFO. A re-derivation at drain
+    // time would land these values on the pending turn — the pin exists to prove that never
+    // happens.
+    act(() => {
+      settings.result.current.setMemoryEnabled(false);
+      settings.result.current.setMemoryBudgetTokens(9999);
+      settings.result.current.setMemoryMode("autonomous-delivery");
+    });
+
+    // Release the blocker so the target advances through the FIFO — the derivation, if any,
+    // would run now, under the mutated settings.
+    blockerGate.resolve(completedTurn("blocker turn", "blocker-assistant"));
+    await act(async () => {
+      await blocker;
+      await target;
+    });
+
+    // KfQ 3765528715: pin that both the blocker AND the target actually reached the wire — if the
+    // target never drained, `targetRequest?.memory` would be `undefined` and every `not.toMatchObject`
+    // assertion would trivially pass, hiding a regression that stopped draining the queue.
+    expect(sendDesktopChat).toHaveBeenCalledTimes(2);
+    // The target turn is the SECOND sendDesktopChat call.
+    const targetRequest = vi.mocked(sendDesktopChat).mock.calls[1]?.[0];
+    // ADR-0154 D1: memory captured at enqueue time survives every intervening settings change,
+    // even when drain happens after the change.
+    expect(targetRequest?.memory).toMatchObject({
+      enabled: true,
+      budgetTokens: 1234,
+      mode: "supervised-coding",
+      surface: "voice",
+    });
+    expect(targetRequest?.memory).not.toMatchObject({ enabled: false });
+    expect(targetRequest?.memory).not.toMatchObject({ budgetTokens: 9999 });
+    expect(targetRequest?.memory).not.toMatchObject({ mode: "autonomous-delivery" });
+  });
 });
 
 describe("useChatSession memory autonomy hydration", () => {
@@ -3947,6 +4696,31 @@ describe("useChatSession memory autonomy hydration", () => {
     const settings = renderHook(() => useConversationMemorySettings());
 
     await waitFor(() => expect(settings.result.current.memoryMode).toBe("autonomous-delivery"));
+  });
+
+  it("shares one in-flight policy hydration across concurrent session mounts", async () => {
+    mockMinimalBootstrap();
+    const hydration = deferred<{
+      requestedMode: "supervised-coding";
+      effectiveMode: "supervised-coding";
+      deploymentCeiling: "supervised-coding";
+      revision: number;
+    }>();
+    vi.mocked(loadMemoryAutonomyMode).mockReturnValue(hydration.promise);
+
+    renderHook(() => useChatSession({ autoCreate: false }));
+    renderHook(() => useChatSession({ autoCreate: false }));
+
+    expect(loadMemoryAutonomyMode).toHaveBeenCalledOnce();
+    await act(async () => {
+      hydration.resolve({
+        requestedMode: "supervised-coding",
+        effectiveMode: "supervised-coding",
+        deploymentCeiling: "supervised-coding",
+        revision: 1,
+      });
+      await hydration.promise;
+    });
   });
 
   it("does not let a stale hydration response overwrite a newer selection", async () => {

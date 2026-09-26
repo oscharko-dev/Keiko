@@ -7,13 +7,13 @@
 // SDP, or `message` object ever reaches the metrics observer (AC6).
 
 import { describe, expect, it, vi } from "vitest";
-import {
-  VOICE_PROTOCOL_VERSION,
-  type VoiceControlMessage,
-  type VoiceControlMessageKind,
-  type VoiceMediaTrackState,
-  type VoicePlaybackState,
+import type {
+  VoiceControlMessage,
+  VoiceControlMessageKind,
+  VoiceMediaTrackState,
+  VoicePlaybackState,
 } from "@oscharko-dev/keiko-contracts";
+import { VOICE_PROTOCOL_VERSION } from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
 import type { VoiceProfile, VoiceCapabilityResolution } from "@/lib/types";
 import {
   createVoiceTimebaseEngine,

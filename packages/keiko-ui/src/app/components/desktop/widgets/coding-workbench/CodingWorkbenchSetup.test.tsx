@@ -3,11 +3,12 @@
 // the runtime is available and no binding is active, drives provision → set-active → refresh with
 // the entered repository path and target branch, and surfaces failures as a content-free alert.
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { useState, type ReactNode } from "react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorkspaceBinding } from "@oscharko-dev/keiko-contracts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { WorkspaceBinding, WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import type { CodingWorkbenchRuntimeActions } from "@/lib/useCodingWorkbenchRuntime";
 import {
   createInitialCodingWorkbenchRuntimeState,
@@ -17,23 +18,93 @@ import {
   ActiveWorkspaceProvider,
   type ActiveWorkspaceApi,
 } from "../../context/ActiveWorkspaceContext";
-import { codingWorkbenchSetupTaskId, stripLeadingAndTrailingDashes } from "./CodingWorkbenchSetup";
+import {
+  CodingWorkbenchSetup,
+  codingWorkbenchSetupTaskId,
+  stripLeadingAndTrailingDashes,
+} from "./CodingWorkbenchSetup";
 import { CodingWorkbenchWindow } from "./CodingWorkbenchWindow";
+import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 
 const runtimeHookMock = vi.hoisted(() => vi.fn());
 const provisionMock = vi.hoisted(() => vi.fn());
 const reconcileMock = vi.hoisted(() => vi.fn());
 const setActiveMock = vi.hoisted(() => vi.fn());
+const listMock = vi.hoisted(() => vi.fn());
+const repairMock = vi.hoisted(() => vi.fn());
+const baseBranchMock = vi.hoisted(() => vi.fn());
+const branchRead = vi.hoisted(() => ({ loading: false, error: null as string | null }));
+// The native folder picker is off by default so the existing tests keep asserting the plain text
+// input; the picker-focused describe below flips `supported` on and drives the outcome.
+const nativeDialogState = vi.hoisted(() => ({
+  supported: false,
+  pick: vi.fn(),
+}));
 
 vi.mock("@/lib/useCodingWorkbenchRuntime", () => ({
   useCodingWorkbenchRuntime: runtimeHookMock,
+}));
+
+vi.mock("../../hooks/useRepositoryBranchState", () => ({
+  useRepositoryBranchState: (): unknown => ({
+    branches: [
+      "main",
+      "master",
+      "dev",
+      "trunk",
+      "release/1",
+      "release/1.0",
+      "release/2",
+      "feature/typed",
+      "main-next",
+    ].map((name) => ({ name, current: name === "main" })),
+    currentBranch: "main",
+    ...branchRead,
+    refresh: vi.fn(),
+  }),
 }));
 
 vi.mock("@/lib/task-workspace-api", () => ({
   provisionTaskWorkspace: provisionMock,
   reconcileTaskWorkspaces: reconcileMock,
   setActiveTaskWorkspace: setActiveMock,
+  listTaskWorkspaces: listMock,
+  repairTaskWorkspace: repairMock,
+  fetchRepositoryBaseBranch: baseBranchMock,
 }));
+
+vi.mock("../../hooks/useNativeFileDialogCapability", () => ({
+  useNativeFileDialogCapability: (): boolean => nativeDialogState.supported,
+}));
+
+vi.mock("@/lib/native-file-dialog", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/native-file-dialog")>();
+  return {
+    ...actual,
+    pickWithNativeDialog: nativeDialogState.pick,
+  };
+});
+
+// The persisted row provisioning refused for the (repository, task) pair the setup card derives
+// from the target branch, carrying the classified finding and the server's recovery hint.
+function refusedWorkspace(
+  hint: { readonly strategy: string; readonly operatorActionRequired: boolean },
+  marker = "identity-schema-retired",
+): unknown {
+  return {
+    workspaceId: "ws-refused",
+    taskId: codingWorkbenchSetupTaskId("main"),
+    driftMarkers: [marker],
+    recoveryHints: [{ marker, ...hint }],
+  };
+}
+
+function pointerDrift(): Error {
+  return Object.assign(new Error("sensitive worktree detail"), {
+    code: "POINTER_DRIFT",
+    failureClass: "repairable",
+  });
+}
 
 // A content-free reconciliation report whose single entry classifies the just-provisioned workspace.
 // `verifyBoundWorkspace` reads only `entries[].workspaceId` and `.status`, so the minimal shape suffices.
@@ -65,18 +136,63 @@ function workspaceApi(overrides: Partial<ActiveWorkspaceApi> = {}): ActiveWorksp
     loading: false,
     switching: false,
     error: null,
-    refresh: vi.fn(() => Promise.resolve()),
-    switchTo: vi.fn(() => Promise.resolve()),
-    clearActive: vi.fn(() => Promise.resolve()),
-    pause: vi.fn(() => Promise.resolve()),
-    resume: vi.fn(() => Promise.resolve()),
-    prepareHandoff: vi.fn(() => Promise.resolve()),
-    provision: vi.fn(() => Promise.resolve()),
+    inventoryUnavailable: false,
+    refresh: vi.fn(() => Promise.resolve(true)),
+    switchTo: vi.fn(() => Promise.resolve(true)),
+    clearActive: vi.fn(() => Promise.resolve(true)),
+    pause: vi.fn(() => Promise.resolve(true)),
+    resume: vi.fn(() => Promise.resolve(true)),
+    prepareHandoff: vi.fn(() => Promise.resolve(true)),
+    repair: vi.fn(() => Promise.resolve(true)),
+    provision: vi.fn(() => Promise.resolve(true)),
     ...overrides,
   };
 }
 
-function liveState(runtimeAvailable = true): CodingWorkbenchRuntimeState {
+// A workspace bound to `repositoryRoot` on `baseBranch`, as after the Workbench's own bind.
+function boundWorkspaceApi(repositoryRoot: string, baseBranch: string): ActiveWorkspaceApi {
+  const at = "2026-09-11T08:19:00.000Z";
+  const instance: WorkspaceInstance = {
+    schemaVersion: "1",
+    workspaceId: "ws-bound",
+    taskId: codingWorkbenchSetupTaskId(baseBranch),
+    repositoryId: "repository-bound",
+    repositoryRoot,
+    baseBranch,
+    taskBranch: "keiko/bound",
+    managedWorktreePath: "/worktrees/bound",
+    gitdirIdentity: "gitdir-bound",
+    lifecycleState: "active",
+    health: "healthy",
+    lock: null,
+    createdAt: at,
+    updatedAt: at,
+    driftMarkers: [],
+    recoveryHints: [],
+    auditCorrelationId: "correlation-bound",
+  };
+  const binding: WorkspaceBinding = {
+    schemaVersion: "1",
+    workspaceId: instance.workspaceId,
+    taskId: instance.taskId,
+    activeRoot: instance.managedWorktreePath,
+    boundSurfaces: ["git-delivery"],
+    gitDeliveryRoot: instance.managedWorktreePath,
+    editorProjectRoot: instance.managedWorktreePath,
+  };
+  return workspaceApi({
+    instances: [instance],
+    activeBinding: binding,
+    activeInstance: instance,
+    activeRoot: instance.managedWorktreePath,
+  });
+}
+
+function liveState(
+  runtimeAvailable = true,
+  runtimeEvidenceClass:
+    "platform-qualified" | "functional-not-platform-qualified" = "platform-qualified",
+): CodingWorkbenchRuntimeState {
   return {
     ...createInitialCodingWorkbenchRuntimeState(),
     runtime: {
@@ -87,6 +203,7 @@ function liveState(runtimeAvailable = true): CodingWorkbenchRuntimeState {
         deploymentCeiling: "supervised-coding",
         effectiveMode: "governed-assist",
         runtimeAvailable,
+        ...(runtimeAvailable ? { runtimeEvidenceClass } : {}),
       },
       error: null,
     },
@@ -97,6 +214,8 @@ function actions(): CodingWorkbenchRuntimeActions {
   return {
     setRequestedMode: vi.fn(),
     setRuntimePreference: vi.fn(),
+    setSelectedModel: vi.fn(),
+    setReasoningEffort: vi.fn(),
     refreshProfile: vi.fn(() => Promise.resolve()),
     refreshSource: vi.fn(() => Promise.resolve()),
     refreshRuntime: vi.fn(() => Promise.resolve()),
@@ -131,11 +250,80 @@ function setupSection(): HTMLElement | null {
   return screen.queryByRole("region", { name: "Code setup" });
 }
 
+// Repository/base attribution pins remain at the owning setup component after the issue wizard's
+// removal; issue prompts now carry their bound repository directly to the preview route.
+function BoundSetup({ base }: { readonly base: string }): ReactNode {
+  const [draft, setDraft] = useState<string | null>(null);
+  return (
+    <CodingWorkbenchSetup
+      selectedRoot="/repos/target"
+      selectedBaseBranch={base}
+      refreshWorkspace={async () => true}
+      runtimePosture="verified"
+      repositoryPathDraft={draft}
+      onRepositoryPathDraftChange={setDraft}
+    />
+  );
+}
+
+type UserApi = ReturnType<typeof userEvent.setup>;
+
+function bindButton(): HTMLElement {
+  return screen.getByRole("button", { name: "Bind workspace" });
+}
+
+// Waits for the card to be bindable. A path the operator entered has no branch default yet — the
+// lookup is armed when they LEAVE the field, and binding stays refused until it settles, so the
+// task id can never be derived from the previous repository's untouched default (CodeRabbit review
+// of #3381).
+async function bindable(): Promise<HTMLElement> {
+  const button = bindButton();
+  await waitFor(() => {
+    expect(button).toBeEnabled();
+  });
+  return button;
+}
+
+// The operator's own sequence for a typed checkout: enter the path, leave the field, bind.
+async function bindEnteredPath(user: UserApi, path: string): Promise<void> {
+  await user.type(screen.getByLabelText("Repository path"), path);
+  await user.tab();
+  await user.click(await bindable());
+}
+
+// Runs the bind sequence's remaining continuations to completion. Used where the assertion is that
+// NOTHING is published, which has no positive signal of its own to wait for.
+async function flushBindSequence(): Promise<void> {
+  await act(async () => {
+    for (let step = 0; step < 8; step += 1) await Promise.resolve();
+  });
+}
+
 describe("CodingWorkbenchSetup", () => {
   beforeEach(() => {
     provisionMock.mockReset();
     reconcileMock.mockReset();
     setActiveMock.mockReset();
+    listMock.mockReset();
+    repairMock.mockReset();
+    baseBranchMock.mockReset();
+    baseBranchMock.mockResolvedValue(null);
+    branchRead.loading = false;
+    branchRead.error = null;
+  });
+
+  afterEach(() => {
+    resetClientDiagnosticWriter();
+  });
+
+  it.each(["loading", "failed"])("does not bind while branch inventory is %s", async (state) => {
+    branchRead.loading = state === "loading";
+    branchRead.error = state === "failed" ? "Branch lookup failed" : null;
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+    await flushBindSequence();
+    expect(bindButton()).toBeDisabled();
+    await userEvent.setup().type(screen.getByLabelText("Repository path"), "{Enter}");
+    expect(provisionMock).not.toHaveBeenCalled();
   });
 
   it("renders the setup section while the runtime is available and no binding is active", async () => {
@@ -155,12 +343,47 @@ describe("CodingWorkbenchSetup", () => {
     ).toEqual([]);
   });
 
-  it("prefills the selected Workbench repository without granting managed execution authority", () => {
+  // ADR-0163 D9: the bootstrap setup section is the FIRST screen a fresh evaluation install shows.
+  // A clean form here would imply a verified runtime.
+  it("states the unverified evaluation runtime on the bootstrap setup screen", async () => {
+    const { container } = renderWorkbench(
+      workspaceApi(),
+      liveState(true, "functional-not-platform-qualified"),
+    );
+
+    expect(setupSection()).toBeInTheDocument();
+    const note = screen.getByTestId("coding-workbench-setup-runtime-evaluation-note");
+    expect(note).toHaveTextContent(/unverified evaluation runtime/iu);
+    // The unavailable note states a different condition and must not appear alongside it.
+    expect(screen.queryByTestId("coding-workbench-setup-runtime-note")).not.toBeInTheDocument();
+
+    const report = await axe(container);
+    expect(
+      report.violations.filter((violation) =>
+        ["serious", "critical"].includes(violation.impact ?? ""),
+      ),
+    ).toEqual([]);
+  });
+
+  it("renders neither runtime note on a platform-qualified install", () => {
+    renderWorkbench(workspaceApi(), liveState(true, "platform-qualified"));
+
+    expect(setupSection()).toBeInTheDocument();
+    expect(screen.queryByTestId("coding-workbench-setup-runtime-note")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("coding-workbench-setup-runtime-evaluation-note"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("prefills the selected Workbench repository without granting managed execution authority", async () => {
     renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
 
     expect(setupSection()).toBeInTheDocument();
     expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/selected");
-    expect(screen.getByRole("button", { name: "Bind workspace" })).toBeEnabled();
+    // The selection arms the branch lookup for that repository, and binding waits for it: until it
+    // settles the field still shows the fallback, which belongs to no repository at all.
+    expect(bindButton()).toBeDisabled();
+    await bindable();
     expect(setActiveMock).not.toHaveBeenCalled();
   });
 
@@ -173,12 +396,11 @@ describe("CodingWorkbenchSetup", () => {
     renderWorkbench(api);
 
     await user.type(screen.getByLabelText("Repository path"), "/repos/keiko-checkout");
-    await user.clear(screen.getByLabelText("Target branch"));
-    await user.type(screen.getByLabelText("Target branch"), "dev");
+    await user.selectOptions(screen.getByLabelText("Target branch"), "dev");
     await user.click(screen.getByRole("button", { name: "Bind workspace" }));
 
     await waitFor(() => {
-      expect(api.refresh).toHaveBeenCalledWith("/repos/keiko-checkout");
+      expect(api.refresh).toHaveBeenCalledTimes(1);
     });
     expect(provisionMock).toHaveBeenCalledWith({
       root: "/repos/keiko-checkout",
@@ -202,8 +424,7 @@ describe("CodingWorkbenchSetup", () => {
     reconcileMock.mockResolvedValue(reconciliationReport("ws-9", "drifted"));
     renderWorkbench(api);
 
-    await user.type(screen.getByLabelText("Repository path"), "/repos/dirty-checkout");
-    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+    await bindEnteredPath(user, "/repos/dirty-checkout");
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(
@@ -223,8 +444,7 @@ describe("CodingWorkbenchSetup", () => {
     reconcileMock.mockRejectedValue(new Error("RECONCILIATION_UNAVAILABLE"));
     renderWorkbench(api);
 
-    await user.type(screen.getByLabelText("Repository path"), "/repos/x");
-    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+    await bindEnteredPath(user, "/repos/x");
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent("The workspace could not be verified.");
@@ -241,8 +461,7 @@ describe("CodingWorkbenchSetup", () => {
     setActiveMock.mockRejectedValue(new Error("ACTIVATION_FAILED"));
     renderWorkbench(api);
 
-    await user.type(screen.getByLabelText("Repository path"), "/repos/x");
-    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+    await bindEnteredPath(user, "/repos/x");
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(
@@ -254,13 +473,62 @@ describe("CodingWorkbenchSetup", () => {
     expect(api.refresh).not.toHaveBeenCalled();
   });
 
+  // Provision, reconcile and activate all COMPLETED here — only the shared context refresh did
+  // not settle (a newer operation superseded it). Reporting that as the generic bind failure told
+  // the operator to review a path and branch that were both accepted, and hid the fact that the
+  // workspace IS bound (#3381 review).
+  it("names a bound workspace whose view could not refresh instead of blaming the bind", async () => {
+    const user = userEvent.setup();
+    const diagnostics: string[] = [];
+    setClientDiagnosticWriter((message) => diagnostics.push(message));
+    const api = workspaceApi({ refresh: vi.fn(() => Promise.resolve(false)) });
+    provisionMock.mockResolvedValue({ instance: { workspaceId: "ws-9" }, created: true });
+    reconcileMock.mockResolvedValue(reconciliationReport("ws-9", "healthy"));
+    setActiveMock.mockResolvedValue({});
+    renderWorkbench(api);
+
+    await bindEnteredPath(user, "/repos/x");
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(
+      "The workspace was bound, but this view could not refresh. Open Task workspaces and use Refresh.",
+    );
+    expect(alert).not.toHaveTextContent("Review the repository path and target branch.");
+    expect(api.refresh).toHaveBeenCalledTimes(1);
+    expect(diagnostics).toContain("[keiko] coding workbench workspace refresh did not settle");
+  });
+
+  it("names a bound workspace whose refresh threw instead of blaming the bind", async () => {
+    const user = userEvent.setup();
+    const diagnostics: string[] = [];
+    setClientDiagnosticWriter((message) => diagnostics.push(message));
+    const api = workspaceApi({
+      refresh: vi.fn(() => Promise.reject(new Error("REFRESH_TRANSPORT_FAILED"))),
+    });
+    provisionMock.mockResolvedValue({ instance: { workspaceId: "ws-9" }, created: true });
+    reconcileMock.mockResolvedValue(reconciliationReport("ws-9", "healthy"));
+    setActiveMock.mockResolvedValue({});
+    renderWorkbench(api);
+
+    await bindEnteredPath(user, "/repos/x");
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("The workspace was bound, but this view could not refresh.");
+    expect(alert).not.toHaveTextContent("Review the repository path and target branch.");
+    expect(alert).not.toHaveTextContent("REFRESH_TRANSPORT_FAILED");
+    expect(
+      diagnostics.some((line) =>
+        line.includes("[keiko] coding workbench workspace refresh failed"),
+      ),
+    ).toBe(true);
+  });
+
   it("surfaces a content-free alert when the bind fails and never activates", async () => {
     const user = userEvent.setup();
     provisionMock.mockRejectedValue(new Error("WORKSPACE_ROOT_INVALID"));
     renderWorkbench(workspaceApi());
 
-    await user.type(screen.getByLabelText("Repository path"), "/repos/broken");
-    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+    await bindEnteredPath(user, "/repos/broken");
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(
@@ -268,6 +536,33 @@ describe("CodingWorkbenchSetup", () => {
     );
     expect(alert).not.toHaveTextContent("WORKSPACE_ROOT_INVALID");
     expect(setActiveMock).not.toHaveBeenCalled();
+  });
+
+  it("binds a separate task when another installation already owns the default task branch", async () => {
+    const user = userEvent.setup();
+    const api = workspaceApi();
+    provisionMock.mockRejectedValueOnce(
+      Object.assign(new Error("Existing task branch"), {
+        code: "BRANCH_CONFLICT",
+        failureClass: "blocked",
+      }),
+    );
+    provisionMock.mockResolvedValue({ instance: { workspaceId: "ws-new" }, created: true });
+    reconcileMock.mockResolvedValue(reconciliationReport("ws-new", "healthy"));
+    renderWorkbench(api, liveState(), "/repos/selected");
+    await user.click(await bindable());
+    await waitFor(() => expect(api.refresh).toHaveBeenCalledOnce());
+    expect(provisionMock).toHaveBeenCalledTimes(2);
+    expect(provisionMock.mock.calls[1]?.[0]).toEqual({
+      root: "/repos/selected",
+      baseBranch: "main",
+      taskId: expect.stringMatching(/^coding-workbench-main-[a-f0-9-]+$/u),
+      requestedBy: "studio-operator",
+    });
+    expect(setActiveMock).toHaveBeenCalledWith({
+      workspaceId: "ws-new",
+      requestedBy: "studio-operator",
+    });
   });
 
   it("explains a blocked task-branch conflict without exposing server detail", async () => {
@@ -298,6 +593,710 @@ describe("CodingWorkbenchSetup", () => {
     renderWorkbench(workspaceApi({ activeBinding: binding() }));
 
     expect(setupSection()).not.toBeInTheDocument();
+  });
+
+  // A checkout whose integration branch is `dev` was offered `main`, which does not resolve there
+  // and refused the bind with INVALID_BASE_BRANCH behind the generic sentence (2026-09-03 dev log).
+  it("defaults the target branch to the selected repository's checked-out branch", async () => {
+    baseBranchMock.mockResolvedValue("dev");
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Target branch")).toHaveValue("dev");
+    });
+    expect(baseBranchMock).toHaveBeenCalledWith("/repos/selected");
+  });
+
+  // F81 (run 28): issue intake after a bind reopened this card seeded with the server's workspace
+  // root and looked up that path's branch. It starts from the bound workspace instead: its
+  // repository and the base branch the operator bound, with no lookup for a path nobody chose.
+  it("uses the bound repository and its base branch without a lookup", () => {
+    render(<BoundSetup base="master" />);
+
+    expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/target");
+    expect(screen.getByLabelText("Target branch")).toHaveValue("master");
+    expect(baseBranchMock).not.toHaveBeenCalled();
+  });
+
+  // The same repository bound onto another base replaces the default it seeded (review on PR #3452):
+  // the earlier base must not stay settled for that path and reach the next bind.
+  it("takes a new bound base branch for the same repository", async () => {
+    const view = render(<BoundSetup base="master" />);
+    expect(screen.getByLabelText("Target branch")).toHaveValue("master");
+
+    view.rerender(<BoundSetup base="release/2" />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Target branch")).toHaveValue("release/2");
+    });
+    expect(baseBranchMock).not.toHaveBeenCalled();
+  });
+
+  // PR #3452 F52: the bootstrap card mounts only while NOTHING is bound, and the live UI flips that
+  // condition on its own within a second of load (observed on 14c4646f4: the card is up at first
+  // paint and gone once the binding and the run workspace arrive). The card owns the typed path in
+  // its own state, so the unmount discards it and the remount re-seeds from `selectedRoot` --
+  // silently replacing what the operator was typing.
+  //
+  // #3563: `bootstrapSetupVisible` now stays on when `selectedRoot !== boundRepositoryRoot` so an
+  // operator switching to a different repository sees the setup card back. The unmount that this
+  // F52 pin exercises therefore requires `selectedRoot === boundRepositoryRoot` (as the real bind
+  // flow guarantees through `onBoundRepository → onSelectRepository`), and the remount re-appears
+  // when the workspace is unbound with the operator's own selection restored. The draft the parent
+  // still holds must survive that flip.
+  it("keeps a typed repository path across a binding that unmounts and remounts the card", async () => {
+    const user = userEvent.setup();
+    const view = renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+    await user.clear(screen.getByLabelText("Repository path"));
+    await user.type(screen.getByLabelText("Repository path"), "/repos/typed-by-operator");
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={boundWorkspaceApi("/repos/target", "master")}>
+        <CodingWorkbenchWindow selectedRoot="/repos/target" />
+      </ActiveWorkspaceProvider>,
+    );
+    await waitFor(() => {
+      expect(setupSection()).not.toBeInTheDocument();
+    });
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={workspaceApi()}>
+        <CodingWorkbenchWindow selectedRoot="/repos/selected" />
+      </ActiveWorkspaceProvider>,
+    );
+
+    await waitFor(() => {
+      expect(setupSection()).toBeInTheDocument();
+    });
+    expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/typed-by-operator");
+  });
+
+  // PR #3452 review: the case above proves ONE well-formed path. The seeding rule treats drafts
+  // unequally, so the edges need their own coverage (AGENTS.md §10). A path is opaque to this card
+  // -- it is never parsed, joined or executed here -- so a traversal-shaped or newline-bearing
+  // string is data like any other and must survive the flip untouched, byte for byte.
+  it.each([
+    ["a path with surrounding spaces", "  /repos/padded  "],
+    ["a traversal-shaped path", "/repos/../../etc/passwd"],
+    ["a path carrying quotes and shell punctuation", '/repos/od d"name;$(x)&|'],
+    ["a single character", "/"],
+  ])("keeps %s across the binding flip", async (_label, draft) => {
+    const user = userEvent.setup();
+    const view = renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+    await user.clear(screen.getByLabelText("Repository path"));
+    await user.type(screen.getByLabelText("Repository path"), draft);
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={boundWorkspaceApi("/repos/target", "master")}>
+        <CodingWorkbenchWindow selectedRoot="/repos/target" />
+      </ActiveWorkspaceProvider>,
+    );
+    await waitFor(() => {
+      expect(setupSection()).not.toBeInTheDocument();
+    });
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={workspaceApi()}>
+        <CodingWorkbenchWindow selectedRoot="/repos/selected" />
+      </ActiveWorkspaceProvider>,
+    );
+
+    await waitFor(() => {
+      expect(setupSection()).toBeInTheDocument();
+    });
+    expect(screen.getByLabelText("Repository path")).toHaveValue(draft);
+  });
+
+  // The two drafts that are DELIBERATELY not kept, pinned so the rule above cannot be widened into
+  // them by accident: a field holding only whitespace is empty for seeding purposes, and a draft
+  // equal to the selection it was seeded from was never typed over. Both re-seed from the current
+  // selection instead of freezing the field against it.
+  it.each([
+    ["whitespace only", "   "],
+    ["the untouched seeded selection", "/repos/selected"],
+  ])("re-seeds a draft that is %s when the selection changes", async (_label, draft) => {
+    const user = userEvent.setup();
+    const view = renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+    await user.clear(screen.getByLabelText("Repository path"));
+    if (draft !== "") await user.type(screen.getByLabelText("Repository path"), draft);
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={workspaceApi()}>
+        <CodingWorkbenchWindow selectedRoot="/repos/next-selection" />
+      </ActiveWorkspaceProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/next-selection");
+    });
+  });
+
+  // …but a branch the operator typed wins over every default, a new bound base included.
+  it("keeps a selected branch when the bound base branch changes", async () => {
+    const user = userEvent.setup();
+    const view = render(<BoundSetup base="master" />);
+    await user.selectOptions(screen.getByLabelText("Target branch"), "feature/typed");
+
+    view.rerender(<BoundSetup base="release/2" />);
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/target");
+    });
+    expect(screen.getByLabelText("Target branch")).toHaveValue("feature/typed");
+    expect(baseBranchMock).not.toHaveBeenCalled();
+  });
+
+  // The seeded branch is the bound repository's, not a choice for another path the operator types.
+  it("reads the branch of a different path typed after the bound-repository seed", async () => {
+    const user = userEvent.setup();
+    baseBranchMock.mockResolvedValue("trunk");
+    render(<BoundSetup base="master" />);
+
+    await user.clear(screen.getByLabelText("Repository path"));
+    await user.type(screen.getByLabelText("Repository path"), "/repos/other");
+    await user.tab();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Target branch")).toHaveValue("trunk");
+    });
+    expect(baseBranchMock).toHaveBeenCalledWith("/repos/other");
+  });
+
+  // A branch selected for one repository is not a choice for the next: a new workbench-wide selection
+  // re-arms the default the way the path field follows it (review of ec04288dc).
+  it("re-arms the branch default when the selected repository changes", async () => {
+    const user = userEvent.setup();
+    baseBranchMock.mockResolvedValue("dev");
+    const api = workspaceApi();
+    const view = renderWorkbench(api, liveState(), "/repos/selected");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Target branch")).toHaveValue("dev");
+    });
+    await user.selectOptions(screen.getByLabelText("Target branch"), "release/1.0");
+    baseBranchMock.mockResolvedValue("trunk");
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={api}>
+        <CodingWorkbenchWindow selectedRoot="/repos/other" />
+      </ActiveWorkspaceProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Target branch")).toHaveValue("trunk");
+    });
+    expect(baseBranchMock).toHaveBeenCalledWith("/repos/other");
+  });
+
+  // …but "the next repository" is the one in the PATH FIELD, not the workbench-wide selection. A
+  // typed path does not follow the switcher, so re-arming on the selection alone re-read the
+  // branch of a repository that was not being bound and overwrote the branch selected for the one
+  // that was: Bind then provisioned /repos/A with /repos/B's checked-out branch (#3381 review).
+  it("keeps a typed path and its selected branch when the workbench selection changes", async () => {
+    const user = userEvent.setup();
+    baseBranchMock.mockResolvedValue("dev");
+    const api = workspaceApi();
+    const view = renderWorkbench(api, liveState(), "/repos/selected");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Target branch")).toHaveValue("dev");
+    });
+
+    await user.clear(screen.getByLabelText("Repository path"));
+    await user.type(screen.getByLabelText("Repository path"), "/repos/A");
+    await user.selectOptions(screen.getByLabelText("Target branch"), "release/1");
+    baseBranchMock.mockResolvedValue("trunk");
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={api}>
+        <CodingWorkbenchWindow selectedRoot="/repos/B" />
+      </ActiveWorkspaceProvider>,
+    );
+
+    // Flush whatever the selection change could have started before reading the fields back: the
+    // overwrite this pins is the lookup's RESOLUTION, not the render that follows the rerender.
+    await waitFor(() => {
+      expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/A");
+    });
+    expect(screen.getByLabelText("Target branch")).toHaveValue("release/1");
+    expect(baseBranchMock).not.toHaveBeenCalledWith("/repos/B");
+  });
+
+  // A settled lookup that cannot name a branch (detached HEAD, no repository, transport failure)
+  // makes the field authoritative for the NEW path — with the default, never with the previous
+  // repository's answer, which would bind the new path against that base (CodeRabbit, PR #3381).
+  it("falls back to the default branch when the new path's lookup cannot name one", async () => {
+    baseBranchMock.mockResolvedValue("release/1");
+    const api = workspaceApi();
+    const view = renderWorkbench(api, liveState(), "/repos/A");
+    await waitFor(() => {
+      expect(screen.getByLabelText("Target branch")).toHaveValue("release/1");
+    });
+    baseBranchMock.mockResolvedValue(null);
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={api}>
+        <CodingWorkbenchWindow selectedRoot="/repos/B" />
+      </ActiveWorkspaceProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/B");
+    });
+    await waitFor(() => {
+      expect(baseBranchMock).toHaveBeenCalledWith("/repos/B");
+    });
+    await waitFor(() => {
+      expect(screen.getByLabelText("Target branch")).toHaveValue("main");
+    });
+  });
+
+  it("keeps a branch the operator typed even when the lookup resolves later", async () => {
+    const user = userEvent.setup();
+    let resolveLookup: (branch: string | null) => void = () => undefined;
+    baseBranchMock.mockImplementation(
+      () =>
+        new Promise<string | null>((resolve) => {
+          resolveLookup = resolve;
+        }),
+    );
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+    await user.selectOptions(screen.getByLabelText("Target branch"), "release/1.0");
+    resolveLookup("dev");
+
+    await waitFor(() => {
+      expect(baseBranchMock).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.getByLabelText("Target branch")).toHaveValue("release/1.0");
+  });
+
+  it("re-reads the branch default when the operator leaves a typed repository path", async () => {
+    const user = userEvent.setup();
+    baseBranchMock.mockResolvedValue("trunk");
+    renderWorkbench(workspaceApi());
+
+    await user.type(screen.getByLabelText("Repository path"), "/repos/typed");
+    await user.tab();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Target branch")).toHaveValue("trunk");
+    });
+    expect(baseBranchMock).toHaveBeenCalledWith("/repos/typed");
+  });
+
+  it("keeps the previous default when the branch lookup fails and leaves a diagnostic", async () => {
+    const diagnostics: string[] = [];
+    setClientDiagnosticWriter((message) => diagnostics.push(message));
+    baseBranchMock.mockRejectedValue(new Error("HTTP 500 /repos/selected"));
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+    await waitFor(() => {
+      expect(diagnostics.some((line) => line.includes("base branch lookup failed"))).toBe(true);
+    });
+    expect(screen.getByLabelText("Target branch")).toHaveValue("main");
+    expect(diagnostics.join("\n")).not.toContain("/repos/selected");
+  });
+
+  // A lookup that never answers must not lock the card out of binding for good — a settled failure
+  // makes the fallback THIS path's fallback, which is exactly what the operator can then edit.
+  it("binds with the visible fallback once a failed branch lookup has settled", async () => {
+    const user = userEvent.setup();
+    baseBranchMock.mockRejectedValue(new Error("HTTP 500"));
+    provisionMock.mockResolvedValue({ instance: { workspaceId: "ws-9" }, created: true });
+    reconcileMock.mockResolvedValue(reconciliationReport("ws-9", "healthy"));
+    setActiveMock.mockResolvedValue({});
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+    await user.click(await bindable());
+
+    await waitFor(() => {
+      expect(provisionMock).toHaveBeenCalledWith({
+        root: "/repos/selected",
+        taskId: codingWorkbenchSetupTaskId("main"),
+        baseBranch: "main",
+        requestedBy: "studio-operator",
+      });
+    });
+  });
+
+  // CodeRabbit review of #3381 (CodingWorkbenchSetup.tsx ~571): `lookupFor` runs on BLUR, and
+  // pressing Enter in the path field submits without ever blurring it. The bind then derived the
+  // task id from the untouched default of the PREVIOUS repository. The refused submit is what arms
+  // the missing lookup, so the operator is never stuck — the next Enter binds the settled branch.
+  it("refuses an Enter bind until the typed path's own branch default has settled", async () => {
+    const user = userEvent.setup();
+    baseBranchMock.mockResolvedValue("dev");
+    provisionMock.mockResolvedValue({ instance: { workspaceId: "ws-9" }, created: true });
+    reconcileMock.mockResolvedValue(reconciliationReport("ws-9", "healthy"));
+    setActiveMock.mockResolvedValue({});
+    renderWorkbench(workspaceApi());
+
+    await user.type(screen.getByLabelText("Repository path"), "/repos/typed{Enter}");
+
+    expect(provisionMock).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.getByLabelText("Target branch")).toHaveValue("dev");
+    });
+
+    await user.keyboard("{Enter}");
+
+    await waitFor(() => {
+      expect(provisionMock).toHaveBeenCalledTimes(1);
+    });
+    expect(provisionMock).toHaveBeenCalledWith({
+      root: "/repos/typed",
+      taskId: codingWorkbenchSetupTaskId("dev"),
+      baseBranch: "dev",
+      requestedBy: "studio-operator",
+    });
+  });
+
+  // The click half of the same finding: clicking Bind blurs the path field and only THEN submits,
+  // so the bind raced the lookup it had just armed and could still use the previous repository's
+  // branch — `main` here, for a checkout whose integration branch is `dev`.
+  it("refuses a click bind with the previous repository's branch after the path changes", async () => {
+    const user = userEvent.setup();
+    baseBranchMock.mockImplementation((root: string) =>
+      Promise.resolve(root === "/repos/second" ? "dev" : "main"),
+    );
+    provisionMock.mockResolvedValue({ instance: { workspaceId: "ws-9" }, created: true });
+    reconcileMock.mockResolvedValue(reconciliationReport("ws-9", "healthy"));
+    setActiveMock.mockResolvedValue({});
+    renderWorkbench(workspaceApi(), liveState(), "/repos/first");
+    await bindable();
+    expect(screen.getByLabelText("Target branch")).toHaveValue("main");
+
+    await user.clear(screen.getByLabelText("Repository path"));
+    await user.type(screen.getByLabelText("Repository path"), "/repos/second");
+    await user.click(bindButton());
+
+    expect(provisionMock).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(screen.getByLabelText("Target branch")).toHaveValue("dev");
+    });
+
+    await user.click(await bindable());
+
+    await waitFor(() => {
+      expect(provisionMock).toHaveBeenCalledTimes(1);
+    });
+    expect(provisionMock).toHaveBeenCalledWith({
+      root: "/repos/second",
+      taskId: codingWorkbenchSetupTaskId("dev"),
+      baseBranch: "dev",
+      requestedBy: "studio-operator",
+    });
+  });
+
+  // A branch the operator typed is their choice for whatever path they bind, so it never waits for
+  // a lookup — the gate above must not turn into "the operator cannot bind what they chose".
+  it("binds an operator-selected branch immediately after the path changes", async () => {
+    const user = userEvent.setup();
+    baseBranchMock.mockResolvedValue("main");
+    provisionMock.mockResolvedValue({ instance: { workspaceId: "ws-9" }, created: true });
+    reconcileMock.mockResolvedValue(reconciliationReport("ws-9", "healthy"));
+    setActiveMock.mockResolvedValue({});
+    renderWorkbench(workspaceApi(), liveState(), "/repos/first");
+    await bindable();
+
+    await user.selectOptions(screen.getByLabelText("Target branch"), "release/1.0");
+    await user.clear(screen.getByLabelText("Repository path"));
+    await user.type(screen.getByLabelText("Repository path"), "/repos/second{Enter}");
+
+    await waitFor(() => {
+      expect(provisionMock).toHaveBeenCalledTimes(1);
+    });
+    expect(provisionMock).toHaveBeenCalledWith({
+      root: "/repos/second",
+      taskId: codingWorkbenchSetupTaskId("release/1.0"),
+      baseBranch: "release/1.0",
+      requestedBy: "studio-operator",
+    });
+  });
+
+  it.each([
+    {
+      code: "INVALID_BASE_BRANCH",
+      failureClass: "blocked",
+      text: "The target branch does not exist in this repository.",
+    },
+    {
+      // Field defect 1.1.1: a branch name outside the supported characters was refused behind the
+      // generic sentence, which sent the operator to re-check a branch that was spelled correctly.
+      code: "INVALID_REQUEST",
+      failureClass: "blocked",
+      text: "Branch names may contain letters, digits and the characters . _ - / ( ) + @ = , only.",
+    },
+    {
+      code: "MISSING_REPOSITORY",
+      failureClass: "blocked",
+      text: "The repository path is not inside a local Git repository.",
+    },
+    {
+      code: "UNSAFE_PATH",
+      failureClass: "blocked",
+      text: "The repository path is outside the folders this installation may bind.",
+    },
+    {
+      code: "LOCK_CONTENTION",
+      failureClass: "retryable",
+      text: "Another action currently holds this task workspace.",
+    },
+    {
+      code: "WORKSPACE_PROVISIONING_UNAVAILABLE",
+      failureClass: undefined,
+      text: "Managed task workspaces are not configured on this installation",
+    },
+    {
+      code: "PROVISIONING_FAILED",
+      failureClass: "terminal",
+      text: "Keiko could not create the managed task workspace for this repository.",
+    },
+  ])(
+    "names a $code refusal instead of the generic sentence",
+    async ({ code, failureClass, text }) => {
+      const user = userEvent.setup();
+      provisionMock.mockRejectedValue(
+        Object.assign(new Error("sensitive detail"), { code, failureClass }),
+      );
+      renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+      await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent(text);
+      expect(alert).not.toHaveTextContent("Review the repository path and target branch.");
+      expect(alert).not.toHaveTextContent("sensitive detail");
+      expect(reconcileMock).not.toHaveBeenCalled();
+      expect(setActiveMock).not.toHaveBeenCalled();
+    },
+  );
+
+  // A refusal and its repair offer belong to the path they were answered for. Switching the
+  // workbench-wide selection moves the path field on; the stale offer must go with it, or "Repair
+  // and bind" would apply the old workspace's repair under the new path (review of ec04288dc).
+  it("withdraws a repair offer when the selected repository changes", async () => {
+    const user = userEvent.setup();
+    const api = workspaceApi();
+    provisionMock.mockRejectedValue(pointerDrift());
+    listMock.mockResolvedValue([
+      refusedWorkspace({ strategy: "reconcile-pointer", operatorActionRequired: false }),
+    ]);
+    const view = renderWorkbench(api, liveState(), "/repos/selected");
+
+    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+    expect(await screen.findByRole("button", { name: "Repair and bind" })).toBeInTheDocument();
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={api}>
+        <CodingWorkbenchWindow selectedRoot="/repos/other" />
+      </ActiveWorkspaceProvider>,
+    );
+
+    expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/other");
+    expect(screen.queryByRole("button", { name: "Repair and bind" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(repairMock).not.toHaveBeenCalled();
+  });
+
+  // The offer is resolved for the taskId `executeBind` derives from the TARGET BRANCH, so an
+  // edited branch field withdraws it exactly as an edited path does. Keeping it let "Repair and
+  // bind" repair, verify and activate the PREVIOUS branch's workspace while the card displayed the
+  // new one (#3381 review).
+  it("withdraws a repair offer when the target branch changes", async () => {
+    const user = userEvent.setup();
+    provisionMock.mockRejectedValue(pointerDrift());
+    listMock.mockResolvedValue([
+      refusedWorkspace({ strategy: "reconcile-pointer", operatorActionRequired: false }),
+    ]);
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+    expect(await screen.findByRole("button", { name: "Repair and bind" })).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText("Target branch"), "main-next");
+
+    expect(screen.getByLabelText("Target branch")).toHaveValue("main-next");
+    expect(screen.queryByRole("button", { name: "Repair and bind" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(repairMock).not.toHaveBeenCalled();
+  });
+
+  // #3381 review: the withdrawal above only ever cleared an EXISTING error, so a bind that was
+  // still PENDING when its inputs moved kept its right to publish. The workbench-wide selection
+  // moves the path field while the fields themselves are disabled, so the deferred sequence could
+  // land a repair offer answered for `/repos/selected` beside a card showing `/repos/other` —
+  // "Repair and bind" one click away from repairing and activating the wrong workspace.
+  it("publishes nothing from a pending bind whose inputs changed while it ran", async () => {
+    const user = userEvent.setup();
+    const api = workspaceApi();
+    let refuseProvision: (error: unknown) => void = () => undefined;
+    provisionMock.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          refuseProvision = reject;
+        }),
+    );
+    listMock.mockResolvedValue([
+      refusedWorkspace({ strategy: "reconcile-pointer", operatorActionRequired: false }),
+    ]);
+    const view = renderWorkbench(api, liveState(), "/repos/selected");
+
+    await user.click(await bindable());
+    expect(screen.getByRole("button", { name: "Binding…" })).toBeDisabled();
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={api}>
+        <CodingWorkbenchWindow selectedRoot="/repos/other" />
+      </ActiveWorkspaceProvider>,
+    );
+    expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/other");
+
+    refuseProvision(pointerDrift());
+    await waitFor(() => {
+      expect(listMock).toHaveBeenCalled();
+    });
+    await flushBindSequence();
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Repair and bind" })).not.toBeInTheDocument();
+    expect(repairMock).not.toHaveBeenCalled();
+  });
+
+  // The 2026-09-03 defect: an existing managed workspace the server could not re-verify was
+  // refused with 409 POINTER_DRIFT, the card blamed the path and branch, and the row had no exit.
+  it("offers the operator-approved repair for a refused existing workspace, then verifies and activates", async () => {
+    const user = userEvent.setup();
+    const api = workspaceApi();
+    provisionMock.mockRejectedValue(pointerDrift());
+    listMock.mockResolvedValue([
+      refusedWorkspace({ strategy: "reconcile-pointer", operatorActionRequired: false }),
+    ]);
+    repairMock.mockResolvedValue({ applied: true, driftMarkers: [] });
+    reconcileMock.mockResolvedValue(reconciliationReport("ws-refused", "healthy"));
+    setActiveMock.mockResolvedValue({});
+    renderWorkbench(api, liveState(), "/repos/selected");
+
+    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Keiko could not re-verify it");
+    expect(alert).toHaveTextContent("nothing is deleted");
+    // The approver, not Keiko, supplies the provenance proof here: the retired identity cannot
+    // separate the original worktree from a same-path replacement (#3381 review).
+    expect(alert).toHaveTextContent("re-registers whatever is on disk there");
+    expect(alert).toHaveTextContent("inspect the tree in Task workspaces first");
+    expect(alert).not.toHaveTextContent("Review the repository path and target branch.");
+    expect(alert).not.toHaveTextContent("sensitive worktree detail");
+    expect(listMock).toHaveBeenCalledWith("/repos/selected");
+    expect(setActiveMock).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Repair and bind" }));
+
+    await waitFor(() => {
+      expect(api.refresh).toHaveBeenCalledTimes(1);
+    });
+    // The click is the approval, and it names the strategy the server recommended.
+    expect(repairMock).toHaveBeenCalledWith({
+      workspaceId: "ws-refused",
+      requestedBy: "studio-operator",
+      strategy: "reconcile-pointer",
+      operatorApproved: true,
+    });
+    expect(reconcileMock).toHaveBeenCalledWith({ root: "/repos/selected" });
+    expect(setActiveMock).toHaveBeenCalledWith({
+      workspaceId: "ws-refused",
+      requestedBy: "studio-operator",
+    });
+  });
+
+  // `automaticStrategyOf` returns `recreate-worktree` first for a missing worktree, and the #447
+  // repair then prunes the stale registration and rebuilds it. The single sentence keyed to every
+  // automatic strategy promised "nothing is deleted" on that path too (#3381 review).
+  it("describes the repair by the recommended strategy, not one sentence for all of them", async () => {
+    const user = userEvent.setup();
+    provisionMock.mockRejectedValue(pointerDrift());
+    listMock.mockResolvedValue([
+      refusedWorkspace({ strategy: "recreate-worktree", operatorActionRequired: false }),
+    ]);
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Keiko could not re-verify it");
+    expect(alert).toHaveTextContent("rebuilds the worktree from its task branch");
+    expect(alert).not.toHaveTextContent("nothing is deleted");
+    expect(await screen.findByRole("button", { name: "Repair and bind" })).toBeInTheDocument();
+  });
+
+  it("describes a stale-lock repair as touching no worktree", async () => {
+    const user = userEvent.setup();
+    provisionMock.mockRejectedValue(pointerDrift());
+    listMock.mockResolvedValue([
+      refusedWorkspace(
+        { strategy: "release-stale-lock", operatorActionRequired: false },
+        "lock-stale",
+      ),
+    ]);
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("releases the stale lock an interrupted action left behind");
+    expect(alert).not.toHaveTextContent("nothing is deleted");
+  });
+
+  it("names an operator-required finding without offering a repair", async () => {
+    const user = userEvent.setup();
+    provisionMock.mockRejectedValue(pointerDrift());
+    listMock.mockResolvedValue([
+      refusedWorkspace({ strategy: "operator-repair", operatorActionRequired: true }, "head-moved"),
+    ]);
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Keiko cannot repair it automatically");
+    expect(screen.queryByRole("button", { name: "Repair and bind" })).not.toBeInTheDocument();
+    expect(repairMock).not.toHaveBeenCalled();
+    expect(setActiveMock).not.toHaveBeenCalled();
+  });
+
+  it("reports a repair the server did not apply and never activates", async () => {
+    const user = userEvent.setup();
+    provisionMock.mockRejectedValue(pointerDrift());
+    listMock.mockResolvedValue([
+      refusedWorkspace({ strategy: "recreate-worktree", operatorActionRequired: false }),
+    ]);
+    repairMock.mockResolvedValue({ applied: false, driftMarkers: ["branch-deleted"] });
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+    await user.click(await screen.findByRole("button", { name: "Repair and bind" }));
+
+    const alert = await screen.findByRole("alert");
+    await waitFor(() => {
+      expect(alert).toHaveTextContent("Keiko cannot repair it automatically");
+    });
+    expect(screen.queryByRole("button", { name: "Repair and bind" })).not.toBeInTheDocument();
+    expect(reconcileMock).not.toHaveBeenCalled();
+    expect(setActiveMock).not.toHaveBeenCalled();
+    expect(setupSection()).toBeInTheDocument();
+  });
+
+  it("falls back to the finding-free operator sentence when the refused row cannot be listed", async () => {
+    const user = userEvent.setup();
+    provisionMock.mockRejectedValue(pointerDrift());
+    listMock.mockRejectedValue(new Error("HTTP 503"));
+    renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+    await user.click(screen.getByRole("button", { name: "Bind workspace" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("its state could not be re-verified");
+    expect(screen.queryByRole("button", { name: "Repair and bind" })).not.toBeInTheDocument();
   });
 
   it("stays reachable with an honest note when the runtime is not confirmed available", () => {
@@ -338,5 +1337,87 @@ describe("CodingWorkbenchSetup", () => {
     const result = stripLeadingAndTrailingDashes("-".repeat(20_000));
     expect(Date.now() - start).toBeLessThan(1000);
     expect(result).toBe("");
+  });
+
+  // #3563 handoff: the bootstrap card's onBoundRepository callback is what tells the parent window
+  // to switch its repository selection onto the workspace the operator just bound. Without it, a
+  // successful bind flipped the setup card away but the composer chip stayed on the old repo, so
+  // the operator saw the setup vanish with no visible confirmation the new binding was in effect.
+  it("reports the bound repository to the parent once the shared context refresh settles", async () => {
+    const user = userEvent.setup();
+    const api = workspaceApi();
+    const onBoundRepository = vi.fn();
+    provisionMock.mockResolvedValue({ instance: { workspaceId: "ws-9" }, created: true });
+    reconcileMock.mockResolvedValue(reconciliationReport("ws-9", "healthy"));
+    setActiveMock.mockResolvedValue({});
+    render(
+      <ActiveWorkspaceProvider value={api}>
+        <CodingWorkbenchSetup
+          selectedRoot="/repos/keiko-checkout"
+          refreshWorkspace={api.refresh}
+          runtimePosture="verified"
+          repositoryPathDraft={null}
+          onRepositoryPathDraftChange={() => undefined}
+          onBoundRepository={onBoundRepository}
+        />
+      </ActiveWorkspaceProvider>,
+    );
+
+    await user.click(await bindable());
+
+    await waitFor(() => {
+      expect(onBoundRepository).toHaveBeenCalledWith("/repos/keiko-checkout");
+    });
+  });
+
+  // #3563 handoff: the setup card imported the native-dialog helpers but never rendered a Browse
+  // button, so the operator was forced to type an absolute path even on platforms whose native
+  // dialog every other Browse surface in this app uses. The button appears only when the BFF's
+  // capability probe confirms support; an unsupported platform keeps the plain text input intact.
+  describe("native folder picker", () => {
+    beforeEach(() => {
+      nativeDialogState.supported = false;
+      nativeDialogState.pick.mockReset();
+    });
+
+    it("hides the Browse button on a platform without native dialog support", () => {
+      renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+      expect(screen.queryByRole("button", { name: "Browse…" })).not.toBeInTheDocument();
+    });
+
+    it("fills the path field with a picked folder and arms its branch lookup", async () => {
+      const user = userEvent.setup();
+      nativeDialogState.supported = true;
+      nativeDialogState.pick.mockResolvedValue({
+        kind: "picked",
+        paths: ["/repos/picked-folder"],
+      });
+      baseBranchMock.mockResolvedValue("trunk");
+      renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+      await user.click(screen.getByRole("button", { name: "Browse…" }));
+
+      await waitFor(() => {
+        expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/picked-folder");
+      });
+      await waitFor(() => {
+        expect(baseBranchMock).toHaveBeenCalledWith("/repos/picked-folder");
+      });
+      await waitFor(() => {
+        expect(screen.getByLabelText("Target branch")).toHaveValue("trunk");
+      });
+    });
+
+    it("reports a busy native dialog without changing the entered path", async () => {
+      const user = userEvent.setup();
+      nativeDialogState.supported = true;
+      nativeDialogState.pick.mockResolvedValue({ kind: "busy" });
+      renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+
+      await user.click(screen.getByRole("button", { name: "Browse…" }));
+
+      expect(await screen.findByText(/Another file dialog is already open/u)).toBeInTheDocument();
+      expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/selected");
+    });
   });
 });

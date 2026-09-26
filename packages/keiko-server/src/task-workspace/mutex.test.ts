@@ -3,8 +3,12 @@
 // keys run concurrently, errors are isolated (do not poison the key), multi-key acquisition serializes
 // against any overlapping key, and the canonical key order makes deadlock structurally impossible.
 
+import { mkdtempSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  fileWriteKeys,
   activePointerKey,
   createWorkspaceMutexRegistry,
   provisionKey,
@@ -147,5 +151,112 @@ describe("createWorkspaceMutexRegistry", () => {
     expect(workspaceKey("ws-abc")).toBe("ws:ws-abc");
     expect(provisionKey("repo-1", "task-2")).toBe("prov:repo-1:task-2");
     expect(activePointerKey("repo-1")).toBe("active:repo-1");
+  });
+});
+
+// Two saves serialize iff their key SETS overlap — `runExclusive` queues on any shared key — so
+// every assertion here is about overlap, not about the arrays being equal.
+function serializesWith(a: readonly string[], b: readonly string[]): boolean {
+  const other = new Set(b);
+  return a.some((key) => other.has(key));
+}
+
+describe("fileWriteKeys identity (#3200 review)", () => {
+  // The key must not change when the write replaces the target: an inode-based key would shift on
+  // every save, letting a request that resolves mid-rename derive a different key and enter the
+  // critical section concurrently.
+  //
+  // This used to be asserted as `fileWriteKeys(p) === fileWriteKeys(p)` — `f(x) === f(x)`, true for
+  // every pure implementation including the inode-based one it names, so it could not fail for the
+  // design it forbids. The invariant is RELOCATED to two places where it can be falsified.
+  //
+  // Not a signature assertion: `Parameters<>` constrains only what CALLERS pass, and
+  // `fileWriteKeys(realPath: string)` could still call `statSync(realPath)` internally while keeping
+  // exactly `[string]`. Observed instead — a path that does not exist still yields keys, and the
+  // same path yields the same keys once the file appears. A filesystem-dependent implementation
+  // would throw ENOENT on the first call or answer differently on the second.
+  it("derives the key without consulting the filesystem, so a missing path still yields keys", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-mutex-absent-"));
+    try {
+      const absent = join(root, "never-created.ts");
+      const whileAbsent = fileWriteKeys(absent);
+      expect(whileAbsent).toHaveLength(2);
+
+      writeFileSync(absent, "now it exists", "utf8");
+      expect(fileWriteKeys(absent)).toEqual(whileAbsent);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a real file's saves serialized across the atomic rename a save performs", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-mutex-rename-"));
+    try {
+      const target = join(root, "app.ts");
+      const replacement = join(root, "app.ts.tmp");
+      writeFileSync(target, "before", "utf8");
+      writeFileSync(replacement, "after", "utf8");
+      // Prove the fixture rather than assume it: the two objects really are distinct while both
+      // exist, so the rename below genuinely changes which one answers to `target`. Asserting a
+      // nonzero inode instead would check only the survivor, and would impose a product requirement
+      // on filesystems that report no usable 64-bit file id.
+      const original = statSync(target, { bigint: true });
+      const incoming = statSync(replacement, { bigint: true });
+      expect([incoming.dev, incoming.ino]).not.toEqual([original.dev, original.ino]);
+
+      const before = fileWriteKeys(target);
+      renameSync(replacement, target);
+
+      // The invariant is that the two saves still SERIALIZE — `runExclusive` queues on any shared
+      // key, as `serializesWith` states. Demanding identical arrays would reject a safe
+      // strengthening that keeps the stable path key and adds a generation-scoped alias beside it.
+      expect(serializesWith(before, fileWriteKeys(target))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("folds case- and normalization-equivalent spellings on every platform", () => {
+    const upper = fileWriteKeys("/tmp/project/Foo.ts");
+    const lower = fileWriteKeys("/tmp/project/foo.ts");
+    const nfc = fileWriteKeys("/tmp/project/caf\u00e9.ts");
+    const nfd = fileWriteKeys("/tmp/project/cafe\u0301.ts");
+    // Portable: the alias key is taken on every platform, so this contract does not depend on the
+    // host. A byte-exact filesystem merely serializes two saves it did not have to.
+    expect(serializesWith(upper, lower)).toBe(true);
+    expect(serializesWith(nfc, nfd)).toBe(true);
+  });
+
+  // The residual the #3200 review named: comparablePath lowercases, and lowercasing SPLITS the
+  // Greek sigma alias class that a case-insensitive filesystem merges — "\u03c2".toLowerCase() and
+  // "\u03a3".toLowerCase() differ, so the exact key alone would let both saves into the section.
+  // The uppercase alias key exists for exactly this and must overlap.
+  it.each([
+    ["final sigma vs capital sigma", "\u03c2", "\u03a3"],
+    ["eszett vs capital eszett (JS toUpperCase splits this class)", "\u00df", "\u1e9e"],
+    ["eszett vs SS uppercase", "\u00df", "SS"],
+    ["capital eszett vs SS", "\u1e9e", "SS"],
+    ["ligature fi vs fi", "\ufb01", "fi"],
+
+    ["final sigma vs small sigma", "\u03c2", "\u03c3"],
+    ["dotless i vs capital I", "\u0131", "I"],
+  ])("serializes the %s alias class the exact key splits", (_label, left, right) => {
+    const a = fileWriteKeys(`/tmp/project/${left}.ts`);
+    const b = fileWriteKeys(`/tmp/project/${right}.ts`);
+    expect(serializesWith(a, b)).toBe(true);
+  });
+
+  it("separates genuinely different files", () => {
+    expect(serializesWith(fileWriteKeys("/tmp/a.ts"), fileWriteKeys("/tmp/b.ts"))).toBe(false);
+  });
+
+  it("keeps every key in one tier so a file save cannot deadlock", () => {
+    // All keys a save takes must sort into the same tier; the registry acquires them in one
+    // canonical order, so a multi-key save can never hold-and-wait against another save.
+    const keys = fileWriteKeys("/tmp/project/app.ts");
+    expect(keys.length).toBeGreaterThan(0);
+    expect(keys.every((key) => key.startsWith("file:") || key.startsWith("file-alias:"))).toBe(
+      true,
+    );
   });
 });

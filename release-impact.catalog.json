@@ -819,8 +819,1970 @@
         "reviewer": "release-owner",
         "reviewedAt": "2026-07-19",
         "humanApproved": true,
-        "approvalReference": "issue:#2531",
-        "rationale": "Issue #2531 explicitly classifies this child as a user-visible new addition, supplies the customer release-note bullet, and sets Human Review Required to No for the epic feature-branch flow."
+        "approvalReference": "github-pr-review:oscharko-dev/Keiko#1800#4618551973",
+        "rationale": "Issue #2531 classifies this child as a user-visible new addition, supplies the customer release-note bullet, and sets Human Review Required to No for the epic feature-branch flow. That issue-scoped reference did not satisfy the publish gate, which requires the release-owner authority to be recorded as an APPROVED GitHub pull-request review. This entry belongs to the 0.2.15 line, whose recorded release-owner authority is PR review #4618551973, and it is bound to that authority like its two sibling 0.2.15 entries. Version 0.2.15 was never published to any registry, so no published catalog contains this entry and the repair violates no append-only guarantee."
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.0",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.0",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain"
+      ],
+      "id": "2026-08-07-keiko-0.3.0-release-readiness",
+      "releaseNoteCategory": "state-or-compatibility-changes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Keiko 0.3.0 completes the release-readiness program: multi-root editor workspaces with an explicit Workspace Trust gate, editor profiles and per-file local history, approximate-nearest-neighbour local knowledge retrieval, and a governed Coding Workbench whose runtime actions are bound to the authenticated launcher session. Every autonomy-capable surface now reports readiness truthfully instead of showing green over an unusable gateway, and failed actions surface a diagnosable error instead of failing silently.",
+      "affectedStateStores": [
+        "ui-store-schema",
+        "workspace-manifests",
+        "editor-local-history",
+        "local-knowledge",
+        "coding-runtime"
+      ],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "The local UI store migrates forward automatically on first start (schema 9 to 19). Migrations are additive: new tables for workspace manifests, workspace trust, editor profiles, local history, coding-runtime snapshots and memory autonomy policy, plus new columns on existing chat rows. No existing row is deleted or rewritten destructively. After the migration an older Keiko binary refuses to open the store rather than corrupting it.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        },
+        {
+          "store": "workspace-manifests",
+          "description": "Workspaces become explicit manifests with per-root trust decisions. An existing single-folder binding is migrated into a one-root manifest. The first time a workspace is opened, Keiko starts in Restricted Mode and asks for an explicit trust decision before scripts, language servers or agent execution are available.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        },
+        {
+          "store": "local-knowledge",
+          "description": "Local knowledge retrieval moves to an approximate-nearest-neighbour index built on demand from the vectors already stored. Stored encrypted vectors remain intact and are reused, so no pod has to be re-indexed; only cached materialization state is discarded and rebuilt.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        },
+        {
+          "store": "coding-runtime",
+          "description": "Coding Workbench state-changing actions are bound to the authenticated, launcher-attested browser session. A window that is not paired with the launcher can read status but is refused run start, approvals, stop/takeover and follow-up prompts, and the surface now says so instead of appearing ready.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "releaseNoteBullets": [
+        "Added multi-root editor workspaces with an explicit Workspace Trust gate: a new workspace opens in Restricted Mode until you grant trust, and scripts, language servers and agent execution stay unavailable until you do.",
+        "Added editor profiles, portable profile import and export, and per-file local history with a keyboard-operable timeline and honest restore.",
+        "Local knowledge now uses an approximate-nearest-neighbour index for retrieval, built on demand from the vectors already stored; existing pods do not need to be re-indexed.",
+        "Coding Workbench, Chat, Git, Prompt Enhancer, MemoriaViva and Quality Intelligence now report readiness and outcomes truthfully: no green state over an unusable gateway, no silent failure, and every refused action names its reason with a copyable support id.",
+        "Voice turns now carry their staged attachments and document context, and interrupting the assistant cancels only the answer it owns instead of blocking sending elsewhere.",
+        "Governed Git delivery authenticates on every network path, reports commit signing honestly, and distinguishes offline from authentication failures instead of reporting one generic error."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-07",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#2802#5225214175",
+        "rationale": "The maintainer explicitly commissioned the 0.3.0 release in the local session and directed the portable delivery scope (bundled Node.js and OpenCode sidecar for macOS and Windows). The entry covers the release-readiness audit programme tracked in epic #2802 and the implementation waves merged into dev. The approval evidence is the release owner's authored comment on the epic issue #2802 (comment 5225214175), carrying the version-bound phrase 'Approved-for-publish: @oscharko-dev/keiko@0.3.0' on a line of its own; the publish gate verifies the comment, its issue binding, the phrase, and the allow-listed author through the GitHub API (GitHub refuses self-approval of one's own pull request, so the solo owner cannot mint a PR-review artifact)."
+      }
+    },
+    {
+      "id": "2026-08-07-keiko-0.3.0-portable-runtime-staging-contract",
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.0",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.0",
+      "releaseNoteCategory": "internal-only",
+      "releaseNotePriority": "internal",
+      "userVisibleChange": "none",
+      "userVisibleSummary": "Portable runtime staging metadata binds the packed Keiko package, bundled Node runtime, target artifacts, and reviewed manifest contract before public release upload.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "supportedFrom": ["0.2.0"],
+      "releaseNoteBullets": [
+        "Portable runtime staging metadata now binds reviewed package and runtime artifact evidence before release upload."
+      ],
+      "internalOnly": true,
+      "observableImpact": false,
+      "defaultPatchNotes": false,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain"
+      ],
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-07",
+        "humanApproved": true,
+        "approvalReference": "github-pr-review:oscharko-dev/Keiko#1717#4606286126",
+        "rationale": "Issue #1948 is an internal staging contract for portable runtime artifacts. Each release version carries its own instance of this unchanged contract, as 0.2.14 and 0.2.15 did; the contract itself (program epic #1944, parent epic #1942, staging-only, the same three targets) is identical and its recorded release-owner approval remains PR review #4606286126. Staging is what this entry authorizes: it binds packed-package, bundled-runtime and manifest evidence before upload, and promotes no public portable release asset."
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.1",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.1",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain"
+      ],
+      "id": "2026-08-09-keiko-0.3.1-public-download",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "normal",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Keiko 0.3.1 is the first public download release. It carries the same product as 0.3.0 and republishes it under a usable tag: the 0.3.0 GitHub release was withdrawn during verification and GitHub keeps that tag immutable, so the downloadable packages ship as 0.3.1. Nothing has to be uninstalled or migrated. An older build left running only occupies the local port, and the new one says so on startup and names both ways out (stop it, or start on another port). The governed one-click update does not apply to this release: its portable evidence declares the evaluation signing status, and the updater accepts only production-signed, notarized portable artifacts. Install it from the GitHub Release download; the in-app update returns once the signed lane ships.",
+      "affectedStateStores": ["ui-store-schema"],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "No schema change relative to 0.3.0. A store created by 0.3.0 opens unchanged; a store from 0.2.x migrates forward exactly as 0.3.0 described.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "releaseNoteBullets": [
+        "First public download release: unsigned evaluation bundles for macOS (Apple Silicon and Intel) and Windows, with Node.js and the OpenCode sidecar included. macOS needs one right-click - Open on first launch; Windows shows the SmartScreen notice.",
+        "Load an existing keiko.config.json directly in the setup dialog instead of typing every field.",
+        "Upgrading from 0.3.0 needs no migration. If an older Keiko is still running it holds the local port; stop it or start this one with --port."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-09",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#2802#5230996334",
+        "rationale": "Republication of the 0.3.0 product under a usable release tag, directed by the release owner after the 0.3.0 GitHub release was withdrawn during verification and its tag became immutable. This single record also carries the portable runtime staging contract, unchanged from 0.3.0 (program epic and the same three targets, staging only): 0.3.1 is one release event with one owner approval, so splitting it across two records would need a second approval artifact for the same decision. The evidence is the release owner's authored comment on epic #2802 (comment 5230996334) carrying the version-bound publish phrase on a line of its own, verified live by the publish gate."
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.2",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.2",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain"
+      ],
+      "id": "2026-08-10-keiko-0.3.2-public-download",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "normal",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Keiko 0.3.2 carries the same product as 0.3.1 and completes its publication: the npm latest dist-tag points at the current release again, so a plain npm install delivers today's Keiko instead of a 0.2.x build. The release pipeline that blocked the 0.3.1 npm promotion was repaired end to end - the publisher verifies the four published downloads (three archives and the Windows setup companion) byte for byte against build-run artifacts fetched by their immutable ids (a rerun can neither substitute bytes nor block a verified release), no longer refuses over per-target evidence files, resolves its own operating conditions (release-owner allowlist, transport policy, provenance attestation only where an OIDC provider exists), and states every unmet precondition before the gate chain runs. The project README was rewritten around the product. Nothing has to be uninstalled or migrated; the governed one-click update still does not apply while the portable line ships with evaluation signing.",
+      "affectedStateStores": ["ui-store-schema"],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "No schema change relative to 0.3.1. A store created by 0.3.0 or 0.3.1 opens unchanged; a store from 0.2.x migrates forward exactly as 0.3.0 described.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "releaseNoteBullets": [
+        "npm installs follow the current release again: the latest dist-tag points at 0.3.2, so a plain npm install delivers today's Keiko.",
+        "The release pipeline verifies the four portable downloads byte for byte against build-run artifacts fetched by immutable id; a workflow rerun can neither substitute release bytes nor block a verified release.",
+        "The project README now leads with the product: what Keiko does, the downloads, and a two-command quickstart."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-10",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#2802#5235616947",
+        "rationale": "Completion of the 0.3.1 release event: the npm latest promotion was blocked by a defect in the publish verification itself, repaired in #3055, and the repaired pipeline requires a version whose tag can still carry a release. 0.3.2 ships the identical product with the repaired release machinery and the product-first README; the evidence is the release owner's authored comment on epic #2802 carrying the version-bound publish phrase on a line of its own, verified live by the publish gate.",
+        "sourceReferences": ["oscharko-dev/Keiko#3055"]
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.3",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.3",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain"
+      ],
+      "id": "2026-08-10-keiko-0.3.3-public-download",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "normal",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Keiko 0.3.3 carries the same product as 0.3.2 and completes the npm publication both prior releases were denied: the byte-for-byte publish verifier crashed on the first empty file inside a build-run artifact (Node 24.18 rejects a zero inflate ceiling), so every governed promotion path refused with an unreadable-artifacts error while the GitHub release itself was intact. An empty entry now reads as proven empty - a stream hiding content behind a zero declaration still refuses - and the npm latest dist-tag finally follows the current release, so a plain npm install delivers today's Keiko instead of a 0.2.x build. Nothing has to be uninstalled or migrated; the governed one-click update still does not apply while the portable line ships with evaluation signing.",
+      "affectedStateStores": ["ui-store-schema"],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "No schema change relative to 0.3.2. A store created by 0.3.x opens unchanged; a store from 0.2.x migrates forward exactly as 0.3.0 described.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "releaseNoteBullets": [
+        "npm installs follow the current release again: the latest dist-tag points at 0.3.3, so a plain npm install delivers today's Keiko.",
+        "The publish verifier reads legitimately empty files inside build-run artifacts instead of refusing the whole release; hostile zero-size declarations still fail closed.",
+        "Identical product surface to 0.3.2: the four verified portable downloads, the supervised coding runtime, and the product-first README."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-10",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#2802#5239029093",
+        "rationale": "Completion of the 0.3.1/0.3.2 release event: the v0.3.2 tag freezes the publish verifier defect (empty-entry inflate crash) inside the very code every governed promotion path must run, so no checkout of that tag can ever verify its own downloads. The owner explicitly sanctioned advancing the version number until the release chain completes; 0.3.3 carries the one-line verifier repair and is otherwise byte-identical in product surface to 0.3.2."
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.4",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.4",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain"
+      ],
+      "id": "2026-08-11-keiko-0.3.4-windows-installer-repair",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Keiko 0.3.4 repairs the Windows portable installation end to end (issue #3072): setup no longer flashes a console window and stops - the launcher distinguishes a double-click from a terminal start, launches the UI, and reports real failures in a native dialog instead of exiting silently (incomplete install, damaged app bundle, runtime that cannot start). The Start Menu entry is a real shortcut; a legacy Keiko.bat from earlier releases is retired automatically during setup, repair, and the first start after an in-app update. The Windows archive pipeline now refuses symlinks, NTFS alternate-data-stream names, encryption-marked and mistyped entries outright, and installer cleanup retries correctly under silent installs.",
+      "affectedStateStores": ["ui-store-schema"],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "No schema change relative to 0.3.2. A store created by 0.3.x opens unchanged; a store from 0.2.x migrates forward exactly as 0.3.0 described.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "releaseNoteBullets": [
+        "Windows setup launches the UI: the portable launcher distinguishes a double-click from a terminal start, so installation no longer ends with a console flash and no window.",
+        "Windows failures are visible: incomplete installs, a damaged app bundle, or a runtime that cannot start now surface a native error dialog instead of exiting silently.",
+        "The Start Menu entry is a real shortcut; a legacy Keiko.bat from earlier releases is retired automatically during setup, repair, and the first start after an in-app update.",
+        "The Windows archive pipeline fails closed on symlinks, NTFS alternate-data-stream names, encryption-marked and mistyped entries, and installer cleanup retries correctly under silent installs.",
+        "These builds carry evaluation signing, and the governed in-app updater does not offer them as a one-click update — download 0.3.4 from this release page. On Windows, SmartScreen may warn on first run: choose “More info”, then “Run anyway”. On macOS, right-click the app and choose “Open” on first launch."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-11",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#2802#5255215533",
+        "rationale": "The owner directed the 0.3.4 release in the working session immediately after the Windows installer repair (PR #3075, issue #3072) merged to dev: the published 0.3.3 Windows portable assets still carry the broken installer, and neither downloads nor in-app updates can deliver the fix without a new release. 0.3.4 ships dev at the merge commit of that repair."
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.5",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.5",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain"
+      ],
+      "id": "2026-08-11-keiko-0.3.5-windows-installer-repair",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Keiko 0.3.5 repairs the Windows portable installation end to end (issue #3072): setup no longer flashes a console window and stops - the launcher distinguishes a double-click from a terminal start, launches the UI, and reports real failures in a native dialog instead of exiting silently (incomplete install, damaged app bundle, runtime that cannot start). The Start Menu entry is a real shortcut; a legacy Keiko.bat from earlier releases is retired automatically during setup, repair, and the first start after an in-app update. The Windows archive pipeline now refuses symlinks, NTFS alternate-data-stream names, encryption-marked and mistyped entries outright, and installer cleanup retries correctly under silent installs.",
+      "affectedStateStores": ["ui-store-schema"],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "No schema change relative to 0.3.2. A store created by 0.3.x opens unchanged; a store from 0.2.x migrates forward exactly as 0.3.0 described.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "releaseNoteBullets": [
+        "Double-clicking the Windows setup now brings up the Keiko UI - the launcher tells an Explorer start from a terminal one, ending the console-flash-then-nothing installs.",
+        "When a Windows start cannot proceed (missing pieces, a broken app bundle, a runtime that will not boot), a native dialog says so instead of a silent exit.",
+        "Setup, repair, and the first start after an in-app update all converge on one verified Start Menu shortcut and clear any leftover Keiko.bat from older releases.",
+        "Archive handling for Windows refuses symlinked, alternate-stream, encrypted, and mistyped entries up front, and cleanup keeps retrying properly under silent installs.",
+        "Downloads remain evaluation-signed and outside the governed one-click updater: fetch 0.3.5 from the release page, then use SmartScreen's More info / Run anyway on Windows or right-click Open on macOS for the first launch."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-11",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#2802#5256631037",
+        "rationale": "Completion of the 0.3.4 release event under the owner's standing direction from the working session: v0.3.4 froze a defective Windows native-builder toolchain path inside the tag (three builders spawned cl from an environment no workflow step provides since PR #3075), so its portable assets can never build from the tagged commit. 0.3.5 carries the script-owned MSVC resolution for all native builders plus the identical Windows installer repair; per the 0.3.3 precedent the version number advances until the release chain completes."
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "traceability": null
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.6",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.6",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain"
+      ],
+      "id": "2026-08-11-keiko-0.3.6-windows-installer-repair",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Keiko 0.3.6 delivers the Windows installation repair to end users. Installing on Windows now opens the app instead of flashing a console window and stopping; when a start genuinely cannot proceed, a native dialog explains it. The Start Menu entry becomes a verified shortcut with automatic cleanup of the legacy launcher file, and the archive pipeline behind the installer refuses hostile entries outright. The tags v0.3.4 and v0.3.5 were burned during this release chain (each froze a defective asset-build path discovered only by the release lane); 0.3.6 is the first version whose Windows asset build was proven green before tagging.",
+      "affectedStateStores": ["ui-store-schema"],
+      "stateImpact": [
+        {
+          "store": "ui-store-schema",
+          "description": "No schema change relative to 0.3.2. A store created by 0.3.x opens unchanged; a store from 0.2.x migrates forward exactly as 0.3.0 described.",
+          "remediation": "no-action-required",
+          "userActionRequired": false
+        }
+      ],
+      "releaseNoteBullets": [
+        "Installing Keiko on Windows opens the app: the launcher recognizes an Explorer double-click, so no more console flash followed by nothing.",
+        "A start that truly cannot proceed explains itself in a native dialog - covering incomplete installs, damaged app bundles, and a runtime that fails to boot.",
+        "One verified Start Menu shortcut, everywhere: setup, repair, and the first launch after an in-app update all migrate away from the legacy Keiko.bat automatically.",
+        "The installer's archive layer refuses symlinks, NTFS alternate-stream names, encryption flags, and mistyped entries before extraction, and its cleanup paces retries correctly under silent installs.",
+        "These are evaluation-signed builds outside the one-click updater: grab 0.3.6 from the release page, then on Windows use SmartScreen's More info and Run anyway once, or on macOS right-click the app and choose Open once."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-11",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#2802#5257601218",
+        "rationale": "Completion of the Windows-repair release chain under the owner's standing direction from the 2026-08-11 working session. v0.3.5 froze the last two bare-cl spawners (the native test protocols, executed only by the release lane) inside the tag; the publisher binds assets to the exact tagged commit, so the tag is unpublishable. 0.3.6 carries the shared MSVC resolution in both protocols, and the evaluation lane ran fully green on the fix branch BEFORE this version was tagged."
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "traceability": null
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.7",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.7",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-08-13-keiko-0.3.7-yarn-install-repair",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "compatibility",
+      "userVisibleSummary": "Keiko 0.3.7 repairs installation with Yarn 4. The npm package now carries every private Keiko runtime workspace through tarball-local file archives instead of npm-only bundle metadata, so Yarn no longer queries the public registry for private packages such as @oscharko-dev/keiko-cli. The release gate now installs the exact staged artifact with npm and through a Yarn 4.9.1 npm-registry locator before publication.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Yarn 4 can install Keiko again: private runtime packages are resolved from the Keiko tarball instead of being requested from the public npm registry.",
+        "The release gate now installs and exercises the same staged package with npm and Yarn 4.9.1, including the CLI, SDK declarations, TypeScript runtime, and all private runtime workspaces."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-13",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3100#5277801301",
+        "rationale": "The release owner directed an immediate 0.3.7 deployment after a customer reproduced the Yarn 4.9.1 installation failure. Issue #3100 records the incident, its root cause, the corrected artifact design, and the version-bound publish authorization."
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "traceability": null
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.8",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.8",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-08-16-keiko-0.3.8-publish-cleanup",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "normal",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Keiko 0.3.8 is a cleanup and bugfix release after the 0.3.7 npm recovery. The npm README no longer displays the paused Keiko for Quality review card while active reviews are disabled, the npm Trusted Publisher runbook now names the verified release.yml plus npm-publish environment binding, direct and transitive third-party packages were refreshed within their supported release bands with a clean audit, and the release carries the post-0.3.7 reliability, governance, contract, package, and audit fixes already merged on dev.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "The npm README no longer shows the paused Keiko for Quality review card, so package pages avoid empty review metrics while active reviews are disabled.",
+        "Release publishing docs now name the verified npm Trusted Publisher binding: workflow file `release.yml` with the `npm-publish` environment.",
+        "Third-party packages were refreshed within their supported release bands, including React, Monaco, editor/test tooling, transitive lockfile updates, and the reviewed `fsevents@2.3.3` install-script approval; npm audit and supply-chain checks are clean while Next.js 16.3, Vite 8.2, axe-core 4.13, ESLint 10, and TypeScript 7 remain separate migrations because the current dependency-review license and major-version gates intentionally block them.",
+        "0.3.8 carries the post-0.3.7 bugfix set already merged on dev, including chat handoff hardening, debug breakpoint reconciliation retries, contract/gateway validation fixes, and package/release hardening with libc-aware offline install-smoke native optional seeding."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-16",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#2802#5306381384",
+        "rationale": "The release owner directed this 0.3.8 release in the 2026-08-16 working session after trusted publishing was configured on npm. The release bundles the merged bugfixes since 0.3.7, hides the paused Keiko for Quality card, refreshes third-party package versions within their supported release bands, and corrects the npm Trusted Publisher runbook before publishing with the latest dist-tag."
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "traceability": null
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.9",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.9",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-08-18-keiko-0.3.9-customer-hardening",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Keiko 0.3.9 is a customer-hardening bugfix release for self-hosted OpenAI-compatible gateways (for example LiteLLM behind a corporate CA). Knowledge Pod indexing no longer reports an answered embedding-endpoint error as \"model gateway is not reachable\", the embedding path carries HTTP status detail and the same CA trust as chat, a first failed indexing run no longer permanently blocks the pod, workspace reloads no longer surface deterministic 412 conflicts or resurrect closed windows, and the desktop shell fixes an aria-hidden focus violation. It also delivers the Dev knowledge-work readiness stack: honest gateway readiness probes, desktop chat turn-lifecycle hardening with legacy rejection cleanup, grounded catalog refresh fixes, quality-intelligence judge degradation honesty, prompt-enhancer German travel-intent scoping, and window focus-race fixes.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Knowledge Pod indexing against self-hosted OpenAI-compatible gateways (LiteLLM and similar) now reports answered embedding failures with their HTTP status instead of a misleading \"model gateway is not reachable\", uses the same certificate trust as chat (system CA fallback), retries transient 5xx/408/425 answers, and recovers automatically after a first failed run instead of pinning the pod to a provisional embedding identity.",
+        "Workspace state no longer loses dirty snapshots to deterministic 412 conflicts on reload, closed windows stay closed after a reload, and the background-window modal lock blurs focused descendants before applying aria-hidden, fixing the Chrome accessibility violation.",
+        "Desktop chat readiness and turn lifecycle were hardened: readiness probes verify a usable assistant answer (content-part arrays included), unready models are rejected before persistence on every path, an omitted modelId prefers a conversation-ready chat model, rejected legacy requests leave no orphaned user message and restore chat recency, and cancellation during memory retrieval settles before any provider call.",
+        "Quality-intelligence runs whose judge prompts exceed the model budget now persist a visible judge degradation instead of presenting an unqualified success, run-progress strings are localized (EN/DE), and the prompt enhancer scopes German travel framing to planning intent so definitions, translations, and price comparisons are no longer rewritten as itinerary planning.",
+        "Window focus races were closed: a delayed text-entry focus is invalidated by any later window interaction, including resize grabs and pressed-and-held maximize buttons."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-18",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3204#5324184870",
+        "rationale": "The release owner directed this release in the 2026-08-18 working session for a customer deployment the next morning, requiring flawless LiteLLM connectivity, Knowledge Pod creation, and HTML manual indexing. It bundles the merged LiteLLM first-run indexing remediation (#3208), the Dev knowledge-work readiness stack (#3204), and the complete post-merge review-finding repair wave (#3212), all integrated on dev with green required gates."
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "traceability": null
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.10",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.10",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-08-18-keiko-0.3.10-indexing-provider-divergence",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Keiko 0.3.10 is a focused patch release fixing the Knowledge Pod indexing dead end that survived 0.3.9 on self-hosted OpenAI-compatible gateways: a pod pinned to the second of two gateway entries sharing one model id (a common LiteLLM configuration shape after endpoint debugging) failed every \"Index now\" click with a generic conflict, zero recorded jobs, and zero diagnostics. Indexing now uses exactly the provider the request resolved (including alias-repaired pods), and the silent failure branch is gone.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Knowledge Pod indexing no longer dies silently when the pod is pinned to one of several gateway entries sharing a model id: the indexing job now runs with exactly the provider the request resolved (including alias-repaired pods), instead of re-deriving it with a strict first-match lookup that could miss and fail with an empty job id, no job history, and no diagnostics.",
+        "The same repair unblocks full re-embed maintenance runs whose embedding model had rotated — the previous silent branch made exactly those runs fail without a trace."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-18",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3214#5332975259",
+        "rationale": "The release owner directed this immediate patch release in the 2026-08-18 working session after the customer's Knowledge Pod indexing remained blocked on 0.3.9; the root cause (divergent provider resolution with a silent failure branch) is fixed and red-proven in #3214, and the customer deployment needs the repair the next morning."
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "traceability": null
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.11",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.11",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-08-19-keiko-0.3.11-strict-gateway-first-run",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Keiko 0.3.11 makes strict OpenAI-compatible gateways work end to end. Embedding requests now fall back to the minimal wire shape when a gateway answers HTTP 400 to optional extras (encoding_format, array input) — the failure mode that blocked Knowledge Pod indexing on certain LiteLLM/TEI deployments while chat and a plain curl succeeded. The fallback remembers a gateway's strictness, keeps one absolute deadline over the whole compatibility ladder, and reports coherent error causes. A fresh install also no longer rejects the first chat: conversation readiness is verified on demand at chat creation and send instead of requiring a manual readiness check in settings.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Knowledge Pod indexing works against strict OpenAI-compatible gateways: an answered HTTP 400/422 to Keiko's embedding request triggers a bounded fallback to the minimal wire shape (no encoding_format; array batches degrade to per-item requests), with per-endpoint strictness memory, one absolute deadline across the whole ladder, and error causes reported from the actual failing response.",
+        "A fresh install can chat immediately after saving gateway credentials: conversation readiness is verified on demand with the minimal chat probe at chat creation and send, honest rejections and observed not-ready states are respected without re-probing, and probe failures land as redacted operator diagnostics.",
+        "A field-twin end-to-end test drives the full fresh-install journey (credentials, immediate chat, Knowledge Pod, HTML+Markdown folder, indexing to vectors) against a simulated strict LiteLLM over the real production transports."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-19",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3218#5341253788",
+        "rationale": "The release owner directed this patch in the 2026-08-19 working session after the customer's strict LiteLLM deployment surfaced HTTP 400 on Keiko's embedding wire shape and the fresh install rejected the first chat until a manual readiness check. Both repairs are red-proven, reviewed (13 findings fixed), and verified end to end by the field-twin journey; Sonar passes with 86.5% new-code coverage."
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "traceability": null
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.12",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.12",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-08-20-keiko-0.3.12-readiness-walk-and-resilient-indexing",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Keiko 0.3.12 makes conversation-model selection and Knowledge Pod indexing robust on gateways whose first-listed model is a special-purpose engine (for example an OCR model) and on slow, CPU-served hardware. The conversation default and the contextual-retrieval fallback now prefer models whose gateway metadata declares a chat-compatible mode, so a warm OCR model can no longer capture new chats or chunk-context generation. A failed readiness probe heals after a short cooldown instead of pinning the model until a restart, grounded Knowledge Pod questions verify readiness on demand, and the model list reports never-probed models as unknown instead of unusable. Indexing no longer holds one HTTP request open for the whole run: the start answers immediately and the panel follows the persisted job, surviving reloads. A gateway outage trips a circuit breaker after five consecutive transient failures instead of grinding for hours, terminal job status is honest about majority failures, discovery limits are operator-raisable and loudly reported when hit, the embedding path honours the configured provider timeout, and interrupted embedding batches resume behind their completed work.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "New chats and the contextual-retrieval fallback default to a model whose gateway metadata declares a chat-compatible mode (LiteLLM /model/info); mode-less special-purpose ids (OCR, speech, reranking) rank last and cannot capture the default while warm — re-run the gateway verification once after updating so the mode metadata is stored.",
+        "Conversation readiness self-heals: a failed probe retries after a 30s cooldown instead of pinning the model for the process lifetime; grounded Knowledge Pod questions verify readiness on demand (the first pod question after a restart answers without any manual probe); the models endpoint reports never-probed models as unknown/usable instead of unusable, so the picker no longer empties after every restart.",
+        "Indexing runs detached: the start request answers immediately with the job id, the panel follows the persisted job (settling strictly on that job's identity), survives page reloads by re-attaching to the running job, and a duplicate start is refused instead of racing the in-flight run.",
+        "Gateway outages stop runs early and honestly: five consecutive transient embedding failures trip EMBEDDING_GATEWAY_UNAVAILABLE instead of grinding through the corpus for hours; a run where most attempted documents failed reports MAJORITY_DOCUMENTS_FAILED; an intact partial index stays retrievable instead of being blacked out.",
+        "Discovery bounds are operator-raisable via KEIKO_LOCAL_KNOWLEDGE_MAX_DISCOVERY_FILES / KEIKO_LOCAL_KNOWLEDGE_MAX_DISCOVERY_DEPTH (hard ceilings 100000 files / depth 64), and hitting a bound now surfaces a DISCOVERY_LIMIT_REACHED warning in capsule health instead of truncating silently.",
+        "Indexing throughput on slow gateways: the embedding path honours the operator-configured provider timeoutMs (it was silently pinned at 30s), and an expired per-batch ladder deadline carries completed embeddings into the retry, which resumes behind them instead of re-embedding from item zero."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-20",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3204#5351772246",
+        "rationale": "The release owner directed this last-chance patch across the 2026-08-19/20 working sessions after the customer's dotsocr-first LiteLLM configuration on slow shared hardware surfaced default-model capture, restart-bricked grounded asks, non-convergent indexing, and multi-hour hangs on gateway outages. Ten repairs across PRs #3220 and #3221 were adversarially verified (two multi-agent passes), every behavioural change is red-proven, and the field configuration is covered end to end by twin journeys including a process-restart grounded ask and an OCR-first fallback election."
+      },
+      "userActionRequired": true,
+      "remediation": "restart-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "traceability": null
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.13",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.13",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-08-20-keiko-0.3.13-model-agnostic-role-recognition",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Keiko 0.3.13 makes model-role recognition model-agnostic. Keiko now takes a model's role from what the gateway DECLARES about it (a LiteLLM /model/info mode), not from a guess based on the model's name. A model a gateway declares as a reranking, speech, image or moderation engine is no longer stored as this gateway's embedding model just because its name resembles one — a field incident where exactly that happened bound a reranking endpoint to every new Knowledge Pod and indexing wrote zero vectors. Models Keiko cannot use are now reported with the reason the gateway gave, instead of disappearing silently, and every declared embedding model is verified with a real embedding request before it is stored, so an endpoint that cannot embed is never bound to a pod. The name heuristic remains only for gateways that declare nothing at all.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "A model's role now comes from the gateway's own declaration (LiteLLM /model/info mode) rather than from its name. A declared reranking, speech, image-generation or moderation engine can no longer be stored as an embedding model because its id happens to contain a token like \"bge\" or \"e5\"; the name heuristic applies only where a gateway declares nothing.",
+        "Models Keiko will not configure are now reported with the declared reason in the setup dialog instead of vanishing without a trace, and they no longer consume slots in the discovery limit — a gateway listing many speech or reranking endpoints can no longer push real chat models out of the configured set.",
+        "Every declared embedding model is verified with one real embedding request during setup. A model that cannot answer is not stored as an embedding model; a model whose role you asserted explicitly, or that was already stored, is kept and flagged as unverified so a brief endpoint outage cannot unpin working Knowledge Pods.",
+        "Gateways whose /model/info route is unavailable, restricted or rate-limited continue to set up exactly as before by falling back to the plain model list; only a response in which every model declares a mode Keiko cannot use is surfaced as an error."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-20",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3204#5358465374",
+        "rationale": "The release owner directed this fix after three releases failed to resolve a customer's LiteLLM deployment: indexing produced zero vectors because model roles were guessed from model names. The defect was reproduced locally against a real LiteLLM container with invented model names before any code changed, and the repair was verified the same way: the customer corpus indexes to 347 vectors with the job succeeding, where it previously bound a reranking endpoint and failed with zero. An independent adversarial review of the first commit found seven further defects, five of which would have broken working deployments; all were repaired and pinned before merge."
+      },
+      "userActionRequired": true,
+      "remediation": "restart-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "traceability": null
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.14",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.14",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-08-20-keiko-0.3.14-embedding-batch-degradation",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Keiko 0.3.14 fixes indexing against gateways that serve single embedding requests but fail requests carrying many texts at once. Keiko embeds a document's sections in one batched request, and fell back to sending them one at a time only when a gateway rejected the batch cleanly with HTTP 400 or 422. A gateway that answers such a batch with a server error, a timeout or a dropped connection was treated as briefly unavailable, so the identical request was retried unchanged - indexing produced no vectors, reported no error, and looked like it was running indefinitely. A failed multi-text request now causes exactly one single-text attempt, provided the run was not cancelled, the request carried more than one text, and its time budget has not run out. If that attempt succeeds, the batch shape is the problem and the gateway is remembered so later requests are sent one text at a time; a throttle (HTTP 429) is excluded from that memory. If it fails too, the original error is reported unchanged, so a genuine outage is still reported as an outage.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Indexing now completes against gateways that answer a multi-text embedding request with a server error, a timeout or a dropped connection. Previously only a clean HTTP 400/422 rejection triggered the fallback to one-text-at-a-time requests, so such a gateway produced zero vectors while the job appeared to keep running.",
+        "The fallback costs exactly one extra request, and it is attempted only for a request that carried more than one text, in a run that was not cancelled, and while its time budget remains. Once single texts have succeeded, the gateway is remembered and later documents skip the failing shape entirely.",
+        "A throttle (HTTP 429) is deliberately excluded from that memory: \"try again later\" says nothing about the request shape, so the throttled request is still served one text at a time while the next one may use the faster batched form again.",
+        "A genuine gateway outage is still reported as an outage: if single texts fail as well, the original error and status are surfaced unchanged rather than being reported as a request-format problem.",
+        "A cancelled indexing run no longer fans out into further requests - including a cancellation that arrives after the gateway already answered - and deployment routing is preserved on the single-text fallback, so an Azure deployment endpoint is probed at its own URL instead of the plain embeddings path."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-20",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3204#5362641516",
+        "rationale": "The release owner directed this fix after 0.3.13 did not resolve a customer's LiteLLM deployment. The customer's gateway was measured directly: a single input answered HTTP 200 in 0.21s, the same texts as an array answered HTTP 500 after 18.87s. The defect was then reproduced on a developer machine against an endpoint reproducing that exact response matrix, at two layers — the transport adapter and the real indexing job — with the product-level run failing as EMBEDDING_ADAPTER_FAILED at zero documents and zero vectors before the change and succeeding after it. Both proof suites were verified red by removing the repair and green by restoring it.",
+        "traceability": null
+      },
+      "userActionRequired": true,
+      "remediation": "restart-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "traceability": null
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.15",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.15",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-08-21-keiko-0.3.15-activity-log",
+      "releaseNoteCategory": "new-additions",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Keiko 0.3.15 adds an activity log. Keiko writes one structured line per operation to logs/server.log inside its state directory: every request with its duration and result, every indexing step from acceptance to completion, every call to the model gateway with the size sent, the time taken and the answer received, and every retry and fallback along the way. All lines belonging to one indexing run share a single job identifier, so the entire course of that run can be read with one search. The log is content-free by design — it records counts, sizes, durations, HTTP statuses and error classes, never document text, model output, credentials, file paths or names you chose yourself — so the file can be handed to support as it is. It is written from the moment Keiko starts, rotates daily and keeps seven days.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Keiko writes an activity log to logs/server.log inside its state directory: one JSON line per operation, active from startup, rotated daily with seven days kept.",
+        "All lines of one indexing run share the same job identifier, so acceptance, document discovery, extraction, chunking, embedding requests, retries, fallbacks and the final outcome can be followed with a single search of one file.",
+        "Calls to the model gateway are recorded before they are sent and again when they answer, with the number of items, the byte size, the configured timeout, the elapsed time and the HTTP status — so a request still in flight is visible as such, with the time it has been running.",
+        "The log is content-free by design: counts, sizes, durations, statuses, error classes, and identifiers reduced to digests. Document text, model output, credentials, request bodies, absolute file paths and names you chose yourself cannot reach it, so the file can be shared with support without disclosing anything.",
+        "Verbosity is adjustable through the KEIKO_LOG_LEVEL environment variable (debug, info, warn, error). The default records the course of every operation without per-item detail."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-21",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3204#5369466877",
+        "rationale": "The release owner directed this after four releases failed to resolve a customer's indexing incident. Each of those releases repaired a defect that had been inferred rather than observed, because the product recorded nothing an operator could send us; the actual gateway defect was eventually found by asking the customer to run curl by hand. The work was built in four multi-agent passes with adversarial verification between them, and those reviews caught defects that would otherwise have shipped: an entire first instrumentation layer that was wired to a no-op, three fail-open paths in the redaction guard itself, a behavioural regression from a changed async boundary, and a test that could not fail. The field scenario was replayed through the real transport against the customer's measured gateway behaviour: 198 events emitted, 198 carrying the run's correlation id, where an earlier revision measured 0 of 187.",
+        "traceability": null
+      },
+      "userActionRequired": true,
+      "remediation": "restart-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "traceability": null
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.16",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.16",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-08-22-keiko-0.3.16-reconstructable-activity-log",
+      "releaseNoteCategory": "improvements",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Keiko 0.3.16 makes the activity log reconstructable: every line now carries a process identity and a gap-free sequence number, so the exact order of events is known even across restarts; every model call, retry, stream and background job shares one correlation id with the request that caused it, and a chat error shows a Support ID you can quote; each request line records the matched route, the names of its query parameters, the response size and whether the client abandoned it, and every event stream ends with a line that says how it ended. A new `keiko support export` command writes one support file with a redacted copy of the last seven days of logs, the product version, platform details and a content-free fingerprint of each local store (schema, migrations, row counts, integrity, encryption mode, key source), and `keiko support analyze` reconstructs per-request timelines from it. The log stays content-free: counts, sizes, durations, statuses, error classes, templates and identifiers — never document text, model output, credentials, file paths, request bodies or names you chose. Diagnostics that used to go only to the console, and browser-side failures, now reach the same log, joined to the request they belong to.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Every activity-log line carries a process id, an instance id and a gap-free sequence number, so an analyzer can order events exactly and detect any line that was dropped.",
+        "One correlation id follows a request from the browser through the BFF to every model-gateway call, retry and circuit-breaker transition, to WebSocket sessions and to the background jobs it spawns; a background job also names the request that started it.",
+        "A chat error now shows a Support ID you can quote; the same id is on every server line of that request.",
+        "Request lines record the matched route template, the query parameter names, the response size and whether the client abandoned the request; every event stream ends with a line stating how many frames and bytes were sent and why it closed.",
+        "`keiko support export` writes one support file — redacted log lines of the last seven days, the product version and platform, and a content-free fingerprint of each local store — and `keiko support analyze` reconstructs per-request timelines from it; the export never modifies, migrates or unlocks a store.",
+        "Errors carry a Keiko-code stack (package and file positions, never absolute paths) and a closed error classification; provider errors record the HTTP status and retry-after; rate limits, key resolution, keychain fallbacks, encryption migrations and store opens leave body-free evidence.",
+        "Console-only diagnostics (memory retrieval degradation, Figma snapshot failures, a crash on a directly launched `keiko ui`) now reach the activity log, and the operator's stderr diagnostic carries no more than the log does.",
+        "Browser-side failures are reported to the server as bounded, content-free notes joined to the request they belong to, behind a process-wide rate limit."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-22",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3247#5380714387",
+        "rationale": "The release owner directed this release after the activity log shipped in 0.3.15, asking that the log become sufficient for an autonomous agent to reproduce a customer defect from the support bundle alone. Each wave was built in multi-agent passes with adversarial verification, then the whole was audited through six independent lenses with one adversarial verifier per finding (16 confirmed findings repaired, 5 refuted, 2 tracked as follow-ups); every CodeRabbit finding on the wave pull requests was repaired or refuted in-thread with evidence. The integrated branch passed typecheck, lint, format, architecture, error-observability, i18n, the full test suite, the local SonarJS gate, the coverage chain with no floor lowered, the assembled package-surface check and a local secret scan before merge, and the required CI matrix on the merge commit.",
+        "traceability": null
+      },
+      "userActionRequired": true,
+      "remediation": "restart-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "traceability": null
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "0.3.17",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v0.3.17",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-08-22-keiko-0.3.17-reproduction-tooling-and-runtime-parity",
+      "releaseNoteCategory": "improvements",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Keiko 0.3.17 completes the activity log: every remaining runtime surface leaves body-free evidence (memory operations, the chat request dispatch, voice sessions, agent-run and workflow outcomes even when the browser tab closed, consolidation summary fallbacks), and the support tooling turns a log into a reproduction: `keiko support analyze` produces full per-request timelines, operation clusters, a reproduction seed and a ready-to-run replay fixture; `keiko support export` can attach evidence manifests and a body-free configuration snapshot, records an integrity sidecar, and only includes the unredacted ui.log when two explicit flags are given; `keiko investigate --from-timeline` feeds a reconstructed timeline straight into the bug-investigation workflow. Diagnostic messages are a closed vocabulary at compile time and the diagnostic writer bounds every machine code, so nothing content-bearing can reach a line. Release tooling records its own deployment and verifies that version, tag, GitHub release, npm and the deployment record agree.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Memory operations, the chat request dispatch, voice sessions, agent-run and workflow outcomes, and consolidation summary fallbacks now leave body-free evidence in the activity log — keyed by the request, run or connection id.",
+        "`keiko support analyze` produces full per-request timelines (frames, error kinds), operation clusters (`--clusters`), a reproduction seed (`--seed`) and a ready-to-run replay fixture (`--emit-fixture`).",
+        "`keiko support export` can attach evidence manifests and a body-free configuration snapshot, writes an integrity sidecar, and includes the unredacted ui.log only when both `--include-ui-log` and `--i-understand-this-is-unredacted` are given — its exclusion is recorded in the manifest either way.",
+        "`keiko investigate --from-timeline <file>` turns a reconstructed timeline into a bug-investigation report, with the same evidence persistence as `keiko run`.",
+        "Diagnostic messages are a closed vocabulary at compile time and the writer bounds every machine code, so no free text, path, key or model id can reach a diagnostic line.",
+        "The error-observability gate exercises eleven runtime surfaces instead of one; ADR-0173 is accepted.",
+        "Release tooling records its own npm-publish deployment and verifies that version, tag, GitHub Latest release, npm latest and the deployment record agree."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-08-22",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3253#5382383043",
+        "rationale": "The release owner directed this release to close epic #3233 without open follow-ups. Waves 4b and 6 plus issues #3245, #3246 and #3252 were built in three multi-agent phases with adversarial review and fixers, then audited a second time through six independent lenses with one adversarial verifier per finding (nine confirmed findings repaired, five refuted with evidence); every repair carries a test that fails before and passes after. The integrated branch passed typecheck, lint, format, architecture, error-observability (eleven sites), i18n, the full test suite, the local SonarJS gate, the coverage chain with no floor lowered, the assembled package-surface check and a local secret scan before merge, and the required CI matrix on the merge commit.",
+        "traceability": null
+      },
+      "userActionRequired": true,
+      "remediation": "restart-required",
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+      },
+      "traceability": null
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.0.0",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.0.0",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-12-keiko-1.0.0-first-stable-major",
+      "releaseNoteCategory": "improvements",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Keiko 1.0.0 is the first stable major release. The customer-facing surface is unchanged from 0.3.17 — no export, CLI flag, or package entry point was added, removed, or renamed by the bump — so what changes is the promise around that surface: 1.x is now the supported line, and a breaking change to it requires a new major release. The release carries the work since 0.3.17: cross-platform updates are production-ready end to end, the Linux x64 coding runtime ships qualified with its sidecar egress confined to the gateway, and the Coding Workbench can now take an issue to a pull request in one governed run — including a governed changeset edit that survives the operator's approval instead of timing out beneath it. Windows installs through a native bootstrap rather than an IExpress companion, every git process outcome is reconstructible from the activity log, and grounded retrieval is bounded with hardened canonical roots.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "First stable major: the published customer surface is unchanged from 0.3.17, and `1.x` is now the supported line — a breaking change to it requires a new major release.",
+        "Cross-platform updates are production-ready: the updater completes on Windows, macOS and Linux against release-signed portable assets, and a failed promotion preserves the complete current install.",
+        "The Linux x64 coding runtime ships qualified, with its sidecar egress confined so generated code reaches the network only through the gateway boundary.",
+        "The Coding Workbench takes an issue to a pull request in one governed run, and shares one pull-request description between the run and the repository.",
+        "A governed changeset edit now survives the operator's Approve/Deny decision instead of expiring 30 seconds into it, so an approved edit actually lands.",
+        "Windows installs through a native bootstrap instead of the IExpress setup companion, with the setup executable's digest bound into the published manifest.",
+        "Every git process outcome is recorded body-free on the activity log, so a failed delivery can be reconstructed from the log alone.",
+        "Grounded retrieval is bounded and canonical workspace roots are hardened, removing a quadratic fallback on large workspaces.",
+        "Security: Next.js and eslint-config-next 16.3.3 close two critical advisories, and pdfjs-dist 6.3.289 raises the floor its release requires."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-12",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3467#5649458835",
+        "rationale": "The release owner directed the 1.0.0 cut once dev was green. The version bump was not mechanical: it exposed ten fixtures that restated a version the production code owns. Nine hand-copied the native adapter runtime as a 0.3.17 literal, which assertCatalogDialect compares against NATIVE_TOOL_CATALOG_RUNTIME, so at 1.0.0 the tool catalog could not be composed at all (190 tests across keiko-tool-catalog, keiko-server and keiko-model-gateway, plus check:tool-catalog-performance); the tenth pinned the same literal in the Windows portable-signing fixture while the producer writes the setup manifest from the real root manifest, so validateWindowsRootSetupManifest compared 0.3.17 against 1.0.0. All ten now derive from the one product-version source, and the deliberate negative cases stay literals. The release branch passed typecheck, lint, format, arch:check including tool-catalog conformance and container-measured performance, arch:check:negative, the full test suite, the local SonarJS gate, version-consistency, release-required-workflows, release-alignment, zizmor-anchors and portable-approvals locally before the pull request, and the required CI matrix on the merge commit.",
+        "traceability": null
+      },
+      "userActionRequired": true,
+      "remediation": "restart-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.0.1",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.0.1",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-14-keiko-1.0.1-first-published-stable",
+      "releaseNoteCategory": "improvements",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Keiko 1.0.1 is the first published release of the stable 1.x line. The v1.0.0 tag was cut but never published: its GitHub release could not receive its downloads, and GitHub never lets a tag of an immutable release be reused, so 1.0.1 ships what 1.0.0 was meant to. The customer-facing surface is unchanged from 0.3.17 — no export, CLI flag, or package entry point was added, removed, or renamed by the bump — so what changes is the promise around that surface: 1.x is now the supported line, and a breaking change to it requires a new major release. The release carries the work since 0.3.17: cross-platform updates are production-ready end to end, the Linux x64 coding runtime ships qualified with its sidecar egress confined to the gateway, and the Coding Workbench can now take an issue to a pull request in one governed run — including a governed changeset edit that survives the operator's approval instead of timing out beneath it. Windows installs through a native bootstrap rather than an IExpress companion, every git process outcome is reconstructible from the activity log, and grounded retrieval is bounded with hardened canonical roots.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "First published 1.x release: 1.0.0 was tagged but never published, so 1.0.1 opens the supported `1.x` line, and a breaking change to it requires a new major release.",
+        "Since 0.3.17 the published customer surface is unchanged: no export, CLI flag or package entry point was added, removed or renamed.",
+        "Updates work end to end on Windows, macOS and Linux: the updater installs release-signed portable assets, and a failed promotion leaves the complete current install in place.",
+        "The Linux x64 coding runtime is qualified, and its sidecar reaches the network only through the gateway boundary.",
+        "The Coding Workbench goes from an issue to a pull request in one governed run, with one pull-request description shared by the run and the repository.",
+        "An approved governed changeset edit now lands instead of expiring 30 seconds into the operator's decision.",
+        "Windows setup uses a native bootstrap in place of the IExpress companion, and the setup executable's digest is bound into the published manifest.",
+        "The activity log records every git process outcome without bodies, so a failed delivery can be reconstructed from the log alone.",
+        "Grounded retrieval is bounded, canonical workspace roots are hardened, and large workspaces no longer hit a quadratic fallback.",
+        "Security: Next.js and eslint-config-next are on 16.3.4, which carries the fixes for two critical advisories, and pdfjs-dist resolves to 6.3.289.",
+        "Portable downloads ship as an immutable GitHub release, each archive with build provenance and a CycloneDX SBOM attestation."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-14",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3467#5665589415",
+        "rationale": "The release owner approved 1.0.1 after the 1.0.0 publish could not complete. The repository has GitHub immutable releases enabled, and the publisher created the v1.0.0 release as published before uploading its downloads, so GitHub refused every upload and the tag name can never carry a complete release. npm never received 1.0.0. The publisher now assembles a portable release as a draft, verifies every download and its signed evidence by name, size and SHA-256 digest while it is still a draft, and publishes it last. The customer-facing surface is the 1.0.0 surface; the version moves only because the tag name is spent.",
+        "traceability": null
+      },
+      "userActionRequired": true,
+      "remediation": "restart-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.0.2",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.0.2",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": true,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-15-keiko-1.0.2-one-button-release",
+      "releaseNoteCategory": "internal-only",
+      "releaseNotePriority": "internal",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Release tooling and CI only. No user-visible change from 1.0.1: no export, CLI flag, package entry point, or runtime behavior was added, removed, or renamed. This release exists to prove the one-button release path delivered by Epic #3495 (PR #3507): the wait-for-checks release-verify job was retired, the publish job now gates on a bot-refuse plus a release-owner allowlist so a workflow_dispatch button on release.yml is the publish approval, and the wait-for-npm confirmation loop is retired to a single shot because npm publish returning success is the confirmation.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Release toolchain: the release owner presses `Run workflow` on release.yml with `publish: true` and the publish completes automatically — no wait-for-checks job, no wait-for-npm loop, and no second-click approval."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-15",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3507#5684274445",
+        "rationale": "The release owner approved 1.0.2 as the acceptance test of the one-button release path delivered by Epic #3495 (PR #3507). No user-visible surface changes from 1.0.1; the version moves only to observe the new dispatch and publish behavior end to end.",
+        "traceability": null
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.0.3",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.0.3",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-16-keiko-1.0.3-workbench-startup-stability",
+      "releaseNoteCategory": "improvements",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Coding Workbench startup, desktop focus, and repository context are more stable. The workbench now presents session identity (task id, branch, health) and the server-confirmed effective mode inside a dedicated information popover, so the composer stays uncluttered before a task starts. Windows management honors the launcher-paired session more reliably, repository branch state resolves correctly across cross-window operations, and prototype-chain-safe connection checks close a class of TypeError on hostile route input. Automatic gateway model verification handles version-skewed BFF responses fail-closed and heals unverified sidecar profiles best-effort.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Coding Workbench: session context and effective mode moved into an information popover — the composer stays clean before a task starts.",
+        "Repository context: branch-state reads no longer stamp new roots into stale-response guards; branch switching resolves cleanly.",
+        "Connection safety: canConnect and hasConnectablePeer reject prototype-chain keys (__proto__, constructor, toString, hasOwnProperty).",
+        "Gateway readiness: BFF response validator rejects version-skewed shapes fail-closed; sidecar profile recovery wraps optional healing steps best-effort.",
+        "Git delivery: repository initialization observes runners with correlation binding; commit routes use an inlined gateway config lookup to eliminate a cold-import cycle.",
+        "Store migrations: activity log sink is wrapped safe — a throwing sink no longer rolls back a schema migration that already ran."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-16",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3506#5698174908",
+        "rationale": "The release owner accepted PR #3506 as the substantive proof-of-example of the one-button release path delivered by Epic #3495 — a 233-file coding-workbench stability rollup taking the deterministic release chain end to end with real user-visible content.",
+        "traceability": null
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.0.4",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.0.4",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-18-keiko-1.0.4-release-and-update-hardening",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Keiko 1.0.4 hardens installation and update handling and repairs the governed release pipeline. Commands now normalize current-install paths before use across launcher, UI, support, repair, audit, uninstall and portable flows. Audit stays read-only for the selected tree, uninstall validates package metadata before any destructive step, and Homebrew command execution validates the shared Cellar ancestry before launching a private descriptor-backed snapshot. Settings keeps model actions available while the catalog refreshes. Release publication now verifies exact registry state with bounded retries and timeouts, while Windows, mutation, coverage, Sonar and performance evidence remain strict release gates.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Update recovery uses the active packaged installation across launcher, UI, support, repair, audit, uninstall and portable commands instead of trusting stale inherited paths.",
+        "Audit remains read-only for the selected state tree, and uninstall validates package scripts before stopping the UI, killing processes, removing launchers or changing state.",
+        "Homebrew launches verify the shared Cellar parent and the complete executable ancestry, then execute a private snapshot copied from a no-follow, revalidated file descriptor.",
+        "Model actions remain available while Settings refreshes the model catalog in the background.",
+        "Stable publication verifies exact npm version visibility and dist-tag convergence with bounded retries and hard network timeouts; registry uncertainty fails closed.",
+        "Release quality keeps full Windows proof, strict mutation results, at least 85% new-code coverage, SonarCloud analysis and reviewed performance evidence as mandatory gates."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-18",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3519#5722852190",
+        "rationale": "The release owner directed the complete repair of issues #3467, #3474, #3494, #3519 and #3520, accepted protected integration through PR #3521, and explicitly requested a 1.0.4 release after dev became green. PR #3521 completed every required exact-head check with zero unresolved conversations and merged through native auto-merge. Its exact dev integration commit 672387e255a36f6f5cd21fe6924de6500330906c then passed CI, CodeQL, Code Quality, workflow hygiene, SonarCloud, all three platform smokes, Node 26 compatibility and the portable release rehearsal before this release cut began.",
+        "traceability": null
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.0.5",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.0.5",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": true,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-18-keiko-1.0.5-release-orchestration-hardening",
+      "releaseNoteCategory": "internal-only",
+      "releaseNotePriority": "internal",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Release delivery and build tooling only. Keiko 1.0.5 does not add, remove or rename a public export, CLI flag, package entry point, state store or product-runtime behavior. A green approved dev SHA now owns one portable build instead of duplicate dev and tag matrices, a release is one press of the release button by an allowlisted owner after which the publish starts by itself once the stable build and every required check are green, and the canonical release bundle excludes expanded duplicate payload trees. The reviewed build-tool updates are @babel/preset-env 8.0.5, Vite 8.3.0 and Autoprefixer 10.5.6.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Release delivery: each approved dev SHA is built once, the compact portable bundle keeps only publish-required archives and evidence, and one press of the release button by an allowlisted owner starts a publication that runs to the end by itself.",
+        "Build tooling: @babel/preset-env 8.0.5, Vite 8.3.0 and Autoprefixer 10.5.6 carry reviewed correctness and performance fixes without changing Keiko's public surface."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-18",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/issues/3548",
+        "rationale": "The release owner explicitly requested completion of every follow-up recorded in #3548, consolidation of the current safe Dependabot updates, protected integration through PR #3549, and a fully monitored 1.0.5 release. The version is the production proof that one build owner, the compact immutable bundle and the explicit human authorization boundary work end to end.",
+        "traceability": null
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.1.0",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.1.0",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-20-keiko-1.1.0-activity-log-wave-1-workbench-opencode-2-one-button-release",
+      "releaseNoteCategory": "new-additions",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Version 1.1.0 hardens Activity Log persistence and support analysis into a strict, versioned machine-reconstruction contract; ships Workbench with OpenCode 2 and per-conversation task history; enables turn-based Digital Twin voice; and turns release delivery into a single unattended button that prepares the next reviewed version by itself. It also removes CI re-measurement of dev merges by reusing the proven tree evidence from the merged pull request, and irons out several small chat and workbench UX rough edges.",
+      "affectedStateStores": ["activity-log", "support-artifacts", "workbench-task-history"],
+      "stateImpact": [
+        {
+          "store": "activity-log",
+          "description": "Records emitted from 1.1.0 use the strict versioned registry contract and are stamped with schema and identity metadata. Existing records remain readable through bounded compatibility readers, are never rewritten, and continue under normal age-based retention. New segment, readiness, loss and incident evidence is added without touching prior files.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "support-artifacts",
+          "description": "New support exports use fail-closed exclusive publication that refuses unsafe filesystem targets (such as symbolic links) and never silently overwrites an existing artifact. Existing artifacts remain untouched and rollback must not restore unsafe overwrite behavior.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        },
+        {
+          "store": "workbench-task-history",
+          "description": "Workbench migrates to OpenCode 2 and now retains per-conversation task history. History is stored inside the existing workspace state directory; no new privileged surface or external destination is added.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        }
+      ],
+      "releaseNoteBullets": [
+        "Activity Log persistence and support analysis are now a strict, versioned machine-reconstruction contract: records are validated against a registry, unsafe filesystem targets are refused, and support analysis explicitly classifies legacy, corrupt, truncated and incomplete evidence.",
+        "Workbench migrates to OpenCode 2 and gains persistent per-conversation task history.",
+        "Voice conversations with the Digital Twin are now turn-based, with a simpler audio setup.",
+        "Publishing a stable release is now a single unattended button: when the current dev version is already published, the release automation prepares and requests the next reviewed version on its own.",
+        "Several chat and workbench UI rough edges are ironed out (Chat History's New button no longer flashes enabled during load; the workbench composer chip row is removed)."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-20",
+        "humanApproved": true,
+        "approvalReference": "github-pr-review:oscharko-dev/Keiko#3555#4066283441",
+        "rationale": "The 1.1.0 minor bump bundles the reviewed and merged customer-facing changes since 1.0.5: Activity Log Wave 1 (#3542, #3554, #3557), Workbench OpenCode 2 with task history (#3561), turn-based Digital Twin voice (#3559), the one-button release automation (#3555), Chat History load-state fix (#3553), and the workbench chip row removal (#3563). 1.0.6 was never cut; its Activity Log hardening notes are folded into 1.1.0's first bullet so the reviewed customer-facing text is preserved without publishing an intermediate patch.",
+        "traceability": null
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.1.1",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.1.1",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-21-keiko-1.1.1-gateway-workbench-admission-context-window-embedding-size-limit",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Version 1.1.1 repairs three defects reported against a self-hosted LiteLLM gateway. The Coding Workbench now offers every chat model whose tool calling was freshly verified, without a separately entered list of coding models. When a gateway declares no token limits, Keiko proves a model's context window itself the first time the Workbench is opened and stores it, so the Workbench no longer refuses the model for the 4,096-token setup placeholder and nothing has to be entered by hand. Knowledge Pod indexing no longer fails with zero vectors when an embedding model with a small input limit rejects a long chunk: the chunk is shortened until the endpoint accepts it, and a confirmed limit is reused.",
+      "affectedStateStores": ["local-knowledge"],
+      "stateImpact": [
+        {
+          "store": "local-knowledge",
+          "description": "Knowledge Pods indexed from 1.1.1 may hold vectors computed from the leading part of a chunk when the embedding endpoint rejected the full chunk for its size. Chunk text, citations and existing vectors are unchanged, no pod is rewritten or re-indexed by the update, and a pod that failed to index on 1.1.0 can simply be indexed again.",
+          "userActionRequired": false,
+          "remediation": "no-action-required"
+        }
+      ],
+      "releaseNoteBullets": [
+        "Coding Workbench: every chat model with a freshly verified tool-calling check is offered; the separate list of coding models is no longer required.",
+        "Coding Workbench: when the gateway reports no token limits, Keiko checks the model's context window automatically on first use and stores the verified size; no manual readiness run or value entry is needed.",
+        "Knowledge Pods: indexing completes against embedding models with a small input limit such as multilingual-e5-large instead of stopping with zero vectors after a gateway error."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-21",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/pull/3573",
+        "rationale": "The release owner explicitly requested an immediate 1.1.1 patch for the customer-reported 1.1.0 defects and decided that the Coding Workbench admits every verified tool-calling chat model without a manually entered coding-model list. The patch adds no root export, no CLI command, no route and no package entry point.",
+        "traceability": null
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.1.6",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.1.6",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-24-keiko-1.1.6-coding-workbench-litellm-stream-recovery",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Coding Workbench turns recover when a strict OpenAI-compatible gateway rejects optional streaming usage metadata. Slow self-hosted model responses remain active, and failed or truncated turns show a closed cause with correlated body-free diagnostics. The staged Yarn project install is qualified in the browser against a LiteLLM/vLLM-shaped local gateway before publication.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Coding Workbench: recover from strict OpenAI-compatible streaming usage-field rejections, tolerate self-hosted model pauses, and show a clear cause when a turn fails or its response stream stops early. The staged Yarn install is checked against a local LiteLLM/vLLM-shaped gateway before release."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-24",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/issues/3596",
+        "rationale": "The release owner requested v1.1.6 after green product gates. Issue #3596 defines the customer-shape acceptance and publication sequence; PR #3598 merged the repair to dev after all required checks, zero open review threads, and a current-head SonarCloud quality gate with zero open issues.",
+        "traceability": null
+      },
+      "userActionRequired": true,
+      "remediation": "restart-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.1.5",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.1.5",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-22-keiko-1.1.5-coding-runs-on-repositories-with-a-non-github-origin",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Version 1.1.5 lets the Coding Workbench start a run in a repository whose origin remote is not on github.com, such as a company's own Git server. Until now the start refused such a repository as an unsupported remote and reported the generic authority failure, so no customer whose code lives outside github.com could start a run. A non-GitHub origin is now its own repository identity; GitHub issue binding and GitHub delivery remain available only for a github.com origin, and local coding runs proceed.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Coding Workbench: a repository whose origin is a company Git server, i.e. any origin host other than github.com, reached through an https, ssh or scp-style remote URL, can start coding runs. The origin is recorded as a foreign-origin identity; a token embedded in the remote URL never enters the identity digest.",
+        "Coding Workbench: GitHub issue binding and GitHub pull-request delivery stay limited to repositories with a github.com origin; a foreign origin runs locally in the governed task workspace."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-22",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/issues/3565",
+        "rationale": "The customer's 1.1.4 log (Observation 18, frames from the installed build) located the refused start in readVerifiedRepositoryIdentity: their repository's origin is their own Git server, which the identity reader refused as verified-commit-remote-unsupported. The release owner ordered the fix and the 1.1.5 publication.",
+        "traceability": null
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.1.4",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.1.4",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-22-keiko-1.1.4-coding-run-start-refusals-named",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Version 1.1.4 makes a refused coding-run start explain itself. Until now a start the server could not resolve, because the selected model is not admitted for coding right now or the bound repository could not be qualified, answered with the generic CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED and the activity log of an installed Keiko carried no stack frames, so the cause could not be located from the customer's log. The Workbench now names the cause and the remedy, the log names the refusing check, and installed builds record their stack frames like a source checkout.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Coding Workbench: a start refused because the selected model is not admitted for coding right now answers with CODING_RUNTIME_MODEL_UNAVAILABLE and tells the operator to run the readiness check under Settings → Models or choose a model that passed it today.",
+        "Coding Workbench: a start refused because the bound repository could not be qualified (non-canonical path, unreadable repository identity, drifted workspace) answers with CODING_RUNTIME_WORKSPACE_UNQUALIFIED and tells the operator to bind the repository again through Browse….",
+        "Activity log: every launch-path refusal records its own code and closed sub-reason, and an installed Keiko (npm or Yarn) records Keiko stack frames on diagnostics, which it never did before."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-22",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/issues/3565",
+        "rationale": "The customer's first coding-run start on 1.1.3 was refused with the generic authority code twice and the log carried frameCount 0, so the cause could not be located from the customer's evidence (#3565 Observation 17). This patch changes no admission rule; it names the refusing check on the wire and in the log.",
+        "traceability": null
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.1.3",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.1.3",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-22-keiko-1.1.3-lean-npm-tarball-behind-repository-firewalls",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Version 1.1.3 ships the npm package in the shape of 1.1.1 again: the tarball carries Keiko's own vendored workspaces and declares its third-party runtime dependencies instead of embedding them. 1.1.2 embedded 20 third-party packages, which doubled the artefact, and a repository firewall in front of a customer's npm registry could not evaluate it, so the release could not be installed at all. The Coding Workbench runtime for macOS remains an optional dependency that npm and Yarn select for the host.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "npm package: the tarball is back to the 1.1.1 shape (17 MB compressed instead of 27 MB, no embedded third-party packages), so installations behind a repository firewall that could not evaluate the 1.1.2 artefact work again. Install with npm install @oscharko-dev/keiko or yarn add @oscharko-dev/keiko in a project folder.",
+        "Coding Workbench on npm installations (macOS) is unchanged from 1.1.2: the platform runtime package is an optional dependency and coding runs start after installation.",
+        "Known limitation: npm install -g of this shape does not install the third-party runtime dependencies on npm 11 (the same as 1.1.1); a project-folder installation is the supported path until the global path is repaired."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-22",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/issues/3565",
+        "rationale": "The release owner ordered an immediate 1.1.3 patch after the customer's Yarn installation of 1.1.2 failed: the repository firewall in front of the customer's registry answered 504 for the doubled, third-party-embedding 1.1.2 tarball, while the 1.1.1 tarball had passed. 1.1.3 removes the embedding from the publisher and the install smoke alike and changes nothing else in the product.",
+        "traceability": null
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.1.2",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.1.2",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-21-keiko-1.1.2-npm-coding-runtime-package-and-branch-names",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Version 1.1.2 makes the Coding Workbench usable on an npm installation. The npm package carried no coding engine, so until now it listed its coding models and could never start a run. On macOS, npm install -g @oscharko-dev/keiko now brings the engine with it: the platform runtime package (@oscharko-dev/keiko-coding-runtime-darwin-arm64 or -darwin-x64) is an optional dependency that npm selects for the host by itself, and Keiko verifies the OpenCode executable and its native helper against digests compiled into the product at every start. The Workbench also binds repositories whose base branch uses parentheses or the characters + @ = , such as feat(GDZ-917)/topic, which were refused as unsafe, and names the supported characters when it refuses a branch name.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Coding Workbench on npm installations (macOS): npm install -g @oscharko-dev/keiko now installs the coding runtime for the Mac's processor automatically, and coding runs start. Keiko verifies the runtime against digests built into the product at every start.",
+        "Coding Workbench: when the coding runtime is missing (for example after an install with --omit=optional), the message names the package to install instead of only stating that the runtime is not confirmed active.",
+        "Coding Workbench: repositories whose base branch contains parentheses or + @ = , (for example feat(GDZ-917)/topic) can be bound; a refused branch name is answered with the supported characters."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-21",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/pull/3577",
+        "rationale": "The release owner ordered an immediate 1.1.2 patch after the customer, who can install Keiko only from npm, could not start a coding run on 1.1.1 and could not bind a repository whose branch name contains parentheses. The npm lane reuses the dev lane's digest verification with a trust anchor compiled into the server; it adds no root export, no CLI command and no route.",
+        "traceability": null
+      },
+      "userActionRequired": false,
+      "remediation": "no-action-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.1.7",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.1.7",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-24-keiko-1.1.7-gateway-latency-resilience",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Keiko stays on a slow OpenAI-compatible gateway instead of giving up: chat, the Coding Workbench, the commit draft, readiness probes, first-run setup and retrieval calls wait minutes for a first byte and keep reading a stream that is still flowing. A model that declares no output limit gets a usable output budget, an exhausted budget is reported as such, a probe the gateway never answered or answered with a transient status is retried after a minute instead of locking the Workbench for six hours, and gateway timeouts show one consistent message in English and German.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Model gateway: streamed answers are bound by silence and a generous budget instead of one flat timeout; whole-body calls, embeddings, rerank and voice get per-call floors; the setup default rises to 120 s.",
+        "Coding Workbench: a usable output budget for models that declare none, an admission check that never sends a request past the proven window, an explicit output-exhausted failure, and a profile that says a verification is still pending instead of refusing.",
+        "Readiness and setup: automatic probes run with their own floors, an unanswered, rate-limited or overloaded probe is retried after a minute, and a slow discovery candidate stays configured but unverified.",
+        "Git: the commit draft survives slow gateways and reasoning models, with its own timeout and exhausted-budget errors.",
+        "Chat: gateway timeouts and exhausted output budgets show consistent, translated messages that never blame the request size."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-24",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/issues/3591",
+        "rationale": "The release owner requested v1.1.7 on 2026-09-24 for the field customer's LiteLLM/vLLM gateway after the 1.1.6 acceptance run against a real LiteLLM proxy found the timeout and output-budget failure classes recorded on epic #3591; the repair PR merged to dev after all required checks, zero open review threads, and a current-head SonarCloud quality gate with zero open issues.",
+        "traceability": null
+      },
+      "userActionRequired": true,
+      "remediation": "restart-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.1.8",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.1.8",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-25-keiko-1.1.8-coding-workbench-acceptance-repairs",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "The Coding Workbench repairs what the 1.1.7 hands-on acceptance and the 1.1.8 lab run exposed: every question is stored once in Coding History, a commit or verification names the real reason it cannot proceed (an unstaged change or unsaved editor buffers) instead of sending the model round in a loop, the Workbench follows and names the repository it works in, a model whose context window cannot hold a coding run is refused at start with that reason, an empty answer or a malformed tool call is reported as such and no longer counts as a provider outage, a refusal of the model's own tool request no longer opens a support incident, a denied edit reads Denied, and a change built on a stale read is sent back to the model before any human is asked to approve it.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Coding History: each question is stored once, and history written by 1.1.x shows each question once.",
+        "Commits and verification: the refusal names candidate-not-staged or buffers-dirty with the matching next step, so the model no longer loops between verifying and proposing.",
+        "Approvals: a denied, expired or cancelled decision is shown and logged as that decision, and a change whose base digest is already stale is refused before the approval card appears.",
+        "Run start: a model whose context window cannot hold a coding run (at least 32,000 tokens) is refused at once with that reason, or while Keiko still verifies its window, instead of failing after two minutes without one.",
+        "Gateway: an empty model answer is reported as empty-answer and a malformed tool call as invalid-tool-call; neither opens the circuit breaker, and every failed turn is shown in the transcript and logged with its cause.",
+        "Tool calls: a refusal of the model's own request (a stale base, a denied or missing path, an unsaved buffer, a busy editor) settles as that verdict and no longer opens a local support incident.",
+        "Workbench: it follows the header's repository, states the deployment ceiling when a mode does not apply, and shows the singular file count, scope and policy reason, and the activity after Stop correctly."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-25",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/issues/3610",
+        "rationale": "The release owner requested v1.1.8 on 2026-09-25 to ship the Coding Workbench repairs of the 1.1.7 hands-on acceptance: #3611 (issue #3610) merged to dev after all required checks and zero open review threads, and the governed-ask repairs of issue #3612 complete the acceptance findings. On 2026-09-25 the owner also asked for epic #3591 to be completed in this release: #3603, #3593 and #3615 ship here, with the dependency dispositions #3607 and #3609 (owner decision: allow the development-only LGPL-3.0-only lint dependency of eslint-plugin-sonarjs 4.2.1).",
+        "traceability": null
+      },
+      "userActionRequired": true,
+      "remediation": "restart-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.1.9",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.1.9",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-26-keiko-1.1.9-coding-workbench-renews-lapsed-tool-proof",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "The Coding Workbench renews an expired tool-calling check by itself after a restart. Keiko's forced tool-call proof expires after 24 hours, and Keiko loads an expired proof as no tool calling. Until now the Workbench read that as a model that cannot call tools: after a restart more than a day after the gateway setup it found no coding model and stayed blocked until a check was started in Settings. Opening the Workbench now renews the proof of every model Keiko verified before, within the existing six-hour bound, and only a fresh proof admits a model to a run.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Coding Workbench: after a restart more than a day after the gateway setup, opening the Workbench renews the expired tool-calling check of every model Keiko verified before, instead of reporting that no model can call tools.",
+        "A model whose check found no tool calling, or never concluded, is still not probed automatically, and only a fresh check admits a model to a run."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-26",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/issues/3610",
+        "rationale": "The release owner ordered on 2026-09-25 that release 1.1.8 ship without defects and that epic #3591 be completed. Repeating the lab flows with the published 1.1.8 package (issue #3610) found that a restart more than a day after setup left the Coding Workbench without a model: the config loader demotes an aged-out tool-call proof to toolCalling false, and the Workbench's automatic renewal of the 1.1.1 owner decision keyed on that flag. 1.1.9 ships that repair; it adds no export, no route, no operation and no configuration key.",
+        "traceability": null
+      },
+      "userActionRequired": true,
+      "remediation": "restart-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
       }
     }
   ]

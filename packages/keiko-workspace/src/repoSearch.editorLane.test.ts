@@ -56,6 +56,7 @@ const PEM_FILE = [
 function workspace(): WorkspaceInfo {
   return {
     root: MEM_ROOT,
+    selectedRoot: MEM_ROOT,
     name: "demo",
     version: "1.0.0",
     testFramework: "vitest",
@@ -195,7 +196,11 @@ describe("searchText content lane – multi-line PEM block shifts every later li
 });
 
 describe("searchText content lane – workspace without a raw-byte read port", () => {
-  it("still matches raw bytes through the guarded UTF-8 read", async () => {
+  // probeBinary's binary-detection probe requires the bounded readFileBytes primitive; when it is
+  // absent, the probe is unavailable rather than falling back to an unbounded readFileUtf8 read
+  // capped after the fact. The candidate degrades the same way a transient EACCES/ENOENT does
+  // (isIoError), so the file is a "tool-unavailable" skip, never silently scanned unbounded.
+  it("skips the file as tool-unavailable instead of an unbounded binary probe", async () => {
     const { scope, fs } = scopeFor({ "src/app.ts": SECRET_FILE });
     const withoutBytePort: WorkspaceFs = { ...fs };
     delete (withoutBytePort as { readFileBytes?: unknown }).readFileBytes;
@@ -206,7 +211,13 @@ describe("searchText content lane – workspace without a raw-byte read port", (
       contentLane: "editor",
     });
 
-    expect(coversLine(result.atoms, "src/app.ts", 1)).toBe(true);
+    expect(coversLine(result.atoms, "src/app.ts", 1)).toBe(false);
+    expect(
+      result.candidates.some(
+        (candidate) =>
+          candidate.scopePath === "src/app.ts" && candidate.omitted === "tool-unavailable",
+      ),
+    ).toBe(true);
   });
 });
 

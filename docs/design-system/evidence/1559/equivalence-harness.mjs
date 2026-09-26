@@ -26,8 +26,10 @@ const REPO = resolve(HERE, "../../../..");
 const CSS_PATH = "packages/keiko-ui/src/app/globals.css";
 const AXE_PATH = resolve(REPO, "node_modules/axe-core/axe.min.js");
 
+// javascript:S4036 — this script is a developer-run evidence-generation harness; the caller's PATH
+// is intentional and the git binary is not a production trust boundary.
 function git(args) {
-  return execFileSync("git", ["-C", REPO, ...args], { encoding: "utf8" }).trim();
+  return execFileSync("git", ["-C", REPO, ...args], { encoding: "utf8" }).trim(); // NOSONAR javascript:S4036
 }
 
 const cssText = readFileSync(resolve(REPO, CSS_PATH), "utf8");
@@ -46,7 +48,6 @@ const HEADLINE = {
   thinking: "The assistant is thinking.",
   speaking: "The assistant is speaking.",
   muted: "The assistant is speaking. Playback is muted.",
-  interrupted: "Voice dialogue interrupted.",
   error: "Voice dialogue could not continue. You can keep chatting in text.",
 };
 const LIVE = new Set(["listening", "speaking", "muted"]);
@@ -130,9 +131,21 @@ const STATES = [
   },
 ];
 
+// Mirror the seven canonical theme/contrast/motion modes from
+// docs/design-system/state-matrix.md: dark (01), light (02), dark-hc (03, in-app HC via
+// `data-hc`), light-hc (04, in-app HC via `data-hc`), prefers-contrast (05, browser-forced contrast
+// via the prefers-contrast media query only), forced-colors (06), reduced-motion (07). The
+// `data-hc` path and the `prefers-contrast` media query are kept independent modes — combining
+// them in one mode would let a regression on one path be masked by the other. Applies the identical
+// zero-serious/critical axe gate to each mode.
 const THEMES = [
-  { id: "dark", attr: null },
-  { id: "light", attr: "light" },
+  { id: "dark", attr: null, hc: null, media: {} },
+  { id: "light", attr: "light", hc: null, media: {} },
+  { id: "dark-hc", attr: null, hc: "more", media: {} },
+  { id: "light-hc", attr: "light", hc: "more", media: {} },
+  { id: "prefers-contrast", attr: null, hc: null, media: { contrast: "more" } },
+  { id: "forced-colors", attr: null, hc: null, media: { forcedColors: "active" } },
+  { id: "reduced-motion", attr: null, hc: null, media: { reducedMotion: "reduce" } },
 ];
 
 function escapeHtml(value) {
@@ -210,14 +223,25 @@ try {
       deviceScaleFactor: 2,
     });
     const page = await ctx.newPage();
-    await page.emulateMedia({ colorScheme: theme.id === "dark" ? "dark" : "light" });
+    await page.emulateMedia({
+      colorScheme: theme.attr === "light" ? "light" : "dark",
+      contrast: "no-preference",
+      forcedColors: "none",
+      reducedMotion: "no-preference",
+      ...theme.media,
+    });
     for (const spec of STATES) {
       await page.setContent(pageHtml(spec), { waitUntil: "load" });
-      await page.evaluate((attr) => {
-        const r = document.documentElement;
-        r.removeAttribute("data-theme");
-        if (attr) r.setAttribute("data-theme", attr);
-      }, theme.attr);
+      await page.evaluate(
+        ({ attr, hc }) => {
+          const r = document.documentElement;
+          delete r.dataset.theme;
+          delete r.dataset.hc;
+          if (attr) r.dataset.theme = attr;
+          if (hc) r.dataset.hc = hc;
+        },
+        { attr: theme.attr, hc: theme.hc },
+      );
       const file = `${spec.id}-${theme.id}.png`;
       await page.screenshot({ path: resolve(HERE, file), fullPage: true });
       rendered += 1;

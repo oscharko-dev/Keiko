@@ -1,7 +1,8 @@
 // Behavioral tests for git-delivery.ts (Issue #471, Epic #470). Covers every exported guard
 // (positive AND negative), every parser (ok path + each distinct error path), the risk-class
 // classifiers (incl. fail-closed and force-push escalation), the typed branch matchers, the
-// risk-class ceiling, and the envelope soundness invariant (kind === resolvedInputs.kind).
+// risk-class severity ordinal table, and the envelope soundness invariant
+// (kind === resolvedInputs.kind).
 
 import { describe, expect, it } from "vitest";
 
@@ -14,7 +15,6 @@ import {
   gitDeliveryBranchNameMatchesPattern,
   gitDeliveryDefaultRiskClass,
   gitDeliveryRiskClassForInputs,
-  gitDeliveryRiskClassWithinCeiling,
   gitDeliveryTargetIsProtectedBranch,
   isGitDeliveryAbortableOperation,
   isGitDeliveryActionKind,
@@ -37,14 +37,46 @@ import {
   parseGitDeliveryResolvedInputs,
 } from "./git-delivery.js";
 import type {
+  GitDeliveryActionEnvelope,
   GitDeliveryBranchPattern,
   GitDeliveryPolicyDecision,
+  GitDeliveryPrMarkReadyInputs,
   GitDeliveryPushInputs,
   GitDeliveryResolvedInputs,
 } from "./git-delivery.js";
 
 // A 64-char lowercase hex string for the approval-token-shape check.
 const TOKEN_HASH = "a".repeat(64);
+
+// Object.freeze throws on a mutation attempt in strict-mode ESM (which every file in this package
+// is), but the assertion that matters is the post-attempt VALUE, not the throw — so a swallowed
+// exception here still leaves the real regression signal (the unchanged read below) intact.
+function attemptMutation(mutate: () => void): void {
+  try {
+    mutate();
+  } catch {
+    // Expected in strict mode: Object.freeze rejects the write.
+  }
+}
+
+describe("frozen governance tables (KEIKO-0879)", () => {
+  it("GIT_DELIVERY_RISK_CLASS_SEVERITY is frozen and a mutation attempt leaves it unchanged", () => {
+    expect(Object.isFrozen(GIT_DELIVERY_RISK_CLASS_SEVERITY)).toBe(true);
+    attemptMutation(() => {
+      (GIT_DELIVERY_RISK_CLASS_SEVERITY as unknown as Record<string, number>).publish = 999;
+    });
+    expect(GIT_DELIVERY_RISK_CLASS_SEVERITY.publish).toBe(2);
+  });
+
+  it("GIT_DELIVERY_ACTION_RISK_DEFAULTS is frozen and a mutation attempt leaves it unchanged", () => {
+    expect(Object.isFrozen(GIT_DELIVERY_ACTION_RISK_DEFAULTS)).toBe(true);
+    attemptMutation(() => {
+      (GIT_DELIVERY_ACTION_RISK_DEFAULTS as unknown as Record<string, string>).commit =
+        "recovery-or-rewrite";
+    });
+    expect(GIT_DELIVERY_ACTION_RISK_DEFAULTS.commit).toBe("local-mutation");
+  });
+});
 
 describe("git-delivery action-kind / risk-class guards", () => {
   it("isGitDeliveryActionKind accepts known kinds and rejects unknowns", () => {
@@ -56,13 +88,22 @@ describe("git-delivery action-kind / risk-class guards", () => {
     expect(isGitDeliveryActionKind(undefined)).toBe(false);
   });
 
+  // #3399 (epic #3384 correction 4): relocated from 11 to 12 members — "pr-description-apply"
+  // joined as a distinct action kind, deliberately separate from "pr-update" so the policy-pack
+  // layer can hold a decision for it that never widens to title/base/draft-state mutations.
+  // #3389 (epic #3384 correction 7): relocated from 12 to 13 members — "pr-mark-ready" joined as a
+  // distinct action kind so the draft->ready transition is approval-gated on its own claim, never
+  // reachable through the generic "pr-update" admission.
   it("GIT_DELIVERY_ACTION_KINDS pins the cardinality and includes branch-switch", () => {
-    expect(GIT_DELIVERY_ACTION_KINDS).toHaveLength(11);
+    expect(GIT_DELIVERY_ACTION_KINDS).toHaveLength(13);
     expect(GIT_DELIVERY_ACTION_KINDS).toContain("branch-switch");
+    expect(GIT_DELIVERY_ACTION_KINDS).toContain("pr-description-apply");
+    expect(GIT_DELIVERY_ACTION_KINDS).toContain("pr-mark-ready");
     expect(new Set(GIT_DELIVERY_ACTION_KINDS).size).toBe(GIT_DELIVERY_ACTION_KINDS.length);
     // The risk-default table is exhaustive over the kinds (one entry per kind).
-    expect(Object.keys(GIT_DELIVERY_ACTION_RISK_DEFAULTS)).toHaveLength(11);
+    expect(Object.keys(GIT_DELIVERY_ACTION_RISK_DEFAULTS)).toHaveLength(13);
     expect(GIT_DELIVERY_ACTION_RISK_DEFAULTS["branch-switch"]).toBe("local-mutation");
+    expect(GIT_DELIVERY_ACTION_RISK_DEFAULTS["pr-mark-ready"]).toBe("protected-or-merge");
   });
 
   it("isGitDeliveryRiskClass discriminates the four classes", () => {
@@ -86,6 +127,7 @@ describe("git-delivery action-kind / risk-class guards", () => {
   it("isGitDeliveryBlockReason includes the fail-closed no-applicable-rule", () => {
     expect(isGitDeliveryBlockReason("no-applicable-rule")).toBe(true);
     expect(isGitDeliveryBlockReason("policy-pack-blocked")).toBe(true);
+    expect(isGitDeliveryBlockReason("authority-denied")).toBe(true);
     expect(isGitDeliveryBlockReason("vibes")).toBe(false);
   });
 
@@ -332,6 +374,7 @@ describe("parseGitDeliveryResolvedInputs", () => {
       { kind: "commit", messageByteLength: 10, stagedPathCount: 1, allowEmptyCommit: false },
       {
         kind: "push",
+        verifiedCommitSha: "a".repeat(40),
         sourceBranchName: "f",
         remoteAlias: "origin",
         remoteBranchName: "f",
@@ -340,6 +383,7 @@ describe("parseGitDeliveryResolvedInputs", () => {
       },
       {
         kind: "pr-create",
+        verifiedCommitSha: "a".repeat(40),
         headBranchName: "f",
         baseBranchName: "main",
         titleByteLength: 5,
@@ -348,6 +392,7 @@ describe("parseGitDeliveryResolvedInputs", () => {
       },
       {
         kind: "pr-update",
+        verifiedCommitSha: "a".repeat(40),
         prExternalId: "42",
         headBranchName: "f",
         baseBranchName: "main",
@@ -355,6 +400,15 @@ describe("parseGitDeliveryResolvedInputs", () => {
         bodyByteLength: 9,
         convertToDraft: false,
         convertFromDraft: true,
+      },
+      {
+        kind: "pr-mark-ready",
+        prExternalId: "42",
+        headSha: "a".repeat(40),
+        baseSha: "b".repeat(40),
+        readinessDigest: "c".repeat(64),
+        currentDraftState: true,
+        transitionPayloadDigest: "d".repeat(64),
       },
       {
         kind: "merge",
@@ -403,6 +457,77 @@ describe("parseGitDeliveryResolvedInputs", () => {
     }
   });
 
+  // #3394 review (findings 1 & 2): `verifiedCommitSha` is mandatory on push/pr-create/pr-update —
+  // isPushInputs/isPrCreateInputs/isPrUpdateInputs each now require a complete Git object id, never
+  // "absent is fine". Fail closed: absence, or a malformed value, is rejected the same way any other
+  // required field is.
+  describe("verifiedCommitSha is mandatory on push, pr-create, and pr-update (#3394 review)", () => {
+    const VALID_SHA = "a".repeat(40);
+    const CASES: readonly [string, Record<string, unknown>][] = [
+      [
+        "push",
+        {
+          kind: "push",
+          sourceBranchName: "f",
+          remoteAlias: "origin",
+          remoteBranchName: "f",
+          forcePush: false,
+          setUpstreamTracking: false,
+        },
+      ],
+      [
+        "pr-create",
+        {
+          kind: "pr-create",
+          headBranchName: "f",
+          baseBranchName: "main",
+          titleByteLength: 1,
+          bodyByteLength: 1,
+          isDraft: false,
+        },
+      ],
+      [
+        "pr-update",
+        {
+          kind: "pr-update",
+          prExternalId: "42",
+          headBranchName: "f",
+          baseBranchName: "main",
+          titleByteLength: 1,
+          bodyByteLength: 1,
+          convertToDraft: false,
+          convertFromDraft: false,
+        },
+      ],
+    ];
+
+    it.each(CASES)("rejects %s inputs that omit verifiedCommitSha entirely", (_kind, base) => {
+      const result = parseGitDeliveryResolvedInputs(base);
+      expect(result.ok).toBe(false);
+    });
+
+    it.each(CASES)("rejects %s inputs with a malformed verifiedCommitSha", (_kind, base) => {
+      const abbreviated = parseGitDeliveryResolvedInputs({
+        ...base,
+        verifiedCommitSha: "a".repeat(7),
+      });
+      expect(abbreviated.ok).toBe(false);
+      const uppercase = parseGitDeliveryResolvedInputs({
+        ...base,
+        verifiedCommitSha: VALID_SHA.toUpperCase(),
+      });
+      expect(uppercase.ok).toBe(false);
+    });
+
+    it.each(CASES)("accepts %s inputs with a complete Git object id", (_kind, base) => {
+      const result = parseGitDeliveryResolvedInputs({ ...base, verifiedCommitSha: VALID_SHA });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.kind).toBe(base.kind);
+      }
+    });
+  });
+
   it("accepts a branch-switch with a non-empty branchName and rejects an empty one", () => {
     const ok = parseGitDeliveryResolvedInputs({ kind: "branch-switch", branchName: "main" });
     expect(ok.ok).toBe(true);
@@ -417,11 +542,90 @@ describe("parseGitDeliveryResolvedInputs", () => {
     const missing = parseGitDeliveryResolvedInputs({ kind: "branch-switch" });
     expect(missing.ok).toBe(false);
   });
+
+  it("rejects a pr-update that asks to convert both to and from draft (KEIKO-0805)", () => {
+    const base = {
+      kind: "pr-update",
+      verifiedCommitSha: "a".repeat(40),
+      prExternalId: "42",
+      headBranchName: "f",
+      baseBranchName: "main",
+      titleByteLength: 5,
+      bodyByteLength: 9,
+    };
+
+    const contradictory = parseGitDeliveryResolvedInputs({
+      ...base,
+      convertToDraft: true,
+      convertFromDraft: true,
+    });
+    expect(contradictory.ok).toBe(false);
+    if (!contradictory.ok) {
+      expect(contradictory.errors[0]).toContain('kind "pr-update"');
+    }
+
+    // Exactly one flag true (either direction), or neither, remains a legal request.
+    const toDraftOnly = parseGitDeliveryResolvedInputs({
+      ...base,
+      convertToDraft: true,
+      convertFromDraft: false,
+    });
+    expect(toDraftOnly.ok).toBe(true);
+
+    const fromDraftOnly = parseGitDeliveryResolvedInputs({
+      ...base,
+      convertToDraft: false,
+      convertFromDraft: true,
+    });
+    expect(fromDraftOnly.ok).toBe(true);
+
+    const neitherDraftFlag = parseGitDeliveryResolvedInputs({
+      ...base,
+      convertToDraft: false,
+      convertFromDraft: false,
+    });
+    expect(neitherDraftFlag.ok).toBe(true);
+  });
+
+  it("rejects a pr-mark-ready whose SHAs are not valid git object ids", () => {
+    const base = {
+      kind: "pr-mark-ready",
+      prExternalId: "42",
+      readinessDigest: "c".repeat(64),
+      currentDraftState: true,
+      transitionPayloadDigest: "d".repeat(64),
+    };
+    const invalidHead = parseGitDeliveryResolvedInputs({
+      ...base,
+      headSha: "not-a-sha",
+      baseSha: "b".repeat(40),
+    });
+    expect(invalidHead.ok).toBe(false);
+    if (!invalidHead.ok) {
+      expect(invalidHead.errors[0]).toContain('kind "pr-mark-ready"');
+    }
+    const missingBase = parseGitDeliveryResolvedInputs({ ...base, headSha: "a".repeat(40) });
+    expect(missingBase.ok).toBe(false);
+  });
+
+  it("rejects a pr-mark-ready with a non-boolean currentDraftState", () => {
+    const result = parseGitDeliveryResolvedInputs({
+      kind: "pr-mark-ready",
+      prExternalId: "42",
+      headSha: "a".repeat(40),
+      baseSha: "b".repeat(40),
+      readinessDigest: "c".repeat(64),
+      currentDraftState: "yes",
+      transitionPayloadDigest: "d".repeat(64),
+    });
+    expect(result.ok).toBe(false);
+  });
 });
 
 describe("parseGitDeliveryActionEnvelope (soundness: kind === resolvedInputs.kind)", () => {
   const validPushInputs: GitDeliveryPushInputs = {
     kind: "push",
+    verifiedCommitSha: "a".repeat(40),
     sourceBranchName: "f",
     remoteAlias: "origin",
     remoteBranchName: "f",
@@ -552,6 +756,48 @@ describe("parseGitDeliveryActionEnvelope (soundness: kind === resolvedInputs.kin
       expect(result.errors.some((e) => e.includes("preview"))).toBe(true);
     }
   });
+
+  // Review finding (#3389 repair): GitDeliveryActionEnvelope's own union previously omitted the
+  // GitDeliveryActionEnvelopeFor<GitDeliveryPrMarkReadyInputs> member (it stopped at
+  // pr-description-apply), so an exhaustive switch over a parsed envelope's `kind` could silently
+  // drop this kind with no compile error. Failing before the fix: TS2367/"unreachable" style
+  // narrowing made the "pr-mark-ready" branch below dead code (its `envelope` was typed `never`
+  // there), because no union member could ever narrow to that kind.
+  it("parses a sound pr-mark-ready envelope, and its kind is a live member of the exhaustive union", () => {
+    const validMarkReadyInputs: GitDeliveryPrMarkReadyInputs = {
+      kind: "pr-mark-ready",
+      prExternalId: "1499",
+      headSha: "a".repeat(40),
+      baseSha: "b".repeat(40),
+      readinessDigest: "c".repeat(64),
+      currentDraftState: true,
+      transitionPayloadDigest: "d".repeat(64),
+    };
+    // A DIRECT structural assignment to the union type — never a cast, never routed through
+    // `parseGitDeliveryActionEnvelope`'s own `as unknown as GitDeliveryActionEnvelope` (which
+    // bypasses excess/missing-member checking and would accept this regardless of the union's
+    // completeness). This is the actual compile-time proof the finding calls for: before the fix,
+    // this assignment failed with "Type '{ ...; kind: \"pr-mark-ready\"; ... }' is not assignable to
+    // type 'GitDeliveryActionEnvelope'" because no union member's `kind` literal was "pr-mark-ready"
+    // — `tsc -p packages/keiko-contracts/tsconfig.json --noEmit` on this file is the failing-before
+    // evidence, not vitest (a runtime test cannot observe a type-only regression: switching on
+    // `envelope.kind` still dispatches correctly at runtime even when TypeScript narrows the
+    // "pr-mark-ready" case's `envelope` to `never`, since property access on `never` is permitted).
+    const envelope: GitDeliveryActionEnvelope = {
+      schemaVersion: GIT_DELIVERY_SCHEMA_VERSION,
+      actionId: "act-mark-ready-1",
+      kind: "pr-mark-ready",
+      resolvedInputs: validMarkReadyInputs,
+      policyDecision: { outcome: "allowed" },
+      approvalRequirement: { required: false },
+    };
+    expect(envelope.resolvedInputs.readinessDigest).toBe("c".repeat(64));
+    // The runtime parser accepts the identical shape too (unaffected by the type-level gap above —
+    // parseGitDeliveryActionEnvelope never switches on `.kind`, it delegates to
+    // parseGitDeliveryResolvedInputs).
+    const result = parseGitDeliveryActionEnvelope(envelope);
+    expect(result).toEqual({ ok: true, value: envelope });
+  });
 });
 
 describe("risk-class classifiers", () => {
@@ -571,6 +817,7 @@ describe("risk-class classifiers", () => {
   it("gitDeliveryRiskClassForInputs escalates a force-push above its default publish class", () => {
     const force: GitDeliveryResolvedInputs = {
       kind: "push",
+      verifiedCommitSha: "a".repeat(40),
       sourceBranchName: "f",
       remoteAlias: "origin",
       remoteBranchName: "f",
@@ -592,18 +839,15 @@ describe("risk-class classifiers", () => {
     expect(gitDeliveryRiskClassForInputs(commit)).toBe("local-mutation");
   });
 
-  it("gitDeliveryRiskClassWithinCeiling compares severities via the frozen table", () => {
-    // commit (local-mutation, 1) within a publish ceiling (2).
-    expect(gitDeliveryRiskClassWithinCeiling("commit", "publish")).toBe(true);
-    // commit within its own class (equal severity).
-    expect(gitDeliveryRiskClassWithinCeiling("commit", "local-mutation")).toBe(true);
-    // merge (protected-or-merge, 3) exceeds a publish ceiling (2).
-    expect(gitDeliveryRiskClassWithinCeiling("merge", "publish")).toBe(false);
-    // recovery (4) exceeds protected-or-merge (3).
-    expect(gitDeliveryRiskClassWithinCeiling("recovery", "protected-or-merge")).toBe(false);
-    // The comparison reads ordinals, not action-name strings.
+  // KEIKO-0925: gitDeliveryRiskClassWithinCeiling duplicated this same ordinal comparison and was
+  // removed as dead API (unused outside this file); the ordinal table itself is still exercised via
+  // GIT_DELIVERY_RISK_CLASS_SEVERITY below and the risk-class-ceiling constraint tests.
+  it("GIT_DELIVERY_RISK_CLASS_SEVERITY orders classes strictly by ordinal", () => {
     expect(GIT_DELIVERY_RISK_CLASS_SEVERITY["recovery-or-rewrite"]).toBeGreaterThan(
       GIT_DELIVERY_RISK_CLASS_SEVERITY.publish,
+    );
+    expect(GIT_DELIVERY_RISK_CLASS_SEVERITY.publish).toBeGreaterThan(
+      GIT_DELIVERY_RISK_CLASS_SEVERITY["local-mutation"],
     );
   });
 });

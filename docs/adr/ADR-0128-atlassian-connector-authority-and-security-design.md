@@ -221,15 +221,44 @@ and its host is extracted as the connector's **sole** allowlisted egress host. A
 requests may only target that host; there is no cross-connector or wildcard allowlist. This is
 enforced twice: once at connector-creation validation, and again at request-construction time in
 the `AtlassianHttpPort` adapter (defense in depth, mirroring the existing
-`outboundTargetBlockedReason` DNS/address re-check pattern in `keiko-model-gateway/src/http.ts`).
+`outboundTargetBlockedReason` literal hostname/address-shape re-check in
+`keiko-model-gateway/src/http.ts`, applied via `classifyOutboundHost` — see `httpPort.ts`'s
+`isBlockedLoopbackTarget`). That literal-shape check runs unconditionally, proxied or not; the
+gateway's *DNS-resolved* address re-check (`enforceOutboundTargetPolicy` with `resolveDns: true`)
+additionally requires `egress.pinProxiedConnectTarget` when this connector's traffic is proxied
+(ADR-0038 D6) — proxied deployments are first-class for this lane (below).
+
+**Correction (#3156, 2026-08-15).** The platform-level default for `pinProxiedConnectTarget` stays
+off for a generic `gatewayFetch` caller (ADR-0038 D6: a caller must construct it explicitly, exactly
+like `denyLoopback`) — nothing about that default changes here. This connector is one such caller,
+and it opts in on every call: `connectorEgressConfig` in `httpPort.ts` unconditionally sets both
+`pinProxiedConnectTarget` and `denyLoopback` to `true` in the config this connector passes to
+`gatewayFetch`, so a proxied connector's DNS-resolved address is independently re-validated after
+resolution against the same loopback/private/link-local/metadata policy as the direct path, not
+merely covered by the literal-shape check. This text previously said the connector left that
+opt-in off in v1, covering a proxied deployment's resolved address by the literal check alone; two
+independent reviewers flagged that a DNS name classified as safe by its literal shape but resolving
+into blocked address space was therefore unvetted whenever this connector was proxied — a live
+SSRF and internal-reconnaissance path, not a theoretical one, since operators commonly point
+connectors at internal reverse proxies.
+The accepted trade-off is that a corporate proxy filtering CONNECT by hostname rather than by
+resolved address could reject the now-pinned, IP-literal CONNECT authority; that is an
+operator-visible, diagnosable failure, weighed as preferable to a silent internal-address bypass for
+a lane whose target is already a single, operator-configured host. See `httpPort.ts`'s comment above
+`isBlockedLoopbackTarget` for the full reasoning and ADR-0038 D6 for what the two flags do and do
+not permit individually.
 
 **Transport:** the concrete adapter is built from `gatewayFetch` (ADR-0038), reusing its existing
 proxy/CA composition unchanged — no connector-specific proxy or CA logic is introduced. Proxy
-configuration (`KEIKO_HTTPS_PROXY` > `HTTPS_PROXY` > `https_proxy`, `NO_PROXY` rules) and trusted
-CAs (Node bundled roots ∪ OS trust store ∪ `NODE_EXTRA_CA_CERTS` ∪ configured bundle) are the
-existing operator-level configuration; this connector does not gain its own proxy/CA settings
-surface. Both enterprise-proxied and direct-internet deployments are first-class because the
-transport is unchanged from the model-gateway/Figma path that already supports both.
+configuration (`KEIKO_HTTPS_PROXY` > `HTTPS_PROXY` > `https_proxy`, `NO_PROXY` rules) remains
+operator-level configuration. When an HTTP(S) proxy resolves a hostname, the gateway configuration
+file must additionally set `egress.acknowledgeProxiedHostnamePolicy: true`; that explicit
+acknowledgement records the delegated-resolution risk and is never inherited from an environment
+variable. Trusted CAs (Node bundled roots ∪ OS trust store ∪ `NODE_EXTRA_CA_CERTS` ∪ configured
+bundle) remain part of the existing operator-level configuration; this connector does not gain its
+own proxy/CA settings surface. Both enterprise-proxied and direct-internet deployments are
+first-class because the transport is unchanged from the model-gateway/Figma path that already
+supports both.
 
 **Redirects and protocol downgrade fail closed.** The adapter issues requests with no redirect
 following (mirroring `figmaHttpPort.ts`'s `redirect: "manual"`): any 3xx response is surfaced as a

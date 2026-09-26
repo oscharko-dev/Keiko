@@ -21,7 +21,7 @@ import type {
   LanguageSignatureParameterInformation,
   LanguageTextEdit,
 } from "@oscharko-dev/keiko-contracts";
-import { LANGUAGE_RENAME_CHANGESET_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts";
+import { LANGUAGE_RENAME_CHANGESET_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/language-service";
 import ts from "typescript";
 import {
   computeLineStarts,

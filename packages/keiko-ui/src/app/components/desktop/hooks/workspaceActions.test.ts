@@ -8,7 +8,7 @@ import {
   activeEditorPane,
   createEditorLayoutStateV2,
   serializeEditorLayoutStateV2,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-layout";
 import {
   MAX_SCOPES,
   appendConnectorScope,
@@ -19,6 +19,7 @@ import {
   effectiveScopes,
   filesChatBindRoot,
   filesVisibleScope,
+  gitChangeChatBind,
   isWorkspaceWindowSelectable,
   moveSelectedWorkspaceWindows,
   makeConnectActions,
@@ -39,18 +40,30 @@ import {
   totalSourceCap,
 } from "./workspaceActions";
 import type { AppWindow, Connection, ConnectingState, View } from "../windows/types";
-import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
+import type { ChatConnectedScope, ChatGitChangeScope, ChatLocalKnowledgeScope } from "@/lib/types";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import { WIN_TYPES } from "../windows/WindowsRegistry";
-import type { ChatBindingTarget } from "./useWorkspace.types";
+import type { ChatBindingTarget, ChatUnbindTarget } from "./useWorkspace.types";
 import {
   EDITOR_SIDEBAR_DEFAULT_WIDTH,
   EDITOR_SIDEBAR_MIN_WIDTH,
   EDITOR_SIDEBAR_PERSISTED_MAX_WIDTH,
 } from "../editorSidebarSizing";
+import { MAX_WORKSPACE_WINDOWS } from "./workspace-persistence";
 
 function win(type: AppWindow["type"], cfg: AppWindow["cfg"] = {}, id = `${type}-1`): AppWindow {
   return { id, type, x: 0, y: 0, w: 10, h: 10, z: 1, cfg, max: false };
+}
+
+function deferredValue<T>(): {
+  readonly promise: Promise<T>;
+  readonly resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((settle): void => {
+    resolve = settle;
+  });
+  return { promise, resolve };
 }
 
 function scope(root: string, connectedAtMs = 1): ChatConnectedScope {
@@ -209,6 +222,41 @@ describe("filesVisibleScope", () => {
       relativePaths: [],
       root: "/repo",
       connectedAtMs: 10,
+    });
+  });
+
+  it("uses the configured repository root for repository-bound Files windows", () => {
+    expect(
+      filesVisibleScope(
+        win("files", {
+          root: "/repo",
+          resolvedRoot: "/worktrees/active-task",
+          rootBinding: "coding-repository",
+        }),
+        15,
+      ),
+    ).toEqual({
+      kind: "workspace-root",
+      relativePaths: [],
+      root: "/repo",
+      connectedAtMs: 15,
+    });
+  });
+
+  it("repairs a legacy Files window before binding it to Chat", () => {
+    expect(
+      filesVisibleScope(
+        win("files", {
+          root: "/repos/product",
+          resolvedRoot: "/repos/product/.keiko/dev/ui/task-workspaces/repo/ws-1",
+        }),
+        16,
+      ),
+    ).toEqual({
+      kind: "workspace-root",
+      relativePaths: [],
+      root: "/repos/product",
+      connectedAtMs: 16,
     });
   });
 
@@ -423,6 +471,84 @@ describe("connectorChatBind", () => {
   });
 });
 
+describe("gitChangeChatBind", () => {
+  it("returns the Git comparison selection for a governed Git↔Chat pair", () => {
+    const git = win("governedGit", {
+      gitChangeBaseRef: "dev",
+      gitChangeHeadRef: "feature/x",
+    });
+    expect(gitChangeChatBind(git, win("chat"))).toEqual({
+      baseRef: "dev",
+      headRef: "feature/x",
+    });
+  });
+
+  it("returns null when the Git comparison has no distinct base branch", () => {
+    const git = win("governedGit", {
+      gitChangeBaseRef: "feature/x",
+      gitChangeHeadRef: "feature/x",
+    });
+    expect(gitChangeChatBind(git, win("chat"))).toBeNull();
+  });
+});
+
+describe("linkedGitChangeComparisons", () => {
+  it("returns every Git comparison connected to the chat, including pending bindings", () => {
+    const { linkedGitChangeComparisons } = makeConnectHarness(
+      [
+        win("chat", {}, "chat-1"),
+        win("governedGit", {}, "git-a"),
+        win("governedGit", {}, "git-b"),
+        win("files", { resolvedRoot: "/repo" }, "files-1"),
+      ],
+      [
+        {
+          ...conn("chat-1", "git-a"),
+          boundGitChangeBaseRef: "dev",
+          boundGitChangeHeadRef: "feature/a",
+          boundGitChangeRelationshipId: "rel-a",
+        },
+        {
+          ...conn("git-b", "chat-1"),
+          boundGitChangeBaseRef: "dev",
+          boundGitChangeHeadRef: "feature/b",
+        },
+        conn("chat-1", "files-1"),
+      ],
+    );
+
+    expect(linkedGitChangeComparisons("chat-1")).toEqual([
+      {
+        connectionId: "chat-1~git-a",
+        baseRef: "dev",
+        headRef: "feature/a",
+        pending: false,
+      },
+      {
+        connectionId: "git-b~chat-1",
+        baseRef: "dev",
+        headRef: "feature/b",
+        pending: true,
+      },
+    ]);
+  });
+
+  it("skips stale Git connector edges that do not carry a valid comparison snapshot", () => {
+    const { linkedGitChangeComparisons } = makeConnectHarness(
+      [win("chat", {}, "chat-1"), win("governedGit", {}, "git-1")],
+      [
+        {
+          ...conn("chat-1", "git-1"),
+          boundGitChangeBaseRef: "feature/x",
+          boundGitChangeHeadRef: "feature/x",
+        },
+      ],
+    );
+
+    expect(linkedGitChangeComparisons("chat-1")).toEqual([]);
+  });
+});
+
 // ─── Epic #710 #718 — linkedConnectorCapsuleIds ──────────────────────────────
 
 function ref<T>(value: T): MutableRefObject<T> {
@@ -437,13 +563,32 @@ interface ConnectHarnessOverrides {
     scope: ChatConnectedScope,
     target?: ChatBindingTarget,
   ) => boolean | Promise<boolean>;
-  readonly onScopeUnbind?: (chatWindowId: string, scope: ChatConnectedScope) => void;
+  readonly onScopeUnbind?: (
+    chatWindowId: string,
+    scope: ChatConnectedScope,
+    target?: ChatUnbindTarget,
+  ) => boolean | Promise<boolean>;
   readonly onConnectorBind?: (
     chatWindowId: string,
     scope: ChatLocalKnowledgeScope,
     target?: ChatBindingTarget,
   ) => boolean | Promise<boolean>;
-  readonly onConnectorUnbind?: (chatWindowId: string, scope: ChatLocalKnowledgeScope) => void;
+  readonly onConnectorUnbind?: (
+    chatWindowId: string,
+    scope: ChatLocalKnowledgeScope,
+    target?: ChatUnbindTarget,
+  ) => boolean | Promise<boolean>;
+  readonly onGitChangeBind?: (
+    chatWindowId: string,
+    selection: { readonly baseRef: string; readonly headRef: string },
+    target?: ChatBindingTarget,
+  ) => ChatGitChangeScope | false | null | Promise<ChatGitChangeScope | false | null>;
+  readonly onGitChangeUnbind?: (
+    chatWindowId: string,
+    relationshipId: string,
+    target?: ChatUnbindTarget,
+  ) => boolean | Promise<boolean>;
+  readonly onConnectionUnbindFailure?: () => void;
 }
 
 function makeConnectHarness(
@@ -452,7 +597,7 @@ function makeConnectHarness(
   overrides: ConnectHarnessOverrides = {},
 ): ReturnType<typeof makeConnectActions> {
   const winsRef = ref(wins);
-  const connsRef = ref(conns);
+  const connsRef = ref<Connection[]>([...conns]);
   const connsByEndpoint = new Map<string, Connection[]>();
   for (const c of conns) {
     const a = connsByEndpoint.get(c.a);
@@ -462,6 +607,18 @@ function makeConnectHarness(
     if (b === undefined) connsByEndpoint.set(c.b, [c]);
     else b.push(c);
   }
+  // Keep `connsRef.current` in sync with every `setConns` call so `isDuplicate(connsRef.current,
+  // …)` inside the actions reflects the same live state React would carry through the ref in
+  // production (#3506 review — the deferred-bind cleanup depends on that read).
+  const providedSetConns = overrides.setConns;
+  const setConns: Dispatch<SetStateAction<Connection[]>> = (action) => {
+    const next =
+      typeof action === "function"
+        ? (action as (previous: Connection[]) => Connection[])(connsRef.current)
+        : action;
+    connsRef.current = next;
+    if (providedSetConns !== undefined) providedSetConns(next);
+  };
   return makeConnectActions({
     wsRef: { current: null } as RefObject<HTMLElement | null>,
     viewRef: ref<View>({ zoom: 1, x: 0, y: 0 }),
@@ -473,17 +630,41 @@ function makeConnectHarness(
     connectingRef: ref<ConnectingState | null>(overrides.connecting ?? null),
     connectCleanupRef: ref<(() => void) | null>(null),
     focus: () => undefined,
-    setConns: overrides.setConns ?? ((() => undefined) as Dispatch<SetStateAction<Connection[]>>),
+    setConns,
     setConnecting: (() => undefined) as Dispatch<SetStateAction<ConnectingState | null>>,
     onScopeBind: overrides.onScopeBind,
     onScopeUnbind: overrides.onScopeUnbind,
     onConnectorBind: overrides.onConnectorBind,
     onConnectorUnbind: overrides.onConnectorUnbind,
+    onGitChangeBind: overrides.onGitChangeBind,
+    onGitChangeUnbind: overrides.onGitChangeUnbind,
+    onConnectionUnbindFailure: overrides.onConnectionUnbindFailure,
   });
 }
 
 function conn(a: string, b: string): Connection {
   return { id: `${a}~${b}`, a, b };
+}
+
+function gitScope(relationshipId = "rel-git-1"): ChatGitChangeScope {
+  return {
+    kind: "git-change",
+    relationshipId,
+    remoteDigest: "d".repeat(64),
+    comparisonLabel: "dev...feature/x",
+    baseRef: "dev",
+    headRef: "feature/x",
+    baseSha: "a".repeat(40),
+    headSha: "b".repeat(40),
+    mergeBaseSha: "a".repeat(40),
+    snapshotDigest: "c".repeat(64),
+    fileCount: 1,
+    totalFiles: 1,
+    omittedFiles: 0,
+    truncatedFiles: 0,
+    descriptionStatus: "current",
+    connectedAtMs: 1,
+  };
 }
 
 function applyState<T>(store: { value: T }, update: SetStateAction<T>): void {
@@ -493,15 +674,15 @@ function applyState<T>(store: { value: T }, update: SetStateAction<T>): void {
 const layoutViewport = { x: 10, y: 20, w: 900, h: 600 };
 
 describe("workspace window selection helpers (Issue #2057)", () => {
-  it("treats visible floating windows as selectable only", () => {
+  it("treats visible windows as selectable even when maximized", () => {
     expect(isWorkspaceWindowSelectable(win("chat", {}, "chat-1"))).toBe(true);
     expect(isWorkspaceWindowSelectable({ ...win("chat", {}, "chat-1"), minimized: true })).toBe(
       false,
     );
-    expect(isWorkspaceWindowSelectable({ ...win("chat", {}, "chat-1"), max: true })).toBe(false);
+    expect(isWorkspaceWindowSelectable({ ...win("chat", {}, "chat-1"), max: true })).toBe(true);
   });
 
-  it("normalizes selection by pruning stale, duplicate, minimized, and maximized ids", () => {
+  it("normalizes selection by pruning stale, duplicate, and minimized ids", () => {
     const wins = [
       win("files", {}, "files-1"),
       { ...win("chat", {}, "chat-1"), minimized: true },
@@ -515,8 +696,8 @@ describe("workspace window selection helpers (Issue #2057)", () => {
         selectedWindowIds: ["files-1", "missing", "files-1", "chat-1", "quality-1", "terminal-1"],
       }),
     ).toEqual({
-      focusedWindowId: null,
-      selectedWindowIds: ["files-1", "terminal-1"],
+      focusedWindowId: "quality-1",
+      selectedWindowIds: ["files-1", "quality-1", "terminal-1"],
     });
   });
 
@@ -530,26 +711,33 @@ describe("workspace window selection helpers (Issue #2057)", () => {
     const replaced = replaceWorkspaceSelection(wins, ["files-1", "quality-1", "chat-1"]);
     expect(replaced).toEqual({
       focusedWindowId: "chat-1",
-      selectedWindowIds: ["files-1", "chat-1"],
+      selectedWindowIds: ["files-1", "quality-1", "chat-1"],
     });
 
     const toggledOff = toggleWorkspaceSelection(wins, replaced, "files-1");
-    expect(toggledOff).toEqual({ focusedWindowId: "files-1", selectedWindowIds: ["chat-1"] });
+    expect(toggledOff).toEqual({
+      focusedWindowId: "files-1",
+      selectedWindowIds: ["quality-1", "chat-1"],
+    });
 
-    expect(toggleWorkspaceSelection(wins, toggledOff, "quality-1")).toEqual(toggledOff);
+    expect(toggleWorkspaceSelection(wins, toggledOff, "quality-1")).toEqual({
+      focusedWindowId: "quality-1",
+      selectedWindowIds: ["chat-1"],
+    });
   });
 
   it("moves only eligible selected windows while preserving offsets and content config", () => {
     const filesCfg = { resolvedRoot: "/repo" };
+    const maximized = { ...win("terminal", {}, "terminal-1"), max: true, x: 640, y: 100 };
     const wins = [
       { ...win("files", filesCfg, "files-1"), x: 40, y: 50, w: 200, h: 120 },
       { ...win("chat", {}, "chat-1"), x: 280, y: 90, w: 240, h: 160 },
-      { ...win("terminal", {}, "terminal-1"), x: 640, y: 100, w: 260, h: 180 },
+      maximized,
     ];
 
     const moved = moveSelectedWorkspaceWindows(
       wins,
-      ["files-1", "chat-1"],
+      ["files-1", "chat-1", "terminal-1"],
       { dx: 25, dy: 30 },
       layoutViewport,
     );
@@ -558,7 +746,7 @@ describe("workspace window selection helpers (Issue #2057)", () => {
     expect(moved.appliedDelta).toEqual({ dx: 25, dy: 30 });
     expect(moved.wins[0]).toMatchObject({ id: "files-1", x: 65, y: 80 });
     expect(moved.wins[1]).toMatchObject({ id: "chat-1", x: 305, y: 120 });
-    expect(moved.wins[2]).toBe(wins[2]);
+    expect(moved.wins[2]).toBe(maximized);
     expect(moved.wins[0]?.cfg).toBe(filesCfg);
   });
 
@@ -1658,8 +1846,8 @@ describe("makeMutations.add — scoped Figma-view card geometry (#GEN-DUP-NEAR-0
   });
 });
 
-describe("makeMutations.add — Chat singleton", () => {
-  it("reuses the existing chat window and switches its target conversation", () => {
+describe("makeMutations.add — per-conversation Chat windows", () => {
+  it("keeps the existing chat window when a different conversation opens", () => {
     let wins: AppWindow[] | null = [win("chat", { chatId: "chat-1", title: "Chat 1" }, "chat")];
     const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
       wins = typeof fn === "function" ? fn(wins) : fn;
@@ -1672,22 +1860,23 @@ describe("makeMutations.add — Chat singleton", () => {
 
     const id = add("chat", { chatId: "chat-2", title: "Chat 2" });
 
-    expect(id).toBe("chat");
-    expect(wins).toHaveLength(1);
-    expect(wins?.[0]).toMatchObject({
-      id: "chat",
-      type: "chat",
-      cfg: { chatId: "chat-2", title: "Chat 2" },
-      minimized: false,
-      z: 5,
+    expect(id).not.toBe("chat");
+    expect(wins?.filter((window) => window.type === "chat")).toHaveLength(2);
+    expect(wins?.find((window) => window.id === "chat")?.cfg).toEqual({
+      chatId: "chat-1",
+      title: "Chat 1",
+    });
+    expect(wins?.find((window) => window.id === id)?.cfg).toEqual({
+      chatId: "chat-2",
+      memoryEnabled: false,
+      title: "Chat 2",
     });
   });
 
-  // GEN-PERF-CHAT-001 — pin the load-bearing singleton invariant. The original Critical was N chat
-  // hosts (one per window) fighting over a single global session's active pointer, producing an
-  // openChat ping-pong storm. Step 03 made `chat` a singleton window; adding a second chat from an
-  // empty workspace must yield exactly ONE 'chat' window (focus + cfg-merge), never a second host.
-  it("add('chat', A) then add('chat', B) yields exactly ONE chat window (singleton pin)", () => {
+  // GEN-PERF-CHAT-001 — the old singleton prevented multiple hosts from fighting over one global
+  // active-chat pointer by deleting the first window. Hosts now own isolated sessions, so the pin
+  // moves to the actual invariant: different conversations get different windows and identities.
+  it("add('chat', A) then add('chat', B) preserves both chat windows", () => {
     let wins: AppWindow[] | null = [];
     const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
       wins = typeof fn === "function" ? fn(wins) : fn;
@@ -1701,14 +1890,100 @@ describe("makeMutations.add — Chat singleton", () => {
     const firstId = add("chat", { chatId: "A", title: "Chat A" });
     const secondId = add("chat", { chatId: "B", title: "Chat B" });
 
-    // Both adds resolve to the same singleton window id.
-    expect(firstId).toBe("chat");
-    expect(secondId).toBe("chat");
-    // Exactly one 'chat' window exists — no second host was spawned.
+    expect(firstId).not.toBeNull();
+    expect(secondId).not.toBeNull();
+    expect(secondId).not.toBe(firstId);
     const chatWindows = (wins ?? []).filter((w) => w.type === "chat");
-    expect(chatWindows).toHaveLength(1);
-    // The singleton now targets the most-recently-added conversation (cfg merged, not duplicated).
-    expect(chatWindows[0]?.cfg).toMatchObject({ chatId: "B", title: "Chat B" });
+    expect(chatWindows).toHaveLength(2);
+    expect(chatWindows.map((window) => window.cfg["chatId"])).toEqual(["A", "B"]);
+    expect(chatWindows.map((window) => window.cfg["memoryEnabled"])).toEqual([false, false]);
+  });
+
+  it("enforces the global workspace bound while still focusing an existing chat", () => {
+    let wins: AppWindow[] | null = Array.from({ length: MAX_WORKSPACE_WINDOWS }, (_, index) => ({
+      ...win("chat", { chatId: `chat-${String(index)}` }, `chat-window-${String(index)}`),
+      minimized: index === 0,
+      z: index + 1,
+    }));
+    const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
+      wins = typeof fn === "function" ? fn(wins) : fn;
+    };
+    const onWindowLimitReached = vi.fn();
+    const { add } = makeMutations({
+      onWindowLimitReached,
+      setWins,
+      zc: { current: MAX_WORKSPACE_WINDOWS },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+
+    expect(add("chat", { chatId: "overflow-chat" })).toBeNull();
+    expect(onWindowLimitReached).toHaveBeenCalledExactlyOnceWith(MAX_WORKSPACE_WINDOWS);
+    expect(wins).toHaveLength(MAX_WORKSPACE_WINDOWS);
+    expect(add("chat", { chatId: "chat-0" })).toBe("chat-window-0");
+    expect(onWindowLimitReached).toHaveBeenCalledOnce();
+    expect(wins?.find((window) => window.id === "chat-window-0")?.minimized).toBe(false);
+  });
+
+  it("reports a live window-cap rejection before React evaluates a deferred updater", () => {
+    const wins = Array.from({ length: MAX_WORKSPACE_WINDOWS }, (_, index) =>
+      win("chat", { chatId: `chat-${String(index)}` }, `chat-window-${String(index)}`),
+    );
+    const winsRef: MutableRefObject<AppWindow[]> = { current: wins };
+    const setWins = vi.fn<Dispatch<SetStateAction<AppWindow[] | null>>>();
+    const onWindowLimitReached = vi.fn();
+    const { add } = makeMutations({
+      onWindowLimitReached,
+      setWins,
+      winsRef,
+      zc: { current: MAX_WORKSPACE_WINDOWS },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+
+    expect(add("chat", { chatId: "overflow-chat" })).toBeNull();
+    expect(onWindowLimitReached).toHaveBeenCalledExactlyOnceWith(MAX_WORKSPACE_WINDOWS);
+    expect(setWins).not.toHaveBeenCalled();
+  });
+
+  it("preserves an explicit memory preference while defaulting a new chat window off", () => {
+    let wins: AppWindow[] | null = [];
+    const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
+      wins = typeof fn === "function" ? fn(wins) : fn;
+    };
+    const { add } = makeMutations({
+      setWins,
+      zc: { current: 1 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+
+    add("chat", { chatId: "new-chat" });
+    add("chat", { chatId: "restored-chat", memoryEnabled: true });
+
+    const chatWindows = (wins ?? []).filter((window) => window.type === "chat");
+    expect(chatWindows[0]?.cfg["memoryEnabled"]).toBe(false);
+    expect(chatWindows[1]?.cfg["memoryEnabled"]).toBe(true);
+  });
+
+  it("focuses the existing window when the same conversation opens again", () => {
+    let wins: AppWindow[] | null = [
+      { ...win("chat", { chatId: "A", title: "Chat A" }, "chat-a"), minimized: true, z: 1 },
+    ];
+    const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
+      wins = typeof fn === "function" ? fn(wins) : fn;
+    };
+    const { add } = makeMutations({
+      setWins,
+      zc: { current: 4 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+
+    expect(add("chat", { chatId: "A", title: "Ignored duplicate" })).toBe("chat-a");
+    expect(wins).toHaveLength(1);
+    expect(wins?.[0]).toMatchObject({
+      id: "chat-a",
+      minimized: false,
+      z: 5,
+      cfg: { chatId: "A", title: "Chat A" },
+    });
   });
 });
 
@@ -1838,6 +2113,28 @@ describe("makeMutations.openEditorFile", () => {
         revealLineEnd: 8,
       },
     });
+  });
+
+  it("rejects a new editor when the workspace-wide window limit is reached", () => {
+    const initial = Array.from({ length: MAX_WORKSPACE_WINDOWS }, (_, index) =>
+      win("files", {}, `files-${String(index)}`),
+    );
+    const store = { value: initial as AppWindow[] | null };
+    const winsRef: MutableRefObject<AppWindow[]> = { current: initial };
+    const onWindowLimitReached = vi.fn();
+    const { openEditorFile } = makeMutations({
+      onWindowLimitReached,
+      setWins: (update) => applyState(store, update),
+      zc: { current: MAX_WORKSPACE_WINDOWS },
+      worldVP: () => layoutViewport,
+      winsRef,
+    });
+
+    const result = openEditorFile({ root: "/repo", path: "src/a.ts" });
+
+    expect(result.ok).toBe(false);
+    expect(store.value).toHaveLength(MAX_WORKSPACE_WINDOWS);
+    expect(onWindowLimitReached).toHaveBeenCalledExactlyOnceWith(MAX_WORKSPACE_WINDOWS);
   });
 
   it("strips a re-included root prefix so an absolute reference stays root-relative (#1374)", () => {
@@ -2061,6 +2358,42 @@ describe("makeMutations.minimize/restore", () => {
 });
 
 describe("makeMutations.toggleTool — Local Knowledge singleton", () => {
+  it("opens a new tool above a persisted window when the z counter is stale", () => {
+    let wins: AppWindow[] | null = [{ ...win("chat", { chatId: "chat-1" }, "chat-1"), z: 10 }];
+    const { toggleTool } = makeMutations({
+      setWins: (update) => {
+        wins = typeof update === "function" ? update(wins) : update;
+      },
+      zc: { current: 0 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+
+    toggleTool("settings");
+
+    expect(wins?.find((window) => window.id === "settings")).toMatchObject({ z: 11 });
+  });
+
+  it("restores an existing navigation window above a later chat window", () => {
+    let wins: AppWindow[] | null = [
+      { ...win("settings", {}, "settings"), minimized: true, z: 2 },
+      { ...win("chat", { chatId: "chat-1" }, "chat-1"), z: 100 },
+    ];
+    const { toggleTool } = makeMutations({
+      setWins: (update) => {
+        wins = typeof update === "function" ? update(wins) : update;
+      },
+      zc: { current: 2 },
+      worldVP: () => ({ x: 0, y: 0, w: 1000, h: 800 }),
+    });
+
+    toggleTool("settings");
+
+    expect(wins?.find((window) => window.id === "settings")).toMatchObject({
+      minimized: false,
+      z: 101,
+    });
+  });
+
   it("opens one Local Knowledge tool window and closes it on the next toggle", () => {
     let wins: AppWindow[] | null = [];
     const setWins: Dispatch<SetStateAction<AppWindow[] | null>> = (fn) => {
@@ -2077,6 +2410,29 @@ describe("makeMutations.toggleTool — Local Knowledge singleton", () => {
 
     toggleTool("localKnowledge");
     expect(wins?.filter((w) => w.type === "localKnowledge")).toHaveLength(0);
+  });
+
+  it("does not open a tool beyond the workspace-wide window limit", () => {
+    let wins: AppWindow[] | null = Array.from({ length: MAX_WORKSPACE_WINDOWS }, (_, index) =>
+      win("files", {}, `files-${String(index)}`),
+    );
+    const winsRef: MutableRefObject<AppWindow[]> = { current: wins };
+    const onWindowLimitReached = vi.fn();
+    const { toggleTool } = makeMutations({
+      onWindowLimitReached,
+      setWins: (update) => {
+        wins = typeof update === "function" ? update(wins) : update;
+        winsRef.current = wins ?? [];
+      },
+      zc: { current: MAX_WORKSPACE_WINDOWS },
+      worldVP: () => layoutViewport,
+      winsRef,
+    });
+
+    toggleTool("localKnowledge");
+
+    expect(wins).toHaveLength(MAX_WORKSPACE_WINDOWS);
+    expect(onWindowLimitReached).toHaveBeenCalledExactlyOnceWith(MAX_WORKSPACE_WINDOWS);
   });
 
   it("merges cfg into an existing singleton when add focuses it", () => {
@@ -2462,7 +2818,7 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
 
   it("discards an accepted edge when the chat changed before the bind settled", async (): Promise<void> => {
     const store = { conns: [] as Connection[] };
-    const chatCfg: AppWindow["cfg"] = { chatId: "chat-old" };
+    const chatCfg: AppWindow["cfg"] = { chatId: "chat-old", projectPath: "/repo-old" };
     let observedTarget: ChatBindingTarget | undefined;
     let resolveBind!: (accepted: boolean) => void;
     const acceptance = new Promise<boolean>((resolve): void => {
@@ -2483,6 +2839,7 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
 
     harness.confirmConnect("chat-1", evt);
     expect(observedTarget?.conversationId).toBe("chat-old");
+    expect(observedTarget?.projectPath).toBe("/repo-old");
     expect(observedTarget?.isCurrent()).toBe(true);
     chatCfg["chatId"] = "chat-new";
     expect(observedTarget?.isCurrent()).toBe(false);
@@ -2562,6 +2919,93 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
     expect(store.conns[0]?.boundConnectorId).toBe("cap-a");
   });
 
+  it("draws a Git↔Chat edge immediately, then attaches the confirmed relationship scope", async () => {
+    const store = { conns: [] as Connection[] };
+    const deferredScope = deferredValue<ChatGitChangeScope>();
+    const seenSelections: Array<{ readonly baseRef: string; readonly headRef: string }> = [];
+    const harness = makeConnectHarness(
+      [
+        win("governedGit", { gitChangeBaseRef: "dev", gitChangeHeadRef: "feature/x" }, "git-1"),
+        win("chat", { chatId: "chat-private", projectPath: "/repo" }, "chat-1"),
+      ],
+      [],
+      {
+        connecting: { from: "git-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onGitChangeBind: (_chatWindowId, selection) => {
+          seenSelections.push(selection);
+          return deferredScope.promise;
+        },
+      },
+    );
+    harness.confirmConnect("chat-1", evt);
+    expect(seenSelections).toEqual([{ baseRef: "dev", headRef: "feature/x" }]);
+    expect(store.conns[0]).toMatchObject({
+      a: "git-1",
+      b: "chat-1",
+      boundChatWindowId: "chat-1",
+      boundGitChangeBaseRef: "dev",
+      boundGitChangeHeadRef: "feature/x",
+    });
+    expect(store.conns[0]?.boundGitChangeRelationshipId).toBeUndefined();
+    deferredScope.resolve(gitScope());
+    await deferredScope.promise;
+    await flushAsyncBind();
+    expect(store.conns[0]).toMatchObject({
+      a: "git-1",
+      b: "chat-1",
+      boundChatWindowId: "chat-1",
+      boundGitChangeBaseRef: "dev",
+      boundGitChangeHeadRef: "feature/x",
+      boundGitChangeRelationshipId: "rel-git-1",
+    });
+  });
+
+  it("removes the immediate Git↔Chat edge again when the git-change bind is vetoed", async () => {
+    const store = { conns: [] as Connection[] };
+    const harness = makeConnectHarness(
+      [
+        win("governedGit", { gitChangeBaseRef: "dev", gitChangeHeadRef: "feature/x" }, "git-1"),
+        win("chat", { chatId: "chat-private", projectPath: "/repo" }, "chat-1"),
+      ],
+      [],
+      {
+        connecting: { from: "git-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onGitChangeBind: () => Promise.resolve(false as const),
+      },
+    );
+    harness.confirmConnect("chat-1", evt);
+    expect(store.conns).toHaveLength(1);
+    await flushAsyncBind();
+    expect(store.conns).toHaveLength(0);
+  });
+
+  it("does not draw a Git↔Chat edge when the Git comparison has no distinct base", async () => {
+    const store = { conns: [] as Connection[] };
+    const onGitChangeBind = vi.fn();
+    const harness = makeConnectHarness(
+      [
+        win(
+          "governedGit",
+          { gitChangeBaseRef: "feature/x", gitChangeHeadRef: "feature/x" },
+          "git-1",
+        ),
+        win("chat", { chatId: "chat-private" }, "chat-1"),
+      ],
+      [],
+      {
+        connecting: { from: "git-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onGitChangeBind,
+      },
+    );
+    harness.confirmConnect("chat-1", evt);
+    await flushAsyncBind();
+    expect(onGitChangeBind).not.toHaveBeenCalled();
+    expect(store.conns).toHaveLength(0);
+  });
+
   it("still draws non-binding edges when no callbacks are wired", async () => {
     const store = { conns: [] as Connection[] };
     const harness = makeConnectHarness(
@@ -2576,11 +3020,220 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
     await flushAsyncBind();
     expect(store.conns).toHaveLength(1);
   });
+
+  // #3506 review — rejecting a duplicate Git↔Chat bind at the source. Without this guard, a
+  // second confirm on an already-bound pair reached `onGitChangeBind`, the server minted a NEW
+  // relationship, and the edge's `boundGitChangeRelationshipId` was overwritten — the original
+  // relationship stayed active on the server but became unreachable through the UI.
+  it("does not re-invoke onGitChangeBind when the Git↔Chat pair is already bound", async () => {
+    const store = {
+      conns: [
+        {
+          id: "git-1~chat-1",
+          a: "git-1",
+          b: "chat-1",
+          boundChatWindowId: "chat-1",
+          boundGitChangeBaseRef: "dev",
+          boundGitChangeHeadRef: "feature/x",
+          boundGitChangeRelationshipId: "rel-git-1",
+        },
+      ] as Connection[],
+    };
+    const onGitChangeBind = vi.fn();
+    const harness = makeConnectHarness(
+      [
+        win("governedGit", { gitChangeBaseRef: "dev", gitChangeHeadRef: "feature/x" }, "git-1"),
+        win("chat", { chatId: "chat-private", projectPath: "/repo" }, "chat-1"),
+      ],
+      store.conns,
+      {
+        connecting: { from: "git-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onGitChangeBind,
+      },
+    );
+    harness.confirmConnect("chat-1", evt);
+    await flushAsyncBind();
+    expect(onGitChangeBind).not.toHaveBeenCalled();
+    // The pre-existing edge (with its original relationship id) survives untouched — no new
+    // relationship replaces it.
+    expect(store.conns).toEqual([
+      {
+        id: "git-1~chat-1",
+        a: "git-1",
+        b: "chat-1",
+        boundChatWindowId: "chat-1",
+        boundGitChangeBaseRef: "dev",
+        boundGitChangeHeadRef: "feature/x",
+        boundGitChangeRelationshipId: "rel-git-1",
+      },
+    ]);
+  });
+
+  // #3506 review — a deferred bind whose optimistic edge is removed before it settles must
+  // hand the just-minted server relationship back through `onGitChangeUnbind`. Without this,
+  // the visible edge disappears while the remote relationship remains — a leak with no UI
+  // handle to release it.
+  it("unbinds a Git↔Chat relationship whose optimistic edge was removed before the bind settled", async () => {
+    const store = { conns: [] as Connection[] };
+    const deferredScope = deferredValue<ChatGitChangeScope>();
+    const onGitChangeUnbind = vi.fn(() => true);
+    const harness = makeConnectHarness(
+      [
+        win("governedGit", { gitChangeBaseRef: "dev", gitChangeHeadRef: "feature/x" }, "git-1"),
+        win("chat", { chatId: "chat-private", projectPath: "/repo" }, "chat-1"),
+      ],
+      [],
+      {
+        connecting: { from: "git-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onGitChangeBind: () => deferredScope.promise,
+        onGitChangeUnbind,
+      },
+    );
+    harness.confirmConnect("chat-1", evt);
+    // The optimistic edge is drawn immediately (no relationship id yet).
+    expect(store.conns).toHaveLength(1);
+    expect(store.conns[0]?.boundGitChangeRelationshipId).toBeUndefined();
+
+    // The operator disconnects before the bind resolves. The edge carries no relationship id,
+    // so removeConn has no unbind work to perform — the edge is removed locally at once.
+    harness.removeConn("git-1~chat-1");
+    expect(store.conns).toHaveLength(0);
+    expect(onGitChangeUnbind).not.toHaveBeenCalled();
+
+    // Server accept arrives with a valid relationship id; the settle path must release it.
+    deferredScope.resolve(gitScope("rel-deferred"));
+    await deferredScope.promise;
+    await flushAsyncBind();
+
+    expect(onGitChangeUnbind).toHaveBeenCalledOnce();
+    expect(onGitChangeUnbind).toHaveBeenCalledWith("chat-1", "rel-deferred", {
+      conversationId: "chat-private",
+      projectPath: "/repo",
+    });
+    // No zombie edge sneaks back into the store from the settle path.
+    expect(store.conns).toHaveLength(0);
+  });
 });
 
 // Release 0.2.0 — unbind must remove the source the edge BOUND, not whatever the window's cfg
 // points at NOW (the user may have navigated the Files window / re-selected another capsule).
 describe("removeConn — unbinds the bind-time snapshot, not the current cfg", () => {
+  it("retains the edge when an asynchronous server unbind is rejected", async () => {
+    const files = win("files", { resolvedRoot: "/data/docs" }, "files-1");
+    const chat = win("chat", { chatId: "chat-private", projectPath: "/private" }, "chat-1");
+    const edge: Connection = {
+      id: "files-1~chat-1",
+      a: "files-1",
+      b: "chat-1",
+      boundRoot: "/data/docs",
+    };
+    const store = { conns: [edge] };
+    const unbind = deferredValue<boolean>();
+    const onScopeUnbind = vi.fn((): boolean | Promise<boolean> =>
+      onScopeUnbind.mock.calls.length === 1 ? unbind.promise : false,
+    );
+    const setConns: Dispatch<SetStateAction<Connection[]>> = (action): void => {
+      store.conns = typeof action === "function" ? action(store.conns) : action;
+    };
+    const harness = makeConnectHarness([files, chat], [edge], {
+      setConns,
+      onScopeUnbind,
+    });
+
+    harness.removeConn(edge.id);
+    expect(onScopeUnbind).toHaveBeenCalledOnce();
+    expect(store.conns).toEqual([edge]);
+    unbind.resolve(false);
+    await unbind.promise;
+
+    await vi.waitFor(() => {
+      harness.removeConn(edge.id);
+      expect(onScopeUnbind).toHaveBeenCalledTimes(2);
+    });
+
+    expect(store.conns).toEqual([edge]);
+  });
+
+  it("notifies the redacted diagnostic boundary when an unbind callback rejects", async () => {
+    const onConnectionUnbindFailure = vi.fn();
+    const files = win("files", { resolvedRoot: "/data/docs" }, "files-1");
+    const chat = win("chat", { chatId: "chat-private", projectPath: "/private" }, "chat-1");
+    const edge: Connection = {
+      id: "files-1~chat-1",
+      a: "files-1",
+      b: "chat-1",
+      boundRoot: "/data/docs",
+    };
+    const store = { conns: [edge] };
+    const setConns: Dispatch<SetStateAction<Connection[]>> = (action): void => {
+      store.conns = typeof action === "function" ? action(store.conns) : action;
+    };
+    const harness = makeConnectHarness([files, chat], [edge], {
+      setConns,
+      onScopeUnbind: () => Promise.reject(new TypeError("customer-specific detail")),
+      onConnectionUnbindFailure,
+    });
+
+    harness.removeConn(edge.id);
+
+    await vi.waitFor(() => {
+      expect(onConnectionUnbindFailure).toHaveBeenCalledOnce();
+    });
+    expect(store.conns).toEqual([edge]);
+  });
+
+  it("removes the edge only after an asynchronous server unbind is accepted", async () => {
+    const files = win("files", { resolvedRoot: "/data/docs" }, "files-1");
+    const chat = win("chat", { chatId: "chat-private", projectPath: "/private" }, "chat-1");
+    const edge: Connection = {
+      id: "files-1~chat-1",
+      a: "files-1",
+      b: "chat-1",
+      boundRoot: "/data/docs",
+    };
+    const store = { conns: [edge] };
+    const unbind = deferredValue<boolean>();
+    const setConns: Dispatch<SetStateAction<Connection[]>> = (action): void => {
+      store.conns = typeof action === "function" ? action(store.conns) : action;
+    };
+    const harness = makeConnectHarness([files, chat], [edge], {
+      setConns,
+      onScopeUnbind: () => unbind.promise,
+    });
+
+    harness.removeConn(edge.id);
+    expect(store.conns).toEqual([edge]);
+    unbind.resolve(true);
+    await unbind.promise;
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(store.conns).toEqual([]);
+  });
+
+  it("passes an immutable chat target to asynchronous unbind handlers", () => {
+    const onScopeUnbind = vi.fn();
+    const files = win("files", { resolvedRoot: "/data/docs" }, "files-1");
+    const chat = win("chat", { chatId: "chat-private", projectPath: "/private" }, "chat-1");
+    const edge: Connection = {
+      id: "files-1~chat-1",
+      a: "files-1",
+      b: "chat-1",
+      boundRoot: "/data/docs",
+    };
+    const harness = makeConnectHarness([files, chat], [edge], { onScopeUnbind });
+
+    harness.removeConn(edge.id);
+
+    expect(onScopeUnbind).toHaveBeenCalledWith(
+      "chat-1",
+      expect.objectContaining({ root: "/data/docs" }),
+      { conversationId: "chat-private", projectPath: "/private" },
+    );
+  });
+
   it("can remove a reset edge without mutating the conversation it previously bound", (): void => {
     const unboundScopes: ChatConnectedScope[] = [];
     const unboundConnectors: ChatLocalKnowledgeScope[] = [];
@@ -2598,11 +3251,13 @@ describe("removeConn — unbinds the bind-time snapshot, not the current cfg", (
     };
     const harness = makeConnectHarness([files, chat], [edge], {
       setConns,
-      onScopeUnbind: (_chatWindowId, scope): void => {
+      onScopeUnbind: (_chatWindowId, scope): boolean => {
         unboundScopes.push(scope);
+        return true;
       },
-      onConnectorUnbind: (_chatWindowId, scope): void => {
+      onConnectorUnbind: (_chatWindowId, scope): boolean => {
         unboundConnectors.push(scope);
+        return true;
       },
     });
 
@@ -2632,11 +3287,33 @@ describe("removeConn — unbinds the bind-time snapshot, not the current cfg", (
     const harness = makeConnectHarness([connector, chat], [edge], {
       onConnectorUnbind: (_chatWindowId, scope) => {
         unbound.push(scope);
+        return true;
       },
     });
     harness.removeConn("conn-1~chat-1");
     expect(unbound).toHaveLength(1);
     expect(unbound[0]).toMatchObject({ kind: "capsule", capsuleId: "cap-a" });
+  });
+
+  it("unbinds the Git-change relationship id stored on the edge", () => {
+    const unbound: string[] = [];
+    const git = win("governedGit", {}, "git-1");
+    const chat = win("chat", { chatId: "chat-private", projectPath: "/repo" }, "chat-1");
+    const edge: Connection = {
+      id: "git-1~chat-1",
+      a: "git-1",
+      b: "chat-1",
+      boundChatWindowId: "chat-1",
+      boundGitChangeRelationshipId: "rel-git-1",
+    };
+    const harness = makeConnectHarness([git, chat], [edge], {
+      onGitChangeUnbind: (_chatWindowId, relationshipId) => {
+        unbound.push(relationshipId);
+        return true;
+      },
+    });
+    harness.removeConn("git-1~chat-1");
+    expect(unbound).toEqual(["rel-git-1"]);
   });
 
   it("unbinds the bound root even after the Files window navigated elsewhere", () => {
@@ -2652,6 +3329,7 @@ describe("removeConn — unbinds the bind-time snapshot, not the current cfg", (
     const harness = makeConnectHarness([files, chat], [edge], {
       onScopeUnbind: (_chatWindowId, scope) => {
         unbound.push(scope);
+        return true;
       },
     });
     harness.removeConn("files-1~chat-1");
@@ -2677,6 +3355,7 @@ describe("removeConn — unbinds the bind-time snapshot, not the current cfg", (
     const harness = makeConnectHarness([files, chat], [edge], {
       onScopeUnbind: (_chatWindowId, scope) => {
         unbound.push(scope);
+        return true;
       },
     });
     harness.removeConn("files-1~chat-1");
@@ -2694,6 +3373,7 @@ describe("removeConn — unbinds the bind-time snapshot, not the current cfg", (
     const harness = makeConnectHarness([files, chat], [conn("files-1", "chat-1")], {
       onScopeUnbind: (_chatWindowId, scope) => {
         unbound.push(scope);
+        return true;
       },
     });
     harness.removeConn("files-1~chat-1");

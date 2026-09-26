@@ -1,9 +1,7 @@
 import { describe, expect, it } from "vitest";
-import {
-  analyzePrompt,
-  asEnhancedPromptId,
-  validateEnhancedPrompt,
-} from "@oscharko-dev/keiko-contracts";
+import { analyzePrompt } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-analyzer";
+import { asEnhancedPromptId } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer";
+import { validateEnhancedPrompt } from "@oscharko-dev/keiko-contracts/runtime/prompt-enhancer-validation";
 import { planPromptEnhancement } from "../planner.js";
 import { generateEnhancedPrompt } from "../generator.js";
 import { getPromptEnhancerExecutionProfile } from "../profiles.js";

@@ -21,14 +21,32 @@ launcher_define="-DKEIKO_PORTABLE_TARGET=\"${target}\""
 launcher="$root/native/portable-launcher/keiko-portable-launcher.c"
 helper="$root/native/portable-launcher/macos-keychain-helper.c"
 launcher_test="$root/native/portable-launcher/keiko-portable-launcher.test.c"
+update_engine_test="$root/native/portable-launcher/keiko-portable-update-engine.test.c"
+handoff_protocol_test="$root/native/portable-launcher/keiko-portable-update-protocol.test.c"
+handoff_sha256_test="$root/native/portable-launcher/keiko-portable-sha256.test.c"
+handoff_tree_hash_test="$root/native/portable-launcher/keiko-portable-tree-hash.test.c"
 
-clang "${common[@]}" "$launcher_define" "$launcher" -o "$scratch/keiko-launcher"
-clang --analyze "${common[@]}" "$launcher_define" "$launcher" -o /dev/null
+clang "${common[@]}" -Wno-deprecated-declarations "$launcher_define" "$launcher" \
+  -o "$scratch/keiko-launcher"
+clang --analyze "${common[@]}" -Wno-deprecated-declarations "$launcher_define" "$launcher" \
+  -o /dev/null
 clang "${common[@]}" -Wno-deprecated-declarations -framework Security -framework CoreFoundation \
   "$helper" -o "$scratch/keychain-helper"
 clang --analyze "${common[@]}" -Wno-deprecated-declarations "$helper" -o /dev/null
-clang "${common[@]}" "$launcher_define" "$launcher_test" -o "$scratch/launcher-test"
+clang "${common[@]}" -Wno-deprecated-declarations "$launcher_define" "$launcher_test" \
+  -o "$scratch/launcher-test"
 "$scratch/launcher-test"
+clang "${common[@]}" "$update_engine_test" -o "$scratch/update-engine-test"
+"$scratch/update-engine-test"
+clang "${common[@]}" "$launcher_define" "$handoff_protocol_test" \
+  -o "$scratch/handoff-protocol-test"
+"$scratch/handoff-protocol-test"
+clang "${common[@]}" -Wno-deprecated-declarations "$handoff_sha256_test" \
+  -o "$scratch/handoff-sha256-test"
+"$scratch/handoff-sha256-test"
+clang "${common[@]}" -Wno-deprecated-declarations "$handoff_tree_hash_test" \
+  -o "$scratch/handoff-tree-hash-test"
+"$scratch/handoff-tree-hash-test"
 
 set +e
 "$scratch/keychain-helper" >/dev/null 2>&1
@@ -64,6 +82,15 @@ if [[ "$invalid_supervisor_status" -eq 0 ]]; then
   echo "macos-native-quality: FAIL - supervisor accepted an unbound invocation"
   exit 1
 fi
+
+# KEIKO-0277: run the darwin protocol harness. Without arguments it runs the platform-independent
+# source contract only (fd-3/fd-4 close pins, non-PATH spawn, no shell exec) — that alone catches
+# a silent deletion of the trust boundary and is worth running on every PR. Behavioural
+# qualification needs the installed Endpoint Security system extension to be ACTIVE (no hosted
+# runner has that), so it is opt-in: `--helper` in the release pipeline, `--compile` on a
+# workstation with the extension installed. Neither is set here; the release path in
+# scripts/qualify-macos-runtime-release.mjs continues to pass `--helper <exact staged binary>`.
+node "$runtime_root/test-protocol.mjs"
 
 extension_root="$runtime_root/system-extension"
 objective_c_flags=(-fobjc-arc -fblocks -Wall -Wextra -Werror -O2 -arch "$architecture")

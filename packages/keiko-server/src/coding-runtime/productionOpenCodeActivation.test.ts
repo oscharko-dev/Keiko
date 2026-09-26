@@ -1,12 +1,22 @@
-import { mkdtempSync, realpathSync, rmSync, unlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { resolveProductionOpenCodeActivation } from "./productionOpenCodeActivation.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import type { ServerLogEvent } from "../observability/index.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../../tests/support/activity-log-proof.js";
+import {
+  productionOpenCodeLoopbackEndpoints,
+  resolveProductionOpenCodeActivation,
+} from "./productionOpenCodeActivation.js";
 import type { SecureWorkspaceTextReadPort } from "./secureWorkspaceTextRead.js";
 import { stageDevLaneFixture, type DevLaneFixture } from "./devLaneFixture/_support.js";
+import type { DevLaneOpenCodeTarget } from "./devLanePortableCodingRuntime.js";
 
 const secureRead: SecureWorkspaceTextReadPort = {
   readText: () => Promise.resolve({ ok: false, reason: "denied" }),
@@ -14,16 +24,19 @@ const secureRead: SecureWorkspaceTextReadPort = {
 
 const roots: string[] = [];
 
-function devLaneFixture(): DevLaneFixture {
+function devLaneFixture(target?: DevLaneOpenCodeTarget): DevLaneFixture {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-activation-")));
   roots.push(root);
-  return stageDevLaneFixture(root);
+  return stageDevLaneFixture(root, target);
 }
 
 interface ActivationOverrides {
   readonly withSecureRead?: boolean;
   readonly withWorkspaceRoot?: boolean;
   readonly stateDir?: string;
+  readonly platform?: NodeJS.Platform;
+  readonly arch?: string;
+  readonly activity?: ServerLogEvent[];
 }
 
 function activationInput(
@@ -32,14 +45,20 @@ function activationInput(
 ): Parameters<typeof resolveProductionOpenCodeActivation>[0] {
   return {
     env,
-    // Deterministic host identity: these cases exercise the macOS dev lane on every CI host.
-    platform: "darwin",
-    arch: "arm64",
+    // Deterministic host identity: these cases exercise supported dev lanes on every CI host.
+    platform: overrides.platform ?? "darwin",
+    arch: overrides.arch ?? "arm64",
     runtimeStateDir: overrides.stateDir ?? join(tmpdir(), "keiko-runtime-state"),
     runtimeEvidence: { observe: () => undefined },
     gatewayReadiness: {
       waitForObservedRequest: () => Promise.resolve(false),
+      verifyObserved: () => undefined,
       clear: () => undefined,
+    },
+    activityLog: {
+      write: (event: ServerLogEvent): void => {
+        overrides.activity?.push(event);
+      },
     },
     ...(overrides.withSecureRead === true ? { secureWorkspaceTextRead: secureRead } : {}),
     ...(overrides.withWorkspaceRoot === false
@@ -53,6 +72,16 @@ afterEach(() => {
 });
 
 describe("production OpenCode activation", () => {
+  it("derives the model gateway and tool facade from one production loopback origin", () => {
+    const endpoints = productionOpenCodeLoopbackEndpoints({ KEIKO_UI_PORT: "1983" });
+    expect(endpoints).toEqual({
+      gatewayUrl: "http://127.0.0.1:1983/api/coding-sidecar/gateway",
+      toolFacadeUrl: "http://127.0.0.1:1983/api/coding-sidecar/tool",
+    });
+    if (endpoints === undefined) throw new Error("expected production loopback endpoints");
+    expect(new URL(endpoints.gatewayUrl).origin).toBe(new URL(endpoints.toolFacadeUrl).origin);
+  });
+
   it("names platform-unqualified without a discoverable runtime on this platform", () => {
     const result = resolveProductionOpenCodeActivation(
       activationInput(
@@ -110,6 +139,90 @@ describe("production OpenCode activation", () => {
     expect(result.unavailableReason).toBe("payload-missing");
   });
 
+  it("records body-free dev-lane refusal evidence", () => {
+    const staged = devLaneFixture();
+    const activity: ServerLogEvent[] = [];
+    unlinkSync(staged.paths.executable);
+
+    const result = resolveProductionOpenCodeActivation(
+      activationInput({ ...staged.env, KEIKO_UI_PORT: "1983" }, { activity }),
+    );
+
+    expect(result.unavailableReason).toBe("payload-missing");
+    expect(activity).toEqual([
+      {
+        category: "process",
+        op: "coding-runtime.dev-lane.refused",
+        correlationId: UNKNOWN_CORRELATION_ID,
+        level: "warn",
+        errorKind: "unavailable",
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          lane: "dev-checkout",
+          reason: "payload-missing",
+        },
+      },
+    ]);
+    const refusedProof = expectActivityLogProof(
+      "coding-runtime.dev-lane.refused.emitted-line",
+      formatActivityLogProofLine(activity[0] ?? {}),
+    );
+    expect(refusedProof).toMatchObject({
+      correlationId: UNKNOWN_CORRELATION_ID,
+      lane: "dev-checkout",
+      reason: "payload-missing",
+    });
+  });
+
+  // #3577: an npm installation activates its coding runtime from a runtime package installed next
+  // to Keiko. A package that is present and fails verification decides the outcome with its own
+  // reason; falling through to the dev lane would answer `platform-unqualified` and hide it.
+  it("lets an installed npm runtime package decide, and names the lane in its refusal", () => {
+    const prefix = realpathSync(mkdtempSync(join(tmpdir(), "keiko-activation-npm-")));
+    roots.push(prefix);
+    const scope = join(prefix, "lib", "node_modules", "@oscharko-dev");
+    const keikoRoot = join(scope, "keiko");
+    const runtimePackage = join(scope, "keiko-coding-runtime-darwin-arm64");
+    mkdirSync(join(keikoRoot, "dist", "cli"), { recursive: true });
+    mkdirSync(join(runtimePackage, "runtime"), { recursive: true });
+    writeFileSync(join(keikoRoot, "package.json"), '{"name":"@oscharko-dev/keiko"}');
+    writeFileSync(join(keikoRoot, "dist", "cli", "index.js"), "");
+    writeFileSync(join(runtimePackage, "package.json"), "{}");
+    const activity: ServerLogEvent[] = [];
+
+    const result = resolveProductionOpenCodeActivation(
+      activationInput(
+        { KEIKO_CLI_BIN_PATH: join(keikoRoot, "dist", "cli", "index.js"), KEIKO_UI_PORT: "1983" },
+        { activity },
+      ),
+    );
+
+    expect(result.unavailableReason).toBe("payload-missing");
+    expect(activity).toHaveLength(1);
+    expect(activity[0]).toMatchObject({
+      op: "coding-runtime.dev-lane.refused",
+      level: "warn",
+      errorKind: "unavailable",
+      extra: { lane: "npm-runtime-package", reason: "payload-missing" },
+    });
+  });
+
+  it("classifies a tampered dev-lane payload separately from routine unavailability", () => {
+    const staged = devLaneFixture();
+    const activity: ServerLogEvent[] = [];
+    writeFileSync(staged.paths.executable, "tampered");
+
+    resolveProductionOpenCodeActivation(
+      activationInput({ ...staged.env, KEIKO_UI_PORT: "1983" }, { activity }),
+    );
+
+    expect(activity.at(-1)).toMatchObject({
+      errorKind: "validation-failed",
+      extra: { reason: "payload-tampered" },
+    });
+  });
+
   it("names secure-read-unavailable when workspace-root resolution is not composed", () => {
     const staged = devLaneFixture();
     const result = resolveProductionOpenCodeActivation(
@@ -130,6 +243,42 @@ describe("production OpenCode activation", () => {
     expect(result.ports?.backend).toBeDefined();
     expect(result.ports?.secureWorkspaceTextRead).toBeDefined();
     expect(result.ports?.editorAgentClient).toBeDefined();
+  });
+
+  it("activates the staged Windows dev lane through the production composition", () => {
+    const staged = devLaneFixture("windows-x64");
+    const stateDir = join(staged.root, "runtime-state");
+    const activity: ServerLogEvent[] = [];
+    const result = resolveProductionOpenCodeActivation(
+      activationInput(
+        { ...staged.env, KEIKO_UI_PORT: "1983" },
+        { platform: "win32", arch: "x64", stateDir, activity },
+      ),
+    );
+
+    expect(result.unavailableReason).toBeUndefined();
+    expect(result.ports?.backend).toBeDefined();
+    expect(result.ports?.secureWorkspaceTextRead).toBeDefined();
+    expect(activity).toHaveLength(1);
+    const [event] = activity;
+    if (event === undefined) throw new Error("dev-lane-activation-log-missing");
+    expect(event).toMatchObject({
+      category: "process",
+      op: "coding-runtime.dev-lane.activated",
+      correlationId: UNKNOWN_CORRELATION_ID,
+      extra: { lane: "dev-checkout", target: "windows-x64" },
+    });
+    expect(event.extra?.runtimeSupervisorSha256).toMatch(/^[a-f0-9]{64}$/u);
+    const activatedProof = expectActivityLogProof(
+      "coding-runtime.dev-lane.activated.emitted-line",
+      formatActivityLogProofLine(event),
+    );
+    expect(activatedProof).toMatchObject({
+      correlationId: UNKNOWN_CORRELATION_ID,
+      lane: "dev-checkout",
+      target: "windows-x64",
+      evidenceClass: "functional-not-platform-qualified",
+    });
   });
 
   it("prefers an injected secure-read port over dev-lane construction", () => {

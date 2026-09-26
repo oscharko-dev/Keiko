@@ -18,12 +18,19 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { join } from "node:path";
 
 import {
   checkArchitectureImportPolicy,
   countImportPolicyViolationsByRule,
 } from "./check-import-policy.mjs";
+import { checkGovernedToolContractNegatives } from "./check-governed-tool-contract.mjs";
+import {
+  checkToolCatalogConformanceNegatives,
+  checkToolCatalogSemanticNegatives,
+} from "./check-tool-catalog-conformance.mjs";
+import { resolveDependencyCruiserEntrypoint } from "./lib/dependency-cruiser-cli.mjs";
 import { runBareSpecifierVisibilityProbe } from "./lib/bare-specifier-visibility-probe.mjs";
 
 const RULES_FILE = ".dependency-cruiser.cjs";
@@ -44,10 +51,24 @@ const PROBE_EXPECTED_RULE = "adr-0019-direction-2-security-only-contracts";
 const PROBE_EXPECTED_RESOLVED = "packages/keiko-harness/dist/index.js";
 const REQUIRED_DIST_ENTRYPOINTS = [PROBE_EXPECTED_RESOLVED];
 // Superset of the production `includeOnly`: fixtures + relative-path targets + src +
-// packages/<name>/(src|dist). The `dist` suffix mirrors the production widening from
-// Wave-2 audit #2627 so the bare-specifier visibility probe (run separately below) has
-// the same graph shape available to the fixture scan.
-const INCLUDE_ONLY_OVERRIDE = String.raw`^(tests/architecture/fixtures|\.\./|src|packages/[^/]+/(src|dist))`;
+// packages/<name>/(src|dist) + the external trust destinations. The `dist` suffix mirrors the
+// production widening from Wave-2 audit #2627 so the bare-specifier visibility probe (run
+// separately below) has the same graph shape available to the fixture scan. The provider-SDK
+// and `node:fs`/`node:fs/promises` alternatives mirror the production EXTERNAL_TRUST_DESTINATIONS
+// widening (audit KEIKO-0255) so trust rules 1, 4 and 5 are proven live by name here instead of
+// being silently pruned before evaluation. This override must stay a superset of the production
+// `includeOnly`; assertProductionIncludeOnlyIsCovered() below fails the gate if it drifts below it.
+// DERIVED from the production filter, not restated beside it. A hand-copied twin drifts silently:
+// production could admit a new destination alternative that this copy lacks, and the fixture scan
+// would prune that destination while every assertion stayed green — the rule it proves would be
+// dead exactly the way KEIKO-0255 found trust-1/4/5 dead (review finding on #3159).
+const PRODUCTION_INCLUDE_ONLY = createRequire(import.meta.url)(join(process.cwd(), RULES_FILE))
+  .options.includeOnly;
+const INCLUDE_ONLY_OVERRIDE =
+  String.raw`^(tests/architecture/fixtures|\.\./|` +
+  // Strip the production regex's own `^(` … `)` wrapper and fold its alternatives in.
+  PRODUCTION_INCLUDE_ONLY.replace(/^\^\(/u, "").replace(/\)$/u, "") +
+  ")";
 
 // One expected rule per physically-extracted package boundary. Most rules should fire exactly once
 // against their dedicated fixture subdir; workflows intentionally fires twice because it pins both
@@ -55,15 +76,19 @@ const INCLUDE_ONLY_OVERRIDE = String.raw`^(tests/architecture/fixtures|\.\./|src
 // direction-8 (ui) fires three times because it pins three distinct Node-domain boundaries the
 // browser tier must not value-import: keiko-tools, keiko-quality-intelligence, and
 // keiko-local-knowledge (the two latter added for the native QI UI surface, issue #280). The
-// editor browser-tier rule (adr-0042-editor-not-node-domain-values) fires eight times against its
+// editor browser-tier rule (adr-0042-editor-not-node-domain-values) fires ten times against its
 // dedicated editor-browser fixture, pinning model-gateway plus the ADR-0042 audit gap targets:
-// the five existing keiko-memory-* packages, keiko-verification, and keiko-ui internals. The
+// the five existing keiko-memory-* packages, keiko-verification, keiko-ui internals, and (added by
+// KEIKO-0638 to mirror the ui-browser fixture) keiko-quality-intelligence + keiko-local-knowledge.
+// The
 // import-policy expectations below cover literal import specifiers dependency-cruiser does not
 // expose as source graph edges in this repository configuration.
 const EXPECTED_DEPCRUISER_RULE_COUNTS = {
+  "adr-0019-direction-2c-tool-catalog-only-contracts-security": 1,
   "adr-0128-connectors-only-contracts-security": 1,
   "adr-0019-direction-1-contracts-leaf": 1,
   "adr-0019-direction-2-security-only-contracts": 1,
+  "adr-0019-direction-2b-git-only-contracts": 1,
   "adr-0019-direction-3a-model-gateway-only-contracts-security": 1,
   "adr-0019-direction-3b-workspace-only-contracts-security": 1,
   "adr-0019-direction-3c-tools-only-contracts-security-workspace": 1,
@@ -85,22 +110,80 @@ const EXPECTED_DEPCRUISER_RULE_COUNTS = {
   "adr-0019-direction-6-domain-not-server": 1,
   "adr-0019-direction-7-domain-not-cli": 1,
   "adr-0019-direction-8-ui-not-node-domain-values": 3,
-  "adr-0042-editor-not-node-domain-values": 8,
+  "adr-0042-editor-not-node-domain-values": 10,
   "adr-0019-direction-9-root-product-composition-only": 1,
+  // trust-1/4/5 target destinations outside the first-party namespace (provider SDKs under
+  // node_modules, the node:fs and node:fs/promises builtins). Until audit KEIKO-0255 they were
+  // pruned by `includeOnly` before evaluation and fired nowhere — present in the config, dead in
+  // practice, and covered only by the AST checker below. These three entries are the pin that
+  // keeps the dependency-cruiser layer live: drop the includeOnly widening or the fixture path
+  // from either rule's from.path and the expected count falls to 0 and this gate goes red.
+  "adr-0019-trust-1-provider-sdk-isolation": 1,
   "adr-0019-trust-2-ui-no-provider-config": 1,
   "adr-0019-trust-3-ui-no-gateway-internals": 1,
+  "adr-0019-trust-4-no-direct-fs-outside-workspace": 1,
+  "adr-0019-trust-5-patch-routes-through-tools": 1,
   "adr-0019-trust-6-evidence-allowed-callers": 1,
   "adr-0019-trust-7-cli-server-no-port-bypass": 1,
   "adr-0019-trust-8-no-do-not-follow-in-prod": 1,
+  "adr-0165-editor-read-allowed-callers": 2,
 };
 
+// Representative module paths spanning every alternative of the production `includeOnly`.
+// The fixture-scan override must admit everything production admits: if it ever drops below the
+// production filter, fixtures would be evaluated against a NARROWER graph than production and a
+// rule could pass here while being dead in the real scan — the exact failure mode KEIKO-0255
+// found. Regex superset is not decidable in general, so this asserts it behaviourally.
+const INCLUDE_ONLY_COVERAGE_SAMPLES = [
+  "src/cli/index.ts",
+  "packages/keiko-tools/src/exec.ts",
+  "packages/keiko-harness/dist/index.js",
+  "node_modules/openai/index.js",
+  "node_modules/@anthropic-ai/sdk/index.js",
+  "node_modules/some-ai-sdk/index.js",
+  "node:fs",
+  "fs",
+  "node:fs/promises",
+  "fs/promises",
+];
+
+function assertProductionIncludeOnlyIsCovered() {
+  const productionRe = new RegExp(PRODUCTION_INCLUDE_ONLY);
+  const overrideRe = new RegExp(INCLUDE_ONLY_OVERRIDE);
+  const uncovered = INCLUDE_ONLY_COVERAGE_SAMPLES.filter(
+    (sample) => productionRe.test(sample) && !overrideRe.test(sample),
+  );
+  if (uncovered.length > 0) {
+    console.error(
+      "arch-check-negative: FAIL — the fixture-scan includeOnly override is no longer a superset " +
+        "of the production includeOnly; these paths are cruised in production but pruned here:",
+    );
+    for (const sample of uncovered) {
+      console.error(`  - ${sample}`);
+    }
+    process.exit(1);
+  }
+}
+
 const EXPECTED_IMPORT_POLICY_RULE_COUNTS = {
+  // Two distinct violations: bad-import.ts (a Node core-module import) and
+  // forbidden-package-dependency.ts (a third-party provider SDK import) — the #3415
+  // negative-fixture matrix's "forbidden package dependency" attack class, added alongside the
+  // existing Node-builtin fixture rather than replacing it.
+  "adr-0175-tool-catalog-pure-imports": 2,
+  "adr-0165-raw-coordinate-owner": 1,
+  "adr-0005-owned-root-authority-implementation-private": 1,
+  "adr-0005-owned-root-containment-allowed-callers": 1,
+  "adr-0005-owned-root-lookup-allowed-callers": 1,
+  "adr-0005-owned-root-mint-allowed-callers": 1,
+  "adr-0005-owned-root-preserve-allowed-callers": 1,
   "gen-perf-cli-001-cli-heavy-graphs-load-lazily": 1,
   "adr-0019-trust-1-provider-sdk-isolation": 1,
   "adr-0019-trust-4-no-direct-fs-outside-workspace": 1,
   "adr-0019-trust-5-patch-routes-through-tools": 1,
   "adr-0019-trust-9-local-knowledge-no-egress": 1,
   "adr-0128-connectors-no-direct-egress": 1,
+  "gen-arch-coding-runtime-restricted-egress": 1,
   "adr-0112-provider-runtime-no-internal-bypass": 3,
 };
 
@@ -121,6 +204,18 @@ if (missingDist.length > 0) {
   }
   process.exit(1);
 }
+
+const contractNegativeErrors = [
+  ...checkGovernedToolContractNegatives(process.cwd()),
+  ...checkToolCatalogConformanceNegatives(),
+  ...(await checkToolCatalogSemanticNegatives(process.cwd())),
+];
+if (contractNegativeErrors.length > 0) {
+  for (const error of contractNegativeErrors) console.error(`arch-check-negative: ${error}`);
+  process.exit(1);
+}
+
+assertProductionIncludeOnlyIsCovered();
 
 const probeOutcome = runBareSpecifierVisibilityProbe({
   repoRoot: process.cwd(),
@@ -146,11 +241,21 @@ if (!probeOutcome.ok) {
 }
 
 // Calling the dependency-cruiser bin through Node keeps the gate hermetic without
-// going through platform-specific npm/npx shell shims.
+// going through platform-specific npm/npx shell shims. The entry point is resolved from the
+// installed package's own `bin` map (#3607) rather than a hardcoded filename, since
+// dependency-cruiser has renamed it upstream before. A package that names none fails the gate with
+// a bounded reason, never a stack trace (PR #3617 review).
+let dependencyCruiserEntrypoint;
+try {
+  dependencyCruiserEntrypoint = resolveDependencyCruiserEntrypoint(process.cwd());
+} catch {
+  console.error("arch-check-negative: FAIL — dependency-cruiser entry point unresolved");
+  process.exit(1);
+}
 const result = spawnSync(
   process.execPath,
   [
-    join(process.cwd(), "node_modules", "dependency-cruiser", "bin", "dependency-cruise.mjs"),
+    dependencyCruiserEntrypoint,
     "--validate",
     RULES_FILE,
     "--include-only",

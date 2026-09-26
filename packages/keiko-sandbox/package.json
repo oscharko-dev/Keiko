@@ -1,9 +1,9 @@
 {
   "name": "@oscharko-dev/keiko-sandbox",
-  "version": "0.2.15",
+  "version": "1.1.9",
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Internal sandbox package: the reusable OS/container egress-isolation strategy (ADR-0043). Pure backend-wrapper builders + selection + attestation, with a thin availability probe. Spawning stays in keiko-tools; this package only decides how a `network: \"none\"` command is wrapped so an outbound connection from the child fails. Not published independently.",
+  "description": "Internal sandbox package: reusable OS/container egress isolation and gateway-only Linux namespace confinement (ADR-0043). Owns backend selection, wrapper construction, attestation, availability probes, and the internal Linux namespace/descriptor-relay launcher. Not published independently.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
@@ -15,17 +15,17 @@
   "scripts": {
     "build": "tsc -b tsconfig.json",
     "typecheck": "tsc -b tsconfig.json",
-    "test": "npm run build && vitest run"
+    "test": "vitest run"
   },
   "files": [
     "dist"
   ],
   "sideEffects": false,
   "engines": {
-    "node": ">=24.18.0 <25"
+    "node": ">=24.18.0 <25 || >=26.3.0 <27"
   },
   "dependencies": {
-    "@oscharko-dev/keiko-contracts": "0.2.15"
+    "@oscharko-dev/keiko-contracts": "1.1.9"
   },
   "private": true
 }

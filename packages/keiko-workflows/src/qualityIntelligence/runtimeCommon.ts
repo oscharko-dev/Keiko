@@ -6,7 +6,7 @@
 // entry in `modelRoutedTestDesign.ts`). NO new scheduler, NO event bus: this composes the existing
 // Harness world and emits the versioned QI run-event envelope from `@oscharko-dev/keiko-contracts`.
 
-import { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import * as QI from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import {
   recordQualityIntelligenceRun,
   type QualityIntelligenceCoverageMatrixRow,
@@ -131,7 +131,7 @@ export function emitQueuedAndStarted(ctx: RunContext): void {
 
 function assertStageRegistered(
   descriptor: QualityIntelligenceWorkflowDescriptor,
-  stageName: string,
+  stageName: QI.QualityIntelligenceStageName,
 ): void {
   if (!descriptor.stageNames.includes(stageName)) {
     throw new Error(`Stage "${stageName}" is not declared by descriptor ${descriptor.workflowId}`);
@@ -221,7 +221,7 @@ export function safeReasonSummary(error: unknown): string {
 
 export async function withStage<T>(
   ctx: RunContext,
-  stageName: string,
+  stageName: QI.QualityIntelligenceStageName,
   body: () => T | Promise<T>,
 ): Promise<T> {
   assertStageRegistered(ctx.descriptor, stageName);

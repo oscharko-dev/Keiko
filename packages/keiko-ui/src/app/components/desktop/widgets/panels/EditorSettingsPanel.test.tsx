@@ -2,19 +2,23 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type {
+  EditorM7AiActivationStatus,
+  EditorM7AiState,
+  EditorM7SettingId,
+  EditorM7SettingValue,
+  EditorM11RootSettingsLayer,
+  EditorM11ProfileSettingsLayer,
+  EditorM11SettingsSnapshot,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
+import {
   EDITOR_M11_DEFAULT_PROFILE_REF,
   resolveEditorM11Settings,
-  type EditorM7AiActivationStatus,
-  type EditorM7AiState,
-  type EditorM7SettingId,
-  type EditorM7SettingValue,
-  type EditorM11RootSettingsLayer,
-  type EditorM11ProfileSettingsLayer,
-  type EditorM11SettingsSnapshot,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m11-settings";
 import { I18nProvider } from "@/lib/i18n";
 import { EditorSettingsPanel } from "./EditorSettingsPanel";
 import type { EditorSettingsIssue, EditorSettingsView } from "../cards/useEditorSettings";
@@ -438,12 +442,14 @@ describe("EditorSettingsPanel AI activation confirmation", () => {
   });
 
   it("has no axe violations while the AI activation confirmation dialog is open", async () => {
-    const { container } = renderPanel();
+    renderPanel();
 
     fireEvent.click(screen.getByRole("checkbox", { name: "Inline AI completion" }));
-    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog).toBeInTheDocument();
+    expect(dialog.parentElement?.parentElement).toBe(document.body);
 
-    expect(await axe(container)).toHaveNoViolations();
+    expect(await axe(dialog)).toHaveNoViolations();
   });
 
   it("applies inline AI completion after the operator accepts the confirmation prompt", () => {

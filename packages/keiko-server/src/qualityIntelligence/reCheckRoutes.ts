@@ -15,10 +15,10 @@
 //
 // Both routes go through the central CSRF guard in server.ts (all POSTs do).
 
-import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { isAbsolute } from "node:path";
-import { QualityIntelligence, type QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import type { QualityIntelligence as QI } from "@oscharko-dev/keiko-contracts";
+import * as QualityIntelligence from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import {
   ALL_POLICY_PROFILES,
   buildAtomCoverageStatuses,
@@ -61,6 +61,7 @@ import { resolveQiTestDesignSelection } from "./modelSelection.js";
 import { ingestInlineSourcesAsync, QiIngestionError } from "./runIngestion.js";
 import { parseFigmaSnapshotScreenIds } from "./figmaSnapshotScreenIds.js";
 import { migrateReviewStateForRegeneration } from "./reviewStore.js";
+import { newReferenceId } from "../reference-id.js";
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const REQUIREMENTS_ENVELOPE_PREFIX = "qi-src-req-";
@@ -238,11 +239,34 @@ function validateConnectorSource(
   return undefined;
 }
 
+// KEIKO-0891 follow-on: pass `adf` through so re-check + regenerate-stale run through the same
+// ingestion path handleStartQiRun uses. Without this, a caller re-checking an ADF-normalised
+// requirements source would silently fall back to the plain `text` field — the exact
+// reachability gap runRoutes.ts's own validateSource used to have.
+//
+// KEIKO-0891 follow-up (reviewer P2): fail closed on a present-but-malformed `adf` (explicit
+// null, or a primitive) — surface as an undefined source so the caller emits QI_BAD_SOURCE
+// rather than silently falling back to raw.text.
+function validateRequirementsSource(
+  label: string,
+  raw: Record<string, unknown>,
+  text: string,
+): QI.QualityIntelligenceInlineSource | undefined {
+  const adfOutcome = extractRequirementsAdf(raw);
+  if (adfOutcome.kind === "invalid") return undefined;
+  return {
+    kind: "requirements",
+    label,
+    text,
+    ...(adfOutcome.kind === "present" ? { adf: adfOutcome.value } : {}),
+  };
+}
+
 function validateSource(raw: unknown): QI.QualityIntelligenceInlineSource | undefined {
   if (!isObject(raw) || typeof raw.label !== "string") return undefined;
   const label = raw.label;
   if (raw.kind === "requirements" && typeof raw.text === "string") {
-    return { kind: "requirements", label, text: raw.text };
+    return validateRequirementsSource(label, raw, raw.text);
   }
   if (raw.kind === "workspace" && typeof raw.path === "string") {
     return { kind: "workspace", label, path: raw.path };
@@ -251,6 +275,19 @@ function validateSource(raw: unknown): QI.QualityIntelligenceInlineSource | unde
     return { kind: "file", label, path: raw.path };
   }
   return validateConnectorSource(label, raw);
+}
+
+type AdfExtractResult =
+  | { readonly kind: "absent" }
+  | { readonly kind: "invalid" }
+  | { readonly kind: "present"; readonly value: QI.QualityIntelligenceAdfNode };
+
+function extractRequirementsAdf(raw: Record<string, unknown>): AdfExtractResult {
+  if (!("adf" in raw)) return { kind: "absent" };
+  const value = raw.adf;
+  if (value === undefined) return { kind: "absent" };
+  if (value === null || typeof value !== "object") return { kind: "invalid" };
+  return { kind: "present", value: value as QI.QualityIntelligenceAdfNode };
 }
 
 type ParseSourcesOutcome =
@@ -313,8 +350,9 @@ async function parseSources(req: IncomingMessage): Promise<ParseSourcesOutcome> 
 function buildJudgePortIfAvailable(
   deps: UiHandlerDeps,
   modelId: string,
+  correlationId: string,
 ): ReturnType<typeof createQiJudgePort> | undefined {
-  const outcome = tryCreateQiJudgePort(deps, modelId);
+  const outcome = tryCreateQiJudgePort(deps, modelId, { correlationId });
   return outcome.available ? outcome.port : undefined;
 }
 
@@ -1056,6 +1094,7 @@ function regenWorkflowDeps(
   evidenceStore: ReturnType<typeof createInMemoryQualityIntelligenceLocalStore>,
   capture: (cands: readonly QiTestCaseCandidate[], generatedAt: string) => void,
   signal: AbortSignal,
+  newRunId: string,
 ): QualityIntelligenceModelRoutedTestDesignDeps {
   return {
     sink: { emit: () => undefined },
@@ -1066,7 +1105,7 @@ function regenWorkflowDeps(
         capture(cands, generatedAt);
       },
     },
-    generate: createQiGenerationPort(deps, target),
+    generate: createQiGenerationPort(deps, target, newRunId),
     // The regenerate-stale judge deliberately shares the auto-selected generation model id rather than
     // resolving an independent qi:judge-logic model the way the initial run does (runExecution.ts).
     // This is safe because the regen target comes from resolveQiTestDesignSelection(deps) with NO
@@ -1077,7 +1116,9 @@ function regenWorkflowDeps(
     // asymmetry — an explicitly requested chat-only generation model paired with a separate
     // structured-output judge — cannot arise here because the regen path never carries an explicit
     // generation-model request.
-    ...(target.kind === "model" ? { judge: buildJudgePortIfAvailable(deps, target.modelId) } : {}),
+    ...(target.kind === "model"
+      ? { judge: buildJudgePortIfAvailable(deps, target.modelId, newRunId) }
+      : {}),
   };
 }
 
@@ -1101,6 +1142,7 @@ async function executeScopedWorkflow(args: {
   readonly atomsToRegenerate: readonly QualityIntelligenceIngestedAtom[];
   readonly profile: PolicyProfile;
   readonly signal: AbortSignal;
+  readonly newRunId: string;
 }): Promise<RouteResult | null> {
   const {
     deps,
@@ -1112,6 +1154,7 @@ async function executeScopedWorkflow(args: {
     atomsToRegenerate,
     profile,
     signal,
+    newRunId,
   } = args;
   try {
     const summary = await runQualityIntelligenceModelRoutedTestDesign(
@@ -1122,7 +1165,7 @@ async function executeScopedWorkflow(args: {
         provenanceRefs: ingestion.provenanceRefs,
         profile,
       },
-      regenWorkflowDeps(deps, target, evidenceStore, capture, signal),
+      regenWorkflowDeps(deps, target, evidenceStore, capture, signal, newRunId),
     );
     return summary.status === "succeeded"
       ? null
@@ -1183,6 +1226,7 @@ async function runScopedEphemeral(args: {
     atomsToRegenerate,
     profile,
     signal,
+    newRunId,
   });
   if (failure !== null) return { ok: false, result: failure };
   return finalizeScopedWorkflow(evidenceStore, newRunId, generatedCandidates, generatedAt);
@@ -1416,11 +1460,25 @@ interface PersistMergedRunArgs {
   readonly completedAt: string;
 }
 
-function persistMergedRun(args: PersistMergedRunArgs): void {
+// KEIKO-0839: return the post-dedup merged candidate set so persistRegenerationResult can compute
+// preservedCandidateIds from what was actually persisted (not from the pre-dedup input).
+function persistMergedRun(args: PersistMergedRunArgs): readonly QiTestCaseCandidate[] {
   const mergedCandidates = buildMergedCandidates(
     args.newRunId,
     args.preservedCandidates,
     args.regeneratedCandidates,
+  );
+  // KEIKO-0839-r3: deduplicateCandidates (inside buildMergedCandidates) keeps only the
+  // lexicographically-smallest id among content-equivalent candidates, so a PRESERVED candidate
+  // can lose its own tie-break to an equivalent REGENERATED one and be dropped from
+  // mergedCandidates entirely. Its edited revision -- keyed by that now-absent candidateId -- must
+  // not be persisted into the same artifact: an editedRevisions[] entry with no matching candidate
+  // is orphaned and internally inconsistent. Apply the identical post-dedup survivor filter
+  // persistRegenerationResult already uses for the review-state migration, here too, before the
+  // artifact is ever written.
+  const mergedCandidateIds = new Set(mergedCandidates.map((candidate) => String(candidate.id)));
+  const survivingEditedRevisions = args.preservedEditedRevisions.filter((revision) =>
+    mergedCandidateIds.has(String(revision.candidateId)),
   );
   const runId = QualityIntelligence.asQualityIntelligenceRunId(args.newRunId);
   const coverage = buildCoverageArtifacts(runId, args.ingestion, mergedCandidates);
@@ -1439,7 +1497,7 @@ function persistMergedRun(args: PersistMergedRunArgs): void {
     newRunId: args.newRunId,
     completedAt: args.completedAt,
     mergedCandidates,
-    preservedEditedRevisions: args.preservedEditedRevisions,
+    preservedEditedRevisions: survivingEditedRevisions,
   });
   recordMergedManifest(
     args.evidenceDir,
@@ -1458,6 +1516,7 @@ function persistMergedRun(args: PersistMergedRunArgs): void {
     },
     currentRedactionSecrets(args.deps),
   );
+  return mergedCandidates;
 }
 
 interface RegeneratedSlice {
@@ -1550,7 +1609,7 @@ function persistRegenerationResult(args: {
   readonly profile: PolicyProfile;
   readonly regenerated: RegeneratedSlice;
 }): void {
-  persistMergedRun({
+  const mergedCandidates = persistMergedRun({
     deps: args.deps,
     evidenceDir: args.evidenceDir,
     newRunId: args.newRunId,
@@ -1564,12 +1623,23 @@ function persistRegenerationResult(args: {
     regeneratedManifest: args.regenerated.manifest,
     completedAt: args.regenerated.completedAt,
   });
+  // KEIKO-0839: the review runState must see exactly the ids persistMergedRun actually
+  // persisted. Compute preservedCandidateIds from the POST-dedup merged set intersected with the
+  // original preserved-candidate ids: a preserved candidate that deduplicateCandidates dropped
+  // (id-tied with a regenerated one, tie-break lost) must NOT be reported as preserved to the
+  // review store, or a migrated review state would target an id that does not exist in the run.
+  const mergedCandidateIds = mergedCandidates.map((candidate) => String(candidate.id));
+  const mergedIdSet = new Set(mergedCandidateIds);
+  const preservedCandidateIds = args.narrowed.preservedCandidates
+    .map((candidate) => candidate.id)
+    .filter((id) => mergedIdSet.has(id));
   migrateReviewStateForRegeneration({
     oldRunId: args.drift.manifest.runId,
     newRunId: args.newRunId,
     evidenceDir: args.evidenceDir,
-    preservedCandidateIds: args.narrowed.preservedCandidates.map((candidate) => candidate.id),
+    preservedCandidateIds,
     staleCandidateIds: [...args.narrowed.staleIds],
+    allCandidateIds: mergedCandidateIds,
     now: args.regenerated.completedAt,
     redact: args.deps.redactor,
   });
@@ -1702,7 +1772,12 @@ export async function handleQiRegenerateStale(
   if (evidenceDir === undefined) {
     return errorResult(500, "QI_NO_EVIDENCE_DIR", "The evidence directory is not configured.");
   }
-  const newRunId = `qi-run-${randomUUID()}`;
+  // A QI run window persists it as a reference (#3557 review).
+  const newRunId = newReferenceId({
+    kind: "qi-run",
+    prefix: "qi-run-",
+    correlationId: ctx.correlationId,
+  });
   const requestedAt = new Date().toISOString();
   const abortScope = requestAbortSignal(ctx);
   try {

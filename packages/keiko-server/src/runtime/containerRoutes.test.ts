@@ -280,6 +280,17 @@ describe("GET /api/containers/catalog", () => {
     const res = await fetch(`${baseUrl()}/api/containers/catalog`);
     expect(res.status).toBe(400);
   });
+
+  it("KEIKO-0783: returns 403 WORKSPACE_NOT_REGISTERED for an unregistered projectId", async () => {
+    // Mirror handleContainerCapability's registered-project check: an unregistered path must not
+    // reach guard.listCatalog.
+    const res = await fetch(
+      `${baseUrl()}/api/containers/catalog?projectId=${encodeURIComponent("/not/a/registered/project")}`,
+    );
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("WORKSPACE_NOT_REGISTERED");
+  });
 });
 
 describe("POST /api/containers/runs", () => {
@@ -475,11 +486,10 @@ function makeFakeSseRes(): FakeSseRes {
 }
 
 describe("openContainerSseStream backpressure", () => {
-  it("aborts, unsubscribes, destroys once, and signals when res.write returns false", () => {
+  it("destroys once and signals when the ready frame itself is refused", () => {
     const fake = makeFakeSseRes();
     const manager = new FakeContainerRunnerManager();
     const signals: SseBackpressureSignal[] = [];
-    // Signal backpressure on every write so the first event frame trips the protective path.
     fake.writeReturns = false;
     openContainerSseStream(
       fake.res,
@@ -490,6 +500,33 @@ describe("openContainerSseStream backpressure", () => {
       },
     );
 
+    expect(fake.writes).toHaveLength(1);
+    expect(fake.destroyCount).toBe(1);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.accepted).toBe(false);
+    // The refusal aborted the stream before any event: nothing further is written or destroyed.
+    manager.emitExternal({ kind: "run-completed", runId: "run-bp", payload: { note: "x" } });
+    expect(fake.writes).toHaveLength(1);
+    expect(fake.destroyCount).toBe(1);
+  });
+
+  it("aborts, unsubscribes, destroys once, and signals when res.write returns false", () => {
+    const fake = makeFakeSseRes();
+    const manager = new FakeContainerRunnerManager();
+    const signals: SseBackpressureSignal[] = [];
+    openContainerSseStream(
+      fake.res,
+      manager,
+      (value) => value,
+      (signal) => {
+        signals.push(signal);
+      },
+    );
+    // The client took the ready frame and goes slow only once events flow, so the first EVENT frame
+    // is the refused one. A refused ready frame has its own case.
+    expect(fake.writes).toHaveLength(1);
+    fake.writeReturns = false;
+
     manager.emitExternal({ kind: "run-completed", runId: "run-bp", payload: { note: "x" } });
 
     // The frame was written once, the socket destroyed once, and the observer fired exactly once.
@@ -497,6 +534,8 @@ describe("openContainerSseStream backpressure", () => {
     expect(signals).toHaveLength(1);
     expect(signals[0]?.accepted).toBe(false);
     expect(signals[0]?.frameBytes).toBeGreaterThan(0);
+    expect(fake.writes).toHaveLength(2);
+    expect(fake.writes[1]).toContain("run-completed");
 
     // The abort unsubscribed from the manager, so a second event produces no further work.
     const writesAfterKill = fake.writes.length;

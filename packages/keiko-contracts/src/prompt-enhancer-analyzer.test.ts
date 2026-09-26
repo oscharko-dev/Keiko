@@ -5,18 +5,20 @@
 // package barrel so the public surface is validated alongside the behaviour.
 
 import { describe, it, expect } from "vitest";
+import type {
+  MissingInformationStrategy,
+  PromptEnhancementProfileId,
+  PromptEnhancementRequest,
+  PromptTaskAnalysis,
+  PromptTaskClass,
+} from "./index.js";
+import { analyzePrompt } from "./prompt-enhancer-analyzer.js";
 import {
-  analyzePrompt,
   asPromptEnhancementRequestId,
   normalizePromptDraft,
   PROMPT_ENHANCER_SCHEMA_VERSION,
   PROMPT_TASK_CLASSES,
-  type MissingInformationStrategy,
-  type PromptEnhancementProfileId,
-  type PromptEnhancementRequest,
-  type PromptTaskAnalysis,
-  type PromptTaskClass,
-} from "./index.js";
+} from "./prompt-enhancer.js";
 
 function makeRequest(
   text: string,
@@ -187,6 +189,29 @@ describe("analyzePrompt task classification (AC2)", () => {
     );
     expect(regressionTests.taskClass).toBe("code-generation");
     expect(regressionTests.domain).toBe("software");
+  });
+
+  it("classifies the audited German knowledge-management request as decision support", () => {
+    const analysis = analyze(
+      "Bereite eine belastbare Entscheidung über die Einführung eines Wissensmanagement-Tools vor. Alternativen, Budget, Nutzerzahl, Entscheidungskriterien und Zeitrahmen sind noch unbekannt.",
+    );
+
+    expect(analysis.taskClass).toBe("decision-support");
+    expect(analysis.taskClassConfidence).not.toBe("weak");
+  });
+
+  it("does not classify unrelated German Entscheidung compounds as decision support", () => {
+    const analysis = analyze("Die Entscheidungstabelle ist vollständig.");
+
+    expect(analysis.taskClass).not.toBe("decision-support");
+  });
+
+  it("keeps a German travel request in the travel-capable decision class", () => {
+    const analysis = analyze(
+      "Plane eine Reise nach Japan; berücksichtige Alternativen und eine Entscheidungstabelle für das Budget.",
+    );
+
+    expect(analysis.taskClass).toBe("decision-support");
   });
 });
 
@@ -378,6 +403,48 @@ describe("analyzePrompt output-format missing context", () => {
   it("does not request an output format when the format is explicit", () => {
     const topics = analyze("Extract the fields into JSON.").missingContext.map((m) => m.topic);
     expect(topics).not.toContain("output-format");
+  });
+});
+
+describe("analyzePrompt scope missing context", () => {
+  it("requests scope for an architecture draft without a target system (#3112)", () => {
+    const topics = analyze("Design a software architecture.").missingContext.map(
+      (item) => item.topic,
+    );
+
+    expect(topics).toContain("scope");
+  });
+
+  it("does not treat a generic system reference as an architecture scope", () => {
+    const topics = analyze("Design the system.").missingContext.map((item) => item.topic);
+
+    expect(topics).toContain("scope");
+  });
+
+  it.each([
+    "Design a software architecture for now.",
+    "Design a software architecture for the service.",
+    "Design a software architecture for now. We need to modernize the platform.",
+    "Design a software architecture. The platform must be scalable.",
+    "Design a highly productive software architecture.",
+  ])("does not accept generic or substring-only scope cues: %s", (text) => {
+    expect(analyze(text).missingContext.map((item) => item.topic)).toContain("scope");
+  });
+
+  it("does not request scope when an architecture draft identifies its target system (#3112)", () => {
+    const topics = analyze(
+      "Design a software architecture for a multi-tenant document collaboration service.",
+    ).missingContext.map((item) => item.topic);
+
+    expect(topics).not.toContain("scope");
+  });
+
+  it("accepts a supported plural architecture target", () => {
+    const topics = analyze(
+      "Design a software architecture for distributed systems.",
+    ).missingContext.map((item) => item.topic);
+
+    expect(topics).not.toContain("scope");
   });
 });
 

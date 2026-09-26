@@ -1,8 +1,5 @@
-import {
-  embeddingIdentityKey,
-  type EmbeddingModelIdentity,
-  type KnowledgeCapsuleId,
-} from "@oscharko-dev/keiko-contracts";
+import type { EmbeddingModelIdentity, KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import { embeddingIdentityKey } from "@oscharko-dev/keiko-contracts/runtime/vector-index-port";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 

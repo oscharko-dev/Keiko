@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -36,6 +44,9 @@ describe("portable secure-read bounded load runner", () => {
     await expect(runBounded([], 1.5)).rejects.toThrow("invalid concurrency");
   });
 });
+
+const APPROVED_SIDECAR = JSON.parse(readFileSync("portable-runtime-approvals.json", "utf8"))
+  .sidecarRuntimes[0];
 
 const DIGEST_A = "a".repeat(64);
 const DIGEST_B = "b".repeat(64);
@@ -158,46 +169,18 @@ function stagingSidecarRuntime() {
     approvalSchemaVersion: 2,
     name: "opencode-compatible",
     kind: "coding-runtime",
-    upstream: {
-      owner: "anomalyco",
-      repository: "opencode",
-      name: "opencode",
-      version: "1.17.17",
-      tag: "v1.17.17",
-      commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
-    },
-    adapterCompatibility: {
-      adapterName: "keiko-coding-sidecar",
-      adapterVersion: "1",
-      transport: "http-sse",
-    },
-    protocolSchema: {
-      path: "packages/sdk/openapi.json",
-      url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/sdk/openapi.json",
-      sha256: DIGEST_A,
-      hashAlgorithm: "sha256",
-      hashEncoding: "lowercase-hex",
-      digestInput: "upstream-raw-bytes",
-      transport: "http-sse",
-    },
-    releaseApproval: {
-      redistribution: {
-        status: "approved",
-        reviewReference: "https://github.com/oscharko-dev/Keiko/issues/2253",
-      },
-      subscriptionAuth: {
-        status: "not-applicable",
-        reviewReference: "https://github.com/oscharko-dev/Keiko/issues/2253",
-      },
-    },
+    upstream: structuredClone(APPROVED_SIDECAR.upstream),
+    adapterCompatibility: structuredClone(APPROVED_SIDECAR.adapterCompatibility),
+    protocolSchema: structuredClone(APPROVED_SIDECAR.protocolSchema),
+    releaseApproval: structuredClone(APPROVED_SIDECAR.releaseApproval),
     license: {
       spdxId: "MIT",
-      url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/LICENSE",
+      url: APPROVED_SIDECAR.license.url,
       sha256: DIGEST_F,
     },
     archive: {
       platformTarget: "windows-x64",
-      url: "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode.zip",
+      url: APPROVED_SIDECAR.archives["windows-x64"].url,
       sizeBytes: 123456,
       sha256: DIGEST_B,
     },
@@ -398,7 +381,26 @@ describe("portable secure-read smoke qualification", () => {
   function stageWithHelper(helperBody, options = {}) {
     const stageRoot = stageDir();
     const executable = writeHelperExecutable(stageRoot, helperBody, options);
-    writeManifest(stageRoot, stagingManifest(sha256OfFile(executable)));
+    const manifest = stagingManifest(sha256OfFile(executable));
+    if (options.generationLayout === true) {
+      const generation = {
+        schemaVersion: 1,
+        resourceRoot: `.portable/generations/${DIGEST_A}`,
+        treeHashSchema: "KHT1",
+        treeSha256: DIGEST_A,
+        launcherPath: "Keiko.exe",
+        launcherSha256: DIGEST_B,
+      };
+      const payloadRoot = join(stageRoot, "payload", "Keiko");
+      const generationRoot = join(payloadRoot, ...generation.resourceRoot.split("/"));
+      mkdirSync(generationRoot, { recursive: true });
+      renameSync(join(payloadRoot, "runtime"), join(generationRoot, "runtime"));
+      manifest.schemaVersion = 2;
+      manifest.windowsGeneration = generation;
+      manifest.provenance.windowsGeneration = structuredClone(generation);
+      manifest.releaseImpact.reviewedBinding.windowsGeneration = structuredClone(generation);
+    }
+    writeManifest(stageRoot, manifest);
     return stageRoot;
   }
 
@@ -431,6 +433,11 @@ describe("portable secure-read smoke qualification", () => {
 
   it("passes a faithful helper through the normal read and denied-name matrix", async () => {
     const stageRoot = stageWithHelper(FAITHFUL_HELPER);
+    await expect(smokePortableSecureRead(stageRoot, "windows-x64")).resolves.toBeUndefined();
+  });
+
+  it("resolves a schema 2 helper only from its bound Windows generation", async () => {
+    const stageRoot = stageWithHelper(FAITHFUL_HELPER, { generationLayout: true });
     await expect(smokePortableSecureRead(stageRoot, "windows-x64")).resolves.toBeUndefined();
   });
 

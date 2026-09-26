@@ -1,0 +1,118 @@
+# Issue #3252 made version, tags, the GitHub Latest release, npm `latest`, and the `npm-publish`
+# deployment record one rule (scripts/check-release-alignment.mjs), and the publisher applies it at
+# the end of every `latest` publish. Nothing asked the question between two releases: during the
+# v1.0.0 cut the check reported `newest tag is v1.0.0, expected v0.3.17` — a half-finished release,
+# exactly the state it exists to name — and it was seen only because someone ran it by hand.
+#
+# This lane is that question, on a schedule. Detection only, never repair: a divergence files or
+# updates one tracking issue and fails the lane, and the first aligned run closes that issue again.
+# A source that could not answer at all (exit 2) fails the lane without filing anything, because no
+# alignment result exists. Every value it reads is public already: the tags and releases of this
+# public repository, its deployment list, and the npm registry.
+name: Release alignment
+
+on:
+  schedule:
+    - cron: "40 4 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: release-alignment
+  cancel-in-progress: false
+
+jobs:
+  alignment:
+    name: Verify the published release is coherent
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      deployments: read
+      issues: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # The check reads the tag list from the checkout, so every tag must be present.
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Check release alignment
+        id: alignment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -eo pipefail
+          set +e
+          node scripts/check-release-alignment.mjs > "${RUNNER_TEMP}/alignment.txt" 2>&1
+          checker_exit=$?
+          set -e
+          cat "${RUNNER_TEMP}/alignment.txt"
+          case "${checker_exit}" in
+            0) status=aligned ;;
+            1) status=diverged ;;
+            *)
+              echo "Release alignment could not be determined (exit ${checker_exit}); no tracking issue was filed." \
+                >> "${GITHUB_STEP_SUMMARY}"
+              exit "${checker_exit}"
+              ;;
+          esac
+          echo "status=${status}" >> "${GITHUB_OUTPUT}"
+          # A Markdown code fence, spelled in octal so no backtick sits in a quoted shell string.
+          fence="$(printf '\140\140\140')"
+          {
+            echo "Release alignment: ${status}"
+            echo "${fence}"
+            cat "${RUNNER_TEMP}/alignment.txt"
+            echo "${fence}"
+          } >> "${GITHUB_STEP_SUMMARY}"
+      - name: Report a diverged release
+        if: steps.alignment.outputs.status == 'diverged'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -eo pipefail
+          marker="keiko-release-alignment-diverged"
+          fence="$(printf '\140\140\140')"
+          body="$(printf '%s\n\n%s\n%s\n%s\n\n%s\n\n<!-- %s -->\n' \
+            'The published release is not coherent: the checkout version, the tags, the GitHub Latest release, npm latest, and the npm-publish deployment record disagree. A release was left half-finished, or a tag, release, or deployment record changed outside the release workflow.' \
+            "${fence}" "$(cat "${RUNNER_TEMP}/alignment.txt")" "${fence}" \
+            'Finish or repair the release, then re-run this lane from the Actions tab. The first aligned run closes this issue.' \
+            "${marker}")"
+          # `set -e` matters here: a failed search must stop the step, not read as "no issue exists"
+          # and file a duplicate every night.
+          existing=$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open \
+            --search "\"${marker}\" in:body" --json number --jq '.[0].number // empty')
+          if [ -n "${existing}" ]; then
+            gh issue comment "${existing}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
+          else
+            gh issue create --repo "${GITHUB_REPOSITORY}" \
+              --title "Release alignment diverged" --body "${body}"
+          fi
+      - name: Close a resolved divergence report
+        if: steps.alignment.outputs.status == 'aligned'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -eo pipefail
+          marker="keiko-release-alignment-diverged"
+          existing=$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open \
+            --search "\"${marker}\" in:body" --json number --jq '.[0].number // empty')
+          if [ -n "${existing}" ]; then
+            gh issue close "${existing}" --repo "${GITHUB_REPOSITORY}" \
+              --comment "Release alignment restored: every source agrees again."
+          fi
+      - name: Fail the lane when the release diverged
+        if: steps.alignment.outputs.status == 'diverged'
+        run: exit 1

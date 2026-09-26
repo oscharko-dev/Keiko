@@ -28,6 +28,8 @@ import {
 } from "./d12-measurement-toolchain.mjs";
 import { compareStrings } from "./lib/compare-strings.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { listChangedGitPaths } from "./lib/git-changed-paths.mjs";
+import { EXPECTED_NODE_BASELINE, EXPECTED_NPM_ENGINE } from "./check-runtime-toolchain.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 
@@ -218,19 +220,10 @@ export function computePerformanceSubjectDigestAtCommit(options = {}) {
 // True when the change under test edits the D12 measurement toolchain itself. Only then does the
 // pull-request lane owe a re-measurement: a diff that leaves the ruler alone cannot be responsible
 // for evidence measured with a different one, and must not be blocked by it (ADR-0139 D10).
-function changedPathsAgainst(baseRef, root) {
-  const output = execFileSync(
-    resolveHostExecutable("git"),
-    ["diff", "--name-only", "-z", `${baseRef}...HEAD`, "--"],
-    { cwd: root, encoding: "utf8" },
-  );
-  return output.split("\0").filter((entry) => entry.length > 0);
-}
-
 export function toolchainTouchedAgainst(
   baseRef,
   root = repoRoot,
-  listChangedPaths = changedPathsAgainst,
+  listChangedPaths = listChangedGitPaths,
 ) {
   if (typeof baseRef !== "string" || baseRef.length === 0) return false;
   let changed;
@@ -801,10 +794,10 @@ function evaluateD12Toolchain(provenance, label) {
     "zlibVersion",
   ];
   if (provenance.platform !== "linux") failures.push(`${label}: platform must be linux`);
-  if (provenance.nodeVersion !== "24.18.0") {
+  if (provenance.nodeVersion !== EXPECTED_NODE_BASELINE) {
     failures.push(`${label}: Node.js version must be 24.18.0`);
   }
-  if (provenance.npmVersion !== "11.16.0") {
+  if (provenance.npmVersion !== EXPECTED_NPM_ENGINE) {
     failures.push(`${label}: npm version must be 11.16.0`);
   }
   for (const field of requiredStrings) {
@@ -2406,10 +2399,10 @@ function evaluateD12BundleRuntime(value, label) {
         "(the declared D12 reference environment; see docs/qa/perf-evidence.md)",
     );
   }
-  if (runtime.nodeVersion !== "24.18.0") {
+  if (runtime.nodeVersion !== EXPECTED_NODE_BASELINE) {
     failures.push(`${label} runtime Node.js version must be 24.18.0`);
   }
-  if (runtime.npmVersion !== "11.16.0") {
+  if (runtime.npmVersion !== EXPECTED_NPM_ENGINE) {
     failures.push(`${label} runtime npm version must be 11.16.0`);
   }
   for (const field of ["architecture", "osRelease", "zlibVersion"]) {
@@ -2726,7 +2719,7 @@ function evaluateD12FinalEvidenceEnvelope(evidence) {
 // evaluator that forgets the wrapper stays fatal, which is the fail-closed direction.
 const SUBJECT_DRIFT_FINDINGS = new Set();
 
-function subjectDriftFinding(message) {
+export function subjectDriftFinding(message) {
   SUBJECT_DRIFT_FINDINGS.add(message);
   return message;
 }

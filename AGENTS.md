@@ -20,7 +20,7 @@ remaining drift.
 ## 1. What Keiko is (and the one rule you cannot break)
 
 Keiko is a **governed, local-first agentic workspace** for regulated engineering and knowledge
-work. It is a TypeScript monorepo (npm workspaces, Node >=24.18.0 <25) that ships as one bundled
+work. It is a TypeScript monorepo (npm workspaces, Node >=24.18.0 <25 or >=26.3.0 <27) that ships as one bundled
 product.
 
 **The human-control invariant — non-negotiable:**
@@ -57,6 +57,9 @@ monotonic semantics fixed by
 - **Full access** (`autonomous-delivery`) allows file and internet work inside the validated
   Authority Envelope without per-action approval. Accepted `dev` delivery follows ADR-0135 and is
   integrated automatically only once the auto-merge preconditions in the invariant above hold.
+  (A mode's `allowed` disposition is a policy ceiling — see ADR-0138 D4 for the same-day
+  capability-availability clarification: a surface still needs an implemented execution path
+  before a given mode's `allowed` verdict can act.)
 
 Hard denials remain mode-independent: invalid or expired authority, workspace escape, denied
 sensitive paths, secret exfiltration, unsupported actions, exhausted budgets, and platform
@@ -73,6 +76,9 @@ This shapes the product _and_ how you work on it:
   pass. Fail closed. If a gate blocks you, the gate is usually right.
 - Secrets stay out of code, logs, evidence, config, and tests. Evidence and diagnostics are
   body-free: counts, hashes, redacted summaries — never raw content, keys, endpoints, or PII.
+- Every change to product runtime behaviour — feature, fix, refactor, anything — ships its own
+  body-free logging on the existing activity log, and when you debug, that log is the source you
+  read first (§8).
 
 ---
 
@@ -100,6 +106,11 @@ on purpose: a missing runtime must never quietly mask a real ANN regression.
 
 Use `npm` only. This repo is npm workspaces with a committed `package-lock.json` — there is no
 pnpm/yarn/bun lockfile. Do not add one.
+
+Every workspace package's `scripts.test` is `"vitest run"` — never `"npm run build && vitest run"`.
+An isolated `npm test --workspace <pkg>` therefore requires a prior `npm run build:packages`, which
+root `npm test` performs for you once, workspace-wide, before it invokes vitest (KEIKO-0915,
+#3336).
 
 ---
 
@@ -200,18 +211,22 @@ evidence.
 
 ### When you touched these areas, also run
 
-| You changed…                                   | Also run                                                                                                                                                                                |
-| ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Anything under `packages/keiko-ui/`            | `npm run typecheck --workspace @oscharko-dev/keiko-ui`, `npm run lint --workspace @oscharko-dev/keiko-ui`, `npm run test:coverage:ui`, `npm run check:editor-release-evidence` (see §7) |
-| A package's **public exports** / a new package | `npm run check:package-surface:assembled`                                                                                                                                               |
-| Retrieval / RAG / grounding                    | `check:retrieval-quality`, `check:grounded-retrieval-quality`, `check:grounded-faithfulness`                                                                                            |
-| Context lanes / compaction                     | `check:context-quality`                                                                                                                                                                 |
-| Server error handling / diagnostics            | `check:error-observability`                                                                                                                                                             |
-| An ADR (added/renumbered)                      | `npm run check:adr-index`                                                                                                                                                               |
-| Added or renamed a `test:e2e:*` script         | `npm run check:e2e-suite-wiring` — a suite no lane runs is not coverage (#2629)                                                                                                         |
-| Package versions / release metadata            | `check:version-consistency`, `check:release-impact`                                                                                                                                     |
-| Coverage-sensitive code                        | `npm run test:coverage:quality`                                                                                                                                                         |
-| **Any code at all, before every pull request** | **`npm run gates:sonar`** — the only local run that sees the SonarJS rules `eslint-plugin-sonarjs` does not ship ([`docs/qa/local-sonar.md`](docs/qa/local-sonar.md))                   |
+| You changed…                                                    | Also run                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Anything under `packages/keiko-ui/`                             | `npm run typecheck --workspace @oscharko-dev/keiko-ui`, `npm run lint --workspace @oscharko-dev/keiko-ui`, `npm run test:coverage:ui`, `npm run check:editor-release-evidence` (see §9)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| A package's **public exports** / a new package                  | `npm run check:package-surface:assembled`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Retrieval / RAG / grounding                                     | `check:retrieval-quality`, `check:grounded-retrieval-quality`, `check:grounded-faithfulness`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Context lanes / compaction                                      | `check:context-quality`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Server error handling / diagnostics                             | `check:error-observability`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| A new or changed activity-log line or `op`                      | `npm run generate:op-catalog`, then `npm run check:activity-log`, the Activity Log implementation gate over the complete registered inventory (it runs `check:op-catalog` itself; the catalog is generated, never hand-edited — §8)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| An ADR (added/renumbered)                                       | `npm run check:adr-index`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Anything under `tests/e2e/` — added, renamed, deleted OR edited | `npm run check:e2e-suite-wiring` — a suite no lane runs is not coverage (#2629), a spec no script can reach is not a suite, and a retained spec calling an unmounted route is a journey that cannot pass (#2955). An EDIT counts: changing a title, a `@tag` or an `/api/...` literal moves reachability just as a rename does. Reads the built `API_ROUTES`, so run `npm run build:packages` (or `npm run typecheck`) first                                                                                                                                                                                                                                                                                                                  |
+| The ESLint toolchain or `eslint.config.*`                       | `npm run check:eslint-lane` and `npm run check:dependency-hygiene` — #2777: covers `eslint`, `@eslint/js`, and a workspace's own `eslint` range, none of which `npm ls` can police                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Any file under `.github/workflows/`                             | **`npm run list:workflow-consumers` FIRST** — it names every gate and suite that reads that workflow, so the coupling is a list you work through instead of a series of red CI runs (~33 consumers for `ci.yml`). Then `npm run check:zizmor-anchors` — `.github/zizmor.yml` ignores are LINE numbers, so inserting a line anywhere above one silently drops a reviewed risk acceptance and turns the required `workflow hygiene` context red on an unrelated diff; `npm run check:zizmor-anchors -- --fix` re-pins anchors that only shifted, pairing them with their steps BY ORDER (nearest-line would hand two anchors the same step). A job's `if:` also reaches `check:e2e-suite-wiring`, which reads an unknown term as "does not run" |
+| A dependency version or a pinned GitHub Action                  | `npm run check:dependency-currency` — the closeout document records the reviewed disposition, and this gate fails when it stops describing the lockfile or the workflow pins                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| Package versions / release metadata                             | `check:version-consistency`, `check:release-impact`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Coverage-sensitive code                                         | `npm run test:coverage:quality`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| **Any code at all, before every pull request**                  | **`npm run gates:sonar`** — the only local run that sees the SonarJS rules `eslint-plugin-sonarjs` does not ship ([`docs/qa/local-sonar.md`](docs/qa/local-sonar.md))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
 Prefer the narrow gate for your change over running everything; run the full
 `test:coverage:quality` chain before you claim a release-affecting change is green.
@@ -277,6 +292,21 @@ The bar is strict and **machine-enforced** — match it or the build is red.
   lines and comments excluded; test `describe` blocks are exempt). Small functions, extract
   helpers. `no-console` is a warning in product code — route real output through the intended
   logger/diagnostic sink, not `console.*`.
+  - **`keiko-ui` is held to these three numbers too, with a shrink-only bridge.** It sits in the
+    root config's `ignores`, so `packages/keiko-ui/eslint.config.mjs` sets `complexity`,
+    `max-lines-per-function` and `explicit-function-return-type` itself, at the root config's exact
+    values (pinned by `scripts/__tests__/keiko-ui-lint-bar.test.mjs`, which compares against the
+    root config rather than restating the numbers). The 1,325 violations that predate the bar are
+    held in `packages/keiko-ui/eslint-suppressions.json`, an ESLint bulk-suppression register: new
+    files and new violations in listed files fail the lint run, and the register may only shrink.
+    After removing a violation, prune the register and commit the smaller file:
+
+    ```bash
+    npm run lint:prune-suppressions --workspace @oscharko-dev/keiko-ui
+    ```
+
+    This is a temporary bridge, not a carve-out — decomposing the oversized files is tracked
+    separately (audit KEIKO-0118, #2891).
 - **Prettier (the formatter is law):** 2-space indent, **double quotes**, semicolons,
   `printWidth: 100`, trailing commas everywhere, LF endings. Run `npm run format` before you
   finish; `format:check` is a CI gate.
@@ -336,7 +366,175 @@ sent back.
 
 ---
 
-## 8. Traps specific to this repo (learn these once)
+## 8. Logging is part of every change — and the first thing you read when something breaks
+
+Keiko's activity log (the segments in `<stateDir>/logs/`, governed by
+[ADR-0173](docs/adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md) and
+described in [`docs/observability/`](docs/observability/README.md)) is a **machine-reconstruction
+contract**: a customer's log file must let an agent rebuild a defect 1:1 without access to the
+machine it happened on. That contract only holds if every change keeps it true, so the two rules
+below apply to **every** change to product runtime behaviour — feature, enhancement, refactor,
+fix, migration, connector, UI surface — in every autonomy mode, with no exceptions and no "too
+small to log". (Repository tooling under `scripts/` is not product runtime; it keeps its
+deterministic `PASS`/`FAIL` output. Everything that runs inside the product is in scope.)
+
+### Rule 1 — every change ships its own logging, on the existing system
+
+The behaviour you add or change must leave body-free evidence in the activity log, built on the
+system that exists, never beside it:
+
+- **Emit through the owning layer's existing port.** On the server: `ServerLogSink` /
+  `ServerLogEvent` ([`server-log.ts`](packages/keiko-server/src/observability/server-log.ts)) for
+  activity, `emitServerDiagnostic` / `defaultServerDiagnosticSink`
+  ([`diagnostics-log.ts`](packages/keiko-server/src/diagnostics-log.ts)) for diagnostics. In domain
+  packages: the injected log port of that package — `SecurityLogSink`, `KnowledgeLogSink`,
+  `MemoryVaultLogSink`, `ConsolidationLogSink`, `ModelGatewayLogSink`. In the browser:
+  `reportClientDiagnostic` ([`client-diagnostics.ts`](packages/keiko-ui/src/lib/client-diagnostics.ts)).
+  A new package that performs work receives a port of the same shape from the server. Not
+  `console.*`, not a private logger, not a second log file, not a new format.
+- **`op` is a typed registry value, never a free string.** Declare each production operation with
+  `defineActivityLogOperation` and emit it with `activityLogEvent`. The registration owns the
+  category, emitter, exact required/optional field set, primitive types, hard bounds, closed data
+  classes and vocabularies, causal/lifecycle semantics, analyzer projection, failure classes,
+  proof ids, and release impact. The generator resolves those canonical APIs through TypeScript
+  symbols; same-shaped local helpers, unresolved dynamic calls, duplicate registrations,
+  registrations without an emitter, unregistered emitters, and an emission outside the operation's
+  owner package (a bypass of its owning port) fail closed. Run
+  `npm run generate:op-catalog` and commit the regenerated
+  [`op-catalog.generated.json`](docs/observability/op-catalog.generated.json);
+  `npm run check:op-catalog` rejects drift or any authoritative registry violation. Never hand-edit
+  the catalog. Its legacy literal scan is migration input only and authorizes nothing.
+- **Failure-class coverage is generated, and exemptions are exact.** The registry publishes stable
+  implementation-obligation categories and a failure-class matrix with product owners, lifecycle
+  transitions, causal edges, safe context fields, loss signals, analyzer projections, and proof or
+  replay references. Its release expectation is 100% complete. A genuinely unavoidable platform
+  or durability boundary may use only the registry's reviewed exemption shape: one exact operation
+  and failure class, the operation's owning package as owner, a technical reason, a linked issue,
+  and an expiry at most 180 days ahead. Wildcards, expired or effectively permanent records, unknown
+  operations, another owner, extra authorization fields, silent loss, and incomplete evidence fail
+  closed.
+- **Sufficiency is complete by default.** A supported failure class owns its start/state/end/failure
+  and loss transitions, causal edges, safe context, frames/causes, analyzer projection, and replay
+  proof. Exercise unavailable sinks, rejected writes, backpressure, disk and durability failures,
+  interrupted publication, and degraded capability in focused fault-injection tests. A missing
+  transition or proof is a contract failure, not an optional follow-up; this proof set is the
+  fault-injection gate for the change.
+- **Thread the correlation.** Every line of one logical operation carries that operation's
+  `correlationId`; a background job spawned by a request carries `parentCorrelationId` pointing
+  back at it. The only sanctioned fallback is `UNKNOWN_CORRELATION_ID`
+  ([`correlation.ts`](packages/keiko-server/src/correlation.ts)) — never an ad-hoc string, never a
+  silently missing id.
+- **Errors and loss take the structured path.** §7's no-silent-failures rule, made concrete for the
+  log line: `errorKind`, completeness, loss, compatibility, and writer capability come from their
+  closed versioned vocabularies; the dist-anchored Keiko-code stack (`extra.frames` /
+  `extra.causeChain`) and a correlation id on every failure line. A `catch` that logs nothing, or
+  logs free text, loses the defect for good; `check:error-observability` pins the named sites and
+  checks every `catch` in the whole tree on every run. Failure paths that predate that full-tree
+  check are listed in a register that may only shrink
+  (`docs/observability/legacy-failure-path-register.json`): never add to it, and after fixing a
+  listed path run `node scripts/check-error-observability.mjs --prune-register` and commit the
+  smaller file.
+- **The persisted identity is complete or the write fails closed.** Every persisted v2 record is
+  stamped at the central sink with schema/registry versions and digests, product/build/release and
+  safe platform classes, compatibility and writer-capability states, plus
+  `(pid, instanceId, seq)`. Producers cannot set or spoof those fields. Registered events are
+  revalidated immediately before serialization, so post-construction mutation, an unknown field,
+  a wrong type or vocabulary value, or an invalid identity cannot reach JSON. Rejection evidence
+  uses a closed body-free reason and never echoes the rejected operation or value.
+- **Loss and degraded operation are explicit.** Backpressure, disk exhaustion, unsafe targets,
+  failed durability, and an unavailable primary sink may never masquerade as an active complete
+  writer. Persist the applicable closed completeness/loss/capability state when the primary path is
+  available; otherwise use the existing independent body-free diagnostic fallbacks and state their
+  loss ceiling honestly. Every lost event is counted in the closed loss ledger and persisted as
+  `activity-log.loss`, and diagnostic readiness (`ready`, `degraded`, `unavailable`) is reported in
+  `/api/health`, `keiko status` and the UI. An explicit `silent` log level suppresses ordinary events
+  only: lifecycle, loss and readiness evidence is still written, and readiness reports `degraded`
+  (`level-silent`) so a silent interval never passes for an active complete writer.
+- **Body-free, always.** §7's redaction rule applies to every new field: counts, statuses, scopes,
+  hashes, ids, route templates, byte sizes, durations — never prompts, responses, file contents,
+  secrets, paths, endpoints or PII (ADR-0173 D4). New fields go into `extra` and through the
+  existing redaction ([`log-redaction.ts`](packages/keiko-server/src/observability/log-redaction.ts));
+  if a value cannot be made body-free, log its hash or its count, not the value.
+- **The log is part of the definition of done.** A change is complete only when the new behaviour
+  can be reconstructed from the log alone. Prove it the way you prove the fix: a test asserts the
+  emitted line(s) — `op`, `correlationId`, `errorKind`, the fields that carry the evidence — and a
+  change to a user-visible or failure-prone surface is checked against `keiko support analyze`
+  showing the operation in its timeline. The pull-request template carries this as a checklist item.
+- **Keep one logical, bounded Activity Log.** The storage contract remains one logical Activity Log
+  in `<stateDir>/logs/`; it must not create a second logical stream or a path-based replacement
+  shortcut. It is stored as immutable segments (ADR-0173 D14). Each process appends only to its own
+  active segment, and a sealed segment is read-only and never rewritten. Retention bounds the whole
+  directory by bytes and age, so total use stays within the byte budget plus the pin quota. Never
+  remove or loosen a disk bound. Sealing, recovery and pruning operate only inside an
+  owner-private, non-redirected directory, on the closed name grammar in `keiko-contracts`
+  (`activity-log-files.ts`), and only on opened handles that prove regular, owner-matched files.
+  Publication never replaces an existing name; rename is only the fallback on filesystems that
+  report hard links unsupported. Readers enumerate and order the files only through that grammar
+  (`orderActivityLogFileNames`), never through a hand-written pattern or a fixed file path. Segment
+  and retention changes preserve ordering, compatibility classification, explicit truncation/loss,
+  and support-export reconstruction.
+- **Saved reports remain under human control.** A support export or replay fixture is written only
+  to the local destination the user selected. Keiko does not upload it, attach it to GitHub, open an
+  issue, or otherwise disclose it automatically. Content-bearing optional sections require their
+  existing explicit consent; adding a new destination or disclosure path is a separate authority
+  and privacy decision, never an implied extension of logging.
+- **Keep the contract converged in the same change.** When runtime behavior changes this contract,
+  update the owning code, failure-first regression, emitted-line/analyzer or replay proof,
+  ADR-0173, this section, `CONTRIBUTING.md`, and directly affected operator documentation together.
+- **One command is the gate.** `npm run check:activity-log` is the Activity Log implementation
+  gate, and required CI runs that exact command. Every run builds the packages and evaluates the
+  complete registered inventory: `check:op-catalog` (typed registrations and emitters, closed fields
+  and vocabularies, exemptions, failure-class coverage, the failure-surface inventory, and proof and
+  scenario resolution), `test:activity-log-scenarios` (executes every curated end-to-end scenario
+  the inventory resolves, each of which must reach a complete support-analyze report),
+  `check:error-observability`, `arch:check` with `arch:check:negative`, and `check:release-impact`.
+  It takes no changed-file input, so an unchanged emitter is proven again over the complete
+  inventory rather than over a diff. On an integration commit whose tree is byte-identical to a
+  pull-request head that already ran this exact gate, ADR-0178 reuses that verdict — which proves
+  the same complete inventory on the same bytes, and is strictly stronger than a changed-file
+  scope. Any other narrowing of the gate remains rejected. Each failure
+  names its check, rule, site, and remediation. Run it before every pull request that changes
+  product runtime behaviour.
+
+### Rule 2 — when you debug, the log is your primary source
+
+Before you read code, form a hypothesis, or ask a human for a screenshot, read what the product
+already recorded:
+
+1. **Get the artifact.** `keiko support export --out bundle.jsonl` (adds store fingerprints, a
+   manifest and — with `--include-evidence` — evidence manifests), or one raw Activity Log file
+   from `<stateDir>/logs/` (a segment or a legacy file); the analyzer auto-detects which it was
+   handed. If Keiko recorded a local incident candidate, `keiko support incident show <id> --json`
+   names its defect fingerprint, correlations and pinned evidence window. For one operation,
+   `keiko support export --correlation-id <id>` (or `--incident <id>`) writes only its registered
+   causal closure, and `keiko support query --correlation-id <id> --json` returns it directly; both
+   report `insufficient` with a closed reason rather than cut required evidence to fit.
+2. **Reconstruct.** `keiko support analyze bundle.jsonl` prints every timeline;
+   `--correlation-id <id> --json` narrows to one as a machine-readable `LogTimeline`; `--clusters`
+   groups every parsed line of the file by category, `op` and `errorKind` (errors and successes
+   alike, independent of a correlation id); `--seed` builds the reproduction seed; and
+   `--emit-fixture <path>` writes a ready-to-paste gateway replay fixture.
+3. **Investigate from the timeline.** `keiko investigate --from-timeline <timeline.json>` turns that
+   timeline into a governed investigation with persisted evidence.
+4. **Read compatibility and integrity before trusting a seed.** The analyzer distinguishes
+   supported, legacy, unsupported, corrupt, truncated, and incomplete input. It
+   reports gaps, duplicates, decreasing/reset sequence values, and reorder per
+   `(pid, instanceId)` before exposing a reconstruction. Its `warnings` also name exactly which
+   evidence class it could not reconstruct (no stack frames, no gateway call, no request line, no store fingerprint).
+   A missing class is itself a finding: the surface that failed to log is part of the bug, and Rule
+   1 applies to its fix.
+5. **Turn the seed into a red-then-green test** following
+   [`docs/observability/reproduction-harness.md`](docs/observability/reproduction-harness.md), so the
+   fix is proven against the customer's actual sequence rather than a guess.
+
+The join keys — `(pid, instanceId, seq)` within a process lifetime, `correlationId` within an
+operation, `parentCorrelationId` across a spawn — are stated once in ADR-0173's "How an agent reads
+the log". If a defect cannot be located from the log, that gap is the first defect to fix: add the
+missing evidence under Rule 1, then fix the behaviour.
+
+---
+
+## 9. Traps specific to this repo (learn these once)
 
 These cost real time when rediscovered. They are all real and current.
 
@@ -364,10 +562,24 @@ These cost real time when rediscovered. They are all real and current.
   packaged surface contract; run `npm run check:package-surface:assembled` and update the expected
   surface. The aggregate builds the product, prepares the CLI mode, builds the UI, removes
   build-only and host-native artifacts, and then runs the fail-closed surface checker.
+- **`check:package-surface:assembled` prunes the LIVE `node_modules`, not a staged copy.** Its
+  `prune:package-build-artifacts` and `prune:package-native-optionals` steps run against the real
+  checkout: they delete `node_modules/@napi-rs/canvas` and `canvas-*` (root, and the same under
+  every `packages/*/node_modules`), and remove `packages/<name>/node_modules` entirely for every one
+  of the ~23 workspaces listed in the root `package.json`'s `bundleDependencies`. Nothing later in
+  the aggregate restores them. Run `npm test` afterward in the same checkout and
+  `scripts/__tests__/registry-install-smoke-security.test.mjs`'s dependency-closure test fails —
+  `@napi-rs/canvas` missing from the tree it walks — a false regression with nothing to do with your
+  change. Run the assembled surface check LAST, after `npm test`, or restore first with
+  `npm install`.
 - **A new long-lived integration branch (`feat/…`) must be added in THREE places in
   `.github/workflows/ci.yml`**: the `push:` trigger list, the `pull_request:` trigger list, AND
   the protected-branch-gate `case` allowlist (`refs/heads/<branch>:` and `*:<branch>` patterns) —
-  miss the third and CI runs but the gate still rejects the merge.
+  miss the third and CI runs but the gate still rejects the merge. Add the same branch to CodeQL's
+  `push:` and `pull_request:` lists and Dependency Review's `pull_request:` list. Verify the
+  three-workflow branch-list comparison with `npm run check:workflow-branch-parity`; it is the
+  repository-owned replacement for the audit's `awk`/`diff` check and fails on any missing or
+  extra branch.
 - **Coverage is ratcheted against a committed baseline** (`docs/qa/package-coverage-baseline.json`)
   with per-file floors across all four metrics. Lowering coverage fails the gate; if you add code,
   add tests. There is exactly ONE per-file floor store and ONE evaluation
@@ -382,7 +594,7 @@ These cost real time when rediscovered. They are all real and current.
 
 ---
 
-## 9. Tests
+## 10. Tests
 
 - **Unit/integration tests are co-located:** `foo.ts` → `foo.test.ts` next to it. Vitest,
   `environment: "node"` for packages; `keiko-ui` and `keiko-editor` use jsdom (+ `axe` a11y
@@ -395,7 +607,7 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 
 ---
 
-## 10. Git, branches, and PRs
+## 11. Git, branches, and PRs
 
 - **Signed commits are required** — `dev` branch protection rejects unsigned commits. Ensure
   commit signing is configured before you commit.
@@ -405,31 +617,22 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
   are green on the exact current head and every review conversation is resolved (ADR-0135). Green
   gates plus settled review threads ARE the merge decision; there is no human review step and no
   waiting for a person.
-- **Bounded reviewer arming interlock (ADR-0170 D5).** When the Keiko for Quality reviewer is
-  active — that is, when `vars.KEIKO_QUALITY_ENABLED` is `true` and its workflow runs on the pull
-  request — arm auto-merge only after that run for the **current head** has terminated:
-  published its result or failed. If it has not terminated within **35 minutes** of the last
-  required check going green, **cancel the run**, then arm and record the expiry in the PR as a
-  delivery-policy event.
-
-  Cancelling is the load-bearing part, not the duration. `timeout-minutes` bounds how long a job
-  runs _after it starts_ and says nothing about queue time, so no wall-clock number can guarantee a
-  healthy review has finished. Cancelling at expiry **narrows** the window in which a review can
-  publish after integration — it does not close it, because a run mid-publish can complete an
-  in-flight call, and ADR-0170 D6 keeps that as a stated fail-open window.
-
-  A cancellation that fails is not an expiry. If any run for the current head that has not reached a
-  terminal conclusion — queued, requested, waiting on environment protection, or pending, not only
-  in-progress — cannot be cancelled, containment was not established, so auto-merge stays disarmed
-  and the failed
-  cancellation is recorded — arming anyway would restore the full late-publication window the
-  cancellation exists to narrow.
-
-  The wait is bounded on purpose: a reviewer outage may delay integration, never block it
-  indefinitely. A cancelled or expired review is recorded as such and is never described as clean.
-  When `KEIKO_QUALITY_ENABLED` is not `true` the job never starts, the interlock does not apply,
-  and nothing changes.
-
+- **The integration run reuses the pull request's evidence, it does not repeat it.** `dev` takes
+  signed squash merges of up-to-date heads, so the commit that lands carries the identical tree sha
+  as the head the required matrix already proved. The `dev` run resolves that first and skips the
+  gates that evidence already carries, completing in about two minutes instead of ~48
+  ([ADR-0178](docs/adr/ADR-0178-reuse-proven-tree-evidence-on-integration-runs.md)). One chain is
+  never reused on `dev`: the coverage suites and the SonarCloud analysis run on every push to `dev`,
+  because SonarCloud files an analysis under the branch the scanner names and a pull-request analysis
+  never advances `dev`'s own history (ADR-0178 D1, amended 2026-09-25). It fails closed on every
+  uncertainty, so one differing byte — including an edit to CI itself — runs the full matrix. The
+  pull-request run is unchanged and remains the complete arbiter: never treat a fast `dev` run as
+  permission to let a pull request go unmeasured.
+- **Agent reaction SLO.** When a review finding is published on the current head, the delivering
+  agent pushes one repair within 10 minutes of its appearance. In that window, harvest every
+  already-published finding from every producer into one head. Do not wait for CI to turn green or
+  for a reviewer that has not yet spoken. Measurement and the harvest rule:
+  [`docs/qa/review-settlement.md`](docs/qa/review-settlement.md).
 - **Branch naming** follows `type/short-slug` — e.g. `feat/…`, `fix/…`, `issue/<n>-…`,
   `codex/…`, `claude/…`, `release/…`. Never work directly on `dev`.
 - **Commit subjects** are imperative and conventional-ish (`feat(scope): …`, `fix: …`,
@@ -444,21 +647,33 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 
   `workflow hygiene` is one context running actionlint, the pinned-SHA grep, zizmor and the OSV
   lockfile scan as serial steps of one job (ADR-0159) — same tools, same pinned versions, same rule
-  sets as the four separate contexts it replaced.
+  sets as the four separate contexts it replaced — plus the repository-owned `check:zizmor-anchors`,
+  which runs ahead of zizmor so a drifted line anchor names its own cause instead of surfacing as
+  the finding it was accepted for (#3130).
 
   No human approving review is required for `dev`. CodeRabbit reviews every `dev` pull request and
   every subsequent push without auto-pause. Its status is not required because quota can omit a
   current-head review, but every emitted inline finding requests changes and blocks until repaired
-  and its conversation is resolved. Qodo remains retired under ADR-0167. **Keiko for Quality is
-  reintroduced by [ADR-0170](docs/adr/ADR-0170-keiko-for-quality-as-an-external-reviewer.md) as an
-  external, SHA-pinned reviewer** — it publishes no required status, its findings block only
-  through conversation resolution, and its product code lives in
-  [oscharko-dev/Keiko-for-Quality](https://github.com/oscharko-dev/Keiko-for-Quality), never here.
+  and its conversation is resolved. Qodo remains retired under ADR-0167, and Keiko for
+  Quality is retired under
+  [ADR-0176](docs/adr/ADR-0176-retire-keiko-for-quality.md): it has no workflow, configuration,
+  repository variable, credential consumer, or protected context here.
   The hosted performance dashboard and quota-paced reviewer evaluated in ADR-0169 are fully
   retired: neither has repository configuration, an installed App, a workflow, or a protected
   context. Sonar remains independently required and revalidated inside `ci`. Full mutation and
   reference-machine performance evidence run outside the PR critical path; fast OSS duplicate,
   secret, and deterministic performance proxies run inside `ci` in parallel.
+
+- **A review finding thread is resolved by whoever answers it, and never silently.**
+  The resolution carries one of exactly two things: a **fix reference** (the commit or the changed
+  line that repaired it), or an **evidenced refutation** — what the finding claimed, and the guard,
+  line, or call that disproves it. Resolving a finding thread without a reply is prohibited, for
+  every agent, every human, and every script, including one that only waits for a merge.
+
+  A resolved thread is also invisible to the reviewer's own duplicate suppression, so the finding
+  returns on the next push: silence re-publishes the comment it was meant to clear. A refutation is
+  worth more than a resolve — it is the only signal that teaches the reviewer not to make that
+  claim again.
 
 - **GitHub Actions are pinned to full 40-hex commit SHAs** with a version comment. A tag or
   branch ref (`@v4`) fails the pinned-SHA step of `workflow hygiene`. Keep the SHA-plus-comment
@@ -469,7 +684,7 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 
 ---
 
-## 11. Decisions and docs
+## 12. Decisions and docs
 
 - **ADRs (`docs/adr/`) are architectural guardrails, not authority over working code.** Read the
   relevant ones before changing a boundary, use them to understand intent and constraints, and
@@ -485,7 +700,7 @@ test:e2e:smoke`. Performance-evidence and per-feature suites have their own `tes
 
 ---
 
-## 12. When you are unsure
+## 13. When you are unsure
 
 Stop and ask the human rather than guessing across a trust boundary, a governance gate, a release
 process, or the human-control invariant. Do not stop solely because an ADR contradicts a verified

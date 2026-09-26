@@ -14,7 +14,27 @@ function embeddedManifest() {
   return JSON.parse(match[1]);
 }
 
+function portableAssetsManifestExample() {
+  const section = workflow.slice(workflow.indexOf("The portable assets manifest"));
+  const match = /```json\n([\s\S]*?)\n```/u.exec(section);
+  if (match?.[1] === undefined) throw new Error("portable assets manifest example is missing");
+  return JSON.parse(match[1]);
+}
+
 describe("portable runtime release documentation", () => {
+  it("documents the required Windows setup companion operator fields", () => {
+    const example = portableAssetsManifestExample();
+    const windows = example.artifacts.find((artifact) => artifact.platformTarget === "windows-x64");
+
+    expect(windows).toMatchObject({
+      setupPath: "artifacts/windows-x64/keiko-windows-x64-setup.exe",
+      setupSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      setupSizeBytes: expect.any(Number),
+    });
+    expect(Number.isSafeInteger(windows.setupSizeBytes)).toBe(true);
+    expect(windows.setupSizeBytes).toBeGreaterThan(0);
+  });
+
   it("distinguishes portable manifest v1 from sidecar approval v2", () => {
     const manifest = embeddedManifest();
     const documented = manifest.sidecarRuntimes[0];
@@ -50,10 +70,31 @@ describe("portable runtime release documentation", () => {
     expect(releaseDocs).not.toContain("coding-sidecar-v1");
     expect(releaseDocs).toContain("http-sse");
     expect(releaseDocs).toContain("upstream-raw-bytes");
-    expect(releaseDocs).toContain(
-      "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de",
-    );
-    expect(releaseDocs).toContain("474abdd7ee60f4b67476cfcef7e5311beff4a824");
+    expect(releaseDocs).toContain(approvals.sidecarRuntimes[0].protocolSchema.sha256);
+    expect(releaseDocs).toContain(approvals.sidecarRuntimes[0].upstream.commit);
+  });
+
+  it("keeps every embedded OpenCode identity on the approved V2 pin", () => {
+    const approved = approvals.sidecarRuntimes[0];
+    const declarations = [...contract.matchAll(/"upstream": (\{[\s\S]*?\})/gu)];
+    expect(declarations).toHaveLength(2);
+    for (const declaration of declarations) {
+      expect(JSON.parse(declaration[1])).toEqual(approved.upstream);
+    }
+    const subscriptions = [...contract.matchAll(/"subscriptionAuth": (\{[\s\S]*?\})/gu)];
+    expect(subscriptions).toHaveLength(2);
+    for (const subscription of subscriptions) {
+      expect(JSON.parse(subscription[1])).toEqual(approved.releaseApproval.subscriptionAuth);
+    }
+    for (const document of [contract, workflow]) {
+      expect(document).toContain(approved.upstream.version);
+      expect(document).toContain(approved.upstream.commit);
+      expect(document).toContain(approved.protocolSchema.path);
+      expect(document).toContain(approved.protocolSchema.sha256);
+      expect(document).not.toContain("1.18.30");
+      expect(document).not.toContain("packages/sdk/openapi.json");
+      expect(document).not.toContain('"adapterVersion": "1"');
+    }
   });
 
   it("distinguishes immutable upstream evidence from signed shipped evidence", () => {

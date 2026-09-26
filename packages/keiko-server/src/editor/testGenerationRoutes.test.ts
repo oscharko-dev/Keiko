@@ -5,19 +5,21 @@ import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
+import type {
+  EditorM7SettingId,
+  EditorM7SettingValue,
+  EditorM7SettingsSnapshot,
+  EditorAgentSessionSnapshot,
+  EditorTestGenerationWireResponse,
+  EvidenceStore,
+  GatewayVerificationState,
+} from "@oscharko-dev/keiko-contracts";
+import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import {
-  EDITOR_AGENT_SCHEMA_VERSION,
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
   resolveEditorM7Settings,
-  type EditorM7SettingId,
-  type EditorM7SettingValue,
-  type EditorM7SettingsSnapshot,
-  type EditorAgentSessionSnapshot,
-  type EditorTestGenerationWireResponse,
-  type EvidenceStore,
-  type GatewayVerificationState,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import { probeVerifiedGatewayConfig } from "../_support.js";
 import { buildRedactor, createInMemoryUiStore } from "../index.js";
@@ -44,6 +46,7 @@ function postContext(body: unknown): RouteContext {
   ]) as unknown as IncomingMessage;
   (req as { method?: string }).method = "POST";
   return {
+    correlationId: undefined,
     req,
     res: {} as unknown as ServerResponse,
     params: {},
@@ -55,6 +58,7 @@ function rawPostContext(body: string): RouteContext {
   const req = Readable.from([Buffer.from(body, "utf8")]) as unknown as IncomingMessage;
   (req as { method?: string }).method = "POST";
   return {
+    correlationId: undefined,
     req,
     res: {} as unknown as ServerResponse,
     params: {},
@@ -242,7 +246,6 @@ const unsupportedCandidateRunner: TestGenerationRunner = async (args) => {
     return undefined;
   }
   const { verification: _verification, ...rest } = candidate;
-  void _verification;
   return {
     ...rest,
     unsupportedVerificationReason:

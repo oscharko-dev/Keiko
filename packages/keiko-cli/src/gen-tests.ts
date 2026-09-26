@@ -9,7 +9,13 @@
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { UnitTestTarget, UnitTestWorkflowReport } from "@oscharko-dev/keiko-workflows";
-import { loadGatewayConfigFromFile } from "./gateway-config.js";
+// KEIKO-0655: shared argv-parsing helper replaces the byte-identical flagValue copy and the
+// structurally-identical readValueFlags loop this file, evaluate.ts, and investigate.ts held —
+// flagValue itself is used only inside readNamedValueFlags now, so only that is imported here.
+import { readNamedValueFlags } from "./cli-arg-parsing.js";
+// KEIKO-0655: shared model-resolution helpers replace the byte-identical buildModel /
+// resolveConfiguredModelId / resolveModel copies this file and investigate.ts held.
+import { resolveModelOrExitCode } from "./cli-model-resolution.js";
 // GEN-PERF-CLI-001 — heavy graphs load at dispatch; module scope stays type-only.
 import {
   loadHarness,
@@ -18,9 +24,6 @@ import {
   loadWorkspaceModule,
 } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
-
-type GatewayModule = typeof import("@oscharko-dev/keiko-model-gateway");
-type HarnessModule = typeof import("@oscharko-dev/keiko-harness");
 
 const USAGE = `Usage:
   keiko gen-tests (--file PATH | --dir PATH) [--function NAME] [--changed FILE[,FILE]]
@@ -48,17 +51,6 @@ interface GenTestsArgs {
   readonly dirRoot: string;
 }
 
-// Returns the value of a `--flag value` pair, undefined if absent, or null if present without a
-// value (a usage error) — identical contract to runVerifyCli's flagValue.
-function flagValue(args: readonly string[], name: string): string | undefined | null {
-  const i = args.indexOf(name);
-  if (i === -1) {
-    return undefined;
-  }
-  const value = args[i + 1];
-  return value === undefined || value.startsWith("--") ? null : value;
-}
-
 const VALUE_FLAGS = [
   "--file",
   "--dir",
@@ -73,15 +65,7 @@ type FlagValues = Record<ValueFlag, string | undefined>;
 
 // Reads every value flag once; returns null if any is present without a value (a usage error).
 function readValueFlags(args: readonly string[]): FlagValues | null {
-  const values = {} as FlagValues;
-  for (const flag of VALUE_FLAGS) {
-    const value = flagValue(args, flag);
-    if (value === null) {
-      return null;
-    }
-    values[flag] = value;
-  }
-  return values;
+  return readNamedValueFlags(args, VALUE_FLAGS);
 }
 
 function parseArgs(args: readonly string[]): GenTestsArgs | null {
@@ -131,98 +115,10 @@ function resolveTarget(parsed: GenTestsArgs): UnitTestTarget {
   };
 }
 
-// Builds a ModelPort from the gateway config, or returns a usage/runtime error code via io. The
-// default selector is workflow-safe: generated test patches need tool use and structured output.
-// Explicit --model remains operator-controlled after config membership checks.
-async function buildModel(
-  parsed: GenTestsArgs,
-  io: CliIo,
-  env: EnvSource,
-  gateway: GatewayModule,
-  harness: HarnessModule,
-): Promise<{ port: ModelPort; modelId: string } | number> {
-  try {
-    const path = parsed.config ?? env.KEIKO_CONFIG_FILE;
-    if (path === undefined) {
-      throw new gateway.ConfigInvalidError(
-        "no config source; pass --config PATH or set KEIKO_CONFIG_FILE",
-      );
-    }
-    const config = await loadGatewayConfigFromFile(path, env);
-    if (parsed.model !== undefined) {
-      gateway.assertConfiguredModel(config, parsed.model);
-    }
-    const modelId =
-      parsed.model ??
-      gateway.selectConfiguredModel(config, {
-        kind: "chat",
-        toolCalling: true,
-        structuredOutput: true,
-      });
-    if (modelId === undefined) {
-      io.err("Error: no configured workflow-capable chat model is available.\n");
-      return 1;
-    }
-    return { port: new harness.GatewayModelPort(new gateway.Gateway(config)), modelId };
-  } catch (error) {
-    if (error instanceof gateway.GatewayError) {
-      io.err(
-        `Error: model gateway configuration problem — ${gateway.redact(error.message)}\n` +
-          `Provide a gateway config with --config PATH or KEIKO_CONFIG_FILE.\n`,
-      );
-      return 1;
-    }
-    throw error;
-  }
-}
-
-async function resolveConfiguredModelId(
-  parsed: GenTestsArgs,
-  env: EnvSource,
-  gateway: GatewayModule,
-): Promise<string | undefined> {
-  const path = parsed.config ?? env.KEIKO_CONFIG_FILE;
-  if (path === undefined) {
-    return parsed.model ?? "default";
-  }
-  const config = await loadGatewayConfigFromFile(path, env);
-  if (parsed.model !== undefined) {
-    gateway.assertConfiguredModel(config, parsed.model);
-    return parsed.model;
-  }
-  return gateway.selectConfiguredModel(config, {
-    kind: "chat",
-    toolCalling: true,
-    structuredOutput: true,
-  });
-}
-
-async function resolveModel(
-  parsed: GenTestsArgs,
-  io: CliIo,
-  env: EnvSource,
-  deps: GenTestsDeps,
-  gateway: GatewayModule,
-  harness: HarnessModule,
-): Promise<{ port: ModelPort; modelId: string } | number> {
-  if (deps.model !== undefined) {
-    try {
-      const modelId = await resolveConfiguredModelId(parsed, env, gateway);
-      if (modelId === undefined) {
-        io.err("Error: no configured workflow-capable chat model is available.\n");
-        return 1;
-      }
-      return { port: deps.model, modelId };
-    } catch (error) {
-      if (error instanceof gateway.GatewayError) {
-        io.err(`Error: model gateway configuration problem — ${gateway.redact(error.message)}\n`);
-        return 1;
-      }
-      throw error;
-    }
-  }
-  return buildModel(parsed, io, env, gateway, harness);
-}
+// KEIKO-0655: model-resolution helpers moved to cli-model-resolution.ts. gen-tests and
+// investigate now share the same buildWorkflowCapableModel / resolveConfiguredModelId /
+// resolveModelOrExitCode surface — a change to the resolution rules (workflow-capable
+// selector, config source precedence, GatewayError → exit-1 mapping) happens in one place.
 
 function printText(
   report: UnitTestWorkflowReport,
@@ -265,7 +161,7 @@ export async function runGenTestsCli(
     loadWorkflows(),
     loadWorkspaceModule(),
   ]);
-  const model = await resolveModel(parsed, io, env, deps, gateway, harness);
+  const model = await resolveModelOrExitCode(parsed, io, env, deps.model, gateway, harness);
   if (typeof model === "number") {
     return model;
   }

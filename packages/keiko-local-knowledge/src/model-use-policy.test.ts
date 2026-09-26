@@ -5,14 +5,16 @@
 
 import { describe, expect, it } from "vitest";
 
+import type {
+  KnowledgeCapsule,
+  KnowledgeCapsuleId,
+  KnowledgePodModelUsePolicy,
+} from "@oscharko-dev/keiko-contracts";
 import {
   KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
   sealedLocalPodModelUsePolicy,
   standardPodModelUsePolicy,
-  type KnowledgeCapsule,
-  type KnowledgeCapsuleId,
-  type KnowledgePodModelUsePolicy,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
 
 import { freshStore, sampleCapsuleInput } from "./_support.js";
 import { createCapsule, getCapsule } from "./capsule-lifecycle.js";

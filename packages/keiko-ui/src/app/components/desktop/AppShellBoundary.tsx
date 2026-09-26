@@ -8,13 +8,13 @@
 //
 // Mirrors WindowBodyBoundary (the repo's per-window boundary): class component,
 // getDerivedStateFromError, a fallback with zero heavy dependencies. It renders inside I18nProvider
-// but above TwinProvider and the shell, so every string still goes through the i18n API.
+// but above the shell, so every string still goes through the i18n API.
 
 import { Component, type ReactNode } from "react";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { resetPersistedShortcutOverrides } from "./shellRecovery";
 import styles from "./AppShellBoundary.module.css";
-import { clientErrorSummary } from "@/lib/client-error-summary";
+import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
 interface AppShellBoundaryProps {
@@ -45,7 +45,9 @@ class InnerAppShellBoundary extends Component<InnerAppShellBoundaryProps, AppShe
   public override componentDidCatch(error: Error): void {
     // Same observable-not-silent idiom as WindowBodyBoundary: the crash must stay diagnosable from
     // the console even though the UI only shows the recovery surface.
-    reportClientDiagnostic(`[keiko] app shell crashed: ${clientErrorSummary(error)}`);
+    reportClientDiagnostic(`[keiko] app shell crashed: ${clientErrorSummary(error)}`, {
+      correlationId: correlationIdOf(error),
+    });
   }
 
   private readonly reload = (): void => {

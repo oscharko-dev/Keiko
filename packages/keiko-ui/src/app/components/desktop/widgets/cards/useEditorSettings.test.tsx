@@ -1,14 +1,18 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type {
+  EditorM11ProfileSettingsLayer,
+  EditorM11SettingsSnapshot,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_M7_SCHEMA_VERSION,
   EDITOR_M7_SETTING_REGISTRY,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
+import {
   EDITOR_M11_DEFAULT_PROFILE_REF,
   resolveEditorM11Settings,
-  type EditorM11ProfileSettingsLayer,
-  type EditorM11SettingsSnapshot,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/editor-m11-settings";
 
 import { resetSharedEventSourcesForTests } from "./sharedEventSource";
 import { useEditorSettings } from "./useEditorSettings";

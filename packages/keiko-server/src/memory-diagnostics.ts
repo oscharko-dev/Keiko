@@ -241,4 +241,4 @@ export function exportMemoryDiagnostics(
 }
 
 // Re-export the status list for callers that want to render a stable histogram order.
-export { MEMORY_STATUSES } from "@oscharko-dev/keiko-contracts";
+export { MEMORY_STATUSES } from "@oscharko-dev/keiko-contracts/runtime/memory";

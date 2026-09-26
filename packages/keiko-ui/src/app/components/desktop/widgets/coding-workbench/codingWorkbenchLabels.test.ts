@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
+import type {
+  CodingWorkbenchCodexSubscriptionProfile,
+  CodingWorkbenchModelRefusalReason,
+  CodingWorkbenchRuntimeResearchGrant,
+  CodingWorkbenchRuntimeSnapshot,
+  CodingWorkbenchRuntimeSseEvent,
+} from "@oscharko-dev/keiko-contracts";
 import {
   CODING_WORKBENCH_RUNTIME_STATE_NAMES,
-  CODING_WORKBENCH_SCHEMA_VERSION,
   isLegalCodingWorkbenchRuntimeTransition,
-  type CodingWorkbenchCodexSubscriptionProfile,
-  type CodingWorkbenchRuntimeResearchGrant,
-  type CodingWorkbenchRuntimeSnapshot,
-  type CodingWorkbenchRuntimeSseEvent,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { CODING_WORKBENCH_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   createInitialCodingWorkbenchRuntimeState,
   type CodingWorkbenchResourceState,
@@ -20,6 +23,7 @@ import {
   eventDetail,
   lifecycleAnnouncement,
   modelSourceLabel,
+  startBlockedReason,
   visibleAlert,
 } from "./codingWorkbenchLabels";
 
@@ -69,6 +73,96 @@ describe("modelSourceLabel", () => {
     expect(modelSourceLabel("chatgpt-codex-subscription-profile", t)).toBe(
       "codingWorkbench.modelSource.codexSubscription",
     );
+  });
+});
+
+describe("lifecycleAnnouncement source reason", () => {
+  // "Model source unavailable." alone left the operator with no way to learn that a readiness
+  // check would have fixed it (workbench end-to-end run, 2026-09-03).
+  it("names the sidecar's unavailable reason next to the source announcement", () => {
+    const state: CodingWorkbenchRuntimeState = {
+      ...createInitialCodingWorkbenchRuntimeState("governed-assist", "managed-gateway"),
+      source: {
+        status: "ready",
+        error: null,
+        value: {
+          runtimePreference: "managed-gateway",
+          modelSource: "keiko-model-gateway",
+          runtimeSource: "keiko-sidecar",
+          available: false,
+          unavailableReason: "no-tool-calling",
+          verification: "unverified",
+        },
+      },
+    };
+    const announcement = lifecycleAnnouncement(state, t);
+    expect(announcement).toContain("codingWorkbench.announcement.modelSource.unavailable");
+    expect(announcement).toContain("codingWorkbench.source.unavailableReason.no-tool-calling");
+  });
+
+  // #3390 closeout: a source can report "available" per config/probe yet still be unusable
+  // because its derived context window cannot survive one real request (epic #3384).
+  it("names the insufficient-context-window reason next to the source announcement", () => {
+    const state: CodingWorkbenchRuntimeState = {
+      ...createInitialCodingWorkbenchRuntimeState("governed-assist", "managed-gateway"),
+      source: {
+        status: "ready",
+        error: null,
+        value: {
+          runtimePreference: "managed-gateway",
+          modelSource: "keiko-model-gateway",
+          runtimeSource: "keiko-sidecar",
+          available: false,
+          unavailableReason: "model-context-window-insufficient",
+          verification: "unverified",
+        },
+      },
+    };
+    const announcement = lifecycleAnnouncement(state, t);
+    expect(announcement).toContain("codingWorkbench.announcement.modelSource.unavailable");
+    expect(announcement).toContain(
+      "codingWorkbench.source.unavailableReason.model-context-window-insufficient",
+    );
+  });
+
+  it("announces a coding model whose tool-calling proof aged out by that reason", () => {
+    const state: CodingWorkbenchRuntimeState = {
+      ...createInitialCodingWorkbenchRuntimeState("governed-assist", "managed-gateway"),
+      source: {
+        status: "ready",
+        error: null,
+        value: {
+          runtimePreference: "managed-gateway",
+          modelSource: "keiko-model-gateway",
+          runtimeSource: "keiko-sidecar",
+          available: false,
+          unavailableReason: "tool-calling-unverified",
+          verification: "unverified",
+        },
+      },
+    };
+    expect(lifecycleAnnouncement(state, t)).toContain(
+      "codingWorkbench.source.unavailableReason.tool-calling-unverified",
+    );
+  });
+
+  it("stays silent about a reason the catalog does not know", () => {
+    const state: CodingWorkbenchRuntimeState = {
+      ...createInitialCodingWorkbenchRuntimeState("governed-assist", "managed-gateway"),
+      source: {
+        status: "ready",
+        error: null,
+        value: {
+          runtimePreference: "managed-gateway",
+          modelSource: "keiko-model-gateway",
+          runtimeSource: "keiko-sidecar",
+          available: false,
+          unavailableReason: "something-new",
+          verification: "unverified",
+        },
+      },
+    };
+    expect(lifecycleAnnouncement(state, t)).not.toContain("unavailableReason");
   });
 });
 
@@ -144,6 +238,31 @@ function runtimeEvent(extra: Record<string, unknown>): CodingWorkbenchRuntimeSse
 }
 
 describe("eventDetail auxiliary outcome", () => {
+  it.each([
+    "provider-failed",
+    "stream-incomplete",
+    "turn-rejected",
+    "output-exhausted",
+    "empty-answer",
+    "invalid-tool-call",
+  ] as const)("shows the actionable %s cause for a redacted gateway failure", (failureCode) => {
+    expect(eventDetail(runtimeEvent({ eventKind: "failure-redacted", failureCode }), t)).toBe(
+      `codingWorkbench.event.detailFailure codingWorkbench.event.turnFailure.${failureCode}`,
+    );
+  });
+
+  it("does not invent a gateway cause for a generic runtime failure", () => {
+    expect(
+      eventDetail(
+        runtimeEvent({ eventKind: "failure-redacted", failureCode: "recovery-required" }),
+        t,
+      ),
+    ).toBe("codingWorkbench.event.detailFailure");
+    expect(eventDetail(runtimeEvent({ eventKind: "child-run-completed" }), t)).toBe(
+      "codingWorkbench.event.detail",
+    );
+  });
+
   it("appends the normalized outcome as a content-free sentence", () => {
     expect(eventDetail(runtimeEvent({ auxiliaryOutcome: "denied" }), t)).toBe(
       "codingWorkbench.event.detail codingWorkbench.event.detailOutcome",
@@ -223,7 +342,11 @@ describe("visibleAlert mutation failures (F-09a)", () => {
   const tv: CodingWorkbenchTranslate = (key, values) =>
     values === undefined ? key : `${key} ${JSON.stringify(values)}`;
 
-  function failedMutationState(correlationId?: string): CodingWorkbenchRuntimeState {
+  function failedMutationState(
+    correlationId?: string,
+    code = "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
+    modelRefusalReason?: CodingWorkbenchModelRefusalReason,
+  ): CodingWorkbenchRuntimeState {
     return {
       ...createInitialCodingWorkbenchRuntimeState(),
       mutation: {
@@ -231,10 +354,11 @@ describe("visibleAlert mutation failures (F-09a)", () => {
         kind: "start",
         requestId: "request-1",
         error: {
-          code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED",
+          code,
           message: "Runtime request was rejected.",
           retryable: false,
           ...(correlationId === undefined ? {} : { correlationId }),
+          ...(modelRefusalReason === undefined ? {} : { modelRefusalReason }),
         },
       },
     };
@@ -251,6 +375,39 @@ describe("visibleAlert mutation failures (F-09a)", () => {
     const alert = visibleAlert(failedMutationState("ui-correlation-9"), tv, false);
     expect(alert).toContain("codingWorkbench.alert.actionFailedSupportId");
     expect(alert).toContain("ui-correlation-9");
+  });
+
+  // #3565 Observation 17: a refused start with a nameable cause gets the sentence that says what to
+  // do; every other code keeps the generic alert.
+  it.each([
+    ["CODING_RUNTIME_MODEL_UNAVAILABLE", "codingWorkbench.alert.startRefusedModelUnavailable"],
+    [
+      "CODING_RUNTIME_WORKSPACE_UNQUALIFIED",
+      "codingWorkbench.alert.startRefusedWorkspaceUnqualified",
+    ],
+    ["CODING_RUNTIME_RUNTIME_UNAVAILABLE", "codingWorkbench.alert.actionFailedCode"],
+  ])("explains a refused start with code %s through %s", (code, key) => {
+    const alert = visibleAlert(failedMutationState("ui-correlation-3", code), tv, false);
+    expect(alert).toContain(key);
+    expect(alert).toContain(code);
+    expect(alert).toContain("ui-correlation-3");
+  });
+
+  // #3603: a model refused because its window cannot hold a coding run's prompt, or because that
+  // window is still being verified, says so instead of "the model is unavailable".
+  it.each([
+    ["model-context-window-insufficient", "codingWorkbench.alert.startRefusedModelWindow"],
+    ["model-verification-pending", "codingWorkbench.alert.startRefusedModelVerificationPending"],
+  ] as const)("explains a model refused with %s through %s", (reason, key) => {
+    const alert = visibleAlert(
+      failedMutationState("ui-correlation-4", "CODING_RUNTIME_MODEL_UNAVAILABLE", reason),
+      tv,
+      false,
+    );
+    expect(alert).toContain(key);
+    expect(alert).not.toContain("codingWorkbench.alert.startRefusedModelUnavailable");
+    expect(alert).toContain("CODING_RUNTIME_MODEL_UNAVAILABLE");
+    expect(alert).toContain("ui-correlation-4");
   });
 });
 
@@ -271,9 +428,19 @@ describe("app-session pairing truth (release-audit F-08/RG-12)", () => {
     );
   });
 
-  it("surfaces the unpaired window as a standing visible alert", () => {
-    expect(visibleAlert(unpairedState(), t, false)).toBe("codingWorkbench.pairing.unpaired");
+  it("keeps the unpaired window out of standing visible alerts", () => {
+    expect(visibleAlert(unpairedState(), t, false)).toBeNull();
     expect(visibleAlert(createInitialCodingWorkbenchRuntimeState(), t, false)).toBeNull();
+  });
+
+  it("uses the composer blocker for a direct start attempt from an unpaired window", () => {
+    expect(startBlockedReason(unpairedState(), t, false)).toBe(
+      "codingWorkbench.composer.blocked.unpaired",
+    );
+  });
+
+  it("does not render a composer blocker once start is actually available", () => {
+    expect(startBlockedReason({ ...unpairedState(), canStart: true }, t, false)).toBeNull();
   });
 
   it("keeps an actionable refresh failure ahead of the standing pairing condition", () => {
@@ -336,5 +503,152 @@ describe("activeRunState", () => {
 
   it("treats an absent run state as inactive", () => {
     expect(activeRunState(undefined)).toBe(false);
+  });
+});
+
+// The composer's `startBlockedReason` narrates why Start is not yet available. When no refresh
+// failure and no standing condition apply, it falls through to `readinessStartBlocker`, which
+// walks the four readiness resources in order (source → workspace → runtime → run) and returns
+// the first blocked key it finds. Each branch of this chain is a live composer sentence, so keep
+// coverage on the exact key the operator would read at that step.
+describe("startBlockedReason readiness chain", () => {
+  function pairedState(): CodingWorkbenchRuntimeState {
+    return { ...createInitialCodingWorkbenchRuntimeState(), pairing: "paired" };
+  }
+  const readySource = ready({
+    runtimePreference: "managed-gateway" as const,
+    modelSource: "keiko-model-gateway" as const,
+    runtimeSource: "keiko-sidecar" as const,
+    available: true,
+    verification: "verified" as const,
+  });
+  const readyWorkspace = ready({ health: "healthy" as const, switching: false } as never);
+  const readyRuntime = ready({
+    schemaVersion: "1" as const,
+    requestedMode: "supervised-coding" as const,
+    deploymentCeiling: "supervised-coding" as const,
+    effectiveMode: "supervised-coding" as const,
+    runtimeAvailable: true,
+    runtimeEvidenceClass: "platform-qualified" as const,
+  } as never);
+  const readyRun = ready({
+    schemaVersion: "1",
+    state: "idle",
+    revision: 1,
+    updatedAt: AT,
+    runId: "run-1",
+  } as CodingWorkbenchRuntimeSnapshot);
+
+  it("names the model source as the blocker while its resource has not settled", () => {
+    expect(startBlockedReason(pairedState(), t, false)).toBe(
+      "codingWorkbench.composer.blocked.modelSource",
+    );
+  });
+
+  it("names the workspace as the blocker once the source resolved ready", () => {
+    const state: CodingWorkbenchRuntimeState = { ...pairedState(), source: readySource };
+    expect(startBlockedReason(state, t, false)).toBe("codingWorkbench.composer.blocked.workspace");
+  });
+
+  it("names the runtime as the blocker once source and workspace are ready", () => {
+    const state: CodingWorkbenchRuntimeState = {
+      ...pairedState(),
+      source: readySource,
+      workspace: readyWorkspace,
+    };
+    expect(startBlockedReason(state, t, false)).toBe("codingWorkbench.composer.blocked.runtime");
+  });
+
+  it("names the run resource as the blocker once source, workspace and runtime are ready", () => {
+    const state: CodingWorkbenchRuntimeState = {
+      ...pairedState(),
+      requestedMode: "supervised-coding",
+      source: readySource,
+      workspace: readyWorkspace,
+      runtime: readyRuntime,
+    };
+    expect(startBlockedReason(state, t, false)).toBe("codingWorkbench.composer.blocked.run");
+  });
+
+  // The final fallthrough is only reachable when every resource read as ready but the composer
+  // still refuses to start — a state the reducer would not normally leave standing, but the
+  // sentence is the operator's escape hatch and must remain a real, translated string.
+  it("falls through to the generic not-ready sentence once every resource read as ready", () => {
+    const state: CodingWorkbenchRuntimeState = {
+      ...pairedState(),
+      requestedMode: "supervised-coding",
+      source: readySource,
+      workspace: readyWorkspace,
+      runtime: readyRuntime,
+      run: readyRun,
+    };
+    expect(startBlockedReason(state, t, false)).toBe("codingWorkbench.composer.blocked.notReady");
+  });
+
+  // `pairing: "unknown"` is the boot-time default; it must return the "pairing" sentence, not the
+  // "unpaired" one — the two differ semantically and are wired to different remedies (retry the
+  // workspaces read vs. re-pair the window).
+  it("reports the pairing sentence while the workspaces read has not confirmed", () => {
+    expect(startBlockedReason(createInitialCodingWorkbenchRuntimeState(), t, false)).toBe(
+      "codingWorkbench.composer.blocked.pairing",
+    );
+  });
+});
+
+/**
+ * F-01 PIN, EXTENDED TO THE EVALUATION LANE (ADR-0163 D9). "Runtime ready." spoken over an
+ * unverified evaluation runtime is the same false green in the assistive-technology channel that
+ * the header pill's plain "Ready to start" is on screen. The evaluation sentence SUBSTITUTES the
+ * generic one; it never rides alongside it.
+ */
+describe("lifecycleAnnouncement runtime assurance", () => {
+  function runtimeState(
+    runtimeAvailable: boolean,
+    runtimeEvidenceClass?: "platform-qualified" | "functional-not-platform-qualified",
+  ): CodingWorkbenchRuntimeState {
+    return {
+      ...createInitialCodingWorkbenchRuntimeState(),
+      runtime: ready({
+        schemaVersion: "1",
+        requestedMode: "governed-assist",
+        deploymentCeiling: "governed-assist",
+        effectiveMode: "governed-assist",
+        runtimeAvailable,
+        ...(runtimeEvidenceClass === undefined ? {} : { runtimeEvidenceClass }),
+        ...(runtimeAvailable ? {} : { runtimeUnavailableReason: "runtime-unqualified" }),
+      } as never),
+    };
+  }
+
+  it("announces the evaluation runtime instead of a plain ready runtime", () => {
+    const announcement = lifecycleAnnouncement(
+      runtimeState(true, "functional-not-platform-qualified"),
+      t,
+    );
+    expect(announcement).toContain("codingWorkbench.announcement.runtime.evaluation");
+    expect(announcement).not.toContain("codingWorkbench.announcement.runtime.ready");
+  });
+
+  it("keeps announcing a platform-qualified runtime as ready", () => {
+    const announcement = lifecycleAnnouncement(runtimeState(true, "platform-qualified"), t);
+    expect(announcement).toContain("codingWorkbench.announcement.runtime.ready");
+    expect(announcement).not.toContain("codingWorkbench.announcement.runtime.evaluation");
+  });
+
+  it("never claims the evaluation posture over an unavailable runtime", () => {
+    const announcement = lifecycleAnnouncement(
+      runtimeState(false, "functional-not-platform-qualified"),
+      t,
+    );
+    expect(announcement).toContain("codingWorkbench.announcement.runtime.unavailable");
+    expect(announcement).not.toContain("codingWorkbench.announcement.runtime.evaluation");
+  });
+
+  // An evaluation runtime is a standing fact, not a blocking or recoverable condition, so it must
+  // not take the single role="alert" slot away from a real refresh failure.
+  it("raises no alert for an evaluation runtime", () => {
+    expect(
+      visibleAlert(runtimeState(true, "functional-not-platform-qualified"), t, false),
+    ).toBeNull();
   });
 });

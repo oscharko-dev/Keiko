@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
@@ -469,10 +469,9 @@ describe("GEN-PERF-PERSISTENCE-014: forget-suppression presence check performs n
     listTombstonesByScopeRows(db, userScope, cipher);
     expect(openStringCalls()).toBeGreaterThan(2000);
 
-    const { cipher: cipher2, openStringCalls: calls2 } = countingCipher();
-    // `cipher2` is unused by the presence query (it takes no cipher) — proving no decrypt is even
-    // possible on this path. We assert on the count staying at zero.
-    void cipher2;
+    const { openStringCalls: calls2 } = countingCipher();
+    // The presence query takes no cipher at all, so no decrypt is even possible on this path.
+    // We assert on the count staying at zero.
     const start = performance.now();
     const presence = selectForgetSuppressionBodyHashPresence(
       db,
@@ -537,7 +536,9 @@ afterEach(() => {
 });
 
 function freshFactoryDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "keiko-tomb-ac4-"));
+  // Realpath the tmpdir to avoid tripping the walk-every-ancestor symlink guard on macOS,
+  // where /var (and /tmp) are legitimate system-level symlinks. On Linux this is a no-op.
+  const dir = mkdtempSync(join(realpathSync(tmpdir()), "keiko-tomb-ac4-"));
   factoryCleanups.push(dir);
   return dir;
 }

@@ -4,12 +4,12 @@
 // SHARED fixture issue flowing through BOTH the #2243 sync mapping and the live mapping.
 
 import { describe, expect, it } from "vitest";
+import type { JiraIssueCitationMetadata } from "@oscharko-dev/keiko-contracts";
 import {
   ATLASSIAN_JQL_MAX_CHARS,
   ATLASSIAN_LIVE_SEARCH_MAX_RESULTS,
-  validateJiraLiveSearchResult,
-  type JiraIssueCitationMetadata,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
+import { validateJiraLiveSearchResult } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors-validation";
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import { AtlassianCredentialCustodyError } from "./atlassian-credential-custody.js";
 import type {

@@ -4,6 +4,7 @@ import {
   useEffect,
   useRef,
   useState,
+  type CSSProperties,
   type FocusEvent,
   type KeyboardEvent,
   type ReactNode,
@@ -21,6 +22,25 @@ import { useTranslate } from "@/lib/i18n";
 const AddIcon = Icons.add;
 const CloseIcon = Icons.close;
 const PlusIcon = Icons.plus;
+
+// KEIKO-0349: styled inline to avoid touching globals.css (SHA-pinned visual-proof gate, #1300).
+const PLACEHOLDER_BADGE_STYLE: CSSProperties = {
+  position: "absolute",
+  top: "6px",
+  right: "6px",
+  padding: "2px 6px",
+  fontSize: "10px",
+  fontWeight: 600,
+  letterSpacing: "0.04em",
+  textTransform: "uppercase",
+  color: "var(--text-secondary)",
+  background: "var(--surface-muted, rgba(255,255,255,0.08))",
+  border: "1px solid var(--border-subtle, rgba(0,0,0,0.1))",
+  borderRadius: "4px",
+  pointerEvents: "none",
+};
+
+const PLACEHOLDER_CARD_STYLE: CSSProperties = { position: "relative" };
 
 interface PaletteProps {
   readonly types: typeof WinTypes;
@@ -114,7 +134,18 @@ export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNo
   };
 
   const onBlur = (e: FocusEvent<HTMLDivElement>): void => {
+    // Outside-the-palette focus move: relatedTarget is a Node that is not inside the dialog.
     if (e.relatedTarget instanceof Node && ref.current?.contains(e.relatedTarget) !== true) {
+      onClose();
+      return;
+    }
+    // Window/tab blur signature: relatedTarget === null AND the document itself has lost focus.
+    // The KEIKO-0757 sibling fix on KeyboardShortcutsPanel established this shape; without it a
+    // window blur left the palette dialog open (no relatedTarget Node to distinguish "focus moved
+    // to a real element outside the palette" from "focus left the tab entirely"). A benign
+    // null-relatedTarget blur while the document still has focus (e.g. focus moved to a native
+    // dialog owned by the same document) must NOT close the palette.
+    if (e.relatedTarget === null && !document.hasFocus()) {
       onClose();
     }
   };
@@ -166,6 +197,8 @@ export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNo
         {order.map((k, i) => {
           const def = types[k];
           const Icon = Icons[def.icon];
+          const isPlaceholder = def.status === "placeholder";
+          const cardStyle = isPlaceholder ? PLACEHOLDER_CARD_STYLE : undefined;
           return (
             <button
               type="button"
@@ -174,7 +207,19 @@ export function Palette({ types, order, onAdd, onClose }: PaletteProps): ReactNo
               tabIndex={i === activeIdx ? 0 : -1}
               onFocus={() => setActiveIdx(i)}
               onClick={() => onAdd(k)}
+              {...(cardStyle === undefined ? {} : { style: cardStyle })}
+              {...(isPlaceholder ? { "data-window-status": "placeholder" } : {})}
             >
+              {isPlaceholder ? (
+                <span
+                  className="pal-status"
+                  style={PLACEHOLDER_BADGE_STYLE}
+                  data-testid="pal-status-placeholder"
+                  aria-label={t("palette.placeholderLabel")}
+                >
+                  {t("palette.placeholder")}
+                </span>
+              ) : null}
               <span className="pal-ico">
                 <Icon size={18} />
               </span>

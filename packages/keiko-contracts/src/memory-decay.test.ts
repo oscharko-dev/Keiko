@@ -8,8 +8,8 @@ import {
   MEMORY_TYPES,
   MEMORY_TYPE_DECAY_HALF_LIFE_MULTIPLIERS,
   decayHalfLifeMultiplierForType,
-} from "./memory.js";
-import type { MemoryType } from "./memory.js";
+} from "./memory-contracts.js";
+import type { MemoryType } from "./memory-contracts.js";
 
 describe("MEMORY_TYPE_DECAY_HALF_LIFE_MULTIPLIERS", () => {
   it("covers every memory type (total table — a new type surfaces as a compile+runtime gap)", () => {

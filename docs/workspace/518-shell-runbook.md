@@ -14,7 +14,7 @@ The production workspace is `/` (Next.js App Router root). It re-exports the des
   theme color, and color-scheme metadata. It intentionally does not advertise browser-managed
   PWA installation in the portable-first product path.
 
-No new route is added by #526. The existing `/launch` (returning-user landing) and `/local-knowledge`, `/memoriaviva`, `/quality-intelligence` routes are unchanged.
+No new route is added by #526. The existing `/launch` (returning-user landing), `/local-knowledge`, and `/quality-intelligence` routes are unchanged. The former top-level `/memoriaviva` route stub was deleted in #2894 (KEIKO-0129); the surviving surface is the in-desktop `memoria` window opened from the `/` shell.
 
 ## Regions and ownership
 

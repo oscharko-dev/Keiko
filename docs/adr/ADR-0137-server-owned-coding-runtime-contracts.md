@@ -18,10 +18,16 @@ resource/risk matrix, separately approved delivery, and editor-agent compatibili
 corrects only the missing runtime ownership and delegation boundary. It does not activate a process,
 implement an adapter, execute a connector, or add a browser route.
 
-Production route and orchestrator migration is explicitly deferred to Issue #2256. The existing
-client-envelope runtime routes are not validated by this decision, are not claimed safe or migrated,
-and must not activate productive runtime traffic. Epic #1982 remains blocked until #2256 removes
-that caller-authored authority path and wires these contracts through the production orchestrator.
+Production route and orchestrator migration was deferred to Issue #2256, which left the
+client-envelope runtime routes unmounted, and Issue #2958 (audit KEIKO-0115/KEIKO-0135) then deleted
+them along with the policy and approval store behind them:
+`POST /api/coding-workbench/autonomous-delivery/{confirm,execute}` and
+`POST /api/editor/agent/authority` no longer exist as code, and `routes.test.ts` pins all three
+patterns as unmatched. The single mounted autonomous coding-delivery authority path is
+`CODING_RUNTIME_ROUTE_GROUP`, whose envelopes are minted by
+`runtimeAuthorityService.confirmStart`; every state-changing Git delivery operation is admitted by
+`gitDelivery/runBoundAuthority.authorizeGitDelivery` against that accepted run and gated by the
+one-use `gitDelivery/approvalStore`.
 
 ## Decision
 
@@ -31,6 +37,29 @@ The closed start request contains only a request id, transient task intent, requ
 model source. Stop, takeover, and recovery requests contain only a request id and run id. Exact-key
 validation rejects every additional field. Raw task intent is transient model input and is absent
 from durable runtime state, events, failures, and evidence.
+
+Issue #3385 adds an optional raw `issueRef` and accepted-preview digest to that intent. A paired
+local app session and the selected checkout's existing GitHub reader grant admit preview reads.
+The browser receives only the shared preview projection and bounded untrusted excerpts; it cannot
+submit a binding or select the issue's base branch. Existing task-workspace provisioning resolves
+the default base server-side and rechecks the accepted digest before creating a workspace.
+
+Before minting an issue-bound run, the server resolves the issue again and rejects PRs, closed or
+unreadable issues, changed provenance, stale content and missing authority. The immutable GitHub
+node id, canonical remote digest, checkout id, issue number, default base and content revision are
+bound into the existing execution binding and start confirmation. The same closed issue validator
+guards authority, public snapshots and the durable ledger. Retrying revalidates the previous
+binding; generic tasks retain their existing behavior. Bounded issue text enters only the initial
+model turn through the existing context-pack builder and never enters the durable projections.
+The orchestrator keeps the human task intent unchanged and carries labelled untrusted context in a
+separate server-only `initialContext` dispatch field. Explicit-skill tracking observes only the
+human text. The pinned OpenCode 1.18.30 prompt transport sends context as a separate `synthetic: true`
+text part: it reaches the model but the existing safe-activity projection omits its user-message echo.
+The combined prompt retains the existing byte ceiling. The Codex control port currently accepts
+only text, so its adapter composes the same labelled context after explicit-skill tracking; it never
+feeds that composed string back into skill authorization. Follow-up turns carry no implicit context.
+The existing body-free `coding-runtime.run.issue-context-attached` event records initial attachment;
+raw context stays absent from runtime snapshots, generated runtime configuration and activity logs.
 
 ### D2 — One server aggregate owns runtime authority
 
@@ -46,19 +75,86 @@ opaque run id and envelope digest cross into the adapter seam.
 
 Minting requires a server-issued, action-bound, one-use human confirmation. The Authority Envelope
 itself is retained for the complete run so the existing registry remains the sole source of
-cumulative runtime/tool/patch budgets. Each adapter delegation has a fresh idempotency/replay
+cumulative runtime/tool/patch budgets. The deployment may configure the cumulative prompt-token
+allowance for newly minted envelopes with `KEIKO_CODING_RUNTIME_MAX_PROMPT_TOKENS` (default
+200,000; positive decimal integers up to 2,000,000). Invalid values fail closed; this cannot alter
+an existing envelope or reset its usage. Native context compaction changes subsequent request
+size, not cumulative accounting, and the separate Model Gateway spend ceiling remains enforced.
+Each adapter delegation has a fresh idempotency/replay
 identity. Before every delegation, the BFF re-resolves live facts and rejects task, workspace,
 project, branch, action/connector scope, budget, runtime source, or model source drift. Expiry,
 delegation replay, stop, and takeover fail closed. V1 permits exactly one active run per BFF; a
 concurrent start returns `active-run-conflict` deterministically.
 
+The same aggregate answers a budget question without spending: `delegationFits` says whether one
+more delegation of a given usage would still fit the run's budget, for the same capability, run and
+binding a delegation is admitted on, and reserves neither budget nor replay identity. Approved-skill
+discovery (#3417) lists only the skills the remaining budget can serve by asking it; a skill's own
+invocation still charges its one delegated read at the existing boundary. The server-approved skill
+catalog is the single authority for which skills a run may invoke: it changes only by admitting a
+whole next set as one snapshot with a new revision and digest, and a run's skill invocation is
+refused once the catalog it discovered is no longer the one in force.
+
 ### D3 — Runtime state and failures are closed
 
 The server-owned state vocabulary is exactly `unavailable`, `idle`, `starting`, `ready`, `running`,
-`awaiting-approval`, `stopping`, `succeeded`, `failed`, `cancelled`, `taken-over`, and
+`paused`, `awaiting-approval`, `stopping`, `succeeded`, `failed`, `cancelled`, `taken-over`, and
 `recovery-required`. Legal transitions are an explicit total table; unknown states and implicit
 self-transitions fail closed. Failure codes distinguish authority resolution, expiry, replay,
 revocation, concurrency, and each drift axis without carrying raw process or model content.
+
+**A paused run says what it is waiting for.** `paused` covers two different situations and the
+operator has to be able to tell them apart, so the snapshot carries an optional `pauseReason` from a
+closed vocabulary. Absent means an operator paused the run from the Workbench, which is what
+`paused` meant before. A value names a decision only a local human can make, which a governed tool
+has met and is waiting in place for; the run returns to `running` when that wait settles, either
+way, because the tool then retries the effect or hands the model its refusal.
+
+Such a decision is deliberately NOT an Authority Envelope approval and does not enter the
+`awaiting-approval` plane. The first member, `workspace-script-trust`, is the ADR-0147 D3
+package-script grant: a hard, mode-independent boundary recorded as a durable workspace record, not
+a one-use action authority. Routing it through the approval plane would mint the wrong artifact and,
+in `governed-assist`, collapse that mode's separate per-command approval into a workspace trust
+grant. The wait a governed tool may hold for such a decision is bounded by the governed tool
+invocation's own lifetime, so the tool always answers with its own closed refusal rather than an
+opaque expiry; a decision that outlives a single tool call leaves the run to report a truthful
+failure rather than a silent success.
+
+**An issue-bound delivery run may not report a delivery it cannot evidence.** A GitHub issue linked
+in a Workbench prompt supplies validated, untrusted task context but does not itself request a
+commit, push, or pull request. The server still checks the preview digest and active repository,
+then attaches the issue text and retains its content-free context identity for retries and history
+continuations, without creating a delivery obligation. Workbench prompts use this general agent
+conversation path, including natural-language requests to commit or open a PR: native OpenCode
+executes the requested tools under the same authority; commit, push, and PR tool outcomes retain
+their existing receipt checks. Turn completion is not a commit/push/PR claim. The browser does not infer a
+structured workflow from free text. A caller explicitly selecting the structured API
+`issuePurpose: "delivery"` retains the delivery binding and settles `succeeded` only when durable server-owned evidence
+says something was delivered — a successful verified-commit receipt, or a draft delivery record in a
+phase that means an artifact exists. The record of an ATTEMPT is not evidence: a commit proposal
+refused for want of verification, a push still awaiting approval, and a delivery in recovery all
+persist records while delivering nothing. Without evidence the run settles `failed` with
+`delivery-not-evidenced`. Ad-hoc runs are exempt, because one legitimately ends with no commit and
+inferring delivery intent from free text would turn honest successes into false failures.
+
+**Under Full access, a run that stops one step short is given a bounded continuation first**
+(PR #3452, 2026-09-11). In `autonomous-delivery` the operator's accepted Authority Envelope
+authorizes delivery without a per-action approval (D4). When an issue-bound run's model ends a turn normally while no delivery is
+evidenced, the orchestrator dispatches a fixed, server-authored continuation into the live session
+instead of settling — at most `DELIVERY_CONTINUATION_MAX` (2) times per run, each logged as
+`coding-runtime.run.delivery-continued`. The continuation restates only the accepted task's
+delivery goal; every effect still goes through the governed tools and nothing widens authority. A
+continuation the orchestrator does not send — `coding-runtime.run.delivery-continuation-refused`
+with `reason` `dispatch-threw` (with its `errorKind`), `dispatch-refused`, or
+`evidence-unreadable` — an exhausted budget, a failed or cancelled turn, and every supervised or ask
+run settle exactly as above, and the `delivery-unevidenced` line names how many continuations the
+run had. Two outcomes fail safe instead of guessing. Delivery evidence that cannot be read when the
+run settles is logged as `coding-runtime.run.delivery-evidence-unreadable` (with its `errorKind`)
+and settles the run `recovery-required` rather than `completed` or `delivery-not-evidenced`,
+because neither can be established. A continuation whose run an operator stopped or took over while
+the dispatch was in flight is abandoned with `reason` `run-superseded`: the run keeps the outcome
+the operator's action decided (a stop settles `cancelled`), and the continuation count is
+discarded with the run.
 
 The runtime adapter port accepts only the opaque authority reference, immutable execution binding,
 and closed runtime/model sources. Launch paths, argv, environment, endpoint, and credentials are
@@ -80,9 +176,27 @@ Content-bearing live prompt, response, diff, and diagnostic events are transient
 access-controlled. Durable operational events and evidence are a separate content-free projection;
 they carry only ids, digests, counts, booleans, closed states/codes, and safe labels.
 
-Commit, push, pull-request create/update, merge, and Authority Envelope widening each require their
-own action-bound, one-use human approval in addition to runtime authority. No mode, connector scope,
-or earlier start confirmation pre-approves those delivery actions.
+The owner-requested Coding History workflow (#3560) retains the visible user/assistant conversation
+in the existing local UI conversation store. Native V2 history is validated and captured continuously
+through the armed runtime's capture port, independently of the live display projection's TTL, turn
+and byte limits. Replayed messages update the same source binding idempotently; growing responses
+preserve their prefix and are chunked at the store's message bound. Display expiry cannot erase
+already captured history. Task creation, run binding and the initial intent commit atomically;
+a failed continuation preserves the existing task and messages. Dedicated relation tables associate
+conversation, task workspace, operator and run. Generic chat routes exclude these records; dedicated
+History routes authenticate the paired app session and scope access to the operator. Tool arguments,
+results, hidden context, reasoning and authority credentials are not captured. Reads and model
+context restoration remain bounded and report truncation explicitly. The existing body-free History
+operation records capture source, counts and persistence failures; it never contains conversation text.
+
+Delivery approval, one rule for D3 and D4. In `governed-assist` and `supervised-coding`, commit,
+push and pull-request create/update each require their own action-bound, one-use human approval in
+addition to runtime authority; no connector scope or earlier start confirmation pre-approves them.
+`autonomous-delivery` is the one mode whose accepted Authority Envelope authorizes those three
+actions inside the envelope without a per-action approval (ADR-0129 Full access, ADR-0138 D2): the
+policy decides `allowed`, every effect still runs through the governed delivery tools, and D3's
+delivery-truth rule decides whether the run delivered. Merge and Authority Envelope widening
+require their own human approval in every mode (ADR-0087).
 
 ### D5 — Process-tree ownership and platform qualification are fail-closed invariants
 
@@ -98,6 +212,7 @@ uses this release-qualified matrix:
 
 | Platform | Availability requirement | Prohibited assumption |
 | --- | --- | --- |
+| Linux x64 | The exact release payload carries an offline-verifiable GitHub-OIDC Sigstore qualification receipt for `linux-namespace-gateway`, and the host can create the qualified user/network namespace at launch. | A supported kernel name, source-only namespace test, or network namespace without the anonymous gateway bridge is not release qualification. |
 | Windows x64 | The release-qualified Windows confinement and process-tree termination backend passes its qualification evidence. | Killing only the immediate parent process is not descendant termination. |
 | macOS arm64 | The release-qualified macOS arm64 confinement and process-tree termination backend passes its qualification evidence. | Shell or inherited session/process-group membership is not proof of containment or descendant ownership. |
 | macOS x64 | The release-qualified macOS x64 confinement and process-tree termination backend passes its qualification evidence. | Shell or inherited session/process-group membership is not proof of containment or descendant ownership. |
@@ -135,8 +250,13 @@ it but may not weaken or reinterpret it.
   transport/backpressure, and real-binary execution belong to ordered corrective children and cannot
   be inferred from these contracts. Process-tree ownership and revocation-before-termination are
   normative here; #2251 implements them and #2258 qualifies the platform backends before activation.
-- No production traffic is migrated by Issue #2252. Issue #2256 owns route replacement and
-  orchestrator wiring because this issue expressly forbids browser-route implementation.
+- No production traffic was migrated by Issue #2252; Issue #2256 owned route replacement and
+  orchestrator wiring because this issue expressly forbade browser-route implementation. Issue #2958
+  completed that removal by deleting the unmounted caller-authored authority scaffolding, so no
+  second, unreachable delivery front door remains beside the server-owned path. No primitive was
+  relocated out of it: the one-use proof store, envelope digest, branch and scope admission, ceiling
+  clamp, and operator stop all already had live owners, and the boundary assertions its tests
+  carried moved onto `gitDelivery/runBoundAuthority.test.ts`.
 
 ## Alternatives considered
 

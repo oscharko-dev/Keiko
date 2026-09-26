@@ -55,7 +55,7 @@ export function renderVoiceTwinSummary(scorecard: VoiceTwinScorecard): string {
   lines.push(
     `Voice Digital Twin evaluation summary (schema v${scorecard.schemaVersion})`,
     `Fixtures: ${String(summary.totalFixtures)} total, ${String(summary.fullyPassedFixtures)} fully passed`,
-    `Capability coverage: no-voice=${yesNo(summary.coversNoVoice)} stt=${yesNo(summary.coversSttOnly)} full-realtime=${yesNo(summary.coversFullRealtime)}`,
+    `Capability coverage: no-voice=${yesNo(summary.coversNoVoice)} stt=${yesNo(summary.coversSttOnly)} speech-output=${yesNo(summary.coversSpeechOutput)} full-realtime=${yesNo(summary.coversFullRealtime)}`,
     `Environment coverage: azure-foundry=${yesNo(summary.coversAzureFoundry)} customer-hosted=${yesNo(summary.coversCustomerHosted)}`,
     `Privacy: negative-egress-caught=${yesNo(summary.coversPrivacyNegative)}, matrix cells=${String(scorecard.coveredMatrixCells.length)}`,
     "",

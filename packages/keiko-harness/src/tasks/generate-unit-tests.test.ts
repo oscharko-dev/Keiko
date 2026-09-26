@@ -1,38 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { CodingContextExcerpt, CodingContextPack } from "@oscharko-dev/keiko-contracts";
+import { excerpt, pack } from "./_codingContextPack.js";
 import { buildGenerateUnitTests } from "./generate-unit-tests.js";
-
-function excerpt(
-  text: string,
-  overrides: Partial<CodingContextExcerpt["citation"]> = {},
-): CodingContextExcerpt {
-  return {
-    citation: {
-      sourceKind: "repo-search",
-      sourceTier: "first-party-workspace",
-      id: "a-1",
-      score: 0.9,
-      rank: 0,
-      citationRef: "foo.ts",
-      byteCount: text.length,
-      truncated: false,
-      ...overrides,
-    },
-    text,
-  };
-}
-
-function pack(excerpts: readonly CodingContextExcerpt[]): CodingContextPack {
-  return {
-    schemaVersion: "1",
-    purpose: "test-generation",
-    excerpts,
-    usedBytes: excerpts.reduce((sum, e) => sum + e.citation.byteCount, 0),
-    budgetBytes: 65_536,
-    droppedForBudget: 0,
-    omissions: [],
-  };
-}
 
 describe("buildGenerateUnitTests", () => {
   it("allows patch and verification but not free tool use", () => {
@@ -57,6 +25,14 @@ describe("buildGenerateUnitTests", () => {
     const plan = buildGenerateUnitTests({ filePath: "src/foo.ts" });
     expect(plan.messages[1]?.content).not.toContain("Context:");
     expect(plan.messages[1]?.content).not.toContain("Retrieved context");
+  });
+
+  // KEIKO-0550: context: "" is defined-but-empty, distinct from an omitted field, but must not
+  // survive as a labeled-but-empty "Context: " section in the rendered prompt.
+  it("treats an empty-string context the same as an omitted context", () => {
+    const omitted = buildGenerateUnitTests({ filePath: "src/foo.ts" });
+    const empty = buildGenerateUnitTests({ filePath: "src/foo.ts", context: "" });
+    expect(empty.messages).toEqual(omitted.messages);
   });
 
   it("renders a retrieved context pack into the user message", () => {

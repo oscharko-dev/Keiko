@@ -8,11 +8,13 @@
 // Behavior is preserved verbatim from ReviewWidget's prior local definitions; only the home moved.
 
 import type { ReactNode } from "react";
+import { reportClientDiagnostic } from "../../../../../../lib/client-diagnostics";
 import type { I18nTranslate } from "../../../../../../lib/i18n";
 import type { ChangedFile } from "../../../../../../lib/types";
 import { NATIVE_BLOCK_STYLE } from "../../../native-element-styles";
 import { langOf, highlightLines } from "./syntaxHighlight";
 import type { Token } from "./syntaxHighlight";
+import selectableTextStyles from "./selectableText.module.css";
 import type {
   GitEditorDiffFile as DiffFile,
   GitEditorDiffHunk as DiffHunk,
@@ -31,6 +33,11 @@ export interface DiffViewLabels {
   readonly previousPath: (path: string) => string;
   readonly elevatedReview: string;
 }
+
+// Issue #2710 — line-number gutters, the sign gutter, and screen-reader-only
+// labels stay unselectable inside the now-selectable diff body, so a copied
+// range carries the source text alone.
+const CHROME_CLASS = selectableTextStyles["cmp-selectable-text-chrome"] ?? "";
 
 function lineKindLabel(kind: DiffLine["kind"], labels?: DiffViewLabels): string {
   if (kind === "add") return labels?.addedLine ?? "Added line";
@@ -53,13 +60,19 @@ interface TokensProps {
 }
 
 function TokenSpans({ tokens }: TokensProps): ReactNode {
+  const occurrences = new Map<string, number>();
   return (
     <>
-      {tokens.map((tok, idx) => (
-        <span key={idx} className={`hl-${tok[0]}`}>
-          {tok[1]}
-        </span>
-      ))}
+      {tokens.map((tok) => {
+        const baseKey = `${tok[0]}:${tok[1]}`;
+        const occurrence = occurrences.get(baseKey) ?? 0;
+        occurrences.set(baseKey, occurrence + 1);
+        return (
+          <span key={`${baseKey}:${String(occurrence)}`} className={`hl-${tok[0]}`}>
+            {tok[1]}
+          </span>
+        );
+      })}
     </>
   );
 }
@@ -67,8 +80,8 @@ function TokenSpans({ tokens }: TokensProps): ReactNode {
 interface DiffLineViewProps {
   readonly line: DiffLine;
   readonly lang: string;
-  readonly kindLabel?: string | undefined;
-  readonly labels?: DiffViewLabels | undefined;
+  readonly kindLabel: string | undefined;
+  readonly labels: DiffViewLabels | undefined;
 }
 
 function DiffLineView({ line, lang, kindLabel, labels }: DiffLineViewProps): ReactNode {
@@ -86,10 +99,12 @@ function DiffLineView({ line, lang, kindLabel, labels }: DiffLineViewProps): Rea
 
   return (
     <div className={`rv-line${cls}`}>
-      <span className="rv-sr-only">{kindLabel ?? lineKindLabel(line.kind, labels)}</span>
-      <span className="rv-num-old rv-num">{line.oldLine ?? ""}</span>
-      <span className="rv-num-new rv-num">{line.newLine ?? ""}</span>
-      <span className="rv-gutter" aria-hidden="true">
+      <span className={`rv-sr-only ${CHROME_CLASS}`}>
+        {kindLabel ?? lineKindLabel(line.kind, labels)}
+      </span>
+      <span className={`rv-num-old rv-num ${CHROME_CLASS}`}>{line.oldLine ?? ""}</span>
+      <span className={`rv-num-new rv-num ${CHROME_CLASS}`}>{line.newLine ?? ""}</span>
+      <span className={`rv-gutter ${CHROME_CLASS}`} aria-hidden="true">
         {sign}
       </span>
       <code className="rv-src">{content}</code>
@@ -108,7 +123,7 @@ interface DiffHunkViewLabels {
 interface DiffHunkViewProps {
   readonly hunk: DiffHunk;
   readonly lang: string;
-  readonly labels?: DiffHunkViewLabels | undefined;
+  readonly labels?: DiffHunkViewLabels;
   readonly viewLabels?: DiffViewLabels | undefined;
 }
 
@@ -119,7 +134,10 @@ export function DiffHunkView({ hunk, lang, labels, viewLabels }: DiffHunkViewPro
         className="rv-hunk mono"
         aria-label={`${viewLabels?.hunkHeader ?? "Hunk header"} ${hunk.header}`}
       >
-        <span className="rv-sr-only">
+        {/* Review finding on #3305 — this label sits inside the selectable .rv-code
+            body (data-text-selectable) just like DiffLineView's per-line rv-sr-only
+            span, so it needs the same CHROME_CLASS to stay out of a copied range. */}
+        <span className={`rv-sr-only ${CHROME_CLASS}`}>
           {labels?.header ?? viewLabels?.hunkHeader ?? "Hunk header"}
         </span>
         {hunk.header}
@@ -146,11 +164,11 @@ export function DiffHunkView({ hunk, lang, labels, viewLabels }: DiffHunkViewPro
 interface DiffFileSectionProps {
   readonly file: DiffFile;
   readonly index: number;
-  readonly changedFiles?: readonly ChangedFile[] | undefined;
+  readonly changedFiles?: readonly ChangedFile[];
   readonly sectionRef: (el: HTMLElement | null) => void;
-  readonly translate?: I18nTranslate | undefined;
-  readonly labels?: DiffViewLabels | undefined;
-  readonly idPrefix?: string | undefined;
+  readonly translate?: I18nTranslate;
+  readonly labels?: DiffViewLabels;
+  readonly idPrefix?: string;
 }
 
 function useTranslate(translate: I18nTranslate | undefined): string {
@@ -195,7 +213,16 @@ export function DiffFileSection({
           </span>
         )}
       </h3>
-      <div className="rv-code mono">
+      {/* Issue #2710 — diff text must be selectable and its copy native;
+          data-text-selectable is the interaction-guard contract for both. */}
+      <div
+        className={`rv-code mono ${selectableTextStyles["cmp-selectable-text"]}`}
+        data-text-selectable="true"
+        // Horizontal code scrolling must be reachable without a pointer.
+        // eslint-disable-next-line jsx-a11y/no-noninteractive-tabindex
+        tabIndex={0}
+        onFocusCapture={() => reportClientDiagnostic("[keiko] shared diff viewport focused")}
+      >
         {file.binary ? (
           <p className="rv-empty-p">
             {labels?.binaryFile ?? "Binary file — no text diff to display."}

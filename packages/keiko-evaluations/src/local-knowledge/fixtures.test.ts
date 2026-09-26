@@ -40,6 +40,10 @@ import {
   sourceIsolationFixture,
   wrongScopeFixture,
 } from "./fixtures.js";
+import {
+  RETRIEVAL_REGRESSION_PROBE_FIXTURE_IDS,
+  hasRetrievalGroundTruth,
+} from "./regression-probes.js";
 import type { RetrievalEvalFixture } from "./types.js";
 
 function collectChunkIds(fixture: RetrievalEvalFixture): Set<string> {
@@ -100,6 +104,18 @@ describe("fixtures — registry", () => {
       expect(fixture.capsules.length).toBeGreaterThan(0);
       expect(fixture.queries.length).toBeGreaterThan(0);
     }
+  });
+
+  // KEIKO-0288 sync-check: the retrieval regression probe list must cover every ground-truth
+  // fixture. If a new ground-truth fixture is added but not registered in the probe list,
+  // check:retrieval-quality would silently skip it — the exact ADR-0152 D5 gap this test closes.
+  it("RETRIEVAL_REGRESSION_PROBE_FIXTURE_IDS covers every ground-truth fixture (KEIKO-0288)", () => {
+    const expected = new Set(ALL_FIXTURES.filter(hasRetrievalGroundTruth).map((f) => f.id));
+    const registered = new Set(RETRIEVAL_REGRESSION_PROBE_FIXTURE_IDS);
+    const missing = [...expected].filter((id) => !registered.has(id));
+    const extra = [...registered].filter((id) => !expected.has(id));
+    expect(missing, `missing from probe list: ${missing.join(", ")}`).toEqual([]);
+    expect(extra, `probe list contains ids without ground truth: ${extra.join(", ")}`).toEqual([]);
   });
 });
 

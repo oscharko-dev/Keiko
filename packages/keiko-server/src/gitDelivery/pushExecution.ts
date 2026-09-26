@@ -9,20 +9,23 @@
 // effect is injected via seams so route tests run deterministically against a fake remote.
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import type {
+  GitDeliveryApprovalRequirement,
+  GitDeliveryProtectedBranchConstraint,
+  GitDeliveryPushInputs,
+  GitDeliveryRepoPolicyPack,
+  GitDeliveryRiskClass,
+} from "@oscharko-dev/keiko-contracts";
 import {
   GIT_DELIVERY_POLICY_SCHEMA_VERSION,
   evaluateGitPolicy,
-  gitDeliveryRiskClassForInputs,
-  type GitDeliveryApprovalRequirement,
-  type GitDeliveryProtectedBranchConstraint,
-  type GitDeliveryPushInputs,
-  type GitDeliveryRepoPolicyPack,
-  type GitDeliveryRiskClass,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import { gitDeliveryRiskClassForInputs } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import {
   evaluateGitPreflight,
   evaluateGitPublishEffectivePolicy,
   runGitPublish,
+  type GitPublishExecResult,
   type GitPublishLifecycleResult,
   type GitPushCommand,
   type GitRemotePublishAdapter,
@@ -30,6 +33,7 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import { createNodeGitPublishAdapter } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import type { UiHandlerDeps } from "../deps.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 import type {
@@ -39,10 +43,17 @@ import type {
 import {
   defaultGitDeliveryActionId,
   gitDeliveryMutationResponse,
-  persistGitDeliveryEvidence,
+  gitDeliveryTerminationHandler,
+  logGitDeliveryNoSpawnRefusal,
+  logGitDeliveryPreconditionFailure,
+  logGitDeliveryUpstreamTrackingFailed,
+  recordGitDeliveryLifecycle,
   readWorktreeSnapshotFor,
   type GitDeliveryMutationResponseBody,
 } from "./execution.js";
+import { defaultMintableRepoPack } from "./policyPackMintability.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import type { GitDeliveryAuthorityContinuityDenialCapture } from "./requestPreparation.js";
 
 // The shared/protected remote branches a governed push may never target directly. This is the
 // enforcement of the "no direct push to dev" hard denial (and its equivalents in a repository that
@@ -102,22 +113,60 @@ export interface GitDeliveryPublishSeams {
   readonly branchProtectionReader?: GitDeliveryBranchProtectionReader | undefined;
   readonly policyPacks?: GitDeliveryTrustedPolicyPacks | undefined;
   readonly approvalStore?: GitDeliveryApprovalStore | undefined;
+  // The request's own activity-log sink, so the default publish adapter's runCommand
+  // termination-evidence callback (see publishAdapterFor) writes through the SAME sink the caller
+  // logs everything else through, instead of an uninjectable `processServerLogSink()`.
+  readonly activityLog?: ServerLogSink | undefined;
   readonly now?: (() => number) | undefined;
   readonly newActionId?: (() => string) | undefined;
+  readonly beforeRemoteDispatch?: (() => boolean) | undefined;
+  // Set by the route alongside `beforeRemoteDispatch` when that guard is the continuity re-check. A
+  // denial replaces the adapter's synthetic failure with a typed blocked authority-denied ledger/log
+  // outcome; it never suppresses the terminal audit record.
+  readonly authorityDenialCapture?: GitDeliveryAuthorityContinuityDenialCapture | undefined;
+}
+
+function authorityGuardedPublishAdapter(
+  adapter: GitRemotePublishAdapter,
+  beforeRemoteDispatch: (() => boolean) | undefined,
+  activityLog: ServerLogSink,
+  correlationId: string | undefined,
+): GitRemotePublishAdapter {
+  if (beforeRemoteDispatch === undefined) return adapter;
+  return {
+    publish: (request): Promise<GitPublishExecResult> => {
+      if (beforeRemoteDispatch()) return adapter.publish(request);
+      // F4: no process is spawned for this attempt — mark it explicitly before returning the
+      // synthetic result (see logGitDeliveryNoSpawnRefusal in execution.ts).
+      logGitDeliveryNoSpawnRefusal(activityLog, "push", correlationId);
+      return Promise.resolve({ schemaVersion: "1", outcome: "aborted", durationMs: 0 });
+    },
+  };
 }
 
 function publishAdapterFor(
   workspace: WorkspaceInfo,
   seams: GitDeliveryPublishSeams,
   now: () => number,
+  correlationId: string | undefined,
 ): GitRemotePublishAdapter {
   if (seams.publishAdapterFactory !== undefined) return seams.publishAdapterFactory(workspace);
-  return createNodeGitPublishAdapter({ workspace, processEnv: process.env, now });
+  const activityLog = seams.activityLog ?? processServerLogSink();
+  return createNodeGitPublishAdapter({
+    workspace,
+    processEnv: process.env,
+    now,
+    onTerminated: gitDeliveryTerminationHandler(seams, correlationId),
+    onUpstreamTrackingFailure: (): void => {
+      logGitDeliveryUpstreamTrackingFailed(activityLog, correlationId);
+    },
+  });
 }
 
 function pushInputsOf(command: GitPushCommand): GitDeliveryPushInputs {
   return {
     kind: "push",
+    verifiedCommitSha: command.verifiedCommitSha,
     sourceBranchName: command.sourceBranchName,
     remoteAlias: command.remoteAlias,
     remoteBranchName: command.remoteBranchName,
@@ -138,11 +187,30 @@ export async function executeGovernedPublish(
   workspace: WorkspaceInfo,
   deps: Pick<UiHandlerDeps, "evidenceStore" | "redactor">,
   seams: GitDeliveryPublishSeams,
+  correlationId: string | undefined,
 ): Promise<GitPublishLifecycleResult> {
   const now = seams.now ?? Date.now;
-  const snapshot = await readWorktreeSnapshotFor(workspace, seams, now);
-  const adapter = publishAdapterFor(workspace, seams, now);
-  const packs = seams.policyPacks ?? { repoPack: KEIKO_DEFAULT_PUBLISH_POLICY_PACK };
+  const activityLog = seams.activityLog ?? processServerLogSink();
+  let snapshot: GitWorktreeSnapshot;
+  try {
+    snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
+  } catch (error) {
+    // Mirrors executeGovernedMutation's precondition line: the read-only snapshot step is the
+    // only thing that can throw here (the gateway never does), and it used to throw uncaught,
+    // leaving a failed push with NO activity-log evidence at all — the route's own `catch {}`
+    // (pushRoutes.ts) swallowed it into a content-free 409 with nothing in server.log to explain
+    // it. Reuses the local mutation path's logger rather than minting a second one; `actionKind`
+    // (`push`) is what tells the two apart in one vocabulary.
+    logGitDeliveryPreconditionFailure(activityLog, "push", error, correlationId);
+    throw error;
+  }
+  const adapter = authorityGuardedPublishAdapter(
+    publishAdapterFor(workspace, seams, now, correlationId),
+    seams.beforeRemoteDispatch,
+    activityLog,
+    correlationId,
+  );
+  const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_PUBLISH_POLICY_PACK);
   const newActionId =
     seams.newActionId ?? ((): string => defaultGitDeliveryActionId(command, now()));
   const result = await runGitPublish(
@@ -156,7 +224,19 @@ export async function executeGovernedPublish(
       newActionId,
     },
   );
-  persistGitDeliveryEvidence(deps, result.lifecycle, snapshot, workspace.root, now);
+  // Replace the adapter's synthetic aborted result with the true terminal governance outcome when
+  // continuity refused dispatch. The client receives the captured 403; the ledger retains the matching
+  // blocked / authority-denied / policy-forbidden fact.
+  recordGitDeliveryLifecycle({
+    deps,
+    result: result.lifecycle,
+    snapshot,
+    repoId: workspace.root,
+    now,
+    activityLog,
+    correlationId,
+    authorityDenied: seams.authorityDenialCapture?.result !== undefined,
+  });
   return result;
 }
 
@@ -167,6 +247,12 @@ export interface GitDeliveryPushPreviewBody {
   readonly remoteAlias: string;
   readonly remoteBranchName: string;
   readonly sourceBranchName: string;
+  // #3394 review: the reviewed head SHA the caller should capture and resubmit as
+  // `verifiedCommitSha` at approve/execute time (never re-derived at click time). Sourced from the
+  // SAME freshly-read snapshot the preflight/policy projection below already used — no new IO.
+  // Absent only for an unborn HEAD (nothing to push, so nothing to pin); the UI disables push when
+  // absent, consistent with the existing "cannot act on an incomplete preview" pattern.
+  readonly headCommitSha?: string | undefined;
   readonly riskClass: GitDeliveryRiskClass;
   readonly wouldCreateRemoteBranch: boolean;
   readonly wouldTriggerChecks: boolean;
@@ -214,6 +300,7 @@ export function buildGitDeliveryPushPreview(
     remoteAlias: command.remoteAlias,
     remoteBranchName: command.remoteBranchName,
     sourceBranchName: command.sourceBranchName,
+    ...(snapshot.headSha === undefined ? {} : { headCommitSha: snapshot.headSha }),
     riskClass: gitDeliveryRiskClassForInputs(inputs),
     wouldCreateRemoteBranch: command.setUpstreamTracking && !snapshot.hasUpstream,
     wouldTriggerChecks: true,

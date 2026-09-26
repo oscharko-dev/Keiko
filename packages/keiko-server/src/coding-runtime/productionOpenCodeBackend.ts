@@ -1,13 +1,20 @@
+import type { CodingRuntimeHistory } from "./codingRuntimeHistory.js";
 import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 
-import {
-  CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-  validateCodingWorkbenchRuntimeEvent,
-  type CodingWorkbenchRuntimeEvent,
-  type UpdatePortableTarget,
+import type {
+  CodingWorkbenchSidecarGatewayRunMetadata,
+  CodingWorkbenchRuntimeEvent,
+  UpdatePortableTarget,
 } from "@oscharko-dev/keiko-contracts";
-import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-sandbox";
+import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
+import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { createRuntimeGatewayConfinement } from "@oscharko-dev/keiko-sandbox";
 
 import type { OpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
@@ -38,6 +45,41 @@ import {
   createRuntimeProcessSupervisor,
   type RuntimeProcessSupervisor,
 } from "./runtimeProcessSupervisor.js";
+import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
+import { codingRuntimeFactDigest } from "./runtimeAuthorityService.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import { resolveOpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
+import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
+import type { ServerLogSink } from "../observability/server-log.js";
+
+const OPEN_CODE_START_TIMEOUT_MS = 120_000;
+
+const CODING_RUNTIME_CONTEXT_USAGE_OBSERVED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.context-usage.observed",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.productionOpenCodeBackend.recordContextTelemetry",
+  fields: {
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["accepted", "rejected"],
+    },
+    capacityTokens: { type: "integer", dataClass: "count", required: true },
+    usedInputTokens: { type: "integer", dataClass: "count", required: true },
+    reservedOutputTokens: { type: "integer", dataClass: "count", required: true },
+    sampleDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-context-usage"],
+  proofIds: ["coding-runtime.context-usage.observed.emitted-line"],
+  releaseImpact: "patch",
+});
 
 /**
  * Functional-evidence stand-in for a platform-qualified portable OpenCode runtime. It is reachable
@@ -61,13 +103,22 @@ export interface ProductionOpenCodeBackendInput {
   readonly portable: ResolvedPortableOpenCodeRuntime;
   readonly runtimeStateRoot: string;
   readonly gatewayUrl: string;
+  readonly resolveGatewayRunMetadata?:
+    ((modelId: string) => CodingWorkbenchSidecarGatewayRunMetadata | undefined) | undefined;
+  /**
+   * ADR-0043 D11-D14 (#3390): the full loopback URL the tool facade rides -- the SAME attested
+   * origin as `gatewayUrl`, at `/api/coding-sidecar/tool` -- never a second listener.
+   */
+  readonly toolFacadeUrl: string;
   readonly runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">;
   readonly gatewayReadiness: Pick<
     OpenCodeGatewayReadinessRegistry,
-    "waitForObservedRequest" | "clear"
+    "waitForObservedRequest" | "verifyObserved" | "clear"
   >;
   readonly fetch?: typeof globalThis.fetch | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
+  readonly historyCapture?: CodingRuntimeHistory["captureNative"] | undefined;
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
   /** Explicit functional-test seam. Production composition never supplies this. */
   readonly createSupervisor?:
@@ -88,7 +139,10 @@ export function createProductionOpenCodeBackend(
 ): ProductionRuntimeBackendResolver {
   const safeActivityProjection =
     input.safeActivityProjection ??
-    createCodingSafeActivityProjection({ diagnostics: input.diagnostics });
+    createCodingSafeActivityProjection({
+      diagnostics: input.diagnostics,
+      activityLog: input.activityLog ?? processServerLogSink(),
+    });
   return {
     safeActivityProjection,
     createRun: (run): QualifiedProductionRuntimeRun =>
@@ -102,12 +156,19 @@ function createOpenCodeRun(
   safeActivityProjection: CodingSafeActivityProjection,
 ): QualifiedProductionRuntimeRun {
   assertOpenCodeRun(run);
+  const metadata = input.resolveGatewayRunMetadata?.(run.context.modelProfile.profileId);
+  const contextGeometry =
+    metadata === undefined ? undefined : resolveOpenCodeContextGeometry(metadata);
+  if (contextGeometry === undefined) {
+    throw new CodingRuntimeLaunchRejectedError("runtime-unqualified");
+  }
   const safeActivity = safeActivityController(
     run.minted.authorityRef.runId,
     safeActivityProjection,
+    input.historyCapture,
   );
   try {
-    const composition = composeOpenCodeRun(input, run, safeActivity);
+    const composition = composeOpenCodeRun(input, run, safeActivity, contextGeometry);
     const launch = openCodeLaunchMaterial(input, run);
     const turnPort = createOpenCodeRuntimeTurnPort(composition.runPort);
     const questionPort = createOpenCodeRuntimeQuestionPort(composition.runPort);
@@ -119,6 +180,7 @@ function createOpenCodeRun(
       turnPort,
       questionPort,
       permissionPort,
+      toolBridge: composition.toolBridge,
       dispose: (): void => {
         safeActivity.clear();
       },
@@ -134,24 +196,30 @@ function composeOpenCodeRun(
   input: ProductionOpenCodeBackendInput,
   run: ProductionRuntimeBackendInput,
   safeActivity: NonNullable<OpenCodeRuntimeCompositionInput["safeActivity"]>,
+  contextGeometry: OpenCodeRuntimeCompositionInput["contextGeometry"],
 ): ReturnType<typeof createOpenCodeRuntimeComposition> {
   return createOpenCodeRuntimeComposition({
     portable: {
       verification: input.portable.sidecar,
       resourceRoot: input.portable.installRoot,
       target: input.portable.target,
-      admission: isDevLaneRuntime(input.portable) ? "functional-dev-lane" : "release-qualified",
+      admission: admissionPolicy(input.portable),
     },
     stateBaseRoot: join(input.runtimeStateRoot, "coding-runtime", "opencode"),
+    contextGeometry,
     capabilities: {
       modelGatewayCapability: run.minted.modelGatewayCapability,
       toolFacadeCapability: run.minted.toolFacadeCapability,
     },
+    toolFacadeOrigin: input.toolFacadeUrl,
     toolFacade: run.toolFacade,
     governedEventSink: idempotentEventSink(
       run.minted.authorityRef.runId,
       run.minted.authorityRef.envelopeDigest,
       input.runtimeEvidence,
+      run,
+      contextGeometry,
+      input.activityLog ?? processServerLogSink(),
     ),
     onQuestionObserved: liveQuestionSignal(
       run.minted.authorityRef.runId,
@@ -162,8 +230,9 @@ function composeOpenCodeRun(
     safeActivity,
     gatewayReadiness: input.gatewayReadiness,
     fetch: input.fetch ?? globalThis.fetch,
-    supervisor: runtimeSupervisor(input, run.context.workspaceRoot),
+    supervisor: runtimeSupervisor(input, run),
     diagnostics: input.diagnostics,
+    activityLog: input.activityLog,
     onRuntimeEvent: run.onRuntimeEvent,
     onSandboxAttestation: (runId, attestation): void => {
       if (runId !== run.minted.authorityRef.runId) {
@@ -178,6 +247,7 @@ function composeOpenCodeRun(
     },
     authorityLifecycle: run.authorityLifecycle,
     codingToolApprovals: run.codingToolApprovals,
+    resolveWorkspaceRootAccess: run.resolveWorkspaceRootAccess,
   });
 }
 
@@ -205,6 +275,7 @@ function openSafeActivity(
 function safeActivityController(
   runId: string,
   projection: CodingSafeActivityProjection,
+  historyCapture: ProductionOpenCodeBackendInput["historyCapture"],
 ): NonNullable<OpenCodeRuntimeCompositionInput["safeActivity"]> {
   const terminal =
     boundedCorrelations<Extract<CodingSafeActivitySignal, { readonly kind: "tool" }>>();
@@ -220,6 +291,7 @@ function safeActivityController(
     return accepted;
   };
   return {
+    captureMessages: (messages): boolean => armed && historyCapture?.(runId, messages) === true,
     arm: (): void => {
       armed = true;
     },
@@ -362,7 +434,7 @@ function openCodeLaunchMaterial(
     args: [],
     inheritedEnvAllowlist: [],
     shutdownTimeoutMs: 5_000,
-    startTimeoutMs: 30_000,
+    startTimeoutMs: OPEN_CODE_START_TIMEOUT_MS,
     confinement: input.portable.qualification,
   };
 }
@@ -373,26 +445,127 @@ function assertOpenCodeRun(run: ProductionRuntimeBackendInput): void {
     run.context.runtimeSource !== "keiko-sidecar" ||
     run.context.modelProfile.source !== "keiko-model-gateway"
   ) {
-    throw new Error("opencode-backend-profile-mismatch");
+    // Structured, not a bare Error: this is exactly the manager's `adapter-profile-mismatch`, and
+    // throwing it typed lets the orchestrator report the real cause instead of collapsing every
+    // launch rejection into one generic code (KEIKO-0150).
+    throw new CodingRuntimeLaunchRejectedError("adapter-profile-mismatch");
   }
 }
 
 function runtimeSupervisor(
   input: ProductionOpenCodeBackendInput,
-  workspaceRoot: string,
+  run: ProductionRuntimeBackendInput,
 ): RuntimeProcessSupervisor {
+  const workspaceRoot = run.context.workspaceRoot;
   if (input.createSupervisor) {
     return input.createSupervisor({ workspaceRoot, portable: input.portable });
   }
-  if (isDevLaneRuntime(input.portable)) return devLaneSupervisor(input.portable);
+  if (isDevLaneRuntime(input.portable)) {
+    return devLaneSupervisor(input.portable, input, run);
+  }
+  if (input.portable.target === "linux-x64") {
+    return linuxNamespaceGatewaySupervisor(input.portable, input, run);
+  }
+  if (isEvaluationLaneRuntime(input.portable) && input.portable.target !== "windows-x64") {
+    return appSandboxSupervisor(input.portable, input, run);
+  }
   return createRuntimeProcessSupervisor({
     backend: createNativeRuntimeProcessBackend({
       helperPath: input.portable.nativeHelperPath,
       runtimeRoots: [join(input.portable.installRoot, input.portable.sidecar.payloadRootPath)],
       workspaceRoot,
       identity: input.portable.qualification,
+      gatewayConfinement: runtimeGatewayConfinement(input.portable, input, run),
     }),
     qualifications: [input.portable.qualification],
+  });
+}
+
+function linuxNamespaceGatewaySupervisor(
+  portable: ResolvedPortableOpenCodeRuntime,
+  input: ProductionOpenCodeBackendInput,
+  run: ProductionRuntimeBackendInput,
+): RuntimeProcessSupervisor {
+  return createRuntimeProcessSupervisor({
+    backend: createDevLaneRuntimeProcessBackend({
+      identity: {
+        platform: "linux",
+        arch: "x64",
+        backend: "linux-namespace-gateway",
+      },
+      runtimeRoot: join(portable.installRoot, portable.sidecar.payloadRootPath),
+      gatewayConfinement: runtimeGatewayConfinement(portable, input, run),
+    }),
+    qualifications: [portable.qualification],
+  });
+}
+
+function devLaneSupervisor(
+  portable: DevLanePortableOpenCodeRuntime,
+  input: ProductionOpenCodeBackendInput,
+  run: ProductionRuntimeBackendInput,
+): RuntimeProcessSupervisor {
+  if (portable.target !== "windows-x64") return appSandboxSupervisor(portable, input, run);
+  if (portable.nativeHelperPath === undefined) throw new Error("dev-lane-supervisor-missing");
+  return createRuntimeProcessSupervisor({
+    backend: createNativeRuntimeProcessBackend({
+      helperPath: portable.nativeHelperPath,
+      expectedHelperSha256: portable.nativeHelperSha256,
+      runtimeRoots: [join(portable.installRoot, portable.sidecar.payloadRootPath)],
+      workspaceRoot: run.context.workspaceRoot,
+      identity: portable.qualification,
+      gatewayConfinement: runtimeGatewayConfinement(portable, input, run),
+    }),
+    qualifications: [portable.qualification],
+  });
+}
+
+/**
+ * The macOS dev/evaluation supervisor enforces the exact gateway TCP endpoint across descendants
+ * and denies service-based escape. Its evidence class still carries no release signature or platform
+ * qualification. Windows dev-lane runs use the native Job Object supervisor.
+ *
+ * Dev lane (#2475, ADR-0140): no packaged install exists to supervise natively.
+ * Evaluation lane (ADR-0163 D9): the native supervisor connects to the runtime monitor socket served
+ * ONLY by the Endpoint Security system extension, which requires an Apple-entitled, notarized,
+ * user-approved install; on an unsigned build it fails at first spawn with
+ * ERROR_MONITOR_UNAVAILABLE. Windows evaluation is unaffected — its Job Object supervisor needs no
+ * signature and its containment is real.
+ *
+ * One body for both, because two byte-identical copies would let a future edit weaken one lane's
+ * supervision while the other silently kept the old shape.
+ */
+function appSandboxSupervisor(
+  portable: QualifiedPortableOpenCodeRuntime | DevLanePortableOpenCodeRuntime,
+  input: ProductionOpenCodeBackendInput,
+  run: ProductionRuntimeBackendInput,
+): RuntimeProcessSupervisor {
+  return createRuntimeProcessSupervisor({
+    backend: createDevLaneRuntimeProcessBackend({
+      identity: {
+        platform: "darwin",
+        arch: portable.qualification.arch,
+        backend: "macos-app-sandbox",
+      },
+      runtimeRoot: join(portable.installRoot, portable.sidecar.payloadRootPath),
+      gatewayConfinement: runtimeGatewayConfinement(portable, input, run),
+    }),
+    qualifications: [portable.qualification],
+  });
+}
+
+function runtimeGatewayConfinement(
+  portable: ResolvedPortableOpenCodeRuntime,
+  input: ProductionOpenCodeBackendInput,
+  run: ProductionRuntimeBackendInput,
+): ReturnType<typeof createRuntimeGatewayConfinement> {
+  return createRuntimeGatewayConfinement({
+    gatewayUrl: input.gatewayUrl,
+    runId: run.minted.authorityRef.runId,
+    treeBindingId: run.minted.treeBindingId,
+    envelopeDigest: run.minted.authorityRef.envelopeDigest,
+    runtimeArtifactDigest: portable.sidecar.shippedExecutableSha256,
+    modelProfileDigest: codingRuntimeFactDigest(run.context.modelProfile),
   });
 }
 
@@ -403,45 +576,110 @@ function isDevLaneRuntime(
   return "lane" in portable;
 }
 
+/** Only the packaged union member carries `platformAssurance` (ADR-0163 D9). */
+function isEvaluationLaneRuntime(
+  portable: ResolvedPortableOpenCodeRuntime,
+): portable is QualifiedPortableOpenCodeRuntime {
+  return "platformAssurance" in portable && portable.platformAssurance === "evaluation-unqualified";
+}
+
 /**
- * Dev-lane supervision (#2475, ADR-0140): the process backend spawns the verified staged payload
- * directly and terminates its POSIX process group. It carries none of the release-qualified
- * containment or orphan-reaping guarantees; the runtime's evidence class records that posture.
+ * The single producer of the admission marker the launch-time availability re-check reads. An
+ * evaluation runtime marked `release-qualified` here would be demanded to prove the full packaged
+ * evidence set at start and refused.
  */
-function devLaneSupervisor(portable: DevLanePortableOpenCodeRuntime): RuntimeProcessSupervisor {
-  return createRuntimeProcessSupervisor({
-    backend: createDevLaneRuntimeProcessBackend({
-      identity: {
-        platform: "darwin",
-        arch: portable.qualification.arch,
-        backend: "macos-app-sandbox",
-      },
-      runtimeRoot: join(portable.installRoot, portable.sidecar.payloadRootPath),
-    }),
-    qualifications: [portable.qualification],
-  });
+function admissionPolicy(
+  portable: ResolvedPortableOpenCodeRuntime,
+): NonNullable<OpenCodeRuntimeCompositionInput["portable"]["admission"]> {
+  if (isDevLaneRuntime(portable)) return "functional-dev-lane";
+  return isEvaluationLaneRuntime(portable) ? "functional-evaluation-lane" : "release-qualified";
 }
 
 function idempotentEventSink(
   runId: string,
   authorityDigest: string,
   evidence: Pick<CodingRuntimeEvidenceAggregator, "observe">,
+  run: ProductionRuntimeBackendInput,
+  contextGeometry: OpenCodeRuntimeCompositionInput["contextGeometry"],
+  activityLog: ServerLogSink,
 ): OpenCodeRuntimeCompositionInput["governedEventSink"] {
-  const identities = new Set<string>();
+  // KEIKO-0707: use the same bounded-correlation primitive the governed-tool call path uses so
+  // idempotency identity retention is capped at MAX_SAFE_ACTIVITY_TOOL_CORRELATIONS instead of
+  // growing without bound for the lifetime of the run. Repeated identities within the retained
+  // window still short-circuit as duplicate; only identities older than the window may be seen
+  // as "applied" a second time -- an acceptable trade for a bounded memory footprint.
+  const identities = boundedCorrelations<true>();
   return {
     execute: (identity, event): Promise<"duplicate" | "applied"> => {
-      const duplicate = identities.has(identity);
-      identities.add(identity);
+      const duplicate = identities.values.has(identity);
+      rememberBoundedCorrelation(identities, identity, true);
       if (!duplicate) {
         evidence.observe(runId, {
           kind: event.kind === "tool" ? "tool-call" : "model-request",
           state: "running",
           authorityDigest,
         });
+        recordContextTelemetry(run, event, contextGeometry, activityLog);
       }
       return Promise.resolve(duplicate ? "duplicate" : "applied");
     },
   };
+}
+
+type ContextUsageActivityMeta =
+  | { readonly level: "info"; readonly correlationId: string }
+  | {
+      readonly level: "warn";
+      readonly correlationId: string;
+      readonly errorKind: "conflict";
+    };
+
+function contextUsageActivityMeta(
+  accepted: boolean,
+  correlationId: string,
+): ContextUsageActivityMeta {
+  if (accepted) return { level: "info", correlationId };
+  return { level: "warn", correlationId, errorKind: "conflict" };
+}
+
+export function recordContextTelemetry(
+  run: ProductionRuntimeBackendInput,
+  event: OpenCodeReconciliationEvent,
+  contextGeometry: OpenCodeRuntimeCompositionInput["contextGeometry"],
+  activityLog: ServerLogSink,
+): void {
+  const registry = run.contextUsage;
+  if (registry === undefined) return;
+  const providerTokenUsage = event.providerTokenUsage;
+  const completedCompaction =
+    event.compaction?.event === "completed" ? event.compaction : undefined;
+  if (providerTokenUsage === undefined && completedCompaction === undefined) return;
+  const updatedAt = new Date().toISOString();
+  if (providerTokenUsage !== undefined) {
+    const accepted = registry.recordProviderSample(run.request.runId, {
+      sampleId: event.digest,
+      capacityTokens: contextGeometry.contextWindowTokens,
+      reservedOutputTokens: contextGeometry.maxOutputTokens,
+      inputTokens: providerTokenUsage.inputTokens,
+      updatedAt,
+    });
+    activityLog.write(
+      activityLogEvent(
+        CODING_RUNTIME_CONTEXT_USAGE_OBSERVED_OPERATION,
+        contextUsageActivityMeta(accepted, run.request.runId),
+        {
+          state: accepted ? "accepted" : "rejected",
+          capacityTokens: contextGeometry.contextWindowTokens,
+          usedInputTokens: providerTokenUsage.inputTokens,
+          reservedOutputTokens: contextGeometry.maxOutputTokens,
+          sampleDigest: event.digest,
+        },
+      ),
+    );
+  }
+  if (completedCompaction !== undefined) {
+    registry.recordCompaction(run.request.runId, completedCompaction.compactionIdSha256, updatedAt);
+  }
 }
 
 /**
@@ -456,11 +694,12 @@ function liveQuestionSignal(
   evidence: Pick<CodingRuntimeEvidenceAggregator, "observe">,
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
 ): (identity: string) => void {
-  const identities = new Set<string>();
+  // KEIKO-0707: bounded identity retention, same reasoning as idempotentEventSink above.
+  const identities = boundedCorrelations<true>();
   let questionSignalSequence = 0;
   return (identity): void => {
-    if (identities.has(identity)) return;
-    identities.add(identity);
+    if (identities.values.has(identity)) return;
+    rememberBoundedCorrelation(identities, identity, true);
     evidence.observe(runId, {
       kind: "model-request",
       state: "running",

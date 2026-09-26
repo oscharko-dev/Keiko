@@ -10,7 +10,7 @@ import type {
   QualityIntelligenceExportBundle,
   QualityIntelligenceTestCaseCandidate,
 } from "@oscharko-dev/keiko-contracts";
-import { assertExportBundleInvariant } from "@oscharko-dev/keiko-contracts";
+import { assertExportBundleInvariant } from "@oscharko-dev/keiko-contracts/runtime/qualityIntelligence/index";
 import { escapeMarkdownActiveSyntax, inlineField } from "../textSafety.js";
 import { startsWithFormulaLead } from "./spreadsheetSafeCsv.js";
 

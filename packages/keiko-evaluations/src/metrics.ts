@@ -4,4 +4,4 @@
 // entry point for those symbols; it re-exports the canonical implementations so existing
 // keiko-evaluations SDK consumers keep working unchanged.
 
-export { binaryNdcgAtK, mean } from "@oscharko-dev/keiko-contracts";
+export { binaryNdcgAtK, mean } from "@oscharko-dev/keiko-contracts/runtime/eval-metrics";

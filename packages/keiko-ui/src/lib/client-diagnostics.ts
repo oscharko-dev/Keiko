@@ -19,19 +19,163 @@
 // `unknown` or an `Error`: a raw error carries a stack with absolute paths and a message Keiko does
 // not control, and a diagnostic surface is what users screenshot into bug reports. Callers that hold
 // an error pass `clientErrorSummary(error)`, which yields its class and nothing else.
+//
+// The optional second argument is metadata ABOUT the report, not content: the correlation id of the
+// server request, the closed kind of failure that raised it, and closed body-free identities needed
+// to reconstruct a response disposition. It rides alongside `message` rather than being folded into
+// it so transports can preserve typed wire fields instead of parsing a caller-specific string
+// convention.
+//
+// LOSS IS COUNTED, NEVER SILENT (#3532). Every diagnostic this page could not deliver — evicted from
+// the bounded pre-transport buffer, dropped by the transport's throttle, lost with a failed POST, or
+// suppressed beyond a per-session reporting cap — is counted here under a closed key. The transport
+// sends the counts with its next report, and the server adds them to its own loss ledger.
 
-export type ClientDiagnosticWriter = (message: string) => void;
+import {
+  CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS,
+  CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX,
+  type ClientBindingOutcome,
+  type ClientBindingReferenceShape,
+  type ClientBindingSurface,
+  type ClientSessionRepairOutcome,
+  type ClientSessionRepairStream,
+  type ClientDiagnosticGitChangeDescription,
+  type ClientMarkdownLayout,
+  type ClientErrorEvidence,
+  type ClientDiagnosticKind,
+  type ClientDiagnosticLossCountKey,
+  type ClientDiagnosticLossCounts,
+  type ClientVoiceDialogueStage,
+  type ClientVoiceCaptureReason,
+  type ClientVoiceCaptureError,
+  type ClientDiagnosticWorkspaceTrustBinding,
+  type ClientDiagnosticCodingHistoryScope,
+  type ClientStageId,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
+
+// Routine desktop-window stage evidence (`useWindowStageEvidence`) rides `meta.stageReport` instead
+// of the `kind`/`gitChangeDescription`/`workspaceTrustBinding` fields above, which all describe a
+// FAILURE report's context. `message` still carries the same human-readable text those call sites
+// always built (so console output is unchanged); the transport below prefers this structured,
+// closed-vocabulary report over the message when building the wire body, because a stage that
+// starts and settles is the ordinary case, never a diagnostic.
+export type ClientDiagnosticStageReport =
+  | { readonly stage: ClientStageId; readonly phase: "started"; readonly ordinal: number }
+  | {
+      readonly stage: ClientStageId;
+      readonly phase: "settled";
+      readonly ordinal: number;
+      readonly durationMs: number;
+    };
+
+// A restored window's binding outcome (#3557), in closed values only: never the reference itself.
+// `meta.correlationId` names the request whose answer decided it.
+export interface ClientDiagnosticBindingReport {
+  readonly surface: ClientBindingSurface;
+  readonly outcome: ClientBindingOutcome;
+  readonly referenceShape: ClientBindingReferenceShape;
+  readonly heuristicFlagged: boolean;
+  // The window's own persisted id; the server logs only its digest.
+  readonly windowRef: string;
+  // Further list loads the verdict depended on, beyond `meta.correlationId`.
+  readonly relatedCorrelationIds?: readonly string[] | undefined;
+  // How many list loads decided the outcome in total, named or not.
+  readonly decidingLoadCount?: number | undefined;
+  // `candidates-offered` only: how many chats the window offered the person, zero included.
+  readonly candidateCount?: number | undefined;
+  // `candidates-offered` only: how many of those offers read alike and show a fingerprint reference.
+  readonly disambiguatedCount?: number | undefined;
+  // A binding found again after redaction, or a person's decision about a chosen chat: that chat's
+  // fingerprint, never its id.
+  readonly targetFingerprint?: string | undefined;
+}
+
+// The outcome of repairing and replaying a read a restarted BFF denied (#3557). `meta.correlationId`
+// is the denied request's id, which the replay reuses; for a stream, its failure streak's id.
+export interface ClientDiagnosticSessionRepairReport {
+  readonly outcome: ClientSessionRepairOutcome;
+  // The local-session repair request every outcome follows; the ingest contract requires it.
+  readonly repairCorrelationId: string;
+  // The closed class of the step that failed: the repair request, or the replay.
+  readonly errorKind?: ActivityLogErrorKind | undefined;
+  // The stream whose failure streak asked for the repair.
+  readonly stream?: ClientSessionRepairStream | undefined;
+}
+
+export interface ClientDiagnosticMeta {
+  readonly correlationId?: string | undefined;
+  readonly parentCorrelationId?: string | undefined;
+  readonly kind?: ClientDiagnosticKind | undefined;
+  // The closed class of the failure, when the caller classified it (`bffRequestErrorKind`).
+  readonly errorKind?: ActivityLogErrorKind | undefined;
+  readonly voiceDialogueStage?: ClientVoiceDialogueStage | undefined;
+  readonly voiceCaptureReason?: ClientVoiceCaptureReason | undefined;
+  readonly voiceCaptureError?: ClientVoiceCaptureError | undefined;
+  readonly markdownLayout?: ClientMarkdownLayout | undefined;
+  readonly moduleLoadFailure?: "git-sync" | "git-history" | undefined;
+  readonly errorEvidence?: ClientErrorEvidence | undefined;
+  readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
+  readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
+  readonly codingIssueOutcome?: "multiple-issues" | undefined;
+  readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
+  readonly stageReport?: ClientDiagnosticStageReport | undefined;
+  readonly bindingReport?: ClientDiagnosticBindingReport | undefined;
+  readonly sessionRepairReport?: ClientDiagnosticSessionRepairReport | undefined;
+}
+
+export type ClientDiagnosticWriter = (message: string, meta?: ClientDiagnosticMeta) => void;
+
+interface PendingDiagnostic {
+  readonly message: string;
+  readonly meta?: ClientDiagnosticMeta | undefined;
+}
 
 // Bounded on purpose: a failing poll loop can raise a diagnostic every tick while the BFF restarts,
 // and an unbounded pre-transport buffer would grow without limit in exactly that case. The oldest
 // records are dropped first — a storm's later entries describe the same fault as its first.
 const PENDING_LIMIT = 100;
 
-const pending: string[] = [];
+const pending: PendingDiagnostic[] = [];
 
-function bufferUntilTransportArrives(message: string): void {
-  pending.push(message);
-  if (pending.length > PENDING_LIMIT) pending.shift();
+// Bounded by construction: one saturating counter per closed key, never a queue of records.
+const lossCounts = new Map<ClientDiagnosticLossCountKey, number>();
+
+/** Count `count` diagnostics this page lost under one closed reason. Never throws. */
+export function recordClientDiagnosticLoss(key: ClientDiagnosticLossCountKey, count = 1): void {
+  if (!Number.isSafeInteger(count) || count <= 0) return;
+  const next = (lossCounts.get(key) ?? 0) + count;
+  lossCounts.set(key, Math.min(CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX, next));
+}
+
+/**
+ * Hands the counted loss to a transport and clears it, or returns undefined when nothing was lost.
+ * A transport whose delivery then fails gives the counts back with `restoreClientDiagnosticLoss`.
+ */
+export function takeClientDiagnosticLoss(): ClientDiagnosticLossCounts | undefined {
+  if (lossCounts.size === 0) return undefined;
+  const counts: Partial<Record<ClientDiagnosticLossCountKey, number>> = {};
+  for (const [key, count] of lossCounts) counts[key] = count;
+  lossCounts.clear();
+  return counts;
+}
+
+/** Returns counts a failed delivery could not hand to the server. */
+export function restoreClientDiagnosticLoss(counts: ClientDiagnosticLossCounts | undefined): void {
+  if (counts === undefined) return;
+  for (const key of CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS) {
+    // An absent key restores nothing: passing its `undefined` on would take the default count.
+    const count = counts[key];
+    if (count !== undefined) recordClientDiagnosticLoss(key, count);
+  }
+}
+
+function bufferUntilTransportArrives(message: string, meta?: ClientDiagnosticMeta): void {
+  pending.push({ message, meta });
+  if (pending.length > PENDING_LIMIT) {
+    pending.shift();
+    recordClientDiagnosticLoss("bufferEvicted");
+  }
 }
 
 let writer: ClientDiagnosticWriter = bufferUntilTransportArrives;
@@ -40,10 +184,17 @@ let writer: ClientDiagnosticWriter = bufferUntilTransportArrives;
  * Report a bounded, already-redacted operator diagnostic.
  *
  * `message` must contain only counts, statuses, closed identifiers and error classes — never a raw
- * error, a file path, a URL with a query string, or anything the user typed.
+ * error, a file path, a URL with a query string, or anything the user typed. `meta.correlationId`,
+ * when supplied, must be the ORIGINAL failed request's id (e.g. a caught `ApiError`'s
+ * `.correlationId`) — never this report's own; a transport re-validates its shape independently
+ * before trusting it for anything (never assume a caller-supplied value is well-formed).
+ *
+ * `meta.stageReport`, when supplied, means `message` is routine stage evidence rather than a
+ * failure: a transport sends the structured report instead of the message, but still writes
+ * `message` to the console unchanged (`useWindowStageEvidence`).
  */
-export function reportClientDiagnostic(message: string): void {
-  writer(message);
+export function reportClientDiagnostic(message: string, meta?: ClientDiagnosticMeta): void {
+  writer(message, meta);
 }
 
 /**
@@ -56,11 +207,32 @@ export function setClientDiagnosticWriter(next: ClientDiagnosticWriter): void {
   writer = next;
   if (pending.length === 0) return;
   const buffered = pending.splice(0, pending.length);
-  for (const message of buffered) next(message);
+  for (const record of buffered) next(record.message, record.meta);
 }
 
 /** Restore the buffering default and discard anything held. Tests use this; product code does not. */
 export function resetClientDiagnosticWriter(): void {
   writer = bufferUntilTransportArrives;
   pending.length = 0;
+  lossCounts.clear();
+}
+
+type SseStreamCloseReason = "connecting" | "closed" | "unknown";
+
+function sseStreamCloseReason(readyState: number | undefined): SseStreamCloseReason {
+  if (readyState === 0) return "connecting";
+  if (readyState === 2) return "closed";
+  return "unknown";
+}
+
+/**
+ * The one text convention an `EventSource.onerror` site reports through `reportClientDiagnostic`.
+ * `install-client-diagnostics.ts` owns the matching parser (`SSE_DIAGNOSTIC_MESSAGE_PATTERN`) and
+ * pins this exact shape in its test; keeping the producer here — in the leaf every SSE consumer
+ * already imports — means one copy of the convention instead of one per consumer. `stream` is a
+ * fixed, code-owned label naming the consumer (never user content).
+ */
+export function sseStreamErrorDiagnostic(stream: string, readyState: number | undefined): string {
+  const readyStateText = readyState === undefined ? "unknown" : String(readyState);
+  return `[keiko] ${stream} sse stream error (kind=sse-error, readyState=${readyStateText}, reason=${sseStreamCloseReason(readyState)})`; // i18n-exempt: developer diagnostic for the activity log, never rendered to a person
 }

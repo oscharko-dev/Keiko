@@ -19,10 +19,8 @@ import {
   type AtlassianHttpBodyRequest,
   type AtlassianHttpBodyResult,
 } from "@oscharko-dev/keiko-connectors";
-import {
-  DEFAULT_ATLASSIAN_SYNC_BOUNDS,
-  type KnowledgeCapsuleId,
-} from "@oscharko-dev/keiko-contracts";
+import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
+import { DEFAULT_ATLASSIAN_SYNC_BOUNDS } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { readConnectorSourceMetadata } from "@oscharko-dev/keiko-local-knowledge";
 import type { RouteContext } from "../../packages/keiko-server/src/routes.js";
 import { openKnowledgeStoreForDeps } from "../../packages/keiko-server/src/local-knowledge-store-open.js";

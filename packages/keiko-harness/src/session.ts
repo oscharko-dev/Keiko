@@ -2,14 +2,16 @@
 // asynchronously, and exposes the run id, config fingerprint, a result Promise, and a
 // cancel() that aborts the single per-run AbortController (ADR-0004 D4, D9).
 
-import { HARNESS_VERSION } from "@oscharko-dev/keiko-contracts";
+import { bindHarnessCatalog, type HarnessCatalogFactory } from "./catalog-runtime.js";
+import { HARNESS_VERSION } from "@oscharko-dev/keiko-contracts/runtime/harness";
 import type { Clock } from "@oscharko-dev/keiko-model-gateway";
 import { systemClock } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import { newCounters, type RunContext } from "./context.js";
+import type { HarnessCompactionPort } from "./context-compaction-port.js";
 import { Emitter } from "./emitter.js";
 import { HARNESS_CODES, toFailure } from "./errors.js";
 import { defaultFingerprinter, defaultIdSource } from "./fingerprint.js";
-import { runLoop } from "./loop.js";
+import { runLoop, terminalFailure } from "./loop.js";
 import type { EventSink, Fingerprinter, IdSource, ModelPort, ToolPort } from "./ports.js";
 import type { HarnessShaperPort } from "./shaper-port.js";
 import { MemoryEventSink } from "./sinks.js";
@@ -30,14 +32,17 @@ export interface AgentConfig {
   readonly model: string;
   readonly workingDirectory: string;
   readonly limits?: Partial<HarnessLimits> | undefined;
-  // Defaults true. Wave 1 never applies a patch regardless; the flag documents intent and
-  // is the seam a future apply-mode issue toggles without changing the harness API.
+  // Defaults true: no productive native catalog is bound or advertised. False permits only
+  // an explicitly injected catalog factory using this run's existing accounting owner.
   readonly dryRun?: boolean | undefined;
 }
 
 export interface HarnessDeps {
   readonly model: ModelPort;
   readonly tools: ToolPort;
+  // Composition supplies genuine authority/handler binding; legacy ToolPort methods are never
+  // an execution fallback. The factory receives this run's counters through a reservation port.
+  readonly bindToolCatalog?: HarnessCatalogFactory;
   readonly sink: EventSink;
   readonly clock?: Clock | undefined;
   readonly idSource?: IdSource | undefined;
@@ -46,6 +51,11 @@ export interface HarnessDeps {
   // shaping and the run is byte-identical to today. The production wiring tier (which already
   // depends on keiko-workflows) injects an implementation backed by the workflow shapers.
   readonly shaperPort?: HarnessShaperPort | undefined;
+  // Optional injected message-history compaction port (KEIKO-0726, #3323). When omitted, the
+  // harness performs no compaction and checkModelCallLimits keeps its original byte-only
+  // hard-fail. The production wiring tier injects an implementation that evicts by measured bytes
+  // alone (packages/keiko-server/src/harness-context-compactor.ts; ADR-0052 D9).
+  readonly compactionPort?: HarnessCompactionPort | undefined;
 }
 
 export interface AgentSession {
@@ -74,6 +84,11 @@ function buildResult(
   sink: MemoryEventSink,
   identity: ResultIdentity,
 ): RunResult {
+  // Gate on outcome via the same terminalFailure rule emitTerminal uses (loop.ts), not on
+  // ctx.failure's mere presence: a raced wall-time deadline callback can write ctx.failure after
+  // the run has already reached "completed"/"cancelled" (see armWallTimeDeadline below), and the
+  // returned RunResult must never contradict its own outcome (KEIKO-0774).
+  const failure = terminalFailure(ctx, outcome);
   return {
     runId: identity.runId,
     fingerprint: identity.fingerprint,
@@ -81,7 +96,7 @@ function buildResult(
     taskType: ctx.taskType,
     ...(ctx.report === undefined ? {} : { report: ctx.report }),
     ...(ctx.patchDiff === undefined ? {} : { patchDiff: ctx.patchDiff }),
-    ...(ctx.failure === undefined ? {} : { failure: ctx.failure }),
+    ...(failure === undefined ? {} : { failure }),
     startedAt: ctx.startedAt,
     finishedAt: ctx.clock.now(),
     events: sink.events(),
@@ -112,6 +127,7 @@ function buildContext(
     startedAt: clock.now(),
     counters: newCounters(),
     ...(deps.shaperPort === undefined ? {} : { shaperPort: deps.shaperPort }),
+    ...(deps.compactionPort === undefined ? {} : { compactionPort: deps.compactionPort }),
     shapedObservations: [],
     compactedToolMessages: new Map(),
     messages: [...plan.messages],
@@ -122,6 +138,8 @@ function buildContext(
     cancelReason: undefined,
     cancelledAtState: undefined,
   };
+  if (!resolveDryRun(config) && deps.bindToolCatalog !== undefined)
+    ctx.catalog = bindHarnessCatalog(ctx, runId, deps.bindToolCatalog);
   return { ctx, memory };
 }
 
@@ -129,16 +147,26 @@ function armWallTimeDeadline(
   ctx: RunContext,
   controller: AbortController,
   clock: Clock,
+  isSettled: () => boolean,
 ): () => void {
   let cleared = false;
   const deadlineController = new AbortController();
-  void clock
+  clock
     .sleep(ctx.limits.maxWallTimeMs, deadlineController.signal)
     .then(() => {
-      if (cleared || controller.signal.aborted) {
+      // isSettled() bails out one tick earlier than `cleared` (set only once clearDeadline, a
+      // `.finally` reaction, actually runs) — see createSession's `settled` flag. This narrows,
+      // but per buildResult/terminalFailure above does not need to eliminate, the window in which
+      // a deadline callback already in flight when runLoop resolves can still write ctx.failure
+      // for a run that has already finished (KEIKO-0774): that write is harmless because
+      // buildResult never surfaces it for a non-failure outcome.
+      if (cleared || isSettled() || controller.signal.aborted) {
         return;
       }
-      ctx.failure = toFailure(HARNESS_CODES.LIMIT_WALL_TIME, "wall-time budget exhausted");
+      // Claim the failure slot only while it is unclaimed: a handler that already recorded why the
+      // run stopped owns that record, and the deadline must not relabel it as budget exhaustion.
+      // The abort below still stops the run either way.
+      ctx.failure ??= toFailure(HARNESS_CODES.LIMIT_WALL_TIME, "wall-time budget exhausted");
       ctx.cancelReason = "maxWallTimeMs exceeded";
       controller.abort("maxWallTimeMs exceeded");
     })
@@ -168,7 +196,11 @@ export function createSession(
   });
   const controller = new AbortController();
   const { ctx, memory } = buildContext(task, config, deps, controller.signal, runId, fingerprint);
-  const clearDeadline = armWallTimeDeadline(ctx, controller, ctx.clock);
+  // Flipped true as soon as runLoop's promise settles — one microtask ahead of clearDeadline
+  // (itself a `.finally` reaction) — so both the wall-time deadline guard and cancel() below have
+  // an earlier "the run is over" signal than `cleared` alone (KEIKO-0774).
+  let settled = false;
+  const clearDeadline = armWallTimeDeadline(ctx, controller, ctx.clock, () => settled);
   ctx.emitter.emit({
     type: "run:started",
     taskType: task.taskType,
@@ -179,13 +211,22 @@ export function createSession(
   // observed at the loop's first abort check, before any model or tool call is made.
   const result = Promise.resolve()
     .then(() => runLoop(ctx))
+    .then((outcome) => {
+      settled = true;
+      return outcome;
+    })
     .finally(clearDeadline)
     .then((outcome) => buildResult(ctx, outcome, memory, { runId, fingerprint }));
   return {
     runId,
     fingerprint,
     result,
+    // A silent no-op once the run has already reached a terminal state — matching cancel()'s
+    // existing best-effort character (it never throws) rather than relabeling a finished run.
     cancel: (reason?: string): void => {
+      if (settled) {
+        return;
+      }
       ctx.cancelReason = reason;
       controller.abort(reason);
     },

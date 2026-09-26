@@ -12,15 +12,17 @@
 
 import { deepRedactStrings } from "@oscharko-dev/keiko-evidence";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import type {
+  TaskWorkspaceDriftMarker,
+  TaskWorkspaceHealth,
+  TaskWorkspaceLifecycleState,
+  WorkspaceEvent,
+  WorkspaceEventType,
+} from "@oscharko-dev/keiko-contracts";
 import {
   TASK_WORKSPACE_SCHEMA_VERSION,
   validateWorkspaceEvent,
-  type TaskWorkspaceDriftMarker,
-  type TaskWorkspaceHealth,
-  type TaskWorkspaceLifecycleState,
-  type WorkspaceEvent,
-  type WorkspaceEventType,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/task-workspace";
 
 export const WORKSPACE_LIFECYCLE_EVIDENCE_KIND = "task-workspace-lifecycle" as const;
 
@@ -30,7 +32,21 @@ export const WORKSPACE_LIFECYCLE_EVIDENCE_KIND = "task-workspace-lifecycle" as c
 // orphan removal). The union is additive — the evidence document stays content-free regardless of which
 // operation produced it.
 export type WorkspaceLifecycleOperation =
-  "provision" | "activate" | "pause" | "resume" | "handoff" | "reconcile" | "repair" | "cleanup";
+  | "provision"
+  | "activate"
+  | "pause"
+  | "resume"
+  | "handoff"
+  | "reconcile"
+  | "repair"
+  | "cleanup"
+  // The read-only health report: its failures must not read as a reconciliation write (#3376).
+  | "health"
+  // The narrow restamp a governed commit Keiko itself executed inside a managed worktree performs on
+  // that row's `lastVerifiedHead` (#3382). Distinct from `reconcile`: it classifies nothing and
+  // writes exactly one field, so an operator filtering `server.log` can tell "Keiko recorded the head
+  // it just wrote" apart from "a pass re-classified this workspace".
+  | "verify-head";
 
 export type WorkspaceLifecycleOutcome =
   | "provisioned"
@@ -62,6 +78,8 @@ export interface WorkspaceLifecycleEvidenceRecord {
   readonly outcome: WorkspaceLifecycleOutcome;
   readonly attempt: number;
   readonly durationMs: number;
+  // Operation-dependent: the managed worktrees the operation touched (0 or 1 for provision,
+  // activate, repair and cleanup) or, for a reconcile, the worktrees the repository listed.
   readonly worktreeCount: number;
   readonly event: WorkspaceEvent;
 }
@@ -110,17 +128,19 @@ export function buildWorkspaceEvent(input: BuildWorkspaceEventInput): WorkspaceE
 
 // Persists ONE lifecycle evidence document, redacting every string leaf first. Best-effort by
 // construction: an evidence-store error must never corrupt the real provisioning result, so it is
-// swallowed and reported as `undefined` (mirrors the command-runner evidence write). Returns the
-// stored location on success.
+// reported through the required body-free observer and returned as `undefined` (mirrors the
+// command-runner evidence write). Returns the stored location on success.
 export function appendWorkspaceLifecycleEvidence(
   store: EvidenceStore,
   record: WorkspaceLifecycleEvidenceRecord,
   redact: (input: string) => string,
+  onPersistFailure: (error: unknown) => void,
 ): string | undefined {
   try {
     const safe = deepRedactStrings(record, redact) as WorkspaceLifecycleEvidenceRecord;
     return store.put(safe.event.eventId, JSON.stringify(safe, null, 2));
-  } catch {
+  } catch (error) {
+    onPersistFailure(error);
     return undefined;
   }
 }

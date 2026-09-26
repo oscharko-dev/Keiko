@@ -36,6 +36,11 @@ export function computeLineStarts(text: string): readonly number[] {
 }
 
 function clamp(value: number, min: number, max: number): number {
+  // KEIKO-0811: NaN fails both comparisons and the doc claims clamp() bounds every input; without
+  // this guard positionToOffset({line:NaN,character:NaN}) leaks NaN back through the caller and
+  // its callers, silently violating the doc comment on lineContentEnd/positionToOffset that says
+  // a malformed editor position can never index outside the text.
+  if (!Number.isFinite(value)) return min;
   if (value < min) return min;
   if (value > max) return max;
   return value;

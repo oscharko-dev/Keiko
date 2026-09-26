@@ -3,7 +3,7 @@ import type {
   MemoryConsolidationJobResponseWire,
   MemoryConsolidationResultWire,
 } from "./memory-consolidation-wire.js";
-import type { MemoryId } from "./memory.js";
+import type { MemoryId } from "./memory-contracts.js";
 
 describe("memory consolidation BFF wire contracts", () => {
   it("keeps review evidence and conflict counts on the shared result wire", () => {

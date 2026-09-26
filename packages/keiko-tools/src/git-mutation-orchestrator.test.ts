@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
-import {
-  GIT_DELIVERY_POLICY_SCHEMA_VERSION,
-  GIT_DELIVERY_SCHEMA_VERSION,
-  type GitDeliveryApprovalRequirement,
-  type GitDeliveryExecutionResult,
-  type GitDeliveryOrgPolicyPack,
-  type GitDeliveryRepoPolicyPack,
-  type GitDeliveryRuleDecision,
-  type GitDeliveryConstraint,
+import type {
+  GitDeliveryApprovalRequirement,
+  GitDeliveryExecutionResult,
+  GitDeliveryOrgPolicyPack,
+  GitDeliveryRepoPolicyPack,
+  GitDeliveryRuleDecision,
+  GitDeliveryConstraint,
 } from "@oscharko-dev/keiko-contracts";
+import { GIT_DELIVERY_POLICY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
+import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import type { GitLocalMutationAdapter } from "./git-mutation-adapter.js";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
 import {
@@ -354,6 +354,29 @@ describe("orchestrator — approval-gated policy", () => {
     );
     expect(result.outcome.status).toBe("succeeded");
     expect(fake.callCount()).toBe(1);
+  });
+
+  // KEIKO-0147 (round 2): the membership check originally landed only in git-merge-gateway, so
+  // this resolver accepted ANY unexpired token even when the decision named specific approvers.
+  // The approver here is deliberately not `alice`, so the pin cannot pass by coincidence.
+  it("blocks when the granting user is not in the decision's requiredApprovers set", async () => {
+    const wrongApprover: GitDeliveryApprovalRequirement = {
+      required: true,
+      approvalTokenHash: "a".repeat(64),
+      approvedByUserId: "mallory",
+      approvedAtMs: 900,
+      expiresAtMs: 5000,
+    };
+    const fake = fakeAdapter(exec("succeeded"));
+    const result = await runGitMutation(
+      request(COMMIT, wrongApprover),
+      deps(fake.adapter, { repoPolicyPack: APPROVAL_GATED }),
+    );
+    expect(result.outcome).toMatchObject({
+      status: "blocked",
+      blockReason: "approver-not-authorized",
+    });
+    expect(fake.callCount()).toBe(0);
   });
 
   it("does not let a valid repo approval override an unsatisfied org constraint", async () => {

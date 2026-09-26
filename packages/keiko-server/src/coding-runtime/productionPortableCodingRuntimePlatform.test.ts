@@ -91,7 +91,6 @@ function macosFixture(receipt: unknown = { result: "passed" }): string {
 describe("production portable runtime platform attestation", () => {
   it("accepts only a signed Windows carrier with a body-free exact receipt", () => {
     const resourceRoot = windowsFixture();
-    vi.stubEnv("SystemRoot", String.raw`D:\Attacker`);
     const runner = recordingRunner(
       commandResult({ stdout: "A".repeat(40) }),
       commandResult({ stdout: "A".repeat(40) }),
@@ -100,8 +99,8 @@ describe("production portable runtime platform attestation", () => {
 
     expect(readWindowsAttestation(resourceRoot, runner.run)).toEqual({ result: "passed" });
     expect(runner.calls).toHaveLength(3);
-    expect(runner.calls[0]?.command).toBe(
-      String.raw`C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe`,
+    expect(runner.calls[0]?.command.toLowerCase()).toMatch(
+      /\\system32\\windowspowershell\\v1\.0\\powershell\.exe$/u,
     );
     expect(runner.calls[0]?.args).toContain("-NoProfile");
     expect(runner.calls[0]?.args).toContain("-NonInteractive");
@@ -114,6 +113,27 @@ describe("production portable runtime platform attestation", () => {
       args: ["--emit"],
       options: { maxBuffer: 65_536, timeout: 10_000, windowsHide: true },
     });
+  });
+
+  it("uses the install-root launcher with a generation-root attestor", () => {
+    const installRoot = mkdtempSync(join(tmpdir(), "keiko-portable-runtime-install-"));
+    roots.push(installRoot);
+    const resourceRoot = windowsFixture();
+    writeFileSync(join(installRoot, "Keiko.exe"), "signed root launcher");
+    rmSync(join(resourceRoot, "Keiko.exe"));
+    const runner = recordingRunner(
+      commandResult({ stdout: "A".repeat(40) }),
+      commandResult({ stdout: "A".repeat(40) }),
+      commandResult({ stdout: '{"result":"passed"}' }),
+    );
+
+    expect(readWindowsAttestation(resourceRoot, runner.run, installRoot)).toEqual({
+      result: "passed",
+    });
+    expect(runner.calls[0]?.args.at(-1)).toBe(realpathSync(join(installRoot, "Keiko.exe")));
+    expect(runner.calls[1]?.args.at(-1)).toBe(
+      realpathSync(join(resourceRoot, "runtime", "native", "keiko-runtime-attestation.exe")),
+    );
   });
 
   it("fails closed for an invalid or differently signed Windows carrier", () => {

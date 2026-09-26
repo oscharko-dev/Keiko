@@ -38,7 +38,7 @@ describe("buildEditorOptions", () => {
   });
 
   it("disables Monaco hover, ambient suggestions, and markdown-capable helper surfaces", () => {
-    expect(options.hover).toEqual({ enabled: false, above: false });
+    expect(options.hover).toEqual({ enabled: "off", above: false });
     expect(options.quickSuggestions).toBe(false);
     expect(options.quickSuggestionsDelay).toBe(0);
     expect(options.suggestOnTriggerCharacters).toBe(true);
@@ -94,18 +94,18 @@ describe("buildEditorOptions", () => {
 
   it("keeps hover disabled by default and when explicitly false (#1201)", () => {
     expect(buildEditorOptions({ readOnly: false, ariaPath: "a.ts" }).hover).toEqual({
-      enabled: false,
+      enabled: "off",
       above: false,
     });
     expect(
       buildEditorOptions({ readOnly: false, ariaPath: "a.ts", hoverEnabled: false }).hover,
-    ).toEqual({ enabled: false, above: false });
+    ).toEqual({ enabled: "off", above: false });
   });
 
   it("enables the hover widget when a hover provider is wired (#1201)", () => {
     expect(
       buildEditorOptions({ readOnly: false, ariaPath: "a.ts", hoverEnabled: true }).hover,
-    ).toEqual({ enabled: true, above: false });
+    ).toEqual({ enabled: "on", above: false });
   });
 
   it("keeps code actions and signature help disabled unless their providers are wired (#2104)", () => {
@@ -158,7 +158,7 @@ describe("buildEditorOptions", () => {
       inlayHintsEnabled: true,
     });
 
-    expect(governed.hover).toEqual({ enabled: true, above: false });
+    expect(governed.hover).toEqual({ enabled: "on", above: false });
     expect(governed.inlineSuggest).toMatchObject({ enabled: true, showToolbar: "never" });
     expect(governed.lightbulb).toEqual({ enabled: "on" });
     expect(governed.parameterHints).toEqual({ enabled: true });

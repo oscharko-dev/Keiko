@@ -1,0 +1,354 @@
+import type {
+  DraftDeliveryBinding,
+  DraftDeliveryRecord,
+} from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import {
+  isVerifiedCommitResult,
+  type VerifiedCommitResult,
+} from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
+import {
+  isGitPullRequestIdentity,
+  type GitPullRequestIdentity,
+} from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
+import { sameGitHubOwnerAndRepo } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { readGitTreeDigest } from "@oscharko-dev/keiko-tools/internal/git-mutation";
+import type { GitPrInspectionResult } from "@oscharko-dev/keiko-tools";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
+import { readVerifiedCommitFacts } from "./verifiedCommitFacts.js";
+import { runtimeGitReadDeps } from "./runtimeGitRead.js";
+import { mintProposalId } from "./proposalId.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import { gitDeliveryActivityErrorKind } from "./execution.js";
+import {
+  DraftDeliveryFailure,
+  type DraftDeliveryDependencies,
+  type DraftDeliveryRunContext,
+} from "./draftDeliveryTypes.js";
+
+const DRAFT_REPOSITORY_DRIFT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.draft-delivery.repository-drift",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "gitDelivery/draftDeliveryFacts.resolveDraftRepository",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    condition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "target-repository-mismatch",
+        "workspace-repository-mismatch",
+        "base-ref-mismatch",
+        "head-equals-base",
+      ],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["git-draft-repository-drift"],
+  proofIds: ["git.draft-delivery.repository-drift.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const DRAFT_REMOTE_OBSERVED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.draft-remote.observed",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitDelivery/draftDeliveryFacts.recordDraftRemoteHeadRead",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    phase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["base-read", "head-read"],
+    },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["observed", "unavailable"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "completed",
+        "already-exists",
+        "base-missing",
+        "head-unpublished",
+        "validation-error",
+        "permission-denied",
+        "not-found",
+        "rate-limited",
+        "provider-unavailable",
+        "unknown",
+        "invalid-response",
+      ],
+    },
+    expectedBaseSha: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    observedBaseSha: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    baseMatchesExpected: { type: "boolean", dataClass: "closed-enum", required: false },
+    expectedHeadSha: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    observedHeadSha: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    headMatchesExpected: { type: "boolean", dataClass: "closed-enum", required: false },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-draft-remote-observation"],
+  proofIds: ["git.draft-remote.observed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+export function draftDeliveryId(prefix: "delivery" | "recovery"): string {
+  return mintProposalId(prefix);
+}
+
+export function assertDraftAuthority(context: DraftDeliveryRunContext): void {
+  if (!context.stillAuthorized() || context.signal?.aborted === true)
+    throw new DraftDeliveryFailure("authority-denied");
+}
+
+// Which of the four identity facts a refused delivery actually failed on. One `remote-drift` code
+// still reaches the model — the four are one class to it — but the condition is on the run's own
+// activity line, because "remote drift" alone was not reconstructible from the log (Coding
+// Workbench run 17, 2026-09-10).
+type DraftRepositoryDrift =
+  | "target-repository-mismatch"
+  | "workspace-repository-mismatch"
+  | "base-ref-mismatch"
+  | "head-equals-base";
+
+function draftRepositoryDrift(
+  target: string,
+  context: DraftDeliveryRunContext,
+): DraftRepositoryDrift | undefined {
+  if (codingWorkbenchRemoteDigest(target) !== context.issueBinding.remoteDigest) {
+    return "target-repository-mismatch";
+  }
+  if (context.repositoryDigest !== context.issueBinding.remoteDigest) {
+    return "workspace-repository-mismatch";
+  }
+  if (context.baseRef !== context.issueBinding.defaultBaseRef) return "base-ref-mismatch";
+  return context.headRef === context.baseRef ? "head-equals-base" : undefined;
+}
+
+export async function resolveDraftRepository(
+  options: DraftDeliveryDependencies,
+  context: DraftDeliveryRunContext,
+): Promise<string> {
+  assertDraftAuthority(context);
+  const target = await options.resolveTarget(context);
+  assertDraftAuthority(context);
+  if (!target.ok) throw new DraftDeliveryFailure(target.reason);
+  const drift = draftRepositoryDrift(target.repository, context);
+  if (drift !== undefined) {
+    (options.execution?.activityLog ?? processServerLogSink()).write(
+      activityLogEvent(
+        DRAFT_REPOSITORY_DRIFT_OPERATION,
+        { level: "warn", correlationId: context.correlationId, errorKind: "conflict" },
+        { runId: context.runId, condition: drift },
+      ),
+    );
+    throw new DraftDeliveryFailure("remote-drift");
+  }
+  return target.repository.toLowerCase();
+}
+
+export function initialDraftBinding(
+  options: DraftDeliveryDependencies,
+  context: DraftDeliveryRunContext,
+  repository: string,
+): DraftDeliveryBinding | undefined {
+  const commit = options.snapshots.get(context.runId)?.verifiedCommitResult;
+  if (
+    !isVerifiedCommitResult(commit) ||
+    commit.status !== "succeeded" ||
+    commit.headSha === undefined
+  )
+    return undefined;
+  if (!commitContextMatches(commit, context)) return undefined;
+  return {
+    runId: context.runId,
+    workspaceDigest: context.workspaceDigest,
+    runtimeAuthorityDigest: context.runtimeAuthorityDigest,
+    envelopeDigest: context.envelopeDigest,
+    remoteDigest: context.repositoryDigest,
+    issueBindingDigest: context.issueBinding.bindingDigest,
+    issueIdDigest: context.issueBinding.issueIdDigest,
+    issueNumber: context.issueBinding.issueNumber,
+    repository,
+    remoteAlias: "origin",
+    baseRef: context.baseRef,
+    baseSha: commit.baseSha,
+    headRef: context.headRef,
+    headSha: commit.headSha,
+    verifiedCommitProposalId: commit.proposalId,
+    recoveryId: draftDeliveryId("recovery"),
+  };
+}
+
+export async function assertDraftLocalCandidate(
+  options: DraftDeliveryDependencies,
+  context: DraftDeliveryRunContext,
+  binding: DraftDeliveryBinding,
+): Promise<void> {
+  const execution = options.execution ?? {};
+  const facts = await readVerifiedCommitFacts(context, execution);
+  const tree = await readGitTreeDigest(runtimeGitReadDeps(context, execution), binding.headSha);
+  assertDraftAuthority(context);
+  if (
+    !facts.clean ||
+    facts.headSha !== binding.headSha ||
+    facts.baseSha !== binding.baseSha ||
+    facts.stagedTreeDigest !== tree
+  )
+    throw new DraftDeliveryFailure("remote-drift");
+}
+
+export interface DraftRemoteState {
+  readonly headSha: string | undefined;
+  readonly pullRequest: GitPullRequestIdentity | undefined;
+}
+
+function remoteCommitEvidence(
+  binding: DraftDeliveryBinding,
+  result: GitPrInspectionResult<string>,
+  phase: "base-read" | "head-read",
+): {
+  readonly expectedBaseSha?: string;
+  readonly observedBaseSha?: string;
+  readonly baseMatchesExpected?: boolean;
+  readonly expectedHeadSha?: string;
+  readonly observedHeadSha?: string;
+  readonly headMatchesExpected?: boolean;
+} {
+  return phase === "base-read"
+    ? {
+        expectedBaseSha: binding.baseSha,
+        ...(result.ok ? { observedBaseSha: result.value } : {}),
+        baseMatchesExpected: result.ok && result.value === binding.baseSha,
+      }
+    : {
+        expectedHeadSha: binding.headSha,
+        ...(result.ok ? { observedHeadSha: result.value } : {}),
+        headMatchesExpected: result.ok && result.value === binding.headSha,
+      };
+}
+
+function recordDraftRemoteHeadRead(
+  options: DraftDeliveryDependencies,
+  context: DraftDeliveryRunContext,
+  binding: DraftDeliveryBinding,
+  result: GitPrInspectionResult<string>,
+  phase: "base-read" | "head-read",
+): void {
+  (options.execution?.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      DRAFT_REMOTE_OBSERVED_OPERATION,
+      {
+        correlationId: context.correlationId,
+        level: result.ok ? "debug" : "warn",
+        ...(result.ok ? {} : { errorKind: gitDeliveryActivityErrorKind(result.reason) }),
+      },
+      {
+        runId: context.runId,
+        phase,
+        state: result.ok ? "observed" : "unavailable",
+        reason: result.ok ? "completed" : result.reason,
+        ...remoteCommitEvidence(binding, result, phase),
+      },
+    ),
+  );
+}
+
+export async function readDraftRemoteState(
+  options: DraftDeliveryDependencies,
+  context: DraftDeliveryRunContext,
+  binding: DraftDeliveryBinding,
+): Promise<DraftRemoteState> {
+  assertDraftAuthority(context);
+  const adapter = options.inspectionAdapter(context);
+  if (adapter === undefined) throw new DraftDeliveryFailure("provider-failed");
+  const input = { ownerAndRepo: binding.repository, headBranchName: binding.headRef };
+  const base = await adapter.readBranchHead({ ...input, headBranchName: binding.baseRef });
+  recordDraftRemoteHeadRead(options, context, binding, base, "base-read");
+  if (!base.ok) throw new DraftDeliveryFailure("provider-failed");
+  if (base.value !== binding.baseSha) throw new DraftDeliveryFailure("remote-drift");
+  const head = await adapter.readBranchHead(input);
+  recordDraftRemoteHeadRead(options, context, binding, head, "head-read");
+  if (!head.ok && head.reason !== "not-found") throw new DraftDeliveryFailure("provider-failed");
+  const list = await adapter.findPullRequestsByHead(input);
+  assertDraftAuthority(context);
+  if (!list.ok) throw new DraftDeliveryFailure("provider-failed");
+  const pullRequest = resolveListedIdentity(list.value, binding);
+  return { headSha: head.ok ? head.value : undefined, pullRequest };
+}
+
+export function prTargetMatches(
+  pr: GitPullRequestIdentity,
+  binding: DraftDeliveryBinding,
+): boolean {
+  return (
+    isGitPullRequestIdentity(pr) &&
+    sameGitHubOwnerAndRepo(pr.repository, binding.repository) &&
+    sameGitHubOwnerAndRepo(pr.headRepository, binding.repository) &&
+    pr.headRef === binding.headRef &&
+    pr.baseRef === binding.baseRef &&
+    pr.baseSha === binding.baseSha &&
+    pr.state === "open" &&
+    pr.isDraft
+  );
+}
+
+/** An unknown PR is never adopted from a matching branch name after an ambiguous create. */
+export function assertKnownDraftIdentity(
+  record: DraftDeliveryRecord,
+  remote: DraftRemoteState,
+): void {
+  if (record.pullRequest === undefined && remote.pullRequest !== undefined)
+    throw new DraftDeliveryFailure("ambiguous-remote");
+  if (
+    record.pullRequest !== undefined &&
+    (remote.pullRequest?.externalId !== record.pullRequest.externalId ||
+      remote.pullRequest.number !== record.pullRequest.number)
+  )
+    throw new DraftDeliveryFailure("remote-drift");
+}
+
+function commitContextMatches(
+  commit: VerifiedCommitResult,
+  context: DraftDeliveryRunContext,
+): boolean {
+  return (
+    commit.runId === context.runId &&
+    commit.envelopeDigest === context.envelopeDigest &&
+    commit.runtimeAuthorityDigest === context.runtimeAuthorityDigest &&
+    commit.workspaceDigest === context.workspaceDigest &&
+    commit.repositoryDigest === context.repositoryDigest &&
+    commit.issueBindingDigest === context.issueBinding.bindingDigest
+  );
+}
+
+function resolveListedIdentity(
+  list: readonly GitPullRequestIdentity[],
+  binding: DraftDeliveryBinding,
+): GitPullRequestIdentity | undefined {
+  if (list.length > 1) throw new DraftDeliveryFailure("ambiguous-remote");
+  const pr = list[0];
+  if (pr !== undefined && !prTargetMatches(pr, binding))
+    throw new DraftDeliveryFailure("remote-drift");
+  return pr;
+}

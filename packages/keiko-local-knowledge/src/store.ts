@@ -16,18 +16,24 @@ import { existsSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
+import type { KnowledgeCapsuleMigration, StoreFingerprint } from "@oscharko-dev/keiko-contracts";
 import {
   KNOWLEDGE_CAPSULE_MIGRATIONS,
   KNOWLEDGE_CAPSULE_TABLES,
   KNOWLEDGE_CAPSULE_V1_TABLES,
   LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-schema";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 // Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: the single 0o700/0o600 hardening pair.
 import {
   chmodIfPresent,
   ensureDirHardened,
   FILE_MODE,
 } from "@oscharko-dev/keiko-security/fs-hardening";
+import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 // Shared SQLite corruption classifier [GEN-DUP-SEMANTIC-019]: the pure classification vocabulary. The
 // KnowledgeStoreError-unwrap hook (see unwrapKnowledgeStoreError) resolves the sealed cause underneath.
 import {
@@ -38,18 +44,79 @@ import {
 
 import { KnowledgeStoreError } from "./errors.js";
 import {
+  emitKnowledgeLogEvent,
+  knowledgeErrorKind,
+  type KnowledgeLogSink,
+} from "./knowledge-log.js";
+import {
   createEncryptedContentCipher,
   PLAINTEXT_CONTENT_CIPHER,
   type StoreContentCipher,
 } from "./store-content-cipher.js";
-import { applyStoreContentEncryption } from "./store-content-encryption.js";
+import {
+  applyStoreContentEncryption,
+  readStoreEncryptionMode,
+} from "./store-content-encryption.js";
 import type { VectorIndexOptions } from "./retrieval/vector-index.js";
+
+const KNOWLEDGE_STORE_QUARANTINED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "knowledge.store.quarantined",
+  category: "diagnostic",
+  owner: "keiko-local-knowledge",
+  emitter: "store.logStoreQuarantine",
+  fields: {
+    reopenState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["reopened", "failed"],
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["knowledge-store-corruption", "knowledge-store-reopen"],
+  proofIds: ["knowledge.store.quarantined.recovery"],
+  releaseImpact: "patch",
+});
+
+const KNOWLEDGE_STORE_ENCRYPTION_REJECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "knowledge.store.encryption-rejected",
+  category: "diagnostic",
+  owner: "keiko-local-knowledge",
+  emitter: "store.openKnowledgeStore",
+  fields: {
+    protectionMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["plaintext-local-file-permissions", "encrypted-key-provider"],
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["knowledge-store-encryption"],
+  proofIds: ["knowledge.store.encryption-rejected.mode"],
+  releaseImpact: "patch",
+});
 
 export interface OpenKnowledgeStoreOptions {
   readonly dbPath: string;
   readonly clock?: () => number;
   readonly protection?: KnowledgeStoreProtectionOptions;
   readonly vectorIndex?: VectorIndexOptions;
+  // Optional content-free activity log. Store recovery is otherwise SILENT: a corrupt database
+  // is renamed aside and a fresh empty one takes its place, and the only trace is a diagnostic
+  // sidecar nobody thinks to look for until after the missing capsules are noticed. Absent →
+  // nothing is written. The database path never reaches a field here.
+  readonly logSink?: KnowledgeLogSink;
 }
 
 export interface KnowledgeStoreKeyProviderContext {
@@ -107,7 +174,9 @@ function applyDurabilityPragmas(db: DatabaseSync): void {
   db.exec("PRAGMA journal_mode = WAL");
   // synchronous=NORMAL: fsyncs on commit boundaries but skips the fsync between WAL
   // appends. Standard durability/latency choice for embedded apps where the user controls
-  // the host process; matches keiko-server's #62 store.
+  // the host process. keiko-server's own store (store/db.ts) does not set this pragma and
+  // relies on SQLite's compiled-in FULL default instead -- that is a separate, deliberately
+  // more conservative choice for the primary UI store, not parity with this one.
   db.exec("PRAGMA synchronous = NORMAL");
   db.exec("PRAGMA foreign_keys = ON");
   db.exec(`PRAGMA busy_timeout = ${String(LK_STORE_BUSY_TIMEOUT_MS)}`);
@@ -147,6 +216,120 @@ function setUserVersion(db: DatabaseSync, version: number): void {
   db.exec(`PRAGMA user_version = ${String(version)}`);
 }
 
+interface MigrationGroup {
+  readonly foreignKeysSuspended: boolean;
+  readonly migrations: readonly KnowledgeCapsuleMigration[];
+}
+
+// Consecutive pending migrations that share the same `requiresForeignKeysSuspended` flag (KEIKO-
+// 0371) apply together in one transaction. With no opted-in migration pending, this produces
+// exactly one "not suspended" group holding every pending migration — byte-identical to the single
+// shared transaction every migration used before the flag existed.
+function groupPendingMigrations(
+  pending: readonly KnowledgeCapsuleMigration[],
+): readonly MigrationGroup[] {
+  const groups: MigrationGroup[] = [];
+  for (const migration of pending) {
+    const foreignKeysSuspended = migration.requiresForeignKeysSuspended === true;
+    const current = groups.at(-1);
+    if (current?.foreignKeysSuspended === foreignKeysSuspended) {
+      groups[groups.length - 1] = {
+        foreignKeysSuspended,
+        migrations: [...current.migrations, migration],
+      };
+    } else {
+      groups.push({ foreignKeysSuspended, migrations: [migration] });
+    }
+  }
+  return groups;
+}
+
+function applyMigrationStatements(
+  db: DatabaseSync,
+  migrations: readonly KnowledgeCapsuleMigration[],
+): void {
+  for (const migration of migrations) {
+    for (const statement of migration.up) {
+      db.exec(statement);
+    }
+    setUserVersion(db, migration.version);
+  }
+}
+
+// The path every migration used before KEIKO-0371: one shared transaction, foreign keys enforced
+// throughout (applyDurabilityPragmas already turned them on before runMigrations ever runs). A
+// migration that does not set `requiresForeignKeysSuspended` still runs exactly this way.
+function applyStandardMigrationGroup(
+  db: DatabaseSync,
+  migrations: readonly KnowledgeCapsuleMigration[],
+): void {
+  db.exec("BEGIN");
+  try {
+    applyMigrationStatements(db, migrations);
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
+interface ForeignKeyViolationRow {
+  readonly table: string;
+}
+
+// `PRAGMA foreign_key_check` never throws by itself — it returns one row per violation found
+// anywhere in the database (empty when clean) — so a suspended-enforcement rebuild must query it
+// explicitly and fail closed itself rather than trust silence.
+function assertNoForeignKeyViolations(db: DatabaseSync): void {
+  const violations = db
+    .prepare("PRAGMA foreign_key_check")
+    .all() as unknown as ForeignKeyViolationRow[];
+  if (violations.length === 0) return;
+  const tables = [...new Set(violations.map((row) => row.table))]
+    .sort((a, b) => a.localeCompare(b))
+    .join(", ");
+  throw new KnowledgeStoreError(
+    `Foreign key check found ${String(violations.length)} violation(s) in [${tables}] after a ` +
+      "foreign-keys-suspended migration rebuild; rolling back rather than committing orphaned rows.",
+  );
+}
+
+// The KEIKO-0371 path: a migration whose `up` DROPs a table that other tables reference with `ON
+// DELETE CASCADE` must not run with foreign keys on, or the DROP cascades and silently deletes
+// every dependent row (SQLite fires FK actions for DROP TABLE exactly like a real DELETE).
+// `PRAGMA foreign_keys` is a documented no-op once a transaction is open, so it is toggled here,
+// before BEGIN and after COMMIT/ROLLBACK — never inside the transaction. `PRAGMA foreign_key_check`
+// runs before COMMIT so a row the rebuild would orphan aborts the migration instead of corrupting
+// the store; the `finally` guarantees enforcement is back on for every later migration group and
+// for the runtime, whether this group succeeded or failed.
+function applySuspendedForeignKeyMigrationGroup(
+  db: DatabaseSync,
+  migrations: readonly KnowledgeCapsuleMigration[],
+): void {
+  db.exec("PRAGMA foreign_keys = OFF");
+  try {
+    db.exec("BEGIN");
+    try {
+      applyMigrationStatements(db, migrations);
+      assertNoForeignKeyViolations(db);
+      db.exec("COMMIT");
+    } catch (error) {
+      db.exec("ROLLBACK");
+      throw error;
+    }
+  } finally {
+    db.exec("PRAGMA foreign_keys = ON");
+  }
+}
+
+function applyMigrationGroup(db: DatabaseSync, group: MigrationGroup): void {
+  if (group.foreignKeysSuspended) {
+    applySuspendedForeignKeyMigrationGroup(db, group.migrations);
+  } else {
+    applyStandardMigrationGroup(db, group.migrations);
+  }
+}
+
 function runMigrations(db: DatabaseSync): void {
   const start = currentUserVersion(db);
   if (start > LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION) {
@@ -158,17 +341,11 @@ function runMigrations(db: DatabaseSync): void {
   }
   const pending = KNOWLEDGE_CAPSULE_MIGRATIONS.filter((m) => m.version > start);
   if (pending.length === 0) return;
-  db.exec("BEGIN");
   try {
-    for (const migration of pending) {
-      for (const statement of migration.up) {
-        db.exec(statement);
-      }
-      setUserVersion(db, migration.version);
+    for (const group of groupPendingMigrations(pending)) {
+      applyMigrationGroup(db, group);
     }
-    db.exec("COMMIT");
   } catch (error) {
-    db.exec("ROLLBACK");
     throw new KnowledgeStoreError(
       `Failed to apply knowledge-capsule migration (start=${String(start)})`,
       { cause: error },
@@ -240,13 +417,13 @@ function quarantineFile(target: string, cause?: unknown): void {
   const ts = new Date().toISOString().replace(/[:.]/g, "-");
   const quarantinedPath = `${target}.corrupt.${ts}`;
   if (existsSync(target)) {
-    renameSync(target, quarantinedPath);
+    atomicPublishRename(target, quarantinedPath, { rename: renameSync });
   }
   const sidecarQuarantinePaths: string[] = [];
   for (const sidecar of [`${target}-wal`, `${target}-shm`]) {
     if (existsSync(sidecar)) {
       const sidecarQuarantinePath = `${sidecar}.corrupt.${ts}`;
-      renameSync(sidecar, sidecarQuarantinePath);
+      atomicPublishRename(sidecar, sidecarQuarantinePath, { rename: renameSync });
       sidecarQuarantinePaths.push(sidecarQuarantinePath);
     }
   }
@@ -321,12 +498,47 @@ function restrictStoreFilePermissions(dbPath: string): void {
   chmodIfPresent(`${dbPath}-shm`, FILE_MODE);
 }
 
+// Both log sites below sit inside a catch block whose contract is that it introduces NO new
+// failure: the quarantine path is mid-recovery, and the encryption path is about to rethrow the
+// cause the caller must see. An injected sink is foreign code — the server's file sink can hit a
+// full disk, and a test double can throw outright — so an unguarded `write` there would replace a
+// diagnosable store failure with a logging failure. Evidence about a failure must never become
+// the failure.
+//
+// The write is NOT swallowed, though: quarantine is the one data-losing decision this file makes,
+// and a lost line about it that nobody can see is how four releases shipped against silence.
+// `emitKnowledgeLogEvent` owns both halves — it never throws at this call site, AND it reports a
+// failing sink once through the sink itself, or through the process warning channel when the sink
+// is dead. Keeping that logic in `knowledge-log.ts` rather than here is deliberate: the same
+// guarantee is owed by the indexing orchestrator and the embedding batcher, and one implementation
+// cannot drift from itself.
+// Recovering from confirmed SQLite corruption trades the old database for an empty one. That is
+// the correct fail-forward, but it is a DATA-LOSING decision, so it is recorded at `error` even
+// when the reopen succeeds — and separately when the reopen does not.
+function logStoreQuarantine(
+  opts: OpenKnowledgeStoreOptions,
+  cause: unknown,
+  reopened: boolean,
+): void {
+  const failureKind = knowledgeErrorKind(cause);
+  emitKnowledgeLogEvent(
+    opts.logSink,
+    activityLogEvent(
+      KNOWLEDGE_STORE_QUARANTINED_OPERATION,
+      { level: "error", errorKind: "read-failed" },
+      { reopenState: reopened ? "reopened" : "failed", failureKind },
+    ),
+  );
+}
+
 export function openKnowledgeStore(opts: OpenKnowledgeStoreOptions): KnowledgeStore {
   ensureDirHardened(dirname(opts.dbPath));
   let attempt = tryOpenAndMigrate(opts.dbPath);
   if (attempt.status === "corrupt") {
-    quarantineFile(opts.dbPath, attempt.cause);
+    const corruptionCause = attempt.cause;
+    quarantineFile(opts.dbPath, corruptionCause);
     attempt = tryOpenAndMigrate(opts.dbPath);
+    logStoreQuarantine(opts, corruptionCause, attempt.status === "ok");
   }
   if (attempt.status !== "ok") {
     throw new KnowledgeStoreError(`Failed to open knowledge-capsule store at ${opts.dbPath}.`, {
@@ -341,9 +553,24 @@ export function openKnowledgeStore(opts: OpenKnowledgeStoreOptions): KnowledgeSt
   let contentCipher: StoreContentCipher;
   try {
     contentCipher = resolveContentCipher(opts, currentUserVersion(db));
-    applyStoreContentEncryption(db, contentCipher);
+    applyStoreContentEncryption(db, contentCipher, opts.logSink);
   } catch (cause) {
     db.close();
+    // Fail-closed: a wrong key or a missing provider for an already-encrypted store. The throw
+    // reaches the caller, but the reason is buried in a cause chain the server surfaces as an
+    // opaque failure — the kind belongs in the log where an operator will actually find it.
+    const failureKind = knowledgeErrorKind(cause);
+    emitKnowledgeLogEvent(
+      opts.logSink,
+      activityLogEvent(
+        KNOWLEDGE_STORE_ENCRYPTION_REJECTED_OPERATION,
+        { level: "error", errorKind: "permission-denied" },
+        {
+          protectionMode: opts.protection?.mode ?? "plaintext-local-file-permissions",
+          failureKind,
+        },
+      ),
+    );
     throw cause;
   }
   restrictStoreFilePermissions(opts.dbPath);
@@ -354,5 +581,89 @@ export function openKnowledgeStore(opts: OpenKnowledgeStoreOptions): KnowledgeSt
       handle.close();
     },
     _internal: { db: handle, now, contentCipher },
+  };
+}
+
+// ─── Store fingerprint (Wave 4a, epic #3233 §6.2) ──────────────────────────────
+//
+// A redacted, point-in-time snapshot of this store's schema/integrity state, embedded in the
+// support bundle manifest's `storeFingerprints` array. Read-only and never throwing: a bundle
+// export must not fail because the store it is reporting on is itself unhealthy — an unreadable
+// signal degrades to its own closed-vocabulary "unavailable" reading rather than aborting the
+// whole fingerprint.
+
+// Genuinely read-only open for a diagnostic snapshot. Unlike `openKnowledgeStore` above, this
+// never runs `runMigrations`, `applyStoreContentEncryption`, or the corruption-quarantine reopen
+// loop — every one of those is a write, and a fingerprint export must not migrate, re-encrypt, or
+// quarantine the very store an operator is trying to inspect. It also returns the raw handle
+// rather than a `KnowledgeStore`, so a caller never needs to reach into `KnowledgeStore._internal`
+// (deliberately package-private, see the doc comment on `KnowledgeStore` above) just to fingerprint
+// a store. `computeStoreFingerprint` below needs only `PRAGMA user_version`/`quick_check` and fixed
+// `SELECT COUNT(*)` reads, none of which need write access.
+export function openKnowledgeStoreReadOnly(dbPath: string): DatabaseSync {
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  // A short busy_timeout (Finding 2) so a reader opened with no wait bound does not spuriously
+  // report the store `open-failed` on an immediate SQLITE_BUSY from a concurrent WAL checkpoint
+  // or schema-changing transaction on a live production server. Connection-local PRAGMA: no write,
+  // does not throw on a `readOnly: true` handle, so the read-only guarantee above is unaffected.
+  db.exec(`PRAGMA busy_timeout = ${String(LK_STORE_BUSY_TIMEOUT_MS)}`);
+  return db;
+}
+
+// Reuses the SAME source list and comparison `runMigrations` already applies (`version` vs the
+// current `PRAGMA user_version`), just inverted: applied, not pending. Migration-group names are
+// `v<version>` — the manifest only carries `version`/`reason`, and `reason` is a free-text
+// sentence unsafe to embed verbatim in a redacted manifest field.
+function migrationsAppliedThrough(schemaVersion: number): readonly string[] {
+  return KNOWLEDGE_CAPSULE_MIGRATIONS.filter((migration) => migration.version <= schemaVersion).map(
+    (migration) => `v${String(migration.version)}`,
+  );
+}
+
+interface RowCount {
+  readonly n: number;
+}
+
+// `KNOWLEDGE_CAPSULE_TABLES` is the same FIXED, package-owned table list `expectedTablesPresent`
+// already validates post-migration — never a dynamic walk of `sqlite_master`, and never a
+// caller-influenced name reaching SQL text.
+function tableRowCountsFor(db: DatabaseSync): Readonly<Record<string, number>> {
+  const counts: Record<string, number> = {};
+  for (const table of KNOWLEDGE_CAPSULE_TABLES) {
+    const row = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as RowCount | undefined;
+    counts[table] = row?.n ?? 0;
+  }
+  return counts;
+}
+
+// A boolean projection of `assertQuickCheckOk`'s pass/fail — never the raw check-output rows,
+// and never throwing: a fingerprint reports a bad quick_check as `false` rather than aborting the
+// whole manifest assembly over one store's integrity.
+function quickCheckOkFor(db: DatabaseSync): boolean {
+  try {
+    assertQuickCheckOk(db);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Computes a {@link StoreFingerprint} for this package's capsule store. Read-only, pure
+ * introspection over an already-open handle — never mutates, never throws.
+ *
+ * `keySource` is intentionally omitted: `KnowledgeStoreKeyProvider` carries only `providerId`,
+ * with no key-resolution-tier concept to report (unlike the vault-backed stores this field also
+ * covers), and this function takes only `db` so it has no provider to ask in any case.
+ */
+export function computeStoreFingerprint(db: DatabaseSync): StoreFingerprint {
+  const schemaVersion = currentUserVersion(db);
+  return {
+    store: "local-knowledge",
+    schemaVersion,
+    migrationsApplied: migrationsAppliedThrough(schemaVersion),
+    tableRowCounts: tableRowCountsFor(db),
+    quickCheckOk: quickCheckOkFor(db),
+    encryptionMode: readStoreEncryptionMode(db),
   };
 }

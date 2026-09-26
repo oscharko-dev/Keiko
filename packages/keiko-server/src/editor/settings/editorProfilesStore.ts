@@ -1,17 +1,19 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
+import type {
+  EditorM11ProfileMutationAction,
+  WorkspaceProfileManifest,
+  WorkspaceProfileRef,
+} from "@oscharko-dev/keiko-contracts";
+import { EDITOR_M7_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
+import { EDITOR_M11_DEFAULT_PROFILE_REF } from "@oscharko-dev/keiko-contracts/runtime/editor-m11-settings";
 import {
-  EDITOR_M7_SCHEMA_VERSION,
-  EDITOR_M11_DEFAULT_PROFILE_REF,
   isReservedWorkspaceProfileDisplayName,
-  isWorkspaceProfileRef,
   validateWorkspaceProfileManifest,
   workspaceProfileDisplayNameKey,
-  type EditorM11ProfileMutationAction,
-  type WorkspaceProfileManifest,
-  type WorkspaceProfileRef,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/workspace-profile";
+import { isWorkspaceProfileRef } from "@oscharko-dev/keiko-contracts/runtime/workspace-contract-primitives";
 
 import { assertNoSymlinkedPathSegments, savePrivateJson } from "../../private-json.js";
 

@@ -1,0 +1,361 @@
+// What the operator diagnostic sink puts on the ACTIVITY LOG line, as opposed to what it prints
+// to stderr. The record is a caller-supplied object, so the question this suite answers is not
+// "does the redactor work" (log-redaction.test.ts owns that) but "which fields of the record are
+// allowed to become log fields at all".
+
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { readPersistedActivityLog } from "../../../tests/support/activity-log-proof.js";
+import {
+  DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+  defaultServerDiagnosticSink,
+  serverDiagnosticFromError,
+} from "./diagnostics-log.js";
+import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import {
+  closeFileServerLogSinks,
+  resetServerLogFailureNotices,
+  SERVER_LOG_LEVEL_ENV,
+} from "./observability/index.js";
+
+function readActivityLine(stateDir: string): Record<string, unknown> {
+  const raw = readPersistedActivityLog(stateDir).trim();
+  const records = raw.split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+  const activity = records.find((record) => record.op === "server.diagnostic.failure");
+  if (activity === undefined) throw new Error("activity record missing");
+  return activity;
+}
+
+describe("diagnostic records on the activity log", () => {
+  let stateDir: string;
+
+  beforeEach(() => {
+    stateDir = mkdtempSync(join(tmpdir(), "keiko-diagnostics-log-"));
+    vi.stubEnv("KEIKO_STATE_DIR", stateDir);
+    // The sink also writes one structured line to stderr; that track is asserted elsewhere.
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    closeFileServerLogSinks();
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("never throws from record() when the Activity Log cannot be opened, and recovers later", () => {
+    resetServerLogFailureNotices();
+    const logsPath = join(stateDir, "logs");
+    writeFileSync(logsPath, "occupied by a regular file");
+    const stderrWrite = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const record: ServerDiagnosticRecord = {
+      correlationId: "req-open-failed",
+      timestamp: "2026-09-18T00:00:00.000Z",
+      operation: "chat.stream",
+      source: "server.top-level-catch",
+      errorClass: "GatewayError",
+      message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+    };
+
+    expect(() => {
+      defaultServerDiagnosticSink.record(record);
+    }).not.toThrow();
+    const notice = stderrWrite.mock.calls
+      .map(([chunk]) => String(chunk))
+      .find((line) => line.includes("server-log.initialize"));
+    expect(notice).toBeDefined();
+    expect(notice).not.toContain(stateDir);
+    expect(JSON.parse(notice ?? "{}")).toMatchObject({
+      op: "server-log.write-failed",
+      correlationId: "req-open-failed",
+      failedOp: "server-log.initialize",
+      writerCapability: "unavailable",
+      loss: "event-dropped",
+    });
+
+    rmSync(logsPath);
+    defaultServerDiagnosticSink.record(record);
+    expect(readActivityLine(stateDir)).toMatchObject({
+      op: "server.diagnostic.failure",
+      correlationId: "req-open-failed",
+    });
+  });
+
+  it("projects the record onto allowlisted fields instead of passing it whole", () => {
+    // `notes` is the shape this defends against: a field the type does not declare today, added
+    // by a future producer or by a merge of request data onto the record. It is short, ASCII and
+    // space-free, so it survives every value guard the log has — the only thing that can stop it
+    // is not offering it to the log in the first place.
+    const record = {
+      correlationId: "req-1f2e3d",
+      timestamp: "2026-08-21T00:00:00.000Z",
+      operation: "chat.stream",
+      source: "server.top-level-catch",
+      errorClass: "GatewayError",
+      message: "Provider verification failed without exposing upstream response details.",
+      code: "GATEWAY_ERROR",
+      occurrenceCount: 2,
+      partialUsage: { promptTokens: 10, completionTokens: 4 },
+      parentCorrelationId: "job-parent-1f2e3d",
+      httpStatus: 503,
+      retryAfterMs: 2_000,
+      deadlineMs: 360_000,
+      notes: "JaneDoe1985",
+    } as ServerDiagnosticRecord & { readonly notes: string };
+
+    defaultServerDiagnosticSink.record(record);
+    const line = readActivityLine(stateDir);
+
+    // The evidence an operator reads, flat on the line and keyed the way every other line is.
+    // `diagnosticSummary` carries the SAME text as `record.message` — that is expected and safe:
+    // `message` is an allowlisted, code-declared summary (never foreign error/provider/customer
+    // text), just projected under a different key so it does not collide with `message` on
+    // `log-redaction.ts`'s `DENIED_FIELD_NAMES`.
+    expect(line).toMatchObject({
+      category: "diagnostic",
+      op: "server.diagnostic.failure",
+      correlationId: "req-1f2e3d",
+      errorKind: "internal",
+      diagnosticOperation: "chat.stream",
+      diagnosticErrorClass: "GatewayError",
+      source: "server.top-level-catch",
+      code: "GATEWAY_ERROR",
+      occurrenceCount: 2,
+      promptTokens: 10,
+      completionTokens: 4,
+      diagnosticSummary: "Provider verification failed without exposing upstream response details.",
+      parentCorrelationId: "job-parent-1f2e3d",
+      httpStatus: 503,
+      retryAfterMs: 2_000,
+      deadlineMs: 360_000,
+      completeness: "complete",
+      loss: "none",
+    });
+
+    // Nothing else. Not the undeclared field, not the whole record under a `record` key, and not
+    // a key literally named `message` (the DENIED_FIELD_NAMES collision this design avoids), nor
+    // the timestamp the envelope already carries as `ts`.
+    expect(line.notes).toBeUndefined();
+    expect(line.record).toBeUndefined();
+    expect(line.message).toBeUndefined();
+    expect(Object.keys(line)).not.toContain("message");
+    expect(line.timestamp).toBeUndefined();
+    expect(JSON.stringify(line)).not.toContain("JaneDoe1985");
+  });
+
+  it("redacts the stderr line the same way as the activity-log line", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const record = {
+      correlationId: "req-1f2e3d",
+      timestamp: "2026-08-21T00:00:00.000Z",
+      operation: "chat.stream",
+      source: "server.top-level-catch",
+      errorClass: "GatewayError",
+      message: "Provider verification failed without exposing upstream response details.",
+      code: "GATEWAY_ERROR",
+      notes: "JaneDoe1985",
+    } as ServerDiagnosticRecord & { readonly notes: string };
+
+    defaultServerDiagnosticSink.record(record);
+    const stderrLine = errorSpy.mock.calls[0]?.[0] as string;
+
+    // The undeclared, caller-supplied field must never reach stderr, exactly as it never reaches
+    // the activity-log file.
+    expect(stderrLine).not.toContain("JaneDoe1985");
+    // The allowlisted summary still makes it through, projected the same way the file line
+    // projects it.
+    expect(stderrLine).toContain(
+      "Provider verification failed without exposing upstream response details.",
+    );
+
+    // A message NOT in the closed vocabulary must not appear verbatim on stderr either. Issue
+    // #3245 narrowed `message` from `string` to the closed `ServerDiagnosticSummary` union, so a
+    // literal like this one no longer type-checks as a `ServerDiagnosticRecord` — deliberately: a
+    // real producer can no longer compile with free text. This test's own subject is the RUNTIME
+    // defence in depth for a record that reaches the sink without having gone through the type
+    // checker (persisted/deserialized data, or a caller that casts around the type, per
+    // `allowlistedSummary`'s own doc comment) — so the cast below is the point of the test, not a
+    // workaround: it simulates exactly that hostile/foreign shape.
+    errorSpy.mockClear();
+    const foreignRecord = {
+      correlationId: "req-foreign",
+      timestamp: "2026-08-21T00:00:00.000Z",
+      operation: "chat.stream",
+      source: "server.top-level-catch",
+      errorClass: "GatewayError",
+      message: "not-in-the-closed-vocabulary",
+    } as unknown as ServerDiagnosticRecord;
+    defaultServerDiagnosticSink.record(foreignRecord);
+    const foreignStderrLine = errorSpy.mock.calls[0]?.[0] as string;
+    expect(foreignStderrLine).not.toContain("not-in-the-closed-vocabulary");
+  });
+
+  // ADR-0173 D3/D11 (g2, g29): a thrown Error carries its stack and its allowlisted summary all
+  // the way to the persisted line, through `serverDiagnosticFromError` → `defaultServerDiagnosticSink`
+  // → the file sink's redaction pass — not merely through `describeError` in isolation.
+  it("wires frames and diagnosticSummary from a thrown Error onto the activity log", () => {
+    function levelThree(): never {
+      throw new Error("boom");
+    }
+    function levelTwo(): void {
+      levelThree();
+    }
+    function levelOne(): void {
+      levelTwo();
+    }
+
+    let caught: unknown;
+    try {
+      levelOne();
+    } catch (error) {
+      caught = error;
+    }
+
+    const record = serverDiagnosticFromError({
+      correlationId: "cid-frames",
+      operation: "unit.frames",
+      source: "unit",
+      error: caught,
+      summary: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+      redact: (message) => message,
+      now: () => 0,
+    });
+    defaultServerDiagnosticSink.record(record);
+    const line = readActivityLine(stateDir);
+
+    expect(line.diagnosticSummary).toBe(DEFAULT_SERVER_DIAGNOSTIC_SUMMARY);
+    expect(Object.keys(line)).not.toContain("message");
+
+    expect(line.frames).toBeInstanceOf(Array);
+    const frames = line.frames as readonly string[];
+    // `levelThree`, `levelTwo`, `levelOne` and the `try` block itself are four distinct call sites
+    // in THIS file, so at least three frames survive the dist/src anchor.
+    expect(frames.length).toBeGreaterThanOrEqual(3);
+    for (const frame of frames) {
+      expect(frame).toMatch(/^packages\/keiko-server\/src\//);
+    }
+  });
+
+  it("omits an absent optional field rather than writing it as null", () => {
+    defaultServerDiagnosticSink.record({
+      correlationId: "req-000001",
+      timestamp: "2026-08-21T00:00:00.000Z",
+      operation: "evidence.persist",
+      source: "server.diagnostic",
+      errorClass: "Error",
+      message: "Audit or evidence persistence failed.",
+      occurrenceCount: 3,
+    });
+    const line = readActivityLine(stateDir);
+
+    expect(line).toMatchObject({
+      op: "server.diagnostic.failure",
+      diagnosticOperation: "evidence.persist",
+      diagnosticErrorClass: "Error",
+      errorKind: "internal",
+      occurrenceCount: 3,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(Object.keys(line)).not.toContain("code");
+    expect(Object.keys(line)).not.toContain("gatewayRequestId");
+    expect(Object.keys(line)).not.toContain("promptTokens");
+    expect(Object.keys(line)).not.toContain("parentCorrelationId");
+    expect(Object.keys(line)).not.toContain("httpStatus");
+    expect(Object.keys(line)).not.toContain("retryAfterMs");
+  });
+
+  it("projects a route operation as a body-free route template", () => {
+    defaultServerDiagnosticSink.record({
+      correlationId: "req-route-1f2e3d",
+      timestamp: "2026-08-21T00:00:00.000Z",
+      operation: "POST /api/gateway/setup",
+      source: "gateway-setup.discovery",
+      errorClass: "GatewayError",
+      message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+    });
+
+    expect(readActivityLine(stateDir)).toMatchObject({
+      op: "server.diagnostic.failure",
+      diagnosticOperation: "POST:/api/gateway/setup",
+      completeness: "complete",
+      loss: "none",
+    });
+  });
+
+  // `parentCorrelationId` is shape-guarded, not merely redacted, the same way `server-log.ts`'s
+  // `applyEnvelopeFields` guards its own `parentCorrelationId` envelope field: a value that does
+  // not fit `isValidCorrelationId`'s shape (`^[A-Za-z0-9._-]{8,128}$`) is dropped outright rather
+  // than written under a marker, even though it is short enough and plain enough to sail through
+  // every generic value guard `log-redaction.ts` applies to an ordinary string field.
+  it("drops a malformed parentCorrelationId instead of writing it through the generic value guards", () => {
+    defaultServerDiagnosticSink.record({
+      correlationId: "req-shape-guard",
+      timestamp: "2026-08-21T00:00:00.000Z",
+      operation: "chat.stream",
+      source: "server.top-level-catch",
+      errorClass: "GatewayError",
+      message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+      parentCorrelationId: "not a real id",
+    });
+    const line = readActivityLine(stateDir);
+
+    expect(Object.keys(line)).not.toContain("parentCorrelationId");
+    expect(JSON.stringify(line)).not.toContain("not a real id");
+  });
+
+  // Raising the threshold is what an operator does to isolate a failure. An unstamped line
+  // defaults to `info`, which is exactly the level `warn` filters out — so the setting meant to
+  // surface failures would have deleted every one of them from the file while stderr kept them.
+  it("stamps the record as an error so a raised threshold cannot filter it out", () => {
+    vi.stubEnv(SERVER_LOG_LEVEL_ENV, "warn");
+
+    defaultServerDiagnosticSink.record({
+      correlationId: "req-abc123",
+      timestamp: "2026-08-21T00:00:00.000Z",
+      operation: "knowledge.index",
+      source: "server.diagnostic",
+      errorClass: "IndexingError",
+      // Issue #3245: this test's subject is level-stamping, not vocabulary content — any closed
+      // member does. Use an existing one rather than adding a case-specific vocabulary entry.
+      message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
+    });
+
+    expect(readActivityLine(stateDir)).toMatchObject({
+      level: "error",
+      category: "diagnostic",
+      op: "server.diagnostic.failure",
+      diagnosticOperation: "knowledge.index",
+    });
+  });
+  it("bounds `code` at the writer: a colon-joined machine token passes, whitespace or over-length is dropped", () => {
+    // #3245 moved per-invocation detail onto `code`; the writer, not each producer, is the bound
+    // (DIAGNOSTIC_CODE_SHAPE): no whitespace, fixed alphabet, at most 256 characters.
+    const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const base = {
+        correlationId: "cid-code-bound-1",
+        timestamp: "2026-08-22T00:00:00.000Z",
+        operation: "unit.code-bound",
+        source: "unit",
+        errorClass: "Error",
+        message: "salience-extraction-diagnostic",
+      } as const;
+      defaultServerDiagnosticSink.record({ ...base, code: "responseFormat=false:kind=x:count=3" });
+      defaultServerDiagnosticSink.record({ ...base, code: "has a space Jane Doe" });
+      defaultServerDiagnosticSink.record({ ...base, code: "x".repeat(300) });
+      const lines = stderrSpy.mock.calls.map(([line]) => line as string);
+      expect(lines).toHaveLength(3);
+      expect(lines[0]).toContain('"code":"responseFormat=false:kind=x:count=3"');
+      expect(lines[1]).not.toContain("Jane Doe");
+      expect(lines[1]).not.toContain('"code"');
+      expect(lines[2]).not.toContain('"code"');
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  });
+});

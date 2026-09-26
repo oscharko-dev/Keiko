@@ -1,17 +1,19 @@
+import type {
+  CodingWorkbenchMode,
+  MemoryAuditEvent,
+  MemoryAuditInitiatorSurface,
+  MemoryId,
+  MemoryRecord,
+  MemoryScope,
+  MemorySourceKind,
+  MemoryStatus,
+} from "@oscharko-dev/keiko-contracts";
+import { CODING_WORKBENCH_MODES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
-  CODING_WORKBENCH_MODES,
   MEMORY_AUDIT_INITIATOR_SURFACES,
   MEMORY_SOURCE_KINDS,
-  type CodingWorkbenchMode,
-  type MemoryAuditEvent,
-  type MemoryAuditInitiatorSurface,
-  type MemoryId,
-  type MemoryRecord,
-  type MemoryScope,
-  type MemorySourceKind,
-  type MemoryStatus,
   validateMemoryScope,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/memory";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { RejectionReason } from "@oscharko-dev/keiko-memory-capture";
 import { auditRunIdFor, RUNID_PREFIX, verifyMemoryAuditHashChain } from "./memory-audit-handler.js";

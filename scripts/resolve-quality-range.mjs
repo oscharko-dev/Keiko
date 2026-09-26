@@ -9,6 +9,10 @@ import { resolveHostExecutable } from "./lib/host-executable.mjs";
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SHA = /^[0-9a-f]{40}$/u;
 const ZERO_SHA = "0".repeat(40);
+// Plain ref names only: a leading dash would be parsed by git as an OPTION (e.g.
+// --fork-point) instead of a ref, and whitespace/control characters have no place in a
+// workflow-provided ref — fail closed on anything but a boring ref shape.
+const SAFE_REF = /^[A-Za-z0-9](?:[A-Za-z0-9._/-]*[A-Za-z0-9])?$/u;
 
 function repositoryGit(args) {
   return execFileSync(resolveHostExecutable("git"), args, {
@@ -26,12 +30,33 @@ function requireImmutableSha(value, message) {
   return value;
 }
 
-function candidateBase(base, head, eventName, git) {
+function candidateBase(base, head, eventName, git, fallbackBaseRef) {
   if (base !== ZERO_SHA && SHA.test(base ?? "")) return base;
+  if (eventName === "push") {
+    // A push that creates a branch delivers the zero SHA as its before-pointer. Falling back
+    // to the repository root here scanned the ENTIRE history (918 commits on release/0.3.9)
+    // and failed the gate on long-accepted historical fixtures, while bounding at head^ would
+    // skip earlier commits of a multi-commit branch creation — a secret introduced and deleted
+    // again before the head would escape the promised history inspection. The merge-base with
+    // the workflow-provided fallback ref (dev) precedes every commit the branch creation
+    // introduced; without that ref this fails closed rather than guessing a narrower range.
+    if (fallbackBaseRef === undefined || fallbackBaseRef === "") {
+      throw new Error(
+        "a branch-creating push needs QUALITY_FALLBACK_BASE_REF to bound its scan range",
+      );
+    }
+    if (!SAFE_REF.test(fallbackBaseRef)) {
+      throw new Error("QUALITY_FALLBACK_BASE_REF must be a plain ref name");
+    }
+    return requireImmutableSha(
+      git(["merge-base", fallbackBaseRef, head]).split("\n")[0],
+      "new-branch push base could not be resolved against the fallback base ref",
+    );
+  }
   if (eventName === "workflow_dispatch") {
     return requireImmutableSha(
       git(["rev-parse", "--verify", `${head}^`]),
-      "manual run base could not be resolved to the selected head's parent",
+      "run base could not be resolved to the head's parent",
     );
   }
   return requireImmutableSha(
@@ -40,10 +65,13 @@ function candidateBase(base, head, eventName, git) {
   );
 }
 
-export function resolveQualityRange({ base, head, eventName }, git = repositoryGit) {
+export function resolveQualityRange(
+  { base, head, eventName, fallbackBaseRef },
+  git = repositoryGit,
+) {
   const immutableHead = requireImmutableSha(head, "head must be an immutable commit SHA");
   requireCommit(immutableHead, git);
-  const candidate = candidateBase(base, immutableHead, eventName, git);
+  const candidate = candidateBase(base, immutableHead, eventName, git, fallbackBaseRef);
   requireCommit(candidate, git);
   const resolvedBase = requireImmutableSha(
     git(["merge-base", candidate, immutableHead]).split("\n")[0],
@@ -73,6 +101,7 @@ export function main(
       {
         base: env.QUALITY_BASE_SHA,
         eventName: env.GITHUB_EVENT_NAME,
+        fallbackBaseRef: env.QUALITY_FALLBACK_BASE_REF,
         head: env.QUALITY_HEAD_SHA,
       },
       git,

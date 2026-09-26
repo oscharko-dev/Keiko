@@ -18,18 +18,45 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
 import { basename, resolve } from "node:path";
 import { Readable } from "node:stream";
+import type {
+  EditorAgentAction,
+  EditorAgentActionDenyReason,
+  EditorAgentActionPolicyDecision,
+  EditorAgentActionResult,
+  EditorAgentActionResultRequest,
+  EditorAgentBridgeActionRequest,
+  EditorAgentBridgeSnapshotRequest,
+  EditorAgentConflictCode,
+  EditorAgentEvent,
+  EditorAgentGitAspect,
+  EditorAgentQueryGitBlame,
+  EditorAgentQueryGitData,
+  EditorAgentQueryGitDiff,
+  EditorAgentQueryGitDiffFile,
+  EditorAgentQueryGitDiffLayer,
+  EditorAgentQueryGitMachineReason,
+  EditorAgentQueryGitOmission,
+  EditorAgentQueryGitOmissionReason,
+  EditorAgentQueryGitStatus,
+  GitEditorDiffScope,
+  GitEditorDiffFile,
+  GitRepositoryStatusResponse,
+  EditorAgentFailureCode,
+  EditorAgentSessionSnapshot,
+  EditorAgentSessionsRequest,
+  EditorAgentSnapshotRequest,
+  EditorAgentSnapshotTextMode,
+  CodingWorkbenchMode,
+  LanguageRange,
+  WorkspaceTrustLevel,
+} from "@oscharko-dev/keiko-contracts";
 import {
   EDITOR_AGENT_BRIDGE_DECISION_CAPABILITY_BYTES,
-  EDITOR_AGENT_ACTION_APPROVAL_RISK,
-  EDITOR_AGENT_WORKBENCH_ACTION_CLASS,
   EDITOR_AGENT_SCHEMA_VERSION,
   EDITOR_AGENT_DIAGNOSTIC_MESSAGE_MAX_CHARS,
   EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,
   EDITOR_AGENT_SESSION_ID_MAX_BYTES,
   EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES,
-  EDITOR_AGENT_NAVIGATION_DOCUMENT_MAX_BYTES,
-  classifyEditorAgentAction,
-  composeEditorAgentActionPolicyDecision,
   editorAgentWritePreconditionError,
   isContainedAgentPath,
   isEditorAgentAction,
@@ -40,48 +67,25 @@ import {
   isEditorAgentWriteActionType,
   parseEditorAgentActionsPostBody,
   parseEditorAgentSnapshotRequest,
-  validateCodingWorkbenchAuthorityEnvelope,
   validateAgentTextEdits,
-  type EditorAgentAction,
-  type EditorAgentActionDenyReason,
-  type EditorAgentActionPolicyDecision,
-  type EditorAgentActionResult,
-  type EditorAgentActionResultRequest,
-  type EditorAgentBridgeActionRequest,
-  type EditorAgentBridgeSnapshotRequest,
-  type EditorAgentConflictCode,
-  type EditorAgentEvent,
-  type EditorAgentGitAspect,
-  type EditorAgentQueryGitBlame,
-  type EditorAgentQueryGitData,
-  type EditorAgentQueryGitDiff,
-  type EditorAgentQueryGitDiffFile,
-  type EditorAgentQueryGitDiffLayer,
-  type EditorAgentQueryGitMachineReason,
-  type EditorAgentQueryGitOmission,
-  type EditorAgentQueryGitOmissionReason,
-  type EditorAgentQueryGitStatus,
-  type GitEditorDiffScope,
   EDITOR_AGENT_QUERY_GIT_SCHEMA_VERSION,
   parseEditorAgentQueryGitData,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import {
+  EDITOR_AGENT_ACTION_APPROVAL_RISK,
+  EDITOR_AGENT_WORKBENCH_ACTION_CLASS,
+  classifyEditorAgentAction,
+  composeEditorAgentActionPolicyDecision,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent-governance";
+import {
   GIT_AGENT_CONTEXT_MAX_BLAME_LINES,
   GIT_AGENT_CONTEXT_MAX_FILES,
   GIT_AGENT_CONTEXT_MAX_HUNKS,
   GIT_AGENT_CONTEXT_MAX_RESULT_BYTES,
   parseGitEditorBlameResponse,
   parseGitEditorDiffResponse,
-  validateGitRepositoryStatusResponse,
-  type GitEditorDiffFile,
-  type GitRepositoryStatusResponse,
-  type EditorAgentFailureCode,
-  type EditorAgentSessionSnapshot,
-  type EditorAgentSessionsRequest,
-  type EditorAgentSnapshotRequest,
-  type EditorAgentSnapshotTextMode,
-  type CodingWorkbenchMode,
-  type LanguageRange,
-  type WorkspaceTrustLevel,
-} from "@oscharko-dev/keiko-contracts";
+} from "@oscharko-dev/keiko-contracts/runtime/git-editor";
+import { validateGitRepositoryStatusResponse } from "@oscharko-dev/keiko-contracts/runtime/git-repository";
 import {
   PatchApplyError,
   PatchValidationError,
@@ -96,13 +100,14 @@ import {
   type WorkspaceWriter,
 } from "@oscharko-dev/keiko-tools";
 import {
-  detectWorkspaceAt,
-  containedRealPathInfo,
   isDenied,
-  readWorkspaceFile,
+  type WorkspaceFs,
   type WorkspaceInfo,
+  containedRealPathInfo,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { workspaceRootAccessOrUndefined } from "../task-workspace/workspace-root-access.js";
+import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   errorBody,
   STREAMING,
@@ -110,7 +115,8 @@ import {
   type RouteContext,
   type RouteResult,
 } from "../routes.js";
-import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "../sse.js";
+import { readyMessage, SSE_HEADERS, startSseHeartbeat } from "../sse.js";
+import { writeOrDestroy } from "../sse-write.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { readJsonObject } from "../files.js";
 import { handleGitStatus, handleGitStructuredDiff, handleGitBlame } from "../gitRoutes.js";
@@ -120,7 +126,6 @@ import {
   handleEditorWorkspaceSearch,
   handleEditorWorkspaceSymbols,
 } from "./workspaceSearchRoutes.js";
-import type { AutonomousDeliveryConfirmation } from "../coding-runtime/autonomousDeliveryPolicy.js";
 import type { CodingRuntimeEditorMutationLeaseRequest } from "../coding-runtime/codingRuntimeEditorMutationLeaseCoordinator.js";
 import {
   editorAgentAuthorityRegistry,
@@ -136,22 +141,28 @@ import {
 } from "./agentActionAudit.js";
 import {
   EDITOR_AGENT_ROOT_BOUNDARY_ERROR_CODE,
-  editorAgentPathBoundaryReason,
+  editorAgentRootContainmentReason,
   isEditorAgentRootBoundaryDenial,
   resolveEditorAgentActionRoot,
+  resolveEditorAgentContainmentPort,
   resolveEditorAgentSessionRoot,
   type EditorAgentRootBoundaryReason,
+  serverResolvedDocumentText,
 } from "./agentRootBoundary.js";
 
 type EditorAgentRouteDeps = Pick<
   UiHandlerDeps,
-  | "autonomousDeliveryApprovalStore"
   | "autonomousDeliveryDeploymentCeiling"
   | "runtimeMutationLease"
+  | "workspaceRootAccessResolver"
   | "workspaceScriptTrust"
 > & { readonly store?: UiHandlerDeps["store"] | undefined };
 
 type EditorAgentActionRouteDeps = UiHandlerDeps;
+
+// The helpers both route families share (root binding, path containment, policy decisions) accept
+// either dependency shape; naming the union once keeps their signatures in step.
+type EditorAgentEitherRouteDeps = EditorAgentActionRouteDeps | EditorAgentRouteDeps;
 
 const MAX_AGENT_BODY_BYTES = 1_048_576;
 const DEFAULT_SNAPSHOT_TEXT_BUDGET_BYTES = EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES;
@@ -365,6 +376,7 @@ function textEditsConflict(action: EditorAgentAction): EditorAgentActionResult |
 function workspaceInfoFromRoot(root: string): WorkspaceInfo {
   return {
     root,
+    selectedRoot: root,
     name: undefined,
     version: undefined,
     testFramework: "unknown",
@@ -694,11 +706,12 @@ function changesetConflict(
 function inspectChangeset(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
+  fs: WorkspaceFs = nodeWorkspaceFs,
 ): ChangesetInspection {
   const inspection = inspectPatch(
     workspaceInfoFromRoot(snapshot.workspaceRoot),
     action.changeset?.patch ?? "",
-    { fs: nodeWorkspaceFs },
+    { fs },
   );
   const validation = inspection.validation;
   const issues = firstChangesetIssueGroup(action, snapshot, inspection);
@@ -915,7 +928,13 @@ function buildEmitAction(
     return {
       ...browserAction,
       requiresReview,
-      changeset: { ...action.changeset, prepared: changesetInspection.prepared },
+      changeset: {
+        ...action.changeset,
+        // Review the same validated spelling the write path applies. Raw model hunk counts
+        // can otherwise make the browser consume a subsequent file header as source text.
+        patch: changesetInspection.validation.normalizedDiff ?? action.changeset.patch,
+        prepared: changesetInspection.prepared,
+      },
     };
   }
   if (action.type !== "applyPatch") return browserAction;
@@ -1059,14 +1078,18 @@ function structuralWriteConflict(
 function inspectAdmissionAction(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
+  fs: WorkspaceFs = nodeWorkspaceFs,
 ): AdmissionInspection {
   if (action.type === "applyChangeset") {
-    return { changeset: inspectChangeset(action, snapshot) };
+    return { changeset: inspectChangeset(action, snapshot, fs) };
   }
   if (action.type === "applyPatch") {
+    // The SAME port the changeset branch above uses. Hardcoding the node port here inspected a
+    // managed task worktree under the user-workspace rules and refused every path inside it
+    // (cursor review, PR #3381) — see `admissionInspectionFs`.
     return {
       patch: inspectPatch(workspaceInfoFromRoot(snapshot.workspaceRoot), action.patch ?? "", {
-        fs: nodeWorkspaceFs,
+        fs,
       }),
     };
   }
@@ -1080,6 +1103,7 @@ function inspectAdmissionAction(
 function preflight(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot | undefined,
+  fs: WorkspaceFs = nodeWorkspaceFs,
 ): PreflightOutcome {
   if (snapshot === undefined) {
     return {
@@ -1089,7 +1113,7 @@ function preflight(
   }
   const targetConflict = activeBufferTargetConflict(action, snapshot);
   if (targetConflict !== null) return { ok: false, result: targetConflict };
-  const inspection = inspectAdmissionAction(action, snapshot);
+  const inspection = inspectAdmissionAction(action, snapshot, fs);
   const structural = structuralWriteConflict(action, snapshot, inspection);
   if (structural !== null) return { ok: false, result: structural };
   if (!editorAgentRegistry.hasLiveBridge(action.sessionId)) {
@@ -1191,7 +1215,12 @@ function registerBridgeSnapshot(
 ): RouteResult {
   const root = resolveEditorAgentSessionRoot(request.snapshot, deps?.store);
   if (!root.ok) return rootBoundaryError(root.reason);
-  const pathReason = editorAgentPathBoundaryReason(root.root, snapshotRootPaths(request.snapshot));
+  const pathReason = editorAgentRootContainmentReason(
+    root.root,
+    snapshotRootPaths(request.snapshot),
+    deps,
+    shapedCorrelationId(request.snapshot.sessionId),
+  );
   if (pathReason !== null) return rootBoundaryError(pathReason);
   const snapshot =
     root.root.workspaceRoot === request.snapshot.workspaceRoot
@@ -1292,88 +1321,8 @@ export async function handleEditorAgentSnapshot(
   };
 }
 
-const EDITOR_AGENT_AUTHORITY_REQUEST_KEYS = new Set([
-  "schemaVersion",
-  "authorityEnvelope",
-  "confirmation",
-]);
-const EDITOR_AGENT_AUTHORITY_CONFIRMATION_KEYS = new Set([
-  "confirmed",
-  "approvalProofDigest",
-  "confirmedAt",
-]);
-
 function editorAgentDeploymentCeiling(deps: EditorAgentRouteDeps | undefined): CodingWorkbenchMode {
   return deps?.autonomousDeliveryDeploymentCeiling ?? "governed-assist";
-}
-
-function parseAuthorityConfirmation(value: unknown): AutonomousDeliveryConfirmation | undefined {
-  if (
-    !isRecord(value) ||
-    !Object.keys(value).every((key) => EDITOR_AGENT_AUTHORITY_CONFIRMATION_KEYS.has(key)) ||
-    value.confirmed !== true ||
-    typeof value.approvalProofDigest !== "string" ||
-    typeof value.confirmedAt !== "string"
-  ) {
-    return undefined;
-  }
-  return {
-    confirmed: true,
-    approvalProofDigest: value.approvalProofDigest,
-    confirmedAt: value.confirmedAt,
-  };
-}
-
-interface ParsedEditorAgentAuthorityRequest {
-  readonly envelope: unknown;
-  readonly confirmation: AutonomousDeliveryConfirmation;
-}
-
-function parseAuthorityRequest(
-  body: Record<string, unknown>,
-): ParsedEditorAgentAuthorityRequest | undefined {
-  const confirmation = parseAuthorityConfirmation(body.confirmation);
-  if (
-    body.schemaVersion !== EDITOR_AGENT_SCHEMA_VERSION ||
-    !Object.keys(body).every((key) => EDITOR_AGENT_AUTHORITY_REQUEST_KEYS.has(key)) ||
-    body.authorityEnvelope === undefined ||
-    confirmation === undefined
-  ) {
-    return undefined;
-  }
-  return { envelope: body.authorityEnvelope, confirmation };
-}
-
-export async function handleEditorAgentAuthority(
-  ctx: RouteContext,
-  deps?: EditorAgentRouteDeps,
-): Promise<RouteResult> {
-  const body = await readJsonObject(ctx.req, MAX_AGENT_BODY_BYTES);
-  if (isRouteResult(body)) return body;
-  const request = parseAuthorityRequest(body);
-  if (request === undefined) {
-    return { status: 400, body: errorBody("INVALID_REQUEST", "Authority request is invalid.") };
-  }
-  const parsed = validateCodingWorkbenchAuthorityEnvelope(request.envelope);
-  const ceiling = editorAgentDeploymentCeiling(deps);
-  const approvalStore = deps?.autonomousDeliveryApprovalStore;
-  const nowIso = new Date().toISOString();
-  if (
-    !parsed.ok ||
-    parsed.value.deploymentCeiling !== ceiling ||
-    approvalStore?.consume(parsed.value, request.confirmation, nowIso) !== true
-  ) {
-    return {
-      status: 403,
-      body: errorBody("AUTHORITY_PROOF_INVALID", "Authority confirmation was not accepted."),
-    };
-  }
-  const registration = editorAgentAuthorityRegistry.register(parsed.value, ceiling, nowIso);
-  if (!registration.ok) {
-    const code = registration.reason === "expired" ? "AUTHORITY_EXPIRED" : "AUTHORITY_INVALID";
-    return { status: 403, body: errorBody(code, "The Authority Envelope was not accepted.") };
-  }
-  return { status: 200, body: { authorityRef: registration.authorityRef } };
 }
 
 function resolveNonMutationTargetPath(
@@ -1426,9 +1375,26 @@ function serverResolvedPathIssue(path: string): EditorAgentActionDenyReason | nu
   return isDenied(path) ? "denied-sensitive-path" : null;
 }
 
+// The correlation the containment port's own denial line is recorded under. A governed action
+// carries its run id; a bridge snapshot has only its session id. Both are shape-checked, so an
+// unshaped value is omitted (and logged as UNKNOWN_CORRELATION_ID) rather than smuggled onto the
+// activity log.
+function shapedCorrelationId(candidate: string | undefined): string | undefined {
+  return candidate !== undefined && isValidCorrelationId(candidate) ? candidate : undefined;
+}
+
+function actionCorrelationId(action: EditorAgentAction): string | undefined {
+  return shapedCorrelationId(action.authorityRef?.runId) ?? shapedCorrelationId(action.actionId);
+}
+
+// The filesystem port the root's own authority resolved: the owned-root port for a proven managed
+// task worktree, the plain node port for an ordinary root. A refused root keeps the previous
+// fail-closed outcome at this seam (the git query is denied) but no longer silently borrows the
+// node port to get there.
 function queryGitPathIssue(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
+  deps: EditorAgentActionRouteDeps | undefined,
 ): EditorAgentActionDenyReason | null {
   if (action.type !== "queryGit" || action.queryGit === undefined) return null;
   const queryPath = normalizeWorkspaceRelativePath(action.queryGit.path);
@@ -1436,9 +1402,15 @@ function queryGitPathIssue(
   if (targetPath !== undefined && normalizeWorkspaceRelativePath(targetPath) !== queryPath) {
     return "workspace-boundary-escape";
   }
+  const port = resolveEditorAgentContainmentPort(
+    deps,
+    snapshot.workspaceRoot,
+    actionCorrelationId(action),
+  );
+  if (!port.ok) return port.reason;
   try {
     containedRealPathInfo(
-      nodeWorkspaceFs,
+      port.fs,
       snapshot.workspaceRoot,
       resolve(snapshot.workspaceRoot, queryPath),
     );
@@ -1451,6 +1423,7 @@ function queryGitPathIssue(
 function serverResolvedPathIssues(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
+  deps: EditorAgentActionRouteDeps | undefined,
 ): EditorAgentActionDenyReason | null {
   const paths = serverResolvedActionPaths(action);
   for (const path of paths) {
@@ -1458,10 +1431,14 @@ function serverResolvedPathIssues(
     const issue = serverResolvedPathIssue(path);
     if (issue !== null) return issue;
   }
-  return queryGitPathIssue(action, snapshot);
+  return queryGitPathIssue(action, snapshot, deps);
 }
 
-function serverActionContext(body: unknown, path: string): RouteContext {
+// `correlationId` is the ACTION's own id, not a request id: these contexts are synthesized to run
+// an editor-agent action's server-resolved step in-process, and the action is the operation an
+// operator reconstructs. `executeServerResolvedAction` already keys its diagnostics on the same
+// value, so a delegated route's activity-log lines now join to the identical id (AGENTS.md §8).
+function serverActionContext(body: unknown, path: string, actionId: string): RouteContext {
   const req = Readable.from([
     Buffer.from(JSON.stringify(body), "utf8"),
   ]) as unknown as IncomingMessage;
@@ -1470,7 +1447,13 @@ function serverActionContext(body: unknown, path: string): RouteContext {
     writableEnded: false,
     on: (): typeof res => res,
   } as unknown as ServerResponse;
-  return { req, res, params: {}, url: new URL(`http://127.0.0.1${path}`) };
+  return {
+    req,
+    res,
+    params: {},
+    url: new URL(`http://127.0.0.1${path}`),
+    correlationId: actionId,
+  };
 }
 
 function actionAbortSignal(ctx: RouteContext): AbortSignal {
@@ -1487,21 +1470,6 @@ function actionAbortSignal(ctx: RouteContext): AbortSignal {
     controller.abort();
   }
   return controller.signal;
-}
-
-function serverResolvedDocumentText(
-  snapshot: EditorAgentSessionSnapshot,
-  path: string,
-  text: string | undefined,
-): string {
-  if (text !== undefined) return text;
-  const workspace = detectWorkspaceAt(snapshot.workspaceRoot, nodeWorkspaceFs);
-  return readWorkspaceFile(
-    workspace,
-    path,
-    { maxBytes: EDITOR_AGENT_NAVIGATION_DOCUMENT_MAX_BYTES },
-    nodeWorkspaceFs,
-  ).text;
 }
 
 function optionalTargetPath(path: string | null | undefined): readonly string[] {
@@ -1533,10 +1501,14 @@ function denyByAuthority(
   };
 }
 
-function authorityDenyReason(
+// Exported for direct regression coverage (mirrors verificationAuthorityDenyReason, Issue #2723):
+// otherwise only reachable by forcing a real authority resolution failure (expiry, revocation, or
+// budget exhaustion) through the full governed action route.
+export function authorityDenyReason(
   resolution: Extract<EditorAgentAuthorityResolution, { readonly ok: false }>,
 ): EditorAgentActionDenyReason {
   if (resolution.reason === "expired") return "authority-expired";
+  if (resolution.reason === "revoked") return "authority-revoked";
   return resolution.reason === "budget-exceeded"
     ? "authority-budget-exceeded"
     : "authority-invalid";
@@ -1610,7 +1582,12 @@ function reserveActionAuthority(
   }
   const rooted = resolveEditorAgentActionRoot(snapshot, action.rootBinding, deps?.store);
   if (!rooted.ok) return denyByAuthority(decision, rooted.reason);
-  const pathReason = editorAgentPathBoundaryReason(rooted.root, actionRootPaths(action, snapshot));
+  const pathReason = editorAgentRootContainmentReason(
+    rooted.root,
+    actionRootPaths(action, snapshot),
+    deps,
+    actionCorrelationId(action),
+  );
   if (pathReason !== null) return denyByAuthority(decision, pathReason);
   const reservation = editorAgentAuthorityRegistry.reserveForAction(
     action.authorityRef,
@@ -1645,7 +1622,12 @@ function validateActionAuthority(
   }
   const rooted = resolveEditorAgentActionRoot(snapshot, action.rootBinding, deps?.store);
   if (!rooted.ok) return denyByAuthority(decision, rooted.reason);
-  const pathReason = editorAgentPathBoundaryReason(rooted.root, actionRootPaths(action, snapshot));
+  const pathReason = editorAgentRootContainmentReason(
+    rooted.root,
+    actionRootPaths(action, snapshot),
+    deps,
+    actionCorrelationId(action),
+  );
   if (pathReason !== null) return denyByAuthority(decision, pathReason);
   const resolution = editorAgentAuthorityRegistry.resolveForAction(
     action.authorityRef,
@@ -1698,7 +1680,7 @@ function auditTargetFields(
 ):
   | { readonly targetPath: string | null }
   | { readonly targetBasename: string; readonly targetPathHash: string }
-  | Record<never, never> {
+  | Partial<Record<"targetPath" | "targetBasename" | "targetPathHash", never>> {
   if (runtimeOrigin) return {};
   if (isEditorAgentRootBoundaryDenial(decision.denyReason)) return {};
   if (queryPath !== undefined) {
@@ -1810,13 +1792,14 @@ function projectChangeset(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
   validation: PatchValidation,
+  fs: WorkspaceFs = nodeWorkspaceFs,
 ): ChangesetProjectionOutcome {
   const selectedPaths = selectedChangesetPaths(action);
   try {
     const diff = projectValidatedPatch(validation, selectedPaths);
     const projected = projectedAction(action, diff, selectedPaths);
     const projectedValidation = validatePatch(workspaceInfoFromRoot(snapshot.workspaceRoot), diff, {
-      fs: nodeWorkspaceFs,
+      fs,
     });
     const issues = projectedChangesetIssues(projected, projectedValidation);
     return issues.length === 0
@@ -1855,11 +1838,13 @@ function applyChangeset(
   if (!claimRuntimeMutation(runtimeMutation, deps)) {
     return runtimeMutationLeaseDeniedResult(action);
   }
+  const fs = changesetWorkspaceFs(snapshot.workspaceRoot, runtimeMutation, deps);
+  if (fs === undefined) return runtimeMutationLeaseDeniedResult(action);
   try {
     applyPatch(workspaceInfoFromRoot(snapshot.workspaceRoot), projection.diff, {
       applyEnabled: true,
       signal: new AbortController().signal,
-      fs: nodeWorkspaceFs,
+      fs,
       ...(editorAgentPatchWriterForTests === undefined
         ? {}
         : { writer: editorAgentPatchWriterForTests }),
@@ -1869,6 +1854,26 @@ function applyChangeset(
     const message = applyChangesetErrorMessage(error);
     emitChangesetDiagnostic(action, "editor.agent.commitChangeset", error, message);
     return changesetTerminalResult(action, projection.selectedPaths, "failed", message);
+  }
+}
+
+function changesetWorkspaceFs(
+  workspaceRoot: string,
+  runtimeMutation: RuntimeMutationClassification,
+  deps?: EditorAgentRouteDeps,
+): WorkspaceFs | undefined {
+  if (runtimeMutation.kind !== "runtime") return nodeWorkspaceFs;
+  try {
+    // Only a proven managed root grants a writable fs here, so both refusal decisions collapse to
+    // the same answer; the collapse is stated at this consumer rather than in the resolver (#3347).
+    const access = workspaceRootAccessOrUndefined(
+      deps?.workspaceRootAccessResolver?.(workspaceRoot),
+    );
+    return access?.kind === "managed-task" && access.canonicalRoot === workspaceRoot
+      ? access.fs
+      : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -2056,23 +2061,29 @@ function handleApprovedChangesetResult(
       decision,
     );
   }
-  const inspection = inspectChangeset(action, snapshot);
-  if (inspection.result !== null) {
-    return finishRuntimeChangeset(
-      action,
-      snapshot,
-      inspection.result,
-      deps,
-      runtimeMutation,
-      decision,
-    );
-  }
-  const projection = projectChangeset(action, snapshot, inspection.validation);
+  const projection = projectApprovedChangeset(action, snapshot, runtimeMutation, deps);
   const result =
     projection.kind === "conflict"
       ? projection.result
       : applyChangeset(action, snapshot, projection, runtimeMutation, deps);
   return finishRuntimeChangeset(action, snapshot, result, deps, runtimeMutation, decision);
+}
+
+function projectApprovedChangeset(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot,
+  runtimeMutation: RuntimeMutationClassification,
+  deps: EditorAgentRouteDeps | undefined,
+): ChangesetProjectionOutcome {
+  const inspectionFs = changesetWorkspaceFs(snapshot.workspaceRoot, runtimeMutation, deps);
+  if (inspectionFs === undefined) {
+    return { kind: "conflict", result: runtimeMutationLeaseDeniedResult(action) };
+  }
+  const inspection = inspectChangeset(action, snapshot, inspectionFs);
+  if (inspection.result !== null) {
+    return { kind: "conflict", result: inspection.result };
+  }
+  return projectChangeset(action, snapshot, inspection.validation, inspectionFs);
 }
 
 function finishRuntimeChangeset(
@@ -2463,13 +2474,20 @@ async function runNavigateSymbolAction(
         document: {
           path: request.document.path,
           languageId: request.document.languageId,
-          text: serverResolvedDocumentText(snapshot, request.document.path, request.document.text),
+          text: serverResolvedDocumentText(
+            deps,
+            snapshot.workspaceRoot,
+            request.document.path,
+            request.document.text,
+            actionCorrelationId(action),
+          ),
         },
         position: request.position,
         ...(request.range === undefined ? {} : { range: request.range }),
         ...(request.diagnostics === undefined ? {} : { diagnostics: request.diagnostics }),
       },
       "/api/editor/language",
+      action.actionId,
     ),
     deps,
     deps.editorLanguageRouteOptions,
@@ -2480,6 +2498,7 @@ async function runNavigateSymbolAction(
 function symbolSearchContext(
   root: string,
   request: NonNullable<EditorAgentAction["searchWorkspace"]>,
+  actionId: string,
 ): RouteContext {
   return serverActionContext(
     {
@@ -2489,6 +2508,7 @@ function symbolSearchContext(
       ...(request.scopePath === undefined ? {} : { scopePath: request.scopePath }),
     },
     "/api/editor/workspace-symbols",
+    actionId,
   );
 }
 
@@ -2497,6 +2517,7 @@ function symbolSearchContext(
 function textSearchContext(
   root: string,
   request: NonNullable<EditorAgentAction["searchWorkspace"]>,
+  actionId: string,
 ): RouteContext {
   return serverActionContext(
     {
@@ -2511,6 +2532,7 @@ function textSearchContext(
       ...(request.scopePath === undefined ? {} : { scopePath: request.scopePath }),
     },
     "/api/editor/workspace-search",
+    actionId,
   );
 }
 
@@ -2522,9 +2544,15 @@ async function runSearchWorkspaceAction(
   const request = action.searchWorkspace;
   if (request === undefined) throw new Error("searchWorkspace payload is missing");
   if (request.mode === "symbol") {
-    return handleEditorWorkspaceSymbols(symbolSearchContext(snapshot.workspaceRoot, request), deps);
+    return handleEditorWorkspaceSymbols(
+      symbolSearchContext(snapshot.workspaceRoot, request, action.actionId),
+      deps,
+    );
   }
-  return handleEditorWorkspaceSearch(textSearchContext(snapshot.workspaceRoot, request), deps);
+  return handleEditorWorkspaceSearch(
+    textSearchContext(snapshot.workspaceRoot, request, action.actionId),
+    deps,
+  );
 }
 
 // Issue #2298: a GET-style synthesized route context so the read-only git handlers (which read
@@ -2533,6 +2561,7 @@ async function runSearchWorkspaceAction(
 function gitReadContext(
   path: string,
   entries: readonly (readonly [string, string])[],
+  actionId: string,
 ): RouteContext {
   const url = new URL(`http://127.0.0.1${path}`);
   for (const [key, value] of entries) url.searchParams.set(key, value);
@@ -2542,19 +2571,24 @@ function gitReadContext(
     writableEnded: false,
     on: (): typeof res => res,
   } as unknown as ServerResponse;
-  return { req, res, params: {}, url };
+  return { req, res, params: {}, url, correlationId: actionId };
 }
 
 function runGitStatusResult(
   root: string,
   path: string,
   deps: EditorAgentActionRouteDeps,
+  actionId: string,
 ): Promise<RouteResult> {
   return handleGitStatus(
-    gitReadContext("/api/git/status", [
-      ["root", root],
-      ["path", path],
-    ]),
+    gitReadContext(
+      "/api/git/status",
+      [
+        ["root", root],
+        ["path", path],
+      ],
+      actionId,
+    ),
     deps,
   );
 }
@@ -2564,13 +2598,18 @@ function runGitDiffResult(
   path: string,
   scope: "staged" | "unstaged",
   deps: EditorAgentActionRouteDeps,
+  actionId: string,
 ): Promise<RouteResult> {
   return handleGitStructuredDiff(
-    gitReadContext("/api/git/diff/structured", [
-      ["root", root],
-      ["path", path],
-      ["scope", scope],
-    ]),
+    gitReadContext(
+      "/api/git/diff/structured",
+      [
+        ["root", root],
+        ["path", path],
+        ["scope", scope],
+      ],
+      actionId,
+    ),
     deps,
   );
 }
@@ -2579,14 +2618,19 @@ function runGitBlameResult(
   root: string,
   path: string,
   deps: EditorAgentActionRouteDeps,
+  actionId: string,
 ): Promise<RouteResult> {
   return handleGitBlame(
-    gitReadContext("/api/git/blame", [
-      ["root", root],
-      ["path", path],
-      ["startLine", "1"],
-      ["maxLines", String(GIT_AGENT_CONTEXT_MAX_BLAME_LINES + 1)],
-    ]),
+    gitReadContext(
+      "/api/git/blame",
+      [
+        ["root", root],
+        ["path", path],
+        ["startLine", "1"],
+        ["maxLines", String(GIT_AGENT_CONTEXT_MAX_BLAME_LINES + 1)],
+      ],
+      actionId,
+    ),
     deps,
   );
 }
@@ -2915,11 +2959,12 @@ function queryGitDiffResults(
   request: NonNullable<EditorAgentAction["queryGit"]>,
   snapshot: EditorAgentSessionSnapshot,
   deps: EditorAgentActionRouteDeps,
+  actionId: string,
 ): Promise<readonly RouteResult[]> | undefined {
   if (!request.aspects.includes("diff")) return undefined;
   return Promise.all(
     (["staged", "unstaged"] as const).map((scope) =>
-      runGitDiffResult(snapshot.workspaceRoot, request.path, scope, deps),
+      runGitDiffResult(snapshot.workspaceRoot, request.path, scope, deps, actionId),
     ),
   );
 }
@@ -2928,9 +2973,10 @@ function queryGitBlameResult(
   request: NonNullable<EditorAgentAction["queryGit"]>,
   snapshot: EditorAgentSessionSnapshot,
   deps: EditorAgentActionRouteDeps,
+  actionId: string,
 ): Promise<RouteResult> | undefined {
   return request.aspects.includes("blame")
-    ? runGitBlameResult(snapshot.workspaceRoot, request.path, deps)
+    ? runGitBlameResult(snapshot.workspaceRoot, request.path, deps, actionId)
     : undefined;
 }
 
@@ -2941,10 +2987,11 @@ async function collectQueryGitOptionalAspects(
   deps: EditorAgentActionRouteDeps,
   aspects: Record<string, unknown>,
   omissions: QueryGitOmission[],
+  actionId: string,
 ): Promise<QueryGitPolicyDenial | QueryGitCancellation | undefined> {
   const [diffResults, blameResult] = await Promise.all([
-    queryGitDiffResults(request, snapshot, deps),
-    queryGitBlameResult(request, snapshot, deps),
+    queryGitDiffResults(request, snapshot, deps, actionId),
+    queryGitBlameResult(request, snapshot, deps, actionId),
   ]);
   if (queryGitWasCancelled(deps)) return { kind: "query-git-cancelled" };
   const denial = queryGitBoundaryDenial([
@@ -3021,7 +3068,12 @@ async function runQueryGitAction(
 ): Promise<RouteResult | QueryGitPolicyDenial | QueryGitCancellation> {
   const request = action.queryGit;
   if (request === undefined) throw new Error("queryGit payload is missing");
-  const statusResult = await runGitStatusResult(snapshot.workspaceRoot, request.path, deps);
+  const statusResult = await runGitStatusResult(
+    snapshot.workspaceRoot,
+    request.path,
+    deps,
+    action.actionId,
+  );
   if (queryGitWasCancelled(deps)) return { kind: "query-git-cancelled" };
   const statusDenial = queryGitBoundaryDenial([statusResult]);
   if (statusDenial !== undefined) return statusDenial;
@@ -3050,6 +3102,7 @@ async function runQueryGitAction(
     deps,
     aspects,
     omissions,
+    action.actionId,
   );
   if (optionalDenial !== undefined) return optionalDenial;
   return queryGitSuccessResult(action, request.path, aspects, omissions, deps);
@@ -3331,7 +3384,7 @@ function rejectServerResolvedPath(
   requestHash: string,
   deps: EditorAgentActionRouteDeps,
 ): RouteResult | null {
-  const pathIssue = serverResolvedPathIssues(action, snapshot);
+  const pathIssue = serverResolvedPathIssues(action, snapshot, deps);
   return pathIssue === null
     ? null
     : serverResolvedFailure(
@@ -3411,10 +3464,25 @@ function rootBoundaryDecision(
   );
 }
 
+// The containment check now reports a REFUSED root (revoked lifecycle, replaced identity, an
+// unfinished authority proof) with its own reason instead of borrowing the plain node port and
+// failing as a path escape, so the conflict code has to follow the reason rather than assume every
+// non-decompose outcome is a target outside the root (P3, PR #3381 review).
+function boundaryConflictCode(reason: EditorAgentRootBoundaryReason): EditorAgentConflictCode {
+  if (reason === "decompose-per-root") return "DECOMPOSE_PER_ROOT";
+  return reason === "workspace-boundary-escape" ? "OUT_OF_SCOPE" : "POLICY_DENIED";
+}
+
+function boundaryConflictMessage(reason: EditorAgentRootBoundaryReason): string {
+  return reason === "root-binding-invalid" || reason === "root-binding-required"
+    ? "The editor action must be authorized and decomposed for one workspace root."
+    : "The editor action target is outside its bound workspace root.";
+}
+
 function bindActionRoot(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot,
-  deps: EditorAgentActionRouteDeps | EditorAgentRouteDeps | undefined,
+  deps: EditorAgentEitherRouteDeps | undefined,
 ): RootBoundAction {
   const resolution = resolveEditorAgentActionRoot(snapshot, action.rootBinding, deps?.store);
   if (!resolution.ok) {
@@ -3428,9 +3496,11 @@ function bindActionRoot(
       ),
     };
   }
-  const pathReason = editorAgentPathBoundaryReason(
+  const pathReason = editorAgentRootContainmentReason(
     resolution.root,
     actionRootPaths(action, snapshot),
+    deps,
+    actionCorrelationId(action),
   );
   if (pathReason !== null) {
     return {
@@ -3438,8 +3508,8 @@ function bindActionRoot(
       decision: rootBoundaryDecision(action, snapshot, pathReason),
       result: conflict(
         action,
-        pathReason === "decompose-per-root" ? "DECOMPOSE_PER_ROOT" : "OUT_OF_SCOPE",
-        "The editor action target is outside its bound workspace root.",
+        boundaryConflictCode(pathReason),
+        boundaryConflictMessage(pathReason),
       ),
     };
   }
@@ -3450,6 +3520,33 @@ function bindActionRoot(
   };
 }
 
+// The port the admission INSPECTION reads the current file contents through. A changeset keeps the
+// write-capable managed resolution (`changesetWorkspaceFs`, which refuses outright rather than
+// downgrading to the node port). Every OTHER write action — `applyPatch` above all — inspected
+// through the plain node port, so a single-file patch inside a managed task worktree below the state
+// directory's always-denied segment failed preflight as OUT_OF_SCOPE/INVALID_EDITS: exactly the
+// class the boundary check was repaired for, still open on the editor-agent patch path (cursor
+// review, PR #3381). It now reads through the same containment port the boundary check resolves.
+// A refused port lands on the established fail-closed 403 below; `bindActionRoot` already refuses
+// such a root earlier in `admitEditorAction`, so this is the floor, not the reporting seam.
+function admissionInspectionFs(
+  action: EditorAgentAction,
+  snapshot: EditorAgentSessionSnapshot | undefined,
+  runtimeMutation: RuntimeMutationClassification,
+  deps: EditorAgentActionRouteDeps | undefined,
+): WorkspaceFs | undefined {
+  if (snapshot === undefined) return nodeWorkspaceFs;
+  if (action.type === "applyChangeset") {
+    return changesetWorkspaceFs(snapshot.workspaceRoot, runtimeMutation, deps);
+  }
+  const port = resolveEditorAgentContainmentPort(
+    deps,
+    snapshot.workspaceRoot,
+    actionCorrelationId(action),
+  );
+  return port.ok ? port.fs : undefined;
+}
+
 function admitAndReserveAction(
   action: EditorAgentAction,
   snapshot: EditorAgentSessionSnapshot | undefined,
@@ -3458,7 +3555,18 @@ function admitAndReserveAction(
   requestHash: string,
   deps: EditorAgentActionRouteDeps | undefined,
 ): { readonly ok: true; readonly inspection: AdmissionInspection } | RouteResult {
-  const admission = preflight(action, snapshot);
+  const inspectionFs = admissionInspectionFs(action, snapshot, runtimeMutation, deps);
+  if (inspectionFs === undefined) {
+    return rejectActionRequest(
+      action,
+      snapshot,
+      decision,
+      runtimeMutationLeaseDeniedResult(action),
+      requestHash,
+      403,
+    );
+  }
+  const admission = preflight(action, snapshot, inspectionFs);
   if (!admission.ok) {
     return rejectActionRequest(action, snapshot, decision, admission.result, requestHash, 409);
   }
@@ -3539,7 +3647,7 @@ async function admitEditorAction(
 
 export async function handleEditorAgentActions(
   ctx: RouteContext,
-  deps?: EditorAgentActionRouteDeps | EditorAgentRouteDeps,
+  deps?: EditorAgentEitherRouteDeps,
 ): Promise<RouteResult> {
   const body = await readJsonObject(ctx.req, MAX_AGENT_BODY_BYTES);
   if (isRouteResult(body)) return body;
@@ -3574,7 +3682,7 @@ export async function handleEditorAgentActions(
 }
 
 function fullEditorActionDeps(
-  deps: EditorAgentActionRouteDeps | EditorAgentRouteDeps | undefined,
+  deps: EditorAgentEitherRouteDeps | undefined,
 ): EditorAgentActionRouteDeps | undefined {
   return deps !== undefined && "redactor" in deps && "env" in deps ? deps : undefined;
 }
@@ -3721,11 +3829,20 @@ function scrubBridgeCapabilitiesFromRequestUrl(ctx: RouteContext): void {
   }
 }
 
+/** Every `HandlerOutcome` return in this module funnels through this identity call so a function
+ * that legitimately returns either a `RouteResult` object or the `STREAMING` sentinel symbol is
+ * never reported as "returning different types": each return's expression is a call to this one
+ * helper, whose own signature is the annotated union, not the narrower literal type of whichever
+ * branch produced the value. */
+function asHandlerOutcome(value: HandlerOutcome): HandlerOutcome {
+  return value;
+}
+
 export function handleEditorAgentEvents(ctx: RouteContext): HandlerOutcome {
   const selection = parseEventBridgeSelection(ctx);
   scrubBridgeCapabilitiesFromRequestUrl(ctx);
-  if (!selection.ok) return selection.response;
-  return openAgentSseStream(ctx, selection.connections, selection.bridgeStreamId);
+  if (!selection.ok) return asHandlerOutcome(selection.response);
+  return asHandlerOutcome(openAgentSseStream(ctx, selection.connections, selection.bridgeStreamId));
 }
 
 // Issue #1395 (ADR-0062, AC4) — read-only feed of the bounded audit ledger so users can inspect what
@@ -3791,20 +3908,32 @@ function openAgentSseStream(
   bridgeStreamId: string | undefined,
 ): HandlerOutcome {
   const res: ServerResponse = ctx.res;
+  // Every frame goes through the shared recording path (sse-write.ts) under the request's
+  // correlation id, so the stream counts its frames and bytes and closes with its terminal
+  // `sse.stream.closed` line; a request without an id records the sanctioned fallback rather than
+  // no id at all (AGENTS.md §8). A bridge that stops draining is aborted and destroyed, which also
+  // marks that line `backpressure-killed`.
+  const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+  const controller = new AbortController();
   const subscriber = (event: EditorAgentEvent): void => {
+    if (controller.signal.aborted) return;
     const frame = `id: ${event.eventId}\nevent: editor-agent:${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
-    if (!res.write(frame)) res.destroy();
+    writeOrDestroy(res, frame, controller, undefined, correlationId);
   };
   const dispose = connectEditorAgentSessions(connections, bridgeStreamId, subscriber);
-  if (dispose === undefined) return bridgeCapabilityError();
+  if (dispose === undefined) return asHandlerOutcome(bridgeCapabilityError());
   res.writeHead(200, SSE_HEADERS);
   startSseHeartbeat(res);
-  res.write(readyMessage());
+  // Refused, the ready frame aborts the controller and destroys the stream like any event frame.
+  writeOrDestroy(res, readyMessage(), controller, undefined, correlationId);
   ctx.req.on("close", () => {
     res.end();
   });
-  res.on("close", dispose);
-  return STREAMING;
+  res.on("close", () => {
+    controller.abort();
+    dispose();
+  });
+  return asHandlerOutcome(STREAMING);
 }
 
 export function _resetEditorAgentStateForTests(): void {

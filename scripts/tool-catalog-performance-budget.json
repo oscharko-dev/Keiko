@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 2,
+  "target": "tool-catalog",
+  "policy": "reviewed-non-widening-ceilings-v1",
+  "calibrationSha256": "0087a0cd675b49406612a05f29c8e3bcbc1966398c34887078ae80102d5ee721",
+  "ceilingP95Ms": {
+    "legacy-native-6-tool": {
+      "coldCompileMs": 10.366624999999658,
+      "lookupBatchMs": 4.114791000000196
+    },
+    "managed-opencode-v2": {
+      "coldCompileMs": 31.994877000000088,
+      "lookupBatchMs": 2.601790999999139
+    },
+    "synthetic-300-tool": {
+      "coldCompileMs": 138.49695699999847,
+      "lookupBatchMs": 98.16916599999877
+    }
+  },
+  "maximumP95Ms": {
+    "legacy-native-6-tool": {
+      "coldCompileMs": 10.366624999999658,
+      "lookupBatchMs": 4.114791000000196
+    },
+    "managed-opencode-v2": {
+      "coldCompileMs": 31.994877000000088,
+      "lookupBatchMs": 2.601790999999139
+    },
+    "synthetic-300-tool": {
+      "coldCompileMs": 138.49695699999847,
+      "lookupBatchMs": 98.16916599999877
+    }
+  }
+}

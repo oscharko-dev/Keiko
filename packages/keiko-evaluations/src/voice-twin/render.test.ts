@@ -79,6 +79,17 @@ describe("renderVoiceTwinSummary: yesNo false branches", () => {
     expect(text).toContain("stt=no");
   });
 
+  // KEIKO-0731: coversSpeechOutput materially gates goNoGo (runner.ts's coverageMet check) but was
+  // never printed on the Capability coverage line -- a NO-GO caused by this flag was invisible in the
+  // rendered text. Mutation guard: if the speech-output token is dropped again, this fails.
+  it('renders "no" for coversSpeechOutput=false', () => {
+    const scorecard = makeScorecard({
+      summary: { ...makeScorecard().summary, coversSpeechOutput: false, goNoGo: "NO-GO" },
+    });
+    const text = renderVoiceTwinSummary(scorecard);
+    expect(text).toContain("speech-output=no");
+  });
+
   it('renders "no" for coversFullRealtime=false', () => {
     const scorecard = makeScorecard({
       summary: { ...makeScorecard().summary, coversFullRealtime: false, goNoGo: "NO-GO" },
@@ -281,7 +292,11 @@ describe("renderVoiceTwinSummary: dimensionLine verdict branches", () => {
       ],
     });
     const text = renderVoiceTwinSummary(scorecard);
-    expect(text).toContain("no-voice-dormancy");
+    // KEIKO-0265: pin the verdict TOKEN, not just "pass=3". The dimensionLine format is
+    // "<dim padded to 32> <verdict padded to 5> pass=X fail=Y n/a=Z rate=W" — the verdict is a distinct
+    // token before the counts. Assert against a regex anchoring PASS at the verdict slot so a mutation
+    // to dimensionVerdict that returns "FAIL" or "n/a" for a passing count is caught.
+    expect(text).toMatch(/no-voice-dormancy\s+PASS\s+pass=3/);
     expect(text).toContain("pass=3");
   });
 
@@ -298,6 +313,11 @@ describe("renderVoiceTwinSummary: dimensionLine verdict branches", () => {
       ],
     });
     const text = renderVoiceTwinSummary(scorecard);
+    // KEIKO-0265: pin the verdict TOKEN "n/a", not just the count/rate suffixes. Previously the test
+    // only asserted on `rate=n/a` and `n/a=5`, both of which stay green under a mutation of
+    // dimensionVerdict's guard (e.g. `if (passCount >= 0) return "PASS"`) — the verdict slot would
+    // spuriously read "PASS" and the test would not notice.
+    expect(text).toMatch(/interruption-metric\s+n\/a\s+pass=0/);
     // Mutation guard: if passRate===null check is missing, the n/a rate branch is skipped.
     expect(text).toContain("rate=n/a");
     // Mutation guard: if the passCount > 0 branch fires for passCount=0, "PASS" appears instead of "n/a".
