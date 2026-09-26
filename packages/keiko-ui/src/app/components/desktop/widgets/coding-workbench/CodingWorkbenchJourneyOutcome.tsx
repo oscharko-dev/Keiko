@@ -126,10 +126,13 @@ export function CodingWorkbenchJourneyOutcome(
   if (valid && props.outcome !== undefined) {
     return <JourneyCard key={props.outcome.binding.runId} {...props} outcome={props.outcome} />;
   }
-  // #3633: a draft pull request exists but its handoff status is not observed (the first read
-  // failed, has not answered, or read another run). The card and its Refresh — the only way to read
-  // it again — stay, instead of the whole section disappearing.
-  if (props.snapshot?.draftDelivery?.pullRequest === undefined) return null;
+  // #3633: a draft pull request exists but no handoff status has been observed yet (the first read
+  // failed or answered without one). The card and its Refresh, the only way to read it again, stay
+  // instead of the whole section disappearing. An outcome that is present but fails validation
+  // (foreign, malformed, forged) still renders nothing (CodingWorkbenchJourneyOutcome.security.test).
+  if (props.outcome !== undefined || props.snapshot?.draftDelivery?.pullRequest === undefined) {
+    return null;
+  }
   return <JourneyUnavailable onRefresh={props.onRefresh} />;
 }
 
