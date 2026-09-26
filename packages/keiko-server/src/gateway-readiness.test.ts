@@ -22,6 +22,7 @@ import type { RouteContext } from "./routes.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
 import type { ServerLogEvent } from "./observability/server-log.js";
 import { modelIdEvidence } from "./observability/model-id-evidence.js";
+import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
 
 // A model id reaches a readiness line only as its digest (#3557 review), from the producer itself.
 const CODING_CHAT_DIGEST = modelIdEvidence("coding-chat").modelIdDigest;
@@ -1548,6 +1549,69 @@ describe("gateway readiness route", () => {
 
     expect(recorded).toEqual(["failed"]);
     deps.store.close();
+  });
+
+  // PR #3625 review: a 400 whose body cannot be read comes back to this route as a bare 400, so no
+  // later probe failure recovers the read error. The model gateway's skipped line carries its
+  // dist-anchored frames and cause chain through the server's stack-frame port instead.
+  it("records the frames and cause chain of a probe rejection whose body cannot be read", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "keiko-readiness-unreadable-"));
+    const readFailure = new TypeError("terminated", { cause: new Error("other side closed") });
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start: (controller): void => {
+              controller.error(readFailure);
+            },
+          }),
+          { status: 400 },
+        ),
+      ),
+    ) as unknown as typeof fetch;
+    const base = gatewayConfig();
+    const config: GatewayConfig = {
+      ...base,
+      capabilities: base.capabilities?.map((capability) =>
+        capability.kind === "chat"
+          ? {
+              ...capability,
+              maxOutputTokens: 20,
+              pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 },
+            }
+          : capability,
+      ),
+    };
+    const events: ServerLogEvent[] = [];
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl, undefined, {
+        [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "1",
+        [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(stateDir, "spend.json"),
+      }),
+      activityLog: { write: (event): void => void events.push(event) },
+    };
+    try {
+      await runGatewayReadiness({ options: { probes: ["chat"] } }, deps, "readiness-corr-3625");
+
+      expect(requestBodyAt(fetchImpl, 0).max_tokens).toBe(20);
+      const skipped = events.find(
+        (event) => event.op === "gateway.readiness.compatibility-retry.skipped",
+      );
+      const frames = keikoStackFrames(readFailure);
+      expect(frames.length).toBeGreaterThan(0);
+      expect(skipped).toMatchObject({
+        level: "warn",
+        correlationId: "readiness-corr-3625",
+        extra: { reason: "unreadable-rejection", frames, causeChain: causeChain(readFailure) },
+      });
+      expect(causeChain(readFailure)).toEqual(["Error"]);
+      // Body-free: neither error message reaches the line.
+      expect(JSON.stringify(skipped)).not.toContain("terminated");
+      expect(JSON.stringify(skipped)).not.toContain("other side closed");
+    } finally {
+      deps.store.close();
+      rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -46,7 +46,32 @@ export interface GatewayReadinessChatCompletionRequest {
   // compatibility retry of one probe is recorded under it (PR #3625 review).
   readonly log?: ModelGatewayLogSink | undefined;
   readonly correlationId?: string | undefined;
+  // The server's stack-frame port: dist-anchored, body-free frames and cause chain of a failure the
+  // probe records itself and does not rethrow, never the error's message (PR #3625 review).
+  readonly errorEvidence?:
+    | ((error: unknown) => {
+        readonly frames: readonly string[];
+        readonly causeChain: readonly string[];
+      })
+    | undefined;
 }
+
+const READINESS_FAILURE_TRACE_FIELDS = {
+  frames: {
+    type: "string-array",
+    dataClass: "opaque-id",
+    required: false,
+    maxLength: 512,
+    maxItems: 64,
+  },
+  causeChain: {
+    type: "string-array",
+    dataClass: "error-kind",
+    required: false,
+    maxLength: 128,
+    maxItems: 64,
+  },
+} as const;
 
 // PR #3625 review: a readiness probe's compatibility retry, recorded BEFORE it is sent — which field
 // it leaves out and the status that made it retry — so a retry that then throws is still
@@ -132,6 +157,7 @@ const READINESS_COMPATIBILITY_RETRY_SKIPPED_OPERATION = defineActivityLogOperati
       values: ["other-cause", "unreadable-rejection"],
     },
     rejectedStatus: { type: "integer", dataClass: "count", required: true },
+    ...READINESS_FAILURE_TRACE_FIELDS,
   },
   causal: "correlation",
   lifecycle: "state",
@@ -219,11 +245,13 @@ function readinessStatusErrorKind(status: number): ActivityLogErrorKind {
   return status >= 500 ? "unavailable" : "invalid-request";
 }
 
+// An unreadable rejection is not rethrown: the caller handles the bare 400 and never reaches its
+// own failure path, so this line carries the read error's frames and cause chain itself.
 function logReadinessFieldRetrySkipped(
   request: GatewayReadinessChatCompletionRequest,
   sentField: OutputTokenField,
   rejectedStatus: number,
-  unreadable?: { readonly errorKind: ActivityLogErrorKind },
+  unreadable?: { readonly error: unknown },
 ): void {
   const url = readinessChatCompletionsUrl(request.provider);
   readinessLog(request).write(
@@ -231,13 +259,18 @@ function logReadinessFieldRetrySkipped(
       READINESS_COMPATIBILITY_RETRY_SKIPPED_OPERATION,
       unreadable === undefined
         ? { level: "info", ...correlationOf(request) }
-        : { level: "warn", ...correlationOf(request), errorKind: unreadable.errorKind },
+        : {
+            level: "warn",
+            ...correlationOf(request),
+            errorKind: activityLogErrorKind(unreadable.error),
+          },
       {
         endpointDigest: sha256Hex(logEndpointHost(url) ?? "invalid-endpoint"),
         modelId: logModelId(request.provider.modelId),
         sentField,
         reason: unreadable === undefined ? "other-cause" : "unreadable-rejection",
         rejectedStatus,
+        ...(unreadable === undefined ? {} : request.errorEvidence?.(unreadable.error)),
       },
     ),
   );
@@ -256,7 +289,7 @@ function withoutBody(answer: Response): Response {
 // The rejection read once from the answer itself, bounded, never from a clone: a clone tees the
 // body, and cancelling one tee branch waits until the other is cancelled too, so a capped or failed
 // read would stall on an original nobody reads (PR #3625 review). An unreadable rejection is
-// recorded with its closed error kind.
+// recorded with its closed error kind, frames and cause chain.
 async function readRejection(
   request: GatewayReadinessChatCompletionRequest,
   answer: Response,
@@ -265,9 +298,7 @@ async function readRejection(
   try {
     return { payload: await readJsonCapped(answer, READINESS_REJECTION_MAX_BYTES) };
   } catch (error) {
-    logReadinessFieldRetrySkipped(request, sentField, answer.status, {
-      errorKind: activityLogErrorKind(error),
-    });
+    logReadinessFieldRetrySkipped(request, sentField, answer.status, { error });
     return undefined;
   }
 }

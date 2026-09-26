@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "a9d992fdd6d5be97e5094c43946af848fae5d4636a50bd5119f94ad7534e30ee" as const;
+  "2e2710b54d09c915a06e2f12f094aa1e3a0a2258a234e9c3250bc050b853a132" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -11945,6 +11945,20 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: true,
+      },
+      frames: {
+        type: "string-array",
+        dataClass: "opaque-id",
+        required: false,
+        maxLength: 512,
+        maxItems: 64,
+      },
+      causeChain: {
+        type: "string-array",
+        dataClass: "error-kind",
+        required: false,
+        maxLength: 128,
+        maxItems: 64,
       },
     },
     causal: "correlation",
@@ -42596,10 +42610,22 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           analyzerProjection: "timeline",
           safeContextFields: [
             {
+              name: "causeChain",
+              type: "string-array",
+              dataClass: "error-kind",
+              required: false,
+            },
+            {
               name: "endpointDigest",
               type: "string",
               dataClass: "digest",
               required: true,
+            },
+            {
+              name: "frames",
+              type: "string-array",
+              dataClass: "opaque-id",
+              required: false,
             },
             {
               name: "modelId",
@@ -42631,12 +42657,13 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "completeness-state",
             "count",
             "digest",
+            "error-kind",
             "loss-state",
             "opaque-id",
           ],
           frameCauseEvidence: {
-            frames: false,
-            causeChain: false,
+            frames: true,
+            causeChain: true,
           },
           proofIds: ["gateway.readiness.compatibility-retry.skipped.line"],
           replayReferences: [],

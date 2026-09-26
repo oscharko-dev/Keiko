@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { requestGatewayReadinessChatCompletion } from "./readiness-probe.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import type { GatewayConfig, ModelProviderConfig } from "./types.js";
@@ -361,6 +361,7 @@ describe("requestGatewayReadinessChatCompletion", () => {
   it("does not switch output-token fields when the rejection names another cause", async () => {
     const bodies: Record<string, unknown>[] = [];
     const events: ModelGatewayLogEvent[] = [];
+    const errorEvidence = vi.fn(() => ({ frames: [], causeChain: [] }));
     const fetchImpl: typeof fetch = (_url, init) => {
       bodies.push(probeBody(init));
       return Promise.resolve(
@@ -381,6 +382,7 @@ describe("requestGatewayReadinessChatCompletion", () => {
         },
       },
       correlationId: "probe-corr-0005",
+      errorEvidence,
     });
 
     expect(response.status).toBe(400);
@@ -399,54 +401,102 @@ describe("requestGatewayReadinessChatCompletion", () => {
     if (skipped === undefined) throw new TypeError("skipped retry evidence missing");
     expect(skipped).toMatchObject({
       correlationId: "probe-corr-0005",
+      level: "info",
       extra: { sentField: "max_tokens", reason: "other-cause", rejectedStatus: 400 },
     });
+    // A readable rejection is no failure: no error kind and no trace fields.
+    expect(skipped).not.toHaveProperty("errorKind");
+    expect(skipped.extra).not.toHaveProperty("frames");
+    expect(skipped.extra).not.toHaveProperty("causeChain");
+    expect(errorEvidence).not.toHaveBeenCalled();
     expectActivityLogProof(
       "gateway.readiness.compatibility-retry.skipped.line",
       formatActivityLogProofLine(skipped),
     );
   });
 
-  it("does not switch output-token fields when the rejection cannot be read", async () => {
-    const bodies: Record<string, unknown>[] = [];
-    const events: ModelGatewayLogEvent[] = [];
-    const fetchImpl: typeof fetch = (_url, init) => {
-      bodies.push(probeBody(init));
-      return Promise.resolve(
-        new Response("<html>bad gateway</html>", {
-          status: 400,
-          headers: { "content-type": "text/html" },
-        }),
-      );
-    };
-
-    const response = await requestGatewayReadinessChatCompletion({
-      config: CONFIG,
-      provider: PROVIDER,
-      body: { messages: [] },
-      maxOutputTokens: 17,
-      fetchImpl,
-      log: {
-        write: (event): void => {
-          events.push(event);
-        },
+  // PR #3625 review: the caller handles the bare 400 and never reaches its own failure path, so the
+  // skipped line itself carries the read error's frames and cause chain from the server's port.
+  const streamFailure = new TypeError("terminated", { cause: new Error("other side closed") });
+  it.each([
+    {
+      name: "a malformed body",
+      body: (): BodyInit => "<html>bad gateway</html>",
+      expectRead: (error: unknown): void => {
+        expect(error).toBeInstanceOf(SyntaxError);
       },
-    });
+    },
+    {
+      name: "a body stream that fails",
+      body: (): BodyInit =>
+        new ReadableStream<Uint8Array>({
+          start: (controller): void => {
+            controller.error(streamFailure);
+          },
+        }),
+      expectRead: (error: unknown): void => {
+        expect(error).toBe(streamFailure);
+      },
+    },
+  ])(
+    "does not switch output-token fields when the rejection is $name",
+    async ({ body, expectRead }) => {
+      const bodies: Record<string, unknown>[] = [];
+      const events: ModelGatewayLogEvent[] = [];
+      const readErrors: unknown[] = [];
+      const evidence = {
+        frames: ["packages/keiko-model-gateway/dist/readiness-probe.js:280:12"],
+        causeChain: ["Error"],
+      };
+      const fetchImpl: typeof fetch = (_url, init) => {
+        bodies.push(probeBody(init));
+        return Promise.resolve(
+          new Response(body(), { status: 400, headers: { "content-type": "text/html" } }),
+        );
+      };
 
-    expect(response.status).toBe(400);
-    expect(bodies).toHaveLength(1);
-    const skipped = events.filter(
-      (event) => event.op === "gateway.readiness.compatibility-retry.skipped",
-    );
-    expect(skipped).toMatchObject([
-      { level: "warn", extra: { reason: "unreadable-rejection", sentField: "max_tokens" } },
-    ]);
-    expect(skipped[0]?.errorKind).toBeDefined();
-    expectActivityLogProof(
-      "gateway.readiness.compatibility-retry.skipped.line",
-      formatActivityLogProofLine(skipped[0] ?? {}),
-    );
-  });
+      const response = await requestGatewayReadinessChatCompletion({
+        config: CONFIG,
+        provider: PROVIDER,
+        body: { messages: [] },
+        maxOutputTokens: 17,
+        fetchImpl,
+        log: {
+          write: (event): void => {
+            events.push(event);
+          },
+        },
+        errorEvidence: (error) => {
+          readErrors.push(error);
+          return evidence;
+        },
+      });
+
+      expect(response.status).toBe(400);
+      expect(bodies).toHaveLength(1);
+      expect(readErrors).toHaveLength(1);
+      expectRead(readErrors[0]);
+      const skipped = events.filter(
+        (event) => event.op === "gateway.readiness.compatibility-retry.skipped",
+      );
+      expect(skipped).toMatchObject([
+        {
+          level: "warn",
+          extra: {
+            reason: "unreadable-rejection",
+            sentField: "max_tokens",
+            frames: evidence.frames,
+            causeChain: evidence.causeChain,
+          },
+        },
+      ]);
+      expect(skipped[0]?.errorKind).toBeDefined();
+      expectActivityLogProof(
+        "gateway.readiness.compatibility-retry.skipped.line",
+        formatActivityLogProofLine(skipped[0] ?? {}),
+      );
+    },
+  );
 
   // PR #3625 review: the rejection is read once from the answer itself. Read from a clone, a body
   // over the cap cancelled only the clone's tee branch, whose cancellation waits for the untouched

@@ -43,6 +43,7 @@ import type { RouteContext, RouteResult } from "./routes.js";
 import { readBoundedRequestBody, RequestBodyTooLargeError } from "./bounded-request-body.js";
 import {
   admittedGatewayProbeOutputLimit,
+  gatewayProbeErrorEvidence,
   probeGatewayToolCalling,
   probeUsage,
   reserveGatewayProbeSpend,
@@ -676,6 +677,7 @@ async function providerRequest(
       // Every attempt and compatibility retry of this probe is recorded under its correlation.
       log: deps.activityLog ?? processServerLogSink(),
       correlationId,
+      errorEvidence: gatewayProbeErrorEvidence,
     });
   } catch (error) {
     settleGatewayProbeSpend(reservation, undefined);
