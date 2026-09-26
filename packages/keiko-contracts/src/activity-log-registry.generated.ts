@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "8820eec32037517def0d8a002700227f9ec942254daffe386a3953da9267a2e1" as const;
+  "927734a6824c5b86742efffe42e49ff9dee08b690a1e3455fac4aa90b639d4ed" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -7066,6 +7066,7 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
           "authority-denied",
           "policy-authorized",
           "approved",
+          "denied",
           "cancelled",
           "expired",
           "unavailable",

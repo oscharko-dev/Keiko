@@ -51,6 +51,7 @@ import {
   type CodingToolVerificationResult,
   type CodingToolCommitProofResult,
   type VerificationNotRunReason,
+  GOVERNED_ASK_DECLINED_REASON_CODE,
 } from "./codingToolIpc.js";
 // KEIKO-0695: hoisted from below EDIT_FAILURE_REASON_CODES to the top-of-file import block.
 import type {
@@ -594,6 +595,9 @@ function projectGovernedFailure(
   value: Record<string, unknown>,
 ): CodingToolResult {
   const reasonCode = value.reasonCode;
+  // The operator declined a server-raised ask (a Git stage, commit, push or pull-request proposal):
+  // the same decision as a declined step, so the model reads why and goes on (ADR-0124 D6).
+  if (reasonCode === GOVERNED_ASK_DECLINED_REASON_CODE) return humanDecisionToolResult("denied");
   if (typeof reasonCode !== "string" || !GOVERNED_FAILURE_REASON_CODES.has(reasonCode)) {
     return projected("failed");
   }

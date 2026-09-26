@@ -40,6 +40,11 @@ export const CODING_TOOL_READ_MAX_WINDOW_LINES = 5_000;
 export const CODING_TOOL_DISCOVER_MAX_RESULTS = 100;
 export const CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS = 8;
 export const CODING_TOOL_VERIFICATION_SUMMARY_MAX_CHARS = 1_024;
+/**
+ * The governed-delegate marker of a server-raised ask (a Git stage, commit, push or pull-request
+ * proposal) the operator declined; the facade answers it as the human's decision (ADR-0124 D6).
+ */
+export const GOVERNED_ASK_DECLINED_REASON_CODE = "approval-denied";
 
 export type CodingToolAction =
   | "read"

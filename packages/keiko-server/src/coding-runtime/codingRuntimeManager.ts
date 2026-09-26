@@ -245,6 +245,13 @@ export interface CodingRuntimeApprovalIssueRequest {
   readonly boundRevision?: number | undefined;
 }
 
+/** A human's "no" to one ask of one run (owner decision 2026-09-26, ADR-0124 D6). */
+export interface CodingRuntimeApprovalDeclineRequest {
+  readonly runId: string;
+  readonly requestId: string;
+  readonly actionKind: CodingWorkbenchSupervisedActionKind;
+}
+
 export type CodingRuntimeApprovalIssueResult =
   | {
       readonly ok: true;
@@ -475,6 +482,13 @@ export interface CodingRuntimeManager {
     request: CodingRuntimeLaunchRequest,
   ): CodingRuntimeStartResult | Promise<CodingRuntimeStartResult>;
   issueApproval(request: CodingRuntimeApprovalIssueRequest): CodingRuntimeApprovalIssueResult;
+  /**
+   * Releases the server-side wait of a declined Git stage, commit, push or pull-request proposal:
+   * the server itself raised that ask, so no child process is there to be told, and without the
+   * decline the call would hold until the approval ceiling (ADR-0124 D6). Answers whether the ask
+   * was one of the active run's server-raised proposals and its decline was recorded.
+   */
+  declineApproval?(request: CodingRuntimeApprovalDeclineRequest): boolean;
   pause(runId: string): CodingRuntimePauseResult;
   resume(runId: string, requestedMode?: CodingWorkbenchMode): CodingRuntimePauseResult;
   stop(runId: string, resultStatus?: CodingRuntimeTerminalStatus): Promise<CodingRuntimeStopResult>;
@@ -992,6 +1006,14 @@ class CodingRuntimeManagerImpl implements CodingRuntimeManager {
       approvalDigest: issued.approvalTokenHash,
       expiresAtMs: issued.expiresAtMs,
     };
+  }
+
+  public declineApproval(request: CodingRuntimeApprovalDeclineRequest): boolean {
+    const declineProposal = this.deps.codingToolApprovals?.declineProposal;
+    if (this.active?.context.runId !== request.runId || !isOwnedGitApproval(request)) return false;
+    if (declineProposal === undefined) return false;
+    declineProposal(request.runId, request.requestId);
+    return true;
   }
 
   public pendingApprovalReview(
@@ -3378,7 +3400,9 @@ function permissionRequest(event: SidecarPermissionEvent): CodingWorkbenchPermis
   };
 }
 
-function isOwnedGitApproval(request: CodingRuntimeApprovalIssueRequest): boolean {
+function isOwnedGitApproval(
+  request: Pick<CodingRuntimeApprovalIssueRequest, "actionKind" | "requestId">,
+): boolean {
   return (
     request.actionKind === "commit" ||
     request.actionKind === "git-stage" ||

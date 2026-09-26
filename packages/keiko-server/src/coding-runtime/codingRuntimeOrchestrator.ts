@@ -2068,6 +2068,8 @@ export class CodingRuntimeOrchestrator {
           request,
         );
         if (rejection !== undefined) return rejection;
+      } else {
+        this.declineServerRaisedAsk(current.runId, challenge, actionKind);
       }
       const permissionSettled = await this.resolveRuntimePermission(
         current.runId,
@@ -2090,6 +2092,22 @@ export class CodingRuntimeOrchestrator {
         decision,
       );
       return this.promoteQueuedApproval(live);
+    });
+  }
+
+  // A denied Git stage, commit, push or pull-request proposal was raised by the server itself, so no
+  // child process is there to be told: its own wait is released by the decline, or the waiting call
+  // would hold until the approval ceiling (ADR-0124 D6). Every other ask is settled by the permission
+  // port below; the manager ignores it here.
+  private declineServerRaisedAsk(
+    runId: string,
+    challenge: ApprovalChallenge,
+    actionKind: NonNullable<CodingWorkbenchRuntimePendingPermission["actionKind"]>,
+  ): void {
+    this.deps.manager.declineApproval?.({
+      runId,
+      requestId: challenge.permission.requestId,
+      actionKind,
     });
   }
 

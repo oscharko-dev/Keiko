@@ -76,6 +76,7 @@ import type {
 } from "./codingToolGovernedDelegate.js";
 import {
   CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS,
+  GOVERNED_ASK_DECLINED_REASON_CODE,
   dependencyBootstrapFailureSummary,
   type CodingToolVerificationFailure,
   type CodingToolVerificationResult,
@@ -388,11 +389,13 @@ const CODING_RUNTIME_VERIFICATION_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-type ProposalApprovalWaitOutcome = "approved" | "cancelled" | "expired" | "unavailable";
+type ProposalApprovalWaitOutcome = "approved" | "denied" | "cancelled" | "expired" | "unavailable";
 
 interface ProposalApprovalProbe {
   readonly review: (proposalId: string) => unknown;
   readonly matchesApproval: (proposalId: string) => boolean;
+  /** The operator declined the proposal: it stays reviewable, so this is read first. */
+  readonly declined?: (proposalId: string) => boolean;
 }
 
 export function waitForRuntimeProposalApproval(
@@ -410,6 +413,7 @@ export function waitForRuntimeProposalApproval(
     signal,
     inspect: (): ProposalApprovalWaitOutcome | undefined => {
       try {
+        if (probe.declined?.(proposalId) === true) return "denied";
         if (probe.review(proposalId) === undefined) return "unavailable";
         return probe.matchesApproval(proposalId) ? "approved" : undefined;
       } catch (error) {
@@ -875,10 +879,7 @@ function buildRuntimeGitPort(
       const result = await input.runtimeGitService.execute(request, guard, signal);
       if (result.kind === "refused")
         return { status: "failed", reasonCode: GIT_REFUSAL_REASON_CODES[result.reason] };
-      const released = await releaseStageProposal(input, result, signal);
-      return released === undefined
-        ? { status: "failed", reasonCode: "git-authority-revoked" }
-        : { status: "completed", git: released };
+      return stageReleaseResult(await releaseStageProposal(input, result, signal));
     },
   };
 }
@@ -908,13 +909,15 @@ async function releaseStageProposal(
   input: ProductionManagedWorktreeToolInput,
   result: import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult,
   signal: AbortSignal | undefined,
-): Promise<import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult | undefined> {
+): Promise<
+  import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult | "declined" | undefined
+> {
   if (result.kind !== "stage" || result.status !== "approval-required") return result;
   requestStageReview(input, result);
   const service = input.runtimeGitService;
   if (service === undefined) return undefined;
   const outcome = await waitForRuntimeProposalApproval(
-    service,
+    declinableProposalProbe(input, service),
     result.proposalId,
     signal,
     (error) => {
@@ -922,7 +925,48 @@ async function releaseStageProposal(
     },
   );
   recordProposalApprovalWait(input, "git-stage", result.proposalId, outcome);
+  if (outcome === "denied") return "declined";
   return outcome === "approved" ? { ...result, status: "ready", reason: "none" } : undefined;
+}
+
+function stageReleaseResult(
+  released: import("@oscharko-dev/keiko-contracts").CodingRuntimeGitResult | "declined" | undefined,
+): GovernedCodingToolResult {
+  if (released === "declined")
+    return { status: "failed", reasonCode: GOVERNED_ASK_DECLINED_REASON_CODE };
+  return released === undefined
+    ? { status: "failed", reasonCode: "git-authority-revoked" }
+    : { status: "completed", git: released };
+}
+
+// The run's record of the operator's "no" settles a declined proposal's wait at once: the server
+// raised that ask itself, so no child process is there to be told, and the call would otherwise
+// hold until the approval ceiling (owner decision 2026-09-26, ADR-0124 D6).
+function declinableProposalProbe(
+  input: ProductionManagedWorktreeToolInput,
+  service: ProposalApprovalProbe,
+): ProposalApprovalProbe {
+  const runId = input.authorityRef.runId;
+  return {
+    review: (proposalId) => service.review(proposalId),
+    matchesApproval: (proposalId) => service.matchesApproval(proposalId),
+    declined: (proposalId) =>
+      input.approvalProofVerifier?.proposalDeclined?.(runId, proposalId) === true,
+  };
+}
+
+// A human's "no" reaches the model as that decision; every other unapproved end of the wait stays
+// the revoked delivery authority it always was.
+function deliveryWaitResult(
+  outcome: ProposalApprovalWaitOutcome,
+  ready: GovernedCodingToolResult,
+): GovernedCodingToolResult {
+  if (outcome === "approved") return ready;
+  return {
+    status: "failed",
+    reasonCode:
+      outcome === "denied" ? GOVERNED_ASK_DECLINED_REASON_CODE : "delivery-authority-revoked",
+  };
 }
 
 function buildVerifiedCommitPort(
@@ -982,7 +1026,7 @@ async function releaseDraftDeliveryProposal(
   }
   input.requestDraftDeliveryApproval?.(proposal.record.proposalId);
   const outcome = await waitForRuntimeProposalApproval(
-    service,
+    declinableProposalProbe(input, service),
     proposal.record.proposalId,
     signal,
     (error) => {
@@ -990,9 +1034,11 @@ async function releaseDraftDeliveryProposal(
     },
   );
   recordProposalApprovalWait(input, actionKind, proposal.record.proposalId, outcome);
-  return outcome === "approved"
-    ? { status: "completed", draftDelivery: proposal, approvalDisposition: "ready" }
-    : { status: "failed", reasonCode: "delivery-authority-revoked" };
+  return deliveryWaitResult(outcome, {
+    status: "completed",
+    draftDelivery: proposal,
+    approvalDisposition: "ready",
+  });
 }
 
 async function completeVerifiedCommitRequest(
@@ -1019,7 +1065,7 @@ async function completeVerifiedCommitRequest(
   }
   input.requestCommitApproval?.(result.proposalId);
   const outcome = await waitForRuntimeProposalApproval(
-    service,
+    declinableProposalProbe(input, service),
     result.proposalId,
     signal,
     (error) => {
@@ -1027,9 +1073,11 @@ async function completeVerifiedCommitRequest(
     },
   );
   recordProposalApprovalWait(input, "commit", result.proposalId, outcome);
-  return outcome === "approved"
-    ? { status: "completed", verifiedCommit: result, approvalDisposition: "ready" }
-    : { status: "failed", reasonCode: "delivery-authority-revoked" };
+  return deliveryWaitResult(outcome, {
+    status: "completed",
+    verifiedCommit: result,
+    approvalDisposition: "ready",
+  });
 }
 
 function fullAccessProposalReady(
@@ -1076,7 +1124,8 @@ function recordProposalApprovalWait(
     activityLogEvent(
       CODING_RUNTIME_TOOL_RESULT_OPERATION,
       {
-        ...(outcome === "approved"
+        // A human's "no" is a decision, not a failure of the wait (ADR-0124 D6).
+        ...(outcome === "approved" || outcome === "denied"
           ? {}
           : {
               level: "warn",

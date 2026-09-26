@@ -352,6 +352,7 @@ function fixture(
       approvalDigest: "d",
       expiresAtMs: 1,
     })),
+    declineApproval: vi.fn<NonNullable<CodingRuntimeManager["declineApproval"]>>(() => true),
     pause: vi.fn<CodingRuntimeManager["pause"]>(() => ({ ok: true, paused: true })),
     resume: vi.fn<CodingRuntimeManager["resume"]>(() => ({ ok: true, paused: false })),
     reconcile: vi.fn<CodingRuntimeManager["reconcile"]>(() =>
@@ -586,6 +587,29 @@ function verificationPermission(requestId: string, expiresAt = "2026-01-01T00:01
       actionKind: "verification-command" as const,
       commandLabel: "test",
       expiresAt,
+    },
+  };
+}
+
+// A server-raised delivery-substrate ask, the shape requestDraftDeliveryApproval and the verified
+// commit port emit (requestId = the proposal id).
+function deliveryPermission(requestId: string, actionKind: "commit" | "push" | "pull-request") {
+  return {
+    schemaVersion: "1" as const,
+    eventId: `event-${requestId}`,
+    runId: "run-1",
+    occurredAt: "2026-01-01T00:00:00.000Z",
+    kind: "permission-requested" as const,
+    permissionRequest: {
+      requestId,
+      kind: "delivery-substrate" as const,
+      actionClass: "delivery-substrate" as const,
+      actionKind,
+      reasonCode: `${actionKind}-approval-required`,
+      scopeLabel: "workspace-scope",
+      risk: "high" as const,
+      policyReason: "approval-required" as const,
+      expiresAt: "2026-01-01T00:01:00.000Z",
     },
   };
 }
@@ -2662,6 +2686,51 @@ describe("CodingRuntimeOrchestrator", () => {
       expect(successfulSnapshot(result)).not.toHaveProperty("failureCode");
       expect(f.orchestrator.status().pendingPermission).toBeUndefined();
       expect(f.manager.stop).not.toHaveBeenCalled();
+    });
+
+    // PR #3625: a commit, push or pull-request proposal is raised by the server itself, so the
+    // permission port has no child to reply to. Its own wait is released by the manager's decline;
+    // without it the waiting delivery call held until the approval ceiling.
+    it("declines a denied server-raised commit proposal through the manager", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+      const waiting = successfulSnapshot(
+        await f.orchestrator.ingest(deliveryPermission("commit-3625", "commit")),
+      );
+
+      const result = await f.orchestrator.decideApproval("run-1", {
+        requestId: "commit-3625",
+        decision: "denied",
+        expectedRevision: waiting.revision,
+      });
+
+      expect(f.manager.declineApproval).toHaveBeenCalledExactlyOnceWith({
+        runId: "run-1",
+        requestId: "commit-3625",
+        actionKind: "commit",
+      });
+      expect(f.manager.issueApproval).not.toHaveBeenCalled();
+      expect(successfulSnapshot(result)).toMatchObject({ state: "running" });
+      expect(f.manager.stop).not.toHaveBeenCalled();
+    });
+
+    it("never declines an approved proposal", async () => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+      const waiting = successfulSnapshot(
+        await f.orchestrator.ingest(deliveryPermission("delivery-3625", "push")),
+      );
+
+      await f.orchestrator.decideApproval("run-1", {
+        requestId: "delivery-3625",
+        decision: "approved",
+        expectedRevision: waiting.revision,
+      });
+
+      expect(f.manager.declineApproval).not.toHaveBeenCalled();
+      expect(f.manager.issueApproval).toHaveBeenCalledWith(
+        expect.objectContaining({ requestId: "delivery-3625", actionKind: "push" }),
+      );
     });
 
     it("logs an approval with the same decision line", async () => {

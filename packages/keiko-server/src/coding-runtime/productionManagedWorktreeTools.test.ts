@@ -47,6 +47,8 @@ import {
   type ProductionManagedWorktreeToolInput,
 } from "./productionManagedWorktreeTools.js";
 import { dependencyBootstrapFailureSummary } from "./codingToolIpc.js";
+import { createCodingToolApprovalBridge } from "./codingToolApprovalBridge.js";
+import { humanDecisionToolResult } from "./codingToolFacade.js";
 import { MAX_APPROVAL_CHALLENGE_TTL_MS } from "./codingRuntimeOrchestrator.js";
 import {
   DEFAULT_VERIFICATION_LIMITS,
@@ -168,6 +170,86 @@ describe("production managed worktree tools", () => {
     expect(probe.matchesApproval).not.toHaveBeenCalled();
   });
 
+  // Owner decision 2026-09-26 (ADR-0124 D6): a declined proposal stays reviewable, so its wait reads
+  // the decline first and never asks the review or the approval store again.
+  it("settles a proposal wait as denied once the proposal was declined", async () => {
+    const probe = {
+      review: vi.fn(() => ({})),
+      matchesApproval: vi.fn(() => false),
+      declined: vi.fn(() => true),
+    };
+
+    await expect(waitForRuntimeProposalApproval(probe, "commit-declined")).resolves.toBe("denied");
+    expect(probe.declined).toHaveBeenCalledWith("commit-declined");
+    expect(probe.review).not.toHaveBeenCalled();
+    expect(probe.matchesApproval).not.toHaveBeenCalled();
+  });
+
+  // PR #3625: a commit proposal's ask is raised by the server itself, so a denial had nothing to
+  // reply to. Before ADR-0124 D6 the denial ended the whole run and its abort released the wait; with
+  // the run going on, the call held until the approval ceiling. The run's decline now settles it at
+  // once, and the model reads the human's decision.
+  it("answers a declined commit proposal at once with the human's decision", async () => {
+    vi.useFakeTimers();
+    try {
+      const proposalId = "commit-3625-declined";
+      const binding = { proposalId, runId: GOVERNED_RUN_ID, status: "approval-required" as const };
+      const service = {
+        ...verificationService(),
+        propose: vi.fn(() => Promise.resolve({ ...binding, reason: "approval-required" as const })),
+        review: vi.fn(() => ({ binding }) as unknown as VerifiedCommitProposal),
+        matchesApproval: vi.fn(() => false),
+      } as unknown as VerifiedCommitService;
+      const approvals = createCodingToolApprovalBridge(service);
+      const requestCommitApproval = vi.fn();
+      const activityLog: ServerLogEvent[] = [];
+      const facade = governedCommitFacade({
+        service,
+        approvals,
+        requestCommitApproval,
+        activityLog,
+      });
+
+      const pending = facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "delivery",
+          actionId: "delivery-1",
+          idempotencyKey: "delivery-key",
+          intent: "commit",
+          phase: "propose",
+          message: "feat: declined",
+        }),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(requestCommitApproval).toHaveBeenCalledExactlyOnceWith(proposalId);
+      let settled = false;
+      void pending.then((): void => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(settled).toBe(false);
+
+      approvals.declineProposal?.(GOVERNED_RUN_ID, proposalId);
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(pending).resolves.toEqual(humanDecisionToolResult("denied"));
+      const waitLine = activityLog.find(
+        (event) =>
+          event.op === "coding-runtime.tool-result" &&
+          event.extra?.state === "approval-wait-settled",
+      );
+      expect(waitLine).toMatchObject({
+        correlationId: GOVERNED_RUN_ID,
+        extra: { actionKind: "commit", proposalId, reason: "denied" },
+      });
+      expect(waitLine?.errorKind).toBeUndefined();
+      expect(waitLine?.level).not.toBe("warn");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("holds an approval-required stage proposal until its exact approval is issued", async () => {
     vi.useFakeTimers();
     try {
@@ -232,6 +314,65 @@ describe("production managed worktree tools", () => {
             reason: "approved",
             waitCeilingMs: MAX_APPROVAL_CHALLENGE_TTL_MS,
           },
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("answers a declined stage proposal at once with the human's decision", async () => {
+    vi.useFakeTimers();
+    try {
+      const proposal = {
+        kind: "stage" as const,
+        proposalId: "stage-3625-declined",
+        status: "approval-required" as const,
+        reason: "approval-required" as const,
+        pathCount: 1,
+      };
+      const service = {
+        execute: vi.fn(() => Promise.resolve(proposal)),
+        review: vi.fn(() => proposal),
+        matchesApproval: vi.fn(() => false),
+      } as unknown as RuntimeGitService;
+      const approvals = createCodingToolApprovalBridge(undefined, service);
+      const log: ServerLogEvent[] = [];
+      const facade = verificationFacade({
+        runToReport: vi.fn(),
+        records: [],
+        runtimeGitService: service,
+        requestStageApproval: vi.fn(),
+        approvalProofVerifier: approvals,
+        log,
+      });
+
+      const pending = facade.execute({
+        capability: "runtime-capability",
+        body: JSON.stringify({
+          action: "git",
+          operation: "stage",
+          phase: "propose",
+          paths: ["src/index.ts"],
+          actionId: "stage-1",
+          idempotencyKey: "stage-1",
+        }),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      approvals.declineProposal?.("run-verification-3", proposal.proposalId);
+      await vi.advanceTimersByTimeAsync(25);
+
+      await expect(pending).resolves.toEqual(humanDecisionToolResult("denied"));
+      expect(log).toContainEqual(
+        expect.objectContaining({
+          op: "coding-runtime.tool-result",
+          correlationId: "run-verification-3",
+          extra: expect.objectContaining({
+            actionKind: "git-stage",
+            proposalId: proposal.proposalId,
+            state: "approval-wait-settled",
+            reason: "denied",
+          }) as unknown,
         }),
       );
     } finally {
@@ -3437,6 +3578,7 @@ function verificationRunnerOptions(options: {
 
 function verificationFacade(options: {
   readonly ciRepairBudget?: CiRepairExecutionBudget;
+  readonly approvalProofVerifier?: ReturnType<typeof createCodingToolApprovalBridge>;
   readonly verifiedCommitService?: VerifiedCommitService;
   readonly runtimeGitService?: RuntimeGitService;
   readonly requestStageApproval?: (proposalId: string) => void;
@@ -3455,6 +3597,9 @@ function verificationFacade(options: {
 }): ReturnType<typeof createProductionManagedWorktreeToolFacade> {
   return createProductionManagedWorktreeToolFacade({
     ...(options.ciRepairBudget === undefined ? {} : { ciRepairBudget: options.ciRepairBudget }),
+    ...(options.approvalProofVerifier === undefined
+      ? {}
+      : { approvalProofVerifier: options.approvalProofVerifier }),
     ...(options.verifiedCommitService === undefined
       ? {}
       : { verifiedCommitService: options.verifiedCommitService }),
@@ -3591,6 +3736,67 @@ async function registeredVerificationTool(plugin: unknown): Promise<GeneratedVer
   )
     throw new TypeError("generated verification tool invalid");
   return registered as GeneratedVerificationTool;
+}
+
+const GOVERNED_RUN_ID = "run-governed-3625";
+
+// A commit facade in Ask for approval: a commit proposal waits for the operator instead of being
+// released by full-access policy.
+function governedCommitFacade(options: {
+  readonly service: VerifiedCommitService;
+  readonly approvals: ReturnType<typeof createCodingToolApprovalBridge>;
+  readonly requestCommitApproval: (proposalId: string) => void;
+  readonly activityLog: ServerLogEvent[];
+}): ReturnType<typeof createProductionManagedWorktreeToolFacade> {
+  const envelope = governedEnvelope();
+  return createProductionManagedWorktreeToolFacade({
+    verifiedCommitService: options.service,
+    requestCommitApproval: options.requestCommitApproval,
+    approvalProofVerifier: options.approvals,
+    authority: {
+      revalidateCapabilityForMutation: () => ({ ok: true as const, envelope }),
+      resolveCapabilityForDelegation: () => ({ ok: true as const, envelope }),
+    },
+    authorityRef: { runId: GOVERNED_RUN_ID, envelopeDigest: DIGEST },
+    workspaceRoot: "/managed/worktree",
+    resolveWorkspaceRootAccess,
+    authorityExpiresAt: "2099-01-01T00:00:00.000Z",
+    effectiveMode: "governed-assist",
+    deploymentCeiling: "autonomous-delivery",
+    liveFacts: () => ({
+      ...FACTS,
+      actionClasses: [
+        "workspace-read",
+        "workspace-write",
+        "verification",
+        "delivery-substrate",
+        "connector-access",
+      ],
+      connectorScopes: ["source-control.read", "source-control.write"],
+    }),
+    secureWorkspaceTextRead: { readText: () => Promise.resolve({ ok: false, reason: "denied" }) },
+    editorAgentClient: {
+      action: () =>
+        Promise.resolve({
+          ok: false as const,
+          error: { kind: "route" as const, code: "denied", message: "denied" },
+        }),
+    },
+    invocationRegistry: createCodingToolInvocationRegistry(),
+    verificationRunner: { runToReport: vi.fn() },
+    activityLog: { write: (event): void => void options.activityLog.push(event) },
+    onRuntimeEvent: vi.fn(),
+  });
+}
+
+function governedEnvelope(): never {
+  const authorized = authorizedEnvelope() as unknown as {
+    readonly authority: Record<string, unknown>;
+  };
+  return {
+    ...authorized,
+    authority: { ...authorized.authority, effectiveMode: "governed-assist" },
+  } as never;
 }
 
 function verificationService(): VerifiedCommitService {

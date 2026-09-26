@@ -261,6 +261,15 @@ denial stopped the run as `failed`/`revoked`. The tool call a refused ask ends i
 human's verdict — `denied`, or `cancelled` for an expired or cancelled ask — so the timeline shows it
 instead of the generic failure OpenCode reports for a refused call.
 
+A Git stage, commit, push or pull-request proposal is asked for by the server itself, not by a child
+process, and its tool call waits on the server for the operator's decision. An approval releases
+that wait by issuing the proposal's approval; a denial releases it through the run's approval bridge,
+which records the decline for that run and proposal, so the call answers at once with the same
+declined-step result and guidance, and `coding-runtime.tool-result` records the settled wait with
+reason `denied` at info level. Before this, nothing answered a denied proposal: the run ending on a
+denial had released the wait by its abort, and with the run going on the call held until the
+approval ceiling (1.1.10 e2e: a denied commit left its call pending and the run silent).
+
 The run's own wait on an approval ends at the same instant as the ask's
 (`MAX_APPROVAL_CHALLENGE_TTL_MS` is the human-decision wait): an active approval nobody decided in
 time is retired, the run returns to `running`, or to the next queued ask, under a new revision, so
