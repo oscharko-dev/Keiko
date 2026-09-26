@@ -59,6 +59,7 @@ import {
 // `readVerifiedCommitReview`'s call graph ever imported/invoked `createGitChangeSnapshotService`,
 // the propose() flow below would throw instead of returning "approval-required".
 const gitChangeSnapshotServiceSpy = vi.hoisted(() => vi.fn());
+const fixtureGitEnvironment: { value: NodeJS.ProcessEnv } = vi.hoisted(() => ({ value: {} }));
 vi.mock("../gitChangeSnapshotService.js", () => ({
   createGitChangeSnapshotService: (...args: unknown[]): never => {
     gitChangeSnapshotServiceSpy(...args);
@@ -85,6 +86,12 @@ vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal
     ...actual,
     readGitRawChanges: vi.fn(actual.readGitRawChanges),
     readGitRawWorktreeSnapshot: vi.fn(actual.readGitRawWorktreeSnapshot),
+    readGitStageSupport: vi.fn(
+      (
+        deps: Parameters<typeof actual.readGitStageSupport>[0],
+        paths: Parameters<typeof actual.readGitStageSupport>[1],
+      ) => actual.readGitStageSupport({ ...deps, processEnv: fixtureGitEnvironment.value }, paths),
+    ),
   };
 });
 let root: string;
@@ -192,6 +199,7 @@ function context(): VerifiedCommitRunContext {
 
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-commit-service-")));
+  fixtureGitEnvironment.value = { PATH: process.env.PATH, HOME: root };
   signingRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-commit-service-signing-")));
   git(["init", "-qb", "dev"]);
   git(["config", "user.name", "Keiko Test"]);

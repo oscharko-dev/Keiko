@@ -71887,25 +71887,25 @@
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-activity-log/src/reader/support-analyze.ts:1232",
+      "site": "packages/keiko-activity-log/src/reader/support-analyze.ts:1254",
       "package": "keiko-activity-log"
     },
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-activity-log/src/reader/support-analyze.ts:1576",
+      "site": "packages/keiko-activity-log/src/reader/support-analyze.ts:1598",
       "package": "keiko-activity-log"
     },
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-activity-log/src/reader/support-analyze.ts:2090",
+      "site": "packages/keiko-activity-log/src/reader/support-analyze.ts:2112",
       "package": "keiko-activity-log"
     },
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-activity-log/src/reader/support-analyze.ts:2099",
+      "site": "packages/keiko-activity-log/src/reader/support-analyze.ts:2121",
       "package": "keiko-activity-log"
     },
     {
