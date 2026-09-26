@@ -6,6 +6,7 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { readActivityLogText } from "../../scripts/lib/activity-log-files.mjs";
 import type {
   CodingWorkbenchMode,
   CodingWorkbenchRuntimeSnapshot,
@@ -16,7 +17,7 @@ import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/
 import { openCodingIssueWorkbench, selectCodingIssueMode } from "./support/coding-issue-browser.js";
 import {
   issueResolutionTaskInstructions,
-  previewAndAcceptIssue,
+  startStructuredDeliveryRun,
 } from "./support/coding-issue-journey-live.js";
 import {
   commitControlPath,
@@ -168,6 +169,55 @@ async function readyProposal(
 function git(root: string, args: readonly string[]): string {
   return execFileSync("git", [...args], { cwd: root, encoding: "utf8", timeout: 30_000 }).trim();
 }
+
+function activityLogLines(): readonly Record<string, unknown>[] {
+  return readActivityLogText(join(stateDir, "bff-state", "state", "logs"))
+    .trim()
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+/**
+ * ADR-0124 D6 (owner decision, 2026-09-26): a file edit raises no governed ask in ANY mode any
+ * more, so `approved` below can never observe `"file-edit"` -- the edit's one human approval is now
+ * the change review the mode policy requires before anything is written
+ * (governed-assist/supervised-coding review every edit; autonomous-delivery applies without one),
+ * never the retired pre-write ask. "Closing the review card is routine and reports nothing from the
+ * browser; the server line above is the review's evidence" (ADR-0124 D6): this reads that server
+ * line -- `coding-runtime.editor-mutation.settled` (codingToolReadEditPorts.ts's `completedEdit`) --
+ * to relocate what the retired ask used to prove: an edit was actually gated through the mutation
+ * lease and applied, under this run's own correlation, never silently bypassed. Same helper as
+ * `coding-issue-commit.spec.ts`'s own `editorMutationsSettledFor`, kept local rather than shared:
+ * each reads its own file's `stateDir` constant, and the whole check is three lines.
+ */
+function editorMutationsSettledFor(runId: string): readonly Record<string, unknown>[] {
+  return activityLogLines().filter(
+    (line) => line.op === "coding-runtime.editor-mutation.settled" && line.correlationId === runId,
+  );
+}
+
+/**
+ * ADR-0124 D6 (owner decision, 2026-09-26): "a human's 'no' rejects one step, not the run" -- a
+ * denial no longer settles the run `failed`/`revoked` (codingRuntimeOrchestrator.ts's
+ * `decideApproval` transitions unconditionally to `running` once a decision settles, whichever way
+ * it went). The decision itself is what the activity log records instead
+ * (`coding-runtime.approval.decided`, `recordRuntimeApprovalDecided`), keyed by the exact approval
+ * `requestId` (the same value the pending permission's own `requestId` carries) so this is tied to
+ * the specific denied proposal, never any other decision on the run.
+ */
+function approvalDecisionsFor(
+  requestId: string,
+  decision: "approved" | "denied",
+): readonly Record<string, unknown>[] {
+  return activityLogLines().filter(
+    (line) =>
+      line.op === "coding-runtime.approval.decided" &&
+      line.requestId === requestId &&
+      line.decision === decision,
+  );
+}
+
 /**
  * PR #3625 retired the setup card's own "Issue URL or #number" field and its "Preview issue" /
  * "Use this issue" / "Bind workspace" controls: binding a workspace is now unrelated to resolving
@@ -223,12 +273,23 @@ async function startVerified(
   });
   const root = await provisionDeliveryWorkspace(page, `delivery-${mode}-${String(number)}`);
   await selectCodingIssueMode(page, mode);
-  // PR #3625: the issue reference is resolved from the prompt at Send time, in the SAME click that
-  // starts the run (`previewAndAcceptIssue`, coding-issue-journey-live.ts) -- it also settles the
-  // auth-required grant-retry dance this fixture's freshly-provisioned repository needs, through
-  // the real "Enable GitHub issue access" control, so the removed `allowIssueReader` direct-API
-  // grant is no longer required either.
-  await previewAndAcceptIssue(page, issueResolutionTaskInstructions(`#${String(number)}`));
+  // ADR-0137 D3 / #3625 review: a Workbench prompt's issue link is task CONTEXT ONLY --
+  // `previewAndAcceptIssue` always sends `issuePurpose: "context"` by design
+  // (coding-workbench-runtime-mutations.ts), so a run started that way never gets the delivery
+  // binding draft delivery (push/PR proposals) requires. This suite exercises real push/PR
+  // delivery, so it starts through the structured runtime start API with `issuePurpose: "delivery"`
+  // instead (`startStructuredDeliveryRun`, coding-issue-journey-live.ts), which also settles the
+  // per-repository GitHub issue-reader grant this fixture's freshly-provisioned repository needs.
+  await startStructuredDeliveryRun(page, {
+    // The grant is keyed by the canonical registered repository, never a managed worktree's own
+    // path (githubIssueReaderAuthorization.ts's `githubIssueReaderGrantRoot`: a task worktree
+    // inherits ITS repository's grant; a run's own auth check already reads the active workspace's
+    // repository root, which for a managed worktree is this canonical path, not `root` above).
+    repositoryPath: repository,
+    requestedMode: mode,
+    issueRef: `#${String(number)}`,
+    taskIntent: issueResolutionTaskInstructions(`#${String(number)}`),
+  });
   const approved = new Set<string>();
   await expect
     .poll(
@@ -246,10 +307,17 @@ async function startVerified(
       { timeout: 120_000 },
     )
     .toBe("verified-turn-ready");
+  const afterTurn = await snapshot(page);
   expect([...approved].sort()).toEqual(
-    mode === "governed-assist" ? ["file-edit", "git-stage", "verification-command"] : [],
+    mode === "governed-assist" ? ["git-stage", "verification-command"] : [],
   );
-  expect((await snapshot(page)).issueBinding?.issueNumber).toBe(number);
+  if (afterTurn.runId === undefined) throw new Error("Expected an active run id");
+  const settled = editorMutationsSettledFor(afterTurn.runId);
+  expect(settled.length).toBeGreaterThan(0);
+  expect(settled.every((line) => line.state === "succeeded" && line.actionKind === "edit")).toBe(
+    true,
+  );
+  expect(afterTurn.issueBinding?.issueNumber).toBe(number);
   const { proposed, proposalId } = await readyProposal(
     page,
     mode,
@@ -640,18 +708,21 @@ async function pushApproved(
   recordFor(await control("push-execute", proposalId), "pushed");
 }
 
-test("#3387 @coding-issue-delivery explicit push denial revokes all remote effects", async ({
+test("#3387 @coding-issue-delivery explicit push denial rejects only that step", async ({
   page,
 }) => {
   const before = provider();
   await startVerified(page, "governed-assist", 45);
   const pending = await startPendingProposal(page, "push-propose", "push");
   await page.getByRole("button", { name: "Deny", exact: true }).click();
-  await expect.poll(async () => (await snapshot(page)).state).toBe("failed");
+  // ADR-0124 D6 (owner decision, 2026-09-26): "a human's 'no' rejects one step, not the run" -- the
+  // run returns to `running`, never `failed`/`revoked`.
+  await expect.poll(async () => (await snapshot(page)).state).toBe("running");
   expect((await waitControl(pending.controlId)).result?.status).toBe("cancelled");
   await expectDenied("push-execute", pending.proposalId);
   expect(provider()).toMatchObject({ pushes: before.pushes, creates: before.creates });
-  await finish(page, true);
+  expect(approvalDecisionsFor(pending.proposalId, "denied").length).toBeGreaterThan(0);
+  await finish(page);
 });
 
 test("#3387 @coding-issue-delivery dirty worktree after approval cannot publish", async ({
@@ -774,9 +845,12 @@ test("#3387 @coding-issue-delivery PR denial keeps the pushed commit but creates
   await pushApproved(page, "supervised-coding");
   const pending = await startPendingProposal(page, "pr-propose", "pull-request");
   await page.getByRole("button", { name: "Deny", exact: true }).click();
-  await expect.poll(async () => (await snapshot(page)).state).toBe("failed");
+  // ADR-0124 D6 (owner decision, 2026-09-26): "a human's 'no' rejects one step, not the run" -- the
+  // run returns to `running`, never `failed`/`revoked`.
+  await expect.poll(async () => (await snapshot(page)).state).toBe("running");
   expect((await waitControl(pending.controlId)).result?.status).toBe("cancelled");
   await expectDenied("pr-execute", pending.proposalId);
   expect(provider()).toMatchObject({ pushes: before.pushes + 1, creates: before.creates });
-  await finish(page, true);
+  expect(approvalDecisionsFor(pending.proposalId, "denied").length).toBeGreaterThan(0);
+  await finish(page);
 });
