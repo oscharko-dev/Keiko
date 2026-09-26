@@ -15,6 +15,10 @@ import type {
 import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import { openCodingIssueWorkbench, selectCodingIssueMode } from "./support/coding-issue-browser.js";
 import {
+  issueResolutionTaskInstructions,
+  previewAndAcceptIssue,
+} from "./support/coding-issue-journey-live.js";
+import {
   commitControlPath,
   commitObservationPath,
   COMMIT_MESSAGE,
@@ -164,40 +168,48 @@ async function readyProposal(
 function git(root: string, args: readonly string[]): string {
   return execFileSync("git", [...args], { cwd: root, encoding: "utf8", timeout: 30_000 }).trim();
 }
-async function allowIssueReader(page: Page): Promise<void> {
-  const endpoint = "/api/coding-workbench/github-authorization";
-  const current = await page.request.get(
-    `${endpoint}?${new URLSearchParams({ repositoryPath: repository }).toString()}`,
-  );
-  expect(current.ok()).toBe(true);
-  const revision = ((await current.json()) as { readonly revision: number }).revision;
-  const updated = await page.request.put(endpoint, {
-    headers: CSRF,
-    data: { repositoryPath: repository, authorized: true, expectedRevision: revision },
-  });
-  expect(updated.ok(), await updated.text()).toBe(true);
-}
-async function bindIssue(page: Page, number: number): Promise<string> {
+/**
+ * PR #3625 retired the setup card's own "Issue URL or #number" field and its "Preview issue" /
+ * "Use this issue" / "Bind workspace" controls: binding a workspace is now unrelated to resolving
+ * any issue (coding-issue-journey-live.ts's `previewAndBindIssue` comment). This provisions the
+ * plain repository/branch task workspace directly through the same real, already-relied-on API the
+ * sibling `coding-issue-commit.spec.ts`'s own `provision` uses for its (issue-less) workspace,
+ * rather than reimplementing the "Code setup" combobox flow `coding-issue-intake.spec.ts`'s
+ * `bindPlainWorkspace` drives for a DIFFERENT fixture -- both are real product affordances for the
+ * same effect; this file already trusted the API one before PR #3625 (via the retired flow's own
+ * `bindIssue`, which cleared and rebound through it too) and every test case here needs its own
+ * fresh workspace (`serial` mode reuses one server across all of them).
+ */
+async function provisionDeliveryWorkspace(page: Page, taskId: string): Promise<string> {
   const cleared = await page.request.delete("/api/task-workspaces/active", {
     headers: CSRF,
     data: {},
   });
   expect(cleared.ok(), await cleared.text()).toBe(true);
+  const response = await page.request.post("/api/task-workspaces", {
+    headers: CSRF,
+    data: { root: repository, taskId, baseBranch: "main", requestedBy: "delivery-browser-fixture" },
+  });
+  expect(response.ok(), await response.text()).toBe(true);
+  const { instance } = (await response.json()) as {
+    readonly instance: { readonly workspaceId: string; readonly managedWorktreePath: string };
+  };
+  const repaired = await page.request.post("/api/task-workspaces/reconciliation", {
+    headers: CSRF,
+    data: { requestedBy: "delivery-browser-fixture" },
+  });
+  expect(repaired.ok()).toBe(true);
+  const activated = await page.request.post("/api/task-workspaces/active", {
+    headers: CSRF,
+    data: {
+      workspaceId: instance.workspaceId,
+      requestedBy: "delivery-browser-fixture",
+      acquireLock: false,
+    },
+  });
+  expect(activated.ok(), await activated.text()).toBe(true);
   await page.reload();
-  await allowIssueReader(page);
-  await page.getByLabel("Issue URL or #number").fill(`#${String(number)}`);
-  await page.getByRole("button", { name: "Preview issue", exact: true }).click();
-  await expect(page.getByRole("region", { name: "Issue preview", exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Use this issue", exact: true }).click();
-  await page.getByRole("button", { name: "Bind workspace", exact: true }).click();
-  await expect(page.getByRole("region", { name: "Code setup", exact: true })).toHaveCount(0);
-  const active = await page.request.get("/api/task-workspaces/active");
-  expect(active.ok()).toBe(true);
-  return (
-    (await active.json()) as {
-      readonly active: { readonly binding: { readonly activeRoot: string } };
-    }
-  ).active.binding.activeRoot;
+  return instance.managedWorktreePath;
 }
 async function startVerified(
   page: Page,
@@ -209,20 +221,14 @@ async function startVerified(
     windowId: WINDOW_ID,
     launcherSecret: DELIVERY_LAUNCHER_SECRET,
   });
-  const root = await bindIssue(page, number);
+  const root = await provisionDeliveryWorkspace(page, `delivery-${mode}-${String(number)}`);
   await selectCodingIssueMode(page, mode);
-  await page
-    .getByLabel("Task instructions")
-    .fill("Implement, verify and deliver the accepted issue.");
-  await expect(page.getByRole("button", { name: "Start coding run", exact: true })).toBeEnabled();
-  const responsePromise = page.waitForResponse(
-    (response) =>
-      response.request().method() === "POST" &&
-      response.url().endsWith("/api/coding-workbench/runtime/runs"),
-  );
-  await page.getByRole("button", { name: "Start coding run", exact: true }).click();
-  const started = await responsePromise;
-  expect(started.ok(), await started.text()).toBe(true);
+  // PR #3625: the issue reference is resolved from the prompt at Send time, in the SAME click that
+  // starts the run (`previewAndAcceptIssue`, coding-issue-journey-live.ts) -- it also settles the
+  // auth-required grant-retry dance this fixture's freshly-provisioned repository needs, through
+  // the real "Enable GitHub issue access" control, so the removed `allowIssueReader` direct-API
+  // grant is no longer required either.
+  await previewAndAcceptIssue(page, issueResolutionTaskInstructions(`#${String(number)}`));
   const approved = new Set<string>();
   await expect
     .poll(
