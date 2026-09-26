@@ -786,12 +786,22 @@ function canonicalEndpointIdentity(raw: string): string {
 // points at the endpoint it applies to: an UPLOADED protocol rides only while the form still
 // points at the uploaded gateway endpoint (a manually retyped URL must not inherit the file's
 // protocol, #3042; an edit that does not change the endpoint's identity keeps it, #3046). A
-// HAND-STATED protocol (importedEndpointBaseUrl still empty — nothing was ever uploaded) carries
-// no such binding and rides with whatever endpoint is currently entered, exactly like the visible
-// voice fields.
+// HAND-STATED protocol (importedEndpointBaseUrl still empty — nothing was ever uploaded, OR the
+// operator's own statement released a prior upload's binding, see setChatEndpointStyle /
+// setChatApiVersion below) carries no such binding and rides with whatever endpoint is currently
+// entered — including a preserve-mode blank Base URL, which means "keep the stored endpoint" and
+// is therefore an endpoint too (PR #3625 review).
 function importedEndpointPayload(fields: GatewayFormFields): Partial<GatewaySetupInput> {
   const submittedBaseUrl = fields.baseUrl.trim();
-  if (submittedBaseUrl === "") return {};
+  // A blank URL in preserve mode means "keep the stored endpoint" (mirrors
+  // statedVoiceEndpointPayload's twin rule): a hand-stated protocol applies to that endpoint and
+  // must still submit. An UPLOADED protocol stays bound to its own uploaded URL, which a blank
+  // field can no longer match, so it is dropped exactly like any other endpoint mismatch below.
+  if (submittedBaseUrl === "") {
+    return fields.preserveExisting && fields.importedEndpointBaseUrl === ""
+      ? statedEndpointProtocolFields(fields)
+      : {};
+  }
   // An empty binding means the file declared a protocol but left the URL to the operator, so it
   // applies to whatever endpoint is entered — the same "unbound" rule the voice twin uses. The
   // imported values always come from the CURRENT file, so this can never resurrect an earlier
@@ -803,6 +813,10 @@ function importedEndpointPayload(fields: GatewayFormFields): Partial<GatewaySetu
   ) {
     return {};
   }
+  return statedEndpointProtocolFields(fields);
+}
+
+function statedEndpointProtocolFields(fields: GatewayFormFields): Partial<GatewaySetupInput> {
   return {
     ...(fields.importedEndpointStyle === "" ? {} : { endpointStyle: fields.importedEndpointStyle }),
     ...(fields.importedApiVersion === "" ? {} : { apiVersion: fields.importedApiVersion }),
@@ -1243,10 +1257,12 @@ interface GatewayApiVersionFieldProps {
   readonly onChange: Dispatch<SetStateAction<string>>;
 }
 
-// #3638: manual twin of VoiceApiVersionField for the generic (chat/embedding) connection. No
-// endpoint-identity binding is needed here (unlike the voice fields): the generic connection has
-// exactly one base URL, entered in the same section, so there is no second candidate endpoint a
-// stated protocol could be mistaken for.
+// #3638: manual twin of VoiceApiVersionField for the generic (chat/embedding) connection. A
+// single base URL field does not remove the need for identity binding — importedEndpointStyle
+// and importedApiVersion also carry an UPLOADED protocol, so typing here must still release that
+// binding (onChange is wired to setChatApiVersion, not the raw state setter), or a value stated
+// after the Base URL was edited away from the uploaded one stayed gated on the stale upload
+// (review findings on PR #3625).
 function GatewayApiVersionField({
   value,
   disabled,
@@ -2673,20 +2689,34 @@ export function GatewaySetupDialog({
   const [importedVoiceEndpointBaseUrl, setImportedVoiceEndpointBaseUrl] = useState("");
   // #3638: also the operator's OWN manual statement now, not import-only — see
   // gatewayEndpointStyleSections / GatewayApiVersionField. Kept under its original "imported"
-  // name (rather than renamed across every call site) since importedEndpointPayload's existing
-  // gating already does exactly the right thing for a hand-typed value: it rides into the setup
-  // payload unconditionally whenever importedEndpointBaseUrl is still empty (i.e. nothing was
-  // ever uploaded), and otherwise only while the form still points at the endpoint an upload
-  // declared it for (#3042/#3046).
+  // name (rather than renamed across every call site): importedEndpointPayload's gating makes a
+  // hand-typed value ride the setup payload unconditionally whenever importedEndpointBaseUrl is
+  // empty — nothing was ever uploaded, OR a hand statement released the binding below — and
+  // otherwise only while the form still points at the endpoint an upload declared it for
+  // (#3042/#3046).
   const [importedEndpointStyle, setImportedEndpointStyle] = useState("");
   const [importedApiVersion, setImportedApiVersion] = useState("");
   const [importedEndpointBaseUrl, setImportedEndpointBaseUrl] = useState("");
+  // A hand statement is never bound to the last upload's URL, unlike an import (review findings on
+  // PR #3625): editing the imported URL and only THEN picking a style left the binding pointed at
+  // the old upload, so importedEndpointPayload compared it against the new URL and silently
+  // dropped the operator's own choice. Releasing the binding — rather than rebinding it to
+  // whatever the Base URL field holds right now, like bindStatedVoiceProtocol does — also covers
+  // the reverse order (stating the protocol, then editing the URL): once released, the statement
+  // rides unconditionally, exactly like a dialog that never saw an upload at all, including a
+  // preserve-mode blank Base URL (blank = keep the stored endpoint).
+  const releaseImportedEndpointBinding = (): void => setImportedEndpointBaseUrl("");
   // An api version pairs only with the Azure deployment path (server-enforced,
   // GATEWAY_API_VERSION_REQUIRES_AZURE_ENDPOINT) — clearing it when the operator switches away
   // mirrors stateVoiceEndpointStyle so a stale version never blocks an otherwise valid submit.
   const setChatEndpointStyle = (next: string): void => {
     setImportedEndpointStyle(next);
     if (next !== "azure-openai-deployment") setImportedApiVersion("");
+    releaseImportedEndpointBinding();
+  };
+  const setChatApiVersion: Dispatch<SetStateAction<string>> = (value): void => {
+    setImportedApiVersion(value);
+    releaseImportedEndpointBinding();
   };
   const [uploadReadPending, setUploadReadPending] = useState(false);
   const [workflowEligibleModelIdsConfigured, setWorkflowEligibleModelIdsConfigured] =
@@ -3302,7 +3332,7 @@ export function GatewaySetupDialog({
       endpointStyle={importedEndpointStyle}
       setEndpointStyle={setChatEndpointStyle}
       apiVersion={importedApiVersion}
-      setApiVersion={setImportedApiVersion}
+      setApiVersion={setChatApiVersion}
       timeoutMs={timeoutMs}
       setTimeoutMs={setTimeoutMs}
       deploymentNames={deploymentNames}

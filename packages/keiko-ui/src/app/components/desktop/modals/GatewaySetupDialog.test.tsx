@@ -3174,6 +3174,94 @@ describe("GatewaySetupDialog", () => {
     expect(payload).not.toHaveProperty("apiVersion");
   });
 
+  it("submits a hand-picked chat gateway protocol after the imported Base URL is replaced (PR #3625 review)", async () => {
+    // A manual protocol choice made AFTER editing an imported URL stayed bound to the OLD
+    // uploaded endpoint: importedEndpointPayload compared it against the new URL, found a
+    // mismatch, and silently dropped the operator's own selection from Test & Save.
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "azure-chat",
+      testedModelIds: ["azure-chat"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog />);
+
+    await userEvent.upload(
+      await screen.findByLabelText(/load keiko\.config\.json/i),
+      new File(
+        [
+          JSON.stringify({
+            providers: [
+              {
+                modelId: "azure-chat",
+                baseUrl: "https://resource-a.example.com",
+                capability: { id: "azure-chat", kind: "chat" },
+              },
+            ],
+          }),
+        ],
+        "keiko.config.json",
+        { type: "application/json" },
+      ),
+    );
+    await waitFor(() =>
+      expect(screen.getByLabelText(/base url/i)).toHaveValue("https://resource-a.example.com"),
+    );
+
+    // Replace the imported URL with an unrelated Azure endpoint BEFORE stating the protocol —
+    // the exact order the review finding reproduces.
+    await userEvent.clear(screen.getByLabelText(/base url/i));
+    await userEvent.type(screen.getByLabelText(/base url/i), "https://resource-b.example.com");
+    await userEvent.type(screen.getByLabelText(/api token/i), "example-token");
+    await userEvent.click(screen.getByRole("combobox", { name: /gateway endpoint style/i }));
+    await userEvent.click(screen.getByRole("option", { name: "Azure deployment path" }));
+    await userEvent.type(screen.getByLabelText(/gateway api version/i), "2025-04-01-preview");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(setupGateway).mock.calls[0]?.[0]).toMatchObject({
+      endpointStyle: "azure-openai-deployment",
+      apiVersion: "2025-04-01-preview",
+    });
+  });
+
+  it("submits a hand-picked chat gateway protocol for a preserved endpoint with a blank Base URL (PR #3625 review)", async () => {
+    // In update mode the Base URL field starts blank to mean "keep the stored endpoint" — a
+    // protocol stated against it must still submit. importedEndpointPayload used to return {}
+    // for ANY blank Base URL before even looking at the stated fields, so Test & Save silently
+    // kept the old protocol on the preserved endpoint.
+    vi.mocked(setupGateway).mockResolvedValueOnce({
+      ok: true,
+      testedModelId: "stored-chat",
+      testedModelIds: ["stored-chat"],
+      providerCount: 1,
+      models: [],
+      config: {
+        providers: [],
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+      },
+    });
+    render(<GatewaySetupDialog preserveExisting storedModels={[modelCapability("stored-chat")]} />);
+
+    await userEvent.type(screen.getByLabelText(/api token/i), "rotated-token");
+    await userEvent.click(screen.getByRole("combobox", { name: /gateway endpoint style/i }));
+    await userEvent.click(screen.getByRole("option", { name: "Azure deployment path" }));
+    await userEvent.type(screen.getByLabelText(/gateway api version/i), "2025-04-01-preview");
+    expect(screen.getByLabelText(/base url/i)).toHaveValue("");
+    await userEvent.click(screen.getByRole("button", { name: /test & save/i }));
+
+    await waitFor(() => expect(setupGateway).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(setupGateway).mock.calls[0]?.[0]).toMatchObject({
+      endpointStyle: "azure-openai-deployment",
+      apiVersion: "2025-04-01-preview",
+    });
+  });
+
   it("rejects an unreadable configuration upload with a visible alert and no field changes", async () => {
     render(<GatewaySetupDialog />);
 
