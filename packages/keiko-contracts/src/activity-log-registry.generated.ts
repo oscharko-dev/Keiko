@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "c5978307e70a2542c1e76ca12cc51244fda79b03a746fe56a7c6bff61c17bbd8" as const;
+  "cd8a7d41734b263f282da469e77493570c249b5c98b7f577507a8f530109c265" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -1055,6 +1055,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         type: "integer",
         dataClass: "count",
         required: false,
+      },
+      reasoningEffort: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: false,
+        values: ["none", "minimal", "low", "medium", "high", "xhigh"],
       },
     },
     causal: "correlation",
@@ -25834,6 +25840,12 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
         dataClass: "count",
         required: false,
       },
+      baseBranchDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: false,
+        maxLength: 64,
+      },
       driftMarker: {
         type: "string",
         dataClass: "closed-enum",
@@ -41467,6 +41479,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "baseBranchDigest",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
               name: "causeChain",
               type: "string-array",
               dataClass: "error-kind",
@@ -41537,6 +41555,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "closed-enum",
             "completeness-state",
             "count",
+            "digest",
             "error-kind",
             "loss-state",
             "opaque-id",
@@ -41954,6 +41973,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               name: "readBudgetMs",
               type: "number",
               dataClass: "duration",
+              required: false,
+            },
+            {
+              name: "reasoningEffort",
+              type: "string",
+              dataClass: "closed-enum",
               required: false,
             },
             {
@@ -57978,6 +58003,12 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
               required: false,
             },
             {
+              name: "baseBranchDigest",
+              type: "string",
+              dataClass: "digest",
+              required: false,
+            },
+            {
               name: "causeChain",
               type: "string-array",
               dataClass: "error-kind",
@@ -58048,6 +58079,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             "closed-enum",
             "completeness-state",
             "count",
+            "digest",
             "error-kind",
             "loss-state",
             "opaque-id",

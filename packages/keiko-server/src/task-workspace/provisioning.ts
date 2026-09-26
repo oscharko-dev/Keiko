@@ -180,6 +180,8 @@ interface EmitInput {
   // The managed worktrees this outcome handled: one for a materialised, resumed or activated
   // worktree, none for a pre-write rejection or a refusal.
   readonly worktreeCount?: number | undefined;
+  // The branch a provisioned workspace was cut from; the line carries only its digest.
+  readonly baseBranch?: string | undefined;
 }
 
 // ─── pure helpers ────────────────────────────────────────────────────────────────────────────────
@@ -378,6 +380,7 @@ function emit(ctx: ProvisioningCtx, input: EmitInput): void {
     errorCode: input.errorCode,
     error: input.error,
     driftMarker: input.driftMarker,
+    baseBranch: input.baseBranch,
   });
   if (input.errorCode !== undefined) ctx.failureOutcomeRecorded = true;
 }
@@ -840,6 +843,7 @@ async function runWorktreeMutation(
     fromState: "provisioning",
     toState: "active",
     worktreeCount: 1,
+    baseBranch: request.baseBranch,
   });
   return { instance: active, binding: buildBinding(active), created: attemptedHere };
 }
