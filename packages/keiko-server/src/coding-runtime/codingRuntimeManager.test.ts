@@ -1823,7 +1823,7 @@ describe("coding runtime manager", () => {
       expect.objectContaining({
         correlationId: "run-1988",
         timestamp: "2026-07-07T13:00:00.000Z",
-        operation: "coding-runtime.sandbox-attestation",
+        operation: "coding-runtime.readiness.failed",
         source: "coding-runtime-manager.sandbox-attestation",
         errorClass: "TypeError",
         message: "runtime-start-failed",
@@ -4590,7 +4590,7 @@ describe("codex reviewed egress policy validation", () => {
       expect.objectContaining({
         correlationId: "run-1988",
         timestamp: "2026-07-07T13:00:00.000Z",
-        operation: "coding-runtime.egress-policy",
+        operation: "coding-runtime.readiness.failed",
         source: "coding-runtime-manager.egress-policy",
         errorClass: "Error",
         message: "runtime-start-failed",
