@@ -41,6 +41,7 @@ import {
   type ClientSessionRepairStream,
   type ClientDiagnosticGitChangeDescription,
   type ClientDiagnosticGitClientOperation,
+  type ClientDiagnosticSelectDismissal,
   type ClientGitRetryOperation,
   type ClientMarkdownLayout,
   type ClientErrorEvidence,
@@ -132,6 +133,9 @@ export interface ClientDiagnosticMeta {
   // surface that asked for it is already gone (PR #3625 review): which operation, and how it
   // settled — never the repository, path or URL involved.
   readonly gitClientOperation?: ClientDiagnosticGitClientOperation | undefined;
+  // An open `KeikoSelect` menu dismissed by Escape (PR #3625 review): the closed reason and which
+  // focus location — trigger, search or option — Escape acted from, never a label or option text.
+  readonly selectDismissal?: ClientDiagnosticSelectDismissal | undefined;
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly stageReport?: ClientDiagnosticStageReport | undefined;

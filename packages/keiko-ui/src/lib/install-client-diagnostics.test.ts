@@ -946,6 +946,35 @@ describe("fanOutClientDiagnostic budgets", () => {
     expect(fetchMock).toHaveBeenCalledTimes(20);
     expect(clientDiagnosticPostThrottledCount()).toBe(1);
   });
+
+  // PR #3625 review (KeikoSelect.tsx finding): an open menu's Escape dismissal has no failure
+  // variant at all, so it always spends the routine budget — never the one a genuine failure report
+  // needs — exactly like the discarded-succeeded git-client settlement above.
+  it("posts a select dismissal on the wire and spends the routine budget", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    fanOutClientDiagnostic("[keiko] select menu dismissed by Escape (focus=trigger)", {
+      kind: "other",
+      selectDismissal: { reason: "escape", focus: "trigger" },
+    });
+    expect(lastPostedBody(fetchMock)).toMatchObject({
+      kind: "other",
+      selectDismissal: { reason: "escape", focus: "trigger" },
+    });
+
+    for (let index = 1; index <= 25; index += 1) {
+      fanOutClientDiagnostic("[keiko] select menu dismissed by Escape (focus=option)", {
+        kind: "other",
+        selectDismissal: { reason: "escape", focus: "option" },
+      });
+    }
+    fanOutClientDiagnostic("boundary caught TypeError", { kind: "boundary" });
+
+    expect(lastPostedBody(fetchMock)).toMatchObject({ message: "boundary caught TypeError" });
+    expect(clientDiagnosticPostThrottledCount()).toBe(0);
+  });
 });
 
 it("posts reduced production frames and closed causes through the existing transport", () => {

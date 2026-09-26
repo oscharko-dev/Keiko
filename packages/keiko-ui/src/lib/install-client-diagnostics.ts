@@ -267,6 +267,7 @@ function clientMessagePostBody(
     gitChangeDescription: meta.gitChangeDescription,
     workspaceTrustBinding: meta.workspaceTrustBinding,
     gitClientOperation: meta.gitClientOperation,
+    selectDismissal: meta.selectDismissal,
     codingHistoryScope: meta.codingHistoryScope,
     codingIssueOutcome: meta.codingIssueOutcome,
     loss,
@@ -339,12 +340,14 @@ function gitClientOperationPostBudget(
 
 // Routine evidence: a stage, every binding outcome but a missing target (an offer and a person's
 // decision included), a session repair that recovered, a git-client operation that discarded a
-// succeeded result or recovered/superseded on retry, a manual retry's attempt line. Everything else
-// is a failure report. The binding, repair and git-client rules are the server's own
+// succeeded result or recovered/superseded on retry, a manual retry's attempt line, a select menu's
+// Escape dismissal (PR #3625 review — there is no failure variant of that report at all). Everything
+// else is a failure report. The binding, repair and git-client rules are the server's own
 // (keiko-contracts), so the two budgets never drift.
 function postBudget(meta: ClientDiagnosticMeta | undefined): ClientDiagnosticPostBudget {
   if (meta === undefined) return "failure";
   if (meta.stageReport !== undefined || meta.gitRetryAttemptReport !== undefined) return "routine";
+  if (meta.selectDismissal !== undefined) return "routine";
   if (meta.bindingReport !== undefined) return bindingPostBudget(meta.bindingReport.outcome);
   if (meta.sessionRepairReport !== undefined) {
     return repairPostBudget(meta.sessionRepairReport.outcome);

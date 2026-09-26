@@ -657,6 +657,27 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
   {
     contractKind: "activity-log-failure-class",
     schemaVersion: 1,
+    failureClass: "client-select",
+    requiredProductSurfaces: ["keiko-server"],
+    requiredLifecycleOperations: {
+      start: [],
+      state: [],
+      end: ["client.select.dismissed"],
+      failure: [],
+      loss: [],
+    },
+    requiredCausalOperations: ["client.select.dismissed"],
+    requiredLossOperations: [],
+    requiredProofOperations: ["client.select.dismissed"],
+    requiredReplayProofIds: [],
+    requiredResourceOperations: ["client.select.dismissed"],
+    requiredEvidenceClasses: ["closed-enum", "completeness-state", "loss-state"],
+    requiredFrameOperations: [],
+    requiredCauseOperations: [],
+  },
+  {
+    contractKind: "activity-log-failure-class",
+    schemaVersion: 1,
     failureClass: "client-session-repair",
     requiredProductSurfaces: ["keiko-server"],
     requiredLifecycleOperations: {

@@ -16,6 +16,8 @@ import {
   CLIENT_SESSION_REPAIR_OUTCOMES,
   CLIENT_SESSION_REPAIR_ROUTINE_OUTCOMES,
   CLIENT_SESSION_REPAIR_STREAMS,
+  CLIENT_SELECT_DISMISSAL_FOCUS_LOCATIONS,
+  CLIENT_SELECT_DISMISSAL_REASONS,
   CLIENT_DIAGNOSTIC_KINDS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_KEYS,
   CLIENT_DIAGNOSTIC_LOSS_COUNT_MAX,
@@ -298,6 +300,33 @@ describe("isClientDiagnosticIngestRequest", () => {
       expect(
         isClientDiagnosticIngestRequest({ ...validRequest(), gitClientOperation: invalid }),
       ).toBe(false);
+    }
+  });
+
+  // PR #3625 review (KeikoSelect.tsx finding): an open menu consumes Escape wherever focus sits, and
+  // this closed pair is the only evidence of which surface actually closed — never a label or an
+  // option's text.
+  it("accepts only a closed select dismissal: a known reason paired with a known focus location", () => {
+    for (const reason of CLIENT_SELECT_DISMISSAL_REASONS) {
+      for (const focus of CLIENT_SELECT_DISMISSAL_FOCUS_LOCATIONS) {
+        expect(
+          isClientDiagnosticIngestRequest({
+            ...validRequest(),
+            selectDismissal: { reason, focus },
+          }),
+        ).toBe(true);
+      }
+    }
+    for (const invalid of [
+      { reason: "outside-click", focus: "trigger" },
+      { reason: "escape", focus: "menu" },
+      { reason: "escape" },
+      { focus: "trigger" },
+      { reason: "escape", focus: "trigger", label: "Model only" },
+    ]) {
+      expect(isClientDiagnosticIngestRequest({ ...validRequest(), selectDismissal: invalid })).toBe(
+        false,
+      );
     }
   });
 });

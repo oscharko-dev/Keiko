@@ -905,6 +905,43 @@ const CLIENT_GIT_OPERATION_ATTEMPTED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+// PR #3625 review (KeikoSelect.tsx finding): an open menu consumes Escape wherever focus sits — the
+// trigger, the search box, or an option — instead of leaving it to the workspace's own Escape
+// shortcut, which otherwise would have cleared the window selection while the menu stayed open. This
+// is the only line that shows which surface an operator's Escape actually dismissed: a closed menu
+// already leaves Escape to its ancestors and reports nothing, so every line here names a menu that
+// really was open. There is no failure variant of this report — Escape either closes an open menu or
+// it does not report at all — so it always spends the routine budget, never the one a genuine
+// failure needs.
+const CLIENT_SELECT_DISMISSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.select.dismissed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientSelectDismissed",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["escape"],
+    },
+    focus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["trigger", "search", "option"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["client-select"],
+  proofIds: ["client.select.dismissed.line"],
+  releaseImpact: "patch",
+});
+
 // One declaration for production and the test reset below — duplicating these three literals let
 // them drift, so the test reset silently exercised a limiter with different bounds than production.
 const CLIENT_DIAGNOSTIC_RATE_LIMIT_CONFIG = {
@@ -1324,6 +1361,30 @@ function logClientGitOperationSettled(
   return true;
 }
 
+// PR #3625 review: a select dismissal is always routine evidence — there is no failure variant, so
+// it is diverted here, before `logClientDiagnostic` builds the failure-shaped `extra` below, exactly
+// like `logClientGitOperationSettled`'s own diversion.
+function logClientSelectDismissed(
+  request: ClientDiagnosticIngestRequest,
+  correlationId: string,
+): boolean {
+  const selectDismissal = request.selectDismissal;
+  if (selectDismissal === undefined) return false;
+  getServerLogger().info(
+    activityLogEvent(
+      CLIENT_SELECT_DISMISSED_OPERATION,
+      clientDiagnosticCorrelation(request, correlationId),
+      {
+        reason: selectDismissal.reason,
+        focus: selectDismissal.focus,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+  return true;
+}
+
 function logClientDiagnostic(
   request: ClientDiagnosticIngestRequest,
   ingestCorrelationId: string | undefined,
@@ -1335,7 +1396,8 @@ function logClientDiagnostic(
   if (
     logVoiceDialogueStage(request, correlationId) ||
     logMarkdownLayout(request, correlationId) ||
-    logClientGitOperationSettled(request, correlationId)
+    logClientGitOperationSettled(request, correlationId) ||
+    logClientSelectDismissed(request, correlationId)
   ) {
     return;
   }
@@ -1773,8 +1835,11 @@ function classifyClientReport(value: unknown): ClassifiedClientReport | undefine
 
 // A message report is a failure budget by default, except a git-client operation settlement that
 // discarded a succeeded result or recovered/superseded on retry — that is routine evidence, not a
-// failure, exactly like a binding that resolved or a session repair that recovered (#3625 review).
+// failure, exactly like a binding that resolved or a session repair that recovered (#3625 review) —
+// and a select menu's Escape dismissal, which has no failure variant at all (PR #3625 review,
+// KeikoSelect.tsx finding).
 function messageReportBudget(report: ClientDiagnosticIngestRequest): ClientReportBudget {
+  if (report.selectDismissal !== undefined) return "routine";
   const outcome = report.gitClientOperation?.outcome;
   if (outcome === undefined) return "failure";
   return CLIENT_GIT_CLIENT_OPERATION_FAILURE_OUTCOMES.has(outcome) ? "failure" : "routine";

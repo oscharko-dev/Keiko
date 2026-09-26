@@ -92,6 +92,13 @@ function clientDiagnosticRejectedEvents(sink: BufferedServerLogSink): readonly S
   return sink.events.filter((event) => event.op === "client.diagnostic.rejected");
 }
 
+// PR #3625 review (KeikoSelect.tsx finding): a select menu's Escape dismissal, its own operation.
+function selectDismissedEvent(sink: BufferedServerLogSink): ServerLogEvent {
+  const event = sink.events.find((candidate) => candidate.op === "client.select.dismissed");
+  expect(event, "expected exactly one client.select.dismissed event").toBeDefined();
+  return event ?? { category: "diagnostic", op: "client.select.dismissed" };
+}
+
 describe("POST /api/diagnostics/client", () => {
   beforeEach(() => {
     resetClientDiagnosticsIngestStateForTests();
@@ -773,6 +780,83 @@ describe("POST /api/diagnostics/client", () => {
     });
     for (let index = 1; index <= 61; index += 1) {
       await handleClientDiagnosticIngest(context(settled));
+    }
+    expect(sink.events.some((event) => event.op === "client.diagnostic.rejected")).toBe(false);
+
+    const failure = JSON.stringify({ message: "boundary", clientTs: CLIENT_TS, kind: "boundary" });
+    expect((await handleClientDiagnosticIngest(context(failure))).status).toBe(204);
+    expect(
+      clientDiagnosticEvents(sink).some((event) => event.extra?.clientKind === "boundary"),
+    ).toBe(true);
+    // The routine burst itself stays bounded: its overflow is one routine rate-limit notice, and
+    // the failure budget was never touched.
+    const notices = sink.events.filter((event) => event.op === "client.diagnostic.rate-limited");
+    expect(notices.map((event) => event.extra?.budget)).toEqual(["routine"]);
+  });
+
+  // PR #3625 review (KeikoSelect.tsx finding): an open menu consumes Escape wherever focus sits —
+  // the trigger, the search box, or an option — instead of leaving it to the workspace's own Escape
+  // shortcut. This is the only line that shows which surface an operator's Escape actually
+  // dismissed, at info with no errorKind, never the failure-shaped client.diagnostic.
+  it("persists a select dismissal as client.select.dismissed, at info, with no errorKind", async () => {
+    const sink = captureServerLog();
+    const body = JSON.stringify({
+      message: "[keiko] select menu dismissed by Escape (focus=trigger)",
+      clientTs: CLIENT_TS,
+      correlationId: "ui_select-dismiss-0001",
+      kind: "other",
+      selectDismissal: { reason: "escape", focus: "trigger" },
+    });
+
+    expect(await handleClientDiagnosticIngest(context(body))).toEqual({ status: 204, body: null });
+    expect(clientDiagnosticEvents(sink)).toHaveLength(0);
+    const event = selectDismissedEvent(sink);
+    expect(event.level).toBe("info");
+    expect(event.errorKind).toBeUndefined();
+    const record = expectActivityLogProof(
+      "client.select.dismissed.line",
+      formatActivityLogProofLine(event),
+    );
+    expect(record).toMatchObject({
+      correlationId: "ui_select-dismiss-0001",
+      reason: "escape",
+      focus: "trigger",
+      completeness: "complete",
+      loss: "none",
+    });
+  });
+
+  it("persists every closed focus location on its own client.select.dismissed line", async () => {
+    for (const focus of ["trigger", "search", "option"] as const) {
+      const sink = captureServerLog();
+      const body = JSON.stringify({
+        message: `[keiko] select menu dismissed by Escape (focus=${focus})`,
+        clientTs: CLIENT_TS,
+        kind: "other",
+        selectDismissal: { reason: "escape", focus },
+      });
+
+      expect(await handleClientDiagnosticIngest(context(body))).toEqual({
+        status: 204,
+        body: null,
+      });
+      expect(selectDismissedEvent(sink).extra).toMatchObject({ reason: "escape", focus });
+    }
+  });
+
+  // A select dismissal has no failure variant at all — Escape either closes an open menu or the
+  // report is never sent — so it always spends the routine budget, exactly like a burst of
+  // discarded-succeeded git-client settlements above, and can never starve a genuine failure report.
+  it("keeps the failure budget available after a burst of select dismissals", async () => {
+    const sink = captureServerLog();
+    const dismissed = JSON.stringify({
+      message: "[keiko] select menu dismissed by Escape (focus=option)",
+      clientTs: CLIENT_TS,
+      kind: "other",
+      selectDismissal: { reason: "escape", focus: "option" },
+    });
+    for (let index = 1; index <= 61; index += 1) {
+      await handleClientDiagnosticIngest(context(dismissed));
     }
     expect(sink.events.some((event) => event.op === "client.diagnostic.rejected")).toBe(false);
 

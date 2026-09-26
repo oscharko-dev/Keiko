@@ -382,6 +382,7 @@ export interface ClientDiagnosticIngestRequest {
   readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
   readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
   readonly gitClientOperation?: ClientDiagnosticGitClientOperation | undefined;
+  readonly selectDismissal?: ClientDiagnosticSelectDismissal | undefined;
   readonly codingIssueOutcome?: "multiple-issues" | undefined;
   readonly codingHistoryScope?: ClientDiagnosticCodingHistoryScope | undefined;
   readonly loss?: ClientDiagnosticLossCounts | undefined;
@@ -562,6 +563,7 @@ function hasValidClientDiagnosticContext(value: Record<string, unknown>): boolea
   if (!isOptional(value.voiceCaptureReason, isClientVoiceCaptureReason)) return false;
   if (!isOptional(value.voiceCaptureError, isClientVoiceCaptureError)) return false;
   if (!hasValidGitContext(value)) return false;
+  if (!isOptional(value.selectDismissal, isClientDiagnosticSelectDismissal)) return false;
   return hasValidCodingContext(value) && isOptional(loss, isClientDiagnosticLossCounts);
 }
 
@@ -1115,6 +1117,48 @@ export function isClientGitRetryAttemptIngestRequest(
   if (Object.keys(value).some((key) => !CLIENT_GIT_RETRY_ATTEMPT_KEYS.has(key))) return false;
   if (!isOneOf(value.operation, GIT_RETRY_OPERATIONS)) return false;
   return isCorrelationIdShape(value.correlationId);
+}
+
+// ─── Select menu dismissal evidence (PR #3625 review) ───────────────────────────
+//
+// An open `KeikoSelect` menu consumes Escape wherever focus sits — the trigger, the search box, or
+// an option — instead of leaving it to the workspace's own Escape shortcut, which otherwise would
+// have cleared the window selection while the menu stayed open (KeikoSelect.tsx, `consumeEscape`).
+// Which surface an operator's Escape dismisses is a changed product runtime behaviour with no other
+// trace: the log cannot otherwise distinguish "the menu was closed by this Escape" from "the menu
+// was never opened". This closed, body-free pair rides the message shape's `kind: "other"` exactly
+// like `gitClientOperation` above; only a closed reason and the closed location focus sat in are
+// admitted — never a label, a value, or any option text the select showed.
+
+export const CLIENT_SELECT_DISMISSAL_REASONS = ["escape"] as const;
+export type ClientSelectDismissalReason = (typeof CLIENT_SELECT_DISMISSAL_REASONS)[number];
+
+export const CLIENT_SELECT_DISMISSAL_FOCUS_LOCATIONS = ["trigger", "search", "option"] as const;
+export type ClientSelectDismissalFocus = (typeof CLIENT_SELECT_DISMISSAL_FOCUS_LOCATIONS)[number];
+
+export interface ClientDiagnosticSelectDismissal {
+  readonly reason: ClientSelectDismissalReason;
+  readonly focus: ClientSelectDismissalFocus;
+}
+
+const SELECT_DISMISSAL_REASON_SET: ReadonlySet<string> = new Set(CLIENT_SELECT_DISMISSAL_REASONS);
+const SELECT_DISMISSAL_FOCUS_SET: ReadonlySet<string> = new Set(
+  CLIENT_SELECT_DISMISSAL_FOCUS_LOCATIONS,
+);
+
+/**
+ * True for a closed, body-free select dismissal: a known reason paired with a known focus location,
+ * never an unknown value on either side and never an undeclared field.
+ */
+export function isClientDiagnosticSelectDismissal(
+  value: unknown,
+): value is ClientDiagnosticSelectDismissal {
+  if (!isRecord(value)) return false;
+  if (Object.keys(value).some((key) => key !== "reason" && key !== "focus")) return false;
+  return (
+    isSetMember(value.reason, SELECT_DISMISSAL_REASON_SET) &&
+    isSetMember(value.focus, SELECT_DISMISSAL_FOCUS_SET)
+  );
 }
 
 // ─── Activity Log diagnostic readiness (#3532) ──────────────────────────────────

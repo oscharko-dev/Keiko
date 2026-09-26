@@ -14,8 +14,11 @@ import {
   type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { useTranslate } from "@/lib/i18n";
 import styles from "./KeikoSelect.module.css";
+
+type EscapeFocusLocation = "trigger" | "search" | "option";
 
 type KeikoSelectOption = {
   readonly value: string;
@@ -782,18 +785,25 @@ export default function KeikoSelect({
 
   // An open menu owns Escape wherever focus sits in it — the trigger, the search box or an option:
   // it closes the menu, and the key must not also clear the workspace's window selection or dismiss
-  // an enclosing dialog (the workspace's Escape shortcut stops propagation once it acts).
-  function consumeEscape(event: ReactKeyboardEvent<HTMLElement>): void {
+  // an enclosing dialog (the workspace's Escape shortcut stops propagation once it acts). Which
+  // surface stays open is a changed product runtime behaviour with no other trace, so every call
+  // here — always a genuinely open menu, since each caller is only reachable while `open` is true —
+  // reports body-free evidence of the dismissal (PR #3625 review).
+  function consumeEscape(focus: EscapeFocusLocation, event: ReactKeyboardEvent<HTMLElement>): void {
     event.preventDefault();
     event.stopPropagation();
     closeMenu();
     triggerRef.current?.focus();
+    reportClientDiagnostic(`[keiko] select menu dismissed by Escape (focus=${focus})`, {
+      kind: "other",
+      selectDismissal: { reason: "escape", focus },
+    });
   }
 
   function onTriggerKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>): void {
     if (disabled) return;
     if (event.key === "Escape" && open) {
-      consumeEscape(event);
+      consumeEscape("trigger", event);
       return;
     }
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -810,7 +820,7 @@ export default function KeikoSelect({
 
   function onOptionKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, index: number): void {
     if (event.key === "Escape") {
-      consumeEscape(event);
+      consumeEscape("option", event);
       return;
     }
     if (event.key === "Tab") {
@@ -852,7 +862,7 @@ export default function KeikoSelect({
 
   function onSearchKeyDown(event: ReactKeyboardEvent<HTMLInputElement>): void {
     if (event.key === "Escape") {
-      consumeEscape(event);
+      consumeEscape("search", event);
     } else if (event.key === "ArrowDown") {
       event.preventDefault();
       optionRefs.current[firstEnabledIndex(flatOptions)]?.focus();
