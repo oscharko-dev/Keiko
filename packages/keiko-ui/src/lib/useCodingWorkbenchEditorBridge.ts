@@ -80,6 +80,8 @@ function wait(ms: number): Promise<void> {
   });
 }
 
+// The review's only "failed" decision is the human's Reject, and it says so: the server reads a
+// failed result as the human's decision only with `reviewDecision` (PR #3625 review).
 function decisionRequest(
   action: EditorAgentAction,
   status: "succeeded" | "failed",
@@ -88,6 +90,7 @@ function decisionRequest(
   return {
     schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
     kind: "result",
+    ...(status === "failed" ? { reviewDecision: "rejected" } : {}),
     result: {
       schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
       actionId: action.actionId,

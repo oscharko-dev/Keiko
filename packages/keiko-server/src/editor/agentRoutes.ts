@@ -126,10 +126,10 @@ import {
   handleEditorWorkspaceSearch,
   handleEditorWorkspaceSymbols,
 } from "./workspaceSearchRoutes.js";
-import type {
-  CodingRuntimeEditorMutationLeaseRequest,
-  CodingRuntimeMutationCompletion,
-} from "../coding-runtime/codingRuntimeEditorMutationLeaseCoordinator.js";
+import type { CodingRuntimeEditorMutationLeaseRequest } from "../coding-runtime/codingRuntimeEditorMutationLeaseCoordinator.js";
+
+// How this route ends a runtime mutation: applied, failed, or rejected in its review.
+type RuntimeMutationCompletion = "succeeded" | "failed" | "rejected";
 import {
   editorAgentAuthorityRegistry,
   editorAgentWorkspaceRootDigest,
@@ -1987,6 +1987,7 @@ function handleChangesetResult(
   action: EditorAgentAction,
   reported: EditorAgentActionResult,
   deps?: EditorAgentRouteDeps,
+  reviewDecision?: EditorAgentActionResultRequest["reviewDecision"],
 ): RouteResult {
   const snapshot = editorAgentRegistry.snapshotFor(action.sessionId);
   const runtimeMutation = classifyRuntimeMutation(action, snapshot, deps);
@@ -1997,10 +1998,11 @@ function handleChangesetResult(
       "failed",
       "The browser rejected the changeset.",
     );
-    // The review's own "no": nothing was claimed or applied, so the run reads the human's decision
-    // instead of a failed mutation (owner decision 2026-09-26, ADR-0124 D6).
+    // Only the review's own Reject is the human's decision (owner decision 2026-09-26, ADR-0124
+    // D6); nothing was claimed or applied. A failure the browser reports itself (a malformed
+    // changeset, a failed load, another review active) stays a failed mutation (PR #3625 review).
     return finishRuntimeChangeset(action, snapshot, failed, deps, runtimeMutation, undefined, {
-      completion: "rejected",
+      completion: reviewDecision === "rejected" ? "rejected" : "failed",
     });
   }
   if (snapshot === undefined) {
@@ -2100,7 +2102,7 @@ function finishRuntimeChangeset(
   deps: EditorAgentRouteDeps | undefined,
   runtimeMutation: RuntimeMutationClassification,
   decision = decideActionPolicy(action, snapshot, deps, runtimeMutation),
-  { completion }: { readonly completion?: CodingRuntimeMutationCompletion } = {},
+  { completion }: { readonly completion?: RuntimeMutationCompletion } = {},
 ): RouteResult {
   completeRuntimeMutation(
     action,
@@ -2122,11 +2124,13 @@ function completeRuntimeMutation(
   action: EditorAgentAction,
   classification: RuntimeMutationClassification,
   deps: EditorAgentRouteDeps | undefined,
-  completion: CodingRuntimeMutationCompletion,
+  completion: RuntimeMutationCompletion,
 ): void {
   if (classification.kind !== "runtime" || deps?.runtimeMutationLease === undefined) return;
+  const lease = deps.runtimeMutationLease;
   try {
-    deps.runtimeMutationLease.complete(classification.request, completion);
+    if (completion === "rejected") lease.reject(classification.request);
+    else lease.complete(classification.request, completion === "succeeded");
   } catch (error) {
     emitChangesetDiagnostic(
       action,
@@ -2229,7 +2233,9 @@ function handleReportedActionResult(
       ),
     };
   }
-  if (action.type === "applyChangeset") return handleChangesetResult(action, result, deps);
+  if (action.type === "applyChangeset") {
+    return handleChangesetResult(action, result, deps, request.reviewDecision);
+  }
   if (action.type === "applyPatch") return handlePatchResult(action, result, deps);
   return finishBrowserActionResult(action, result);
 }

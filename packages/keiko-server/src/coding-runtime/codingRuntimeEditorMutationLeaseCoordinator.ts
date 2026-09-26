@@ -23,8 +23,13 @@ export interface CodingRuntimeEditorMutationLeasePort {
   readonly claim: (request: CodingRuntimeEditorMutationLeaseRequest) => boolean;
   readonly complete: (
     request: CodingRuntimeEditorMutationLeaseRequest,
-    completion: CodingRuntimeMutationCompletion,
+    succeeded: boolean,
   ) => boolean;
+  /**
+   * The human rejected the change in its review, before the commit boundary: the lease settles as
+   * that decision, never as a failed mutation of the run (owner decision 2026-09-26, ADR-0124 D6).
+   */
+  readonly reject: (request: CodingRuntimeEditorMutationLeaseRequest) => boolean;
   readonly discard: (request: CodingRuntimeEditorMutationLeaseRequest) => boolean;
 }
 
@@ -56,11 +61,8 @@ export interface CodingRuntimeEditorMutationLeaseRegistration {
 export type CodingRuntimeMutationIdleOutcome = "idle-succeeded" | "idle-failed" | "not-idle";
 export type CodingRuntimeMutationOutcome = "succeeded" | "failed" | "cancelled" | "rejected";
 
-/**
- * How the editor route ended a mutation: applied, failed, or rejected in its review before the
- * commit boundary — the human's decision on the change (owner decision 2026-09-26, ADR-0124 D6).
- */
-export type CodingRuntimeMutationCompletion = "succeeded" | "failed" | "rejected";
+// How the editor route ended a mutation: applied, failed, or rejected in its review.
+type CodingRuntimeMutationCompletion = "succeeded" | "failed" | "rejected";
 
 export interface CodingRuntimeEditorMutationLeaseCoordinator {
   readonly lease: CodingRuntimeEditorMutationLeasePort;
@@ -101,8 +103,9 @@ export function createCodingRuntimeEditorMutationLeaseBroker(): CodingRuntimeEdi
     matches: (request): boolean => uniqueMatchingPort(ports, request, disposed) !== undefined,
     requiresReview: (request): boolean | undefined => reviewRequirement(ports, request, disposed),
     claim: (request): boolean => claimMatchingPort(ports, request, disposed),
-    complete: (request, completion): boolean =>
-      completeMatchingPort(ports, request, completion, disposed),
+    complete: (request, succeeded): boolean =>
+      completeMatchingPort(ports, request, succeeded ? "succeeded" : "failed", disposed),
+    reject: (request): boolean => completeMatchingPort(ports, request, "rejected", disposed),
     discard: (request): boolean => discardMatchingPort(ports, request, disposed),
     attach: (port): (() => void) | undefined => {
       if (disposed || ports.size >= MAX_ACTIVE_LEASE_PORTS || ports.has(port)) return undefined;
@@ -165,6 +168,8 @@ function claimMatchingPort(
   }
 }
 
+// Settling a lease is one operation whichever way it ended, so a rejection takes the same path to
+// the matching port as a completion.
 function completeMatchingPort(
   ports: ReadonlySet<CodingRuntimeEditorMutationLeasePort>,
   request: CodingRuntimeEditorMutationLeaseRequest,
@@ -174,7 +179,9 @@ function completeMatchingPort(
   const port = uniqueMatchingPort(ports, request, disposed);
   if (port === undefined) return false;
   try {
-    return port.complete(request, completion);
+    return completion === "rejected"
+      ? port.reject(request)
+      : port.complete(request, completion === "succeeded");
   } catch {
     return false;
   }
@@ -221,15 +228,18 @@ export function createCodingRuntimeEditorMutationLeaseCoordinator(
   const idleWaiters = new Set<IdleWaiter>();
   const outcome: MutationOutcome = { latestSucceeded: undefined };
   let disposed = false;
+  const settle = (
+    request: CodingRuntimeEditorMutationLeaseRequest,
+    completion: CodingRuntimeMutationCompletion,
+  ): boolean => completeRecord(records, idleWaiters, outcome, request, completion, disposed);
   const lease: CodingRuntimeEditorMutationLeasePort = {
     matches: (request): boolean => findRecord(records, request, disposed) !== undefined,
     requiresReview: (request): boolean | undefined =>
       findRecord(records, request, disposed)?.requiresReview,
     claim: (request): boolean => claimRecord(records, idleWaiters, outcome, request, disposed),
-    complete: (request, completion): boolean =>
-      completeRecord(records, idleWaiters, outcome, request, completion, disposed),
-    discard: (request): boolean =>
-      completeRecord(records, idleWaiters, outcome, request, "failed", disposed),
+    complete: (request, succeeded): boolean => settle(request, succeeded ? "succeeded" : "failed"),
+    reject: (request): boolean => settle(request, "rejected"),
+    discard: (request): boolean => settle(request, "failed"),
   };
   return {
     lease,

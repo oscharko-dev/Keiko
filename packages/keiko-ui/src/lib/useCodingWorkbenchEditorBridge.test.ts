@@ -210,6 +210,7 @@ describe("useCodingWorkbenchEditorBridge — applyChangeset", () => {
     expect(postResultSpy).toHaveBeenCalledWith(
       expect.objectContaining({ result: expect.objectContaining({ status: "succeeded" }) }),
     );
+    expect(postResultSpy.mock.calls[0]?.[0]).not.toHaveProperty("reviewDecision");
   });
 
   it("deny() posts a failed result and clears pendingReview", async () => {
@@ -228,8 +229,12 @@ describe("useCodingWorkbenchEditorBridge — applyChangeset", () => {
     });
     await flushMicrotasks();
     expect(result.current.pendingReview).toBeNull();
+    // PR #3625 review: the Reject says so, so the server reads it as the human's decision.
     expect(postResultSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ result: expect.objectContaining({ status: "failed" }) }),
+      expect.objectContaining({
+        reviewDecision: "rejected",
+        result: expect.objectContaining({ status: "failed" }),
+      }),
     );
   });
 
