@@ -673,6 +673,9 @@ async function providerRequest(
       ...(options.stream === true ? { stream: true } : {}),
       ...admittedGatewayProbeOutputLimit(reservation, spend),
       maxResponseBytes: MAX_PROVIDER_RESPONSE_BYTES,
+      // Every attempt and compatibility retry of this probe is recorded under its correlation.
+      log: deps.activityLog ?? processServerLogSink(),
+      correlationId,
     });
   } catch (error) {
     settleGatewayProbeSpend(reservation, undefined);

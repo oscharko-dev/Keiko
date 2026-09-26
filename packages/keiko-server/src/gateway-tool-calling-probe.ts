@@ -10,6 +10,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { readJsonCapped } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { reserveGatewaySpendForAttempt } from "./gateway-spend-budget.js";
+import { processServerLogSink } from "./process-log-sink.js";
 
 const MAX_PROVIDER_RESPONSE_BYTES = 500_000;
 
@@ -179,6 +180,9 @@ async function executeGatewayToolCallingProbe(
       ...(fetchImpl === undefined ? {} : { fetchImpl }),
       ...admittedGatewayProbeOutputLimit(reservation, spend),
       maxResponseBytes: MAX_PROVIDER_RESPONSE_BYTES,
+      // Every attempt and compatibility retry of this probe is recorded under its correlation.
+      log: processServerLogSink(),
+      ...(spend === undefined ? {} : { correlationId: spend.correlationId }),
     });
   } catch (error) {
     settleGatewayProbeSpend(reservation, undefined);

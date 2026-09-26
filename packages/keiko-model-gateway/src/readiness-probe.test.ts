@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { requestGatewayReadinessChatCompletion } from "./readiness-probe.js";
+import type { ModelGatewayLogEvent } from "./observability.js";
 import type { GatewayConfig, ModelProviderConfig } from "./types.js";
+import {
+  expectActivityLogProof,
+  formatActivityLogProofLine,
+} from "../../../tests/support/activity-log-proof.js";
 
 const PROVIDER: ModelProviderConfig = {
   modelId: "example-chat-model",
@@ -368,6 +373,77 @@ describe("requestGatewayReadinessChatCompletion", () => {
       ["max_tokens", false],
       ["max_completion_tokens", true],
       ["max_completion_tokens", false],
+    ]);
+  });
+
+  // PR #3625 review: the probe's attempts and its compatibility retry are recorded under the probe's
+  // correlation id, and the retry line says which field was rejected and how the retry answered.
+  it("records an output-token field retry under the probe's correlation id", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const fetchImpl: typeof fetch = (_url, init) =>
+      Promise.resolve(
+        "max_tokens" in probeBody(init)
+          ? new Response(JSON.stringify({ error: { param: "max_tokens" } }), { status: 400 })
+          : jsonResponse({ choices: [] }),
+      );
+
+    await requestGatewayReadinessChatCompletion({
+      config: CONFIG,
+      provider: { ...PROVIDER, modelId: "prod-chat" },
+      body: { messages: [] },
+      maxOutputTokens: 17,
+      fetchImpl,
+      log: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+      correlationId: "probe-corr-0001",
+    });
+
+    const retry = events.find((event) => event.op === "gateway.readiness.compatibility-retry");
+    if (retry === undefined) throw new TypeError("readiness retry evidence missing");
+    expect(retry).toMatchObject({
+      correlationId: "probe-corr-0001",
+      status: 200,
+      extra: { omittedField: "max_tokens", rejectedStatus: 400 },
+    });
+    expectActivityLogProof(
+      "gateway.readiness.compatibility-retry.line",
+      formatActivityLogProofLine(retry),
+    );
+    expect(events.length).toBeGreaterThan(1);
+    expect(events.every((event) => event.correlationId === "probe-corr-0001")).toBe(true);
+    expect(JSON.stringify(events)).not.toContain(PROVIDER.apiKey);
+  });
+
+  it("records a stream-options retry of a streamed probe", async () => {
+    const events: ModelGatewayLogEvent[] = [];
+    const fetchImpl: typeof fetch = (_url, init) =>
+      Promise.resolve(
+        "stream_options" in probeBody(init)
+          ? new Response(JSON.stringify({ error: { param: "stream_options" } }), { status: 400 })
+          : jsonResponse({ choices: [] }),
+      );
+
+    await requestGatewayReadinessChatCompletion({
+      config: CONFIG,
+      provider: PROVIDER,
+      body: { messages: [] },
+      stream: true,
+      fetchImpl,
+      log: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+      correlationId: "probe-corr-0002",
+    });
+
+    expect(
+      events.filter((event) => event.op === "gateway.readiness.compatibility-retry"),
+    ).toMatchObject([
+      { status: 200, extra: { omittedField: "stream_options", rejectedStatus: 400 } },
     ]);
   });
 

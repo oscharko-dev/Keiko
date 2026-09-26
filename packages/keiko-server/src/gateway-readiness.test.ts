@@ -263,8 +263,13 @@ describe("gateway readiness route", () => {
     );
 
     expect(result).toMatchObject({ status: 200, body: { modelId: "coding-chat" } });
-    expect(events).toHaveLength(2);
-    expect(events[0]).toMatchObject({
+    // Exactly one start and one completion of the run; its provider attempts (PR #3625 review) are
+    // recorded under the same correlation id, so the whole run joins on it.
+    const runEvents = events.filter((event) => event.op.startsWith("gateway.readiness.automatic."));
+    expect(runEvents).toHaveLength(2);
+    expect(events.length).toBeGreaterThan(runEvents.length);
+    expect(events.every((event) => event.correlationId === "coding-readiness-0001")).toBe(true);
+    expect(runEvents[0]).toMatchObject({
       op: "gateway.readiness.automatic.started",
       correlationId: "coding-readiness-0001",
       // #3591: the bound the automatic probes ran under — the Workbench floor, not the 30 s configured.
@@ -274,8 +279,8 @@ describe("gateway readiness route", () => {
         chatProbeTimeoutMs: WORKBENCH_PROBE_TIMEOUT_FLOOR_MS,
       },
     });
-    expect(events[0]?.extra).not.toHaveProperty("longContextProbeTimeoutMs");
-    expect(events[1]).toMatchObject({
+    expect(runEvents[0]?.extra).not.toHaveProperty("longContextProbeTimeoutMs");
+    expect(runEvents[1]).toMatchObject({
       op: "gateway.readiness.automatic.completed",
       correlationId: "coding-readiness-0001",
       extra: {
@@ -287,7 +292,7 @@ describe("gateway readiness route", () => {
     });
     const startedProof = expectActivityLogProof(
       "gateway.readiness.automatic.started.line",
-      formatActivityLogProofLine(events[0] ?? {}),
+      formatActivityLogProofLine(runEvents[0] ?? {}),
     );
     expect(startedProof).toMatchObject({
       correlationId: "coding-readiness-0001",
@@ -296,7 +301,7 @@ describe("gateway readiness route", () => {
     });
     const completedProof = expectActivityLogProof(
       "gateway.readiness.automatic.completed.line",
-      formatActivityLogProofLine(events[1] ?? {}),
+      formatActivityLogProofLine(runEvents[1] ?? {}),
     );
     expect(completedProof).toMatchObject({
       correlationId: "coding-readiness-0001",
@@ -429,9 +434,10 @@ describe("gateway readiness route", () => {
     expect("status" in result).toBe(false);
     if ("status" in result) return;
     expect(result.modelId).toBe(modelId);
-    expect(events).toHaveLength(2);
-    expect(events.map((event) => event.extra?.modelId)).toEqual([undefined, undefined]);
-    const digests = events.map((event) => event.extra?.modelIdDigest);
+    const runEvents = events.filter((event) => event.op.startsWith("gateway.readiness.automatic."));
+    expect(runEvents).toHaveLength(2);
+    expect(runEvents.map((event) => event.extra?.modelId)).toEqual([undefined, undefined]);
+    const digests = runEvents.map((event) => event.extra?.modelIdDigest);
     expect(digests[0]).toMatch(/^[a-f0-9]{16}$/u);
     expect(digests[1]).toBe(digests[0]);
     expect(JSON.stringify(events)).not.toContain("xxxxxxxxxx");

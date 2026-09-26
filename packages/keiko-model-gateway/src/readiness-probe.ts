@@ -1,10 +1,22 @@
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
+import {
   apiKeyHeaderValue,
   DEFAULT_API_KEY_HEADER_NAME,
   trimTrailingAzureOpenAiSegment,
   trimTrailingSlash,
 } from "./config.js";
 import { gatewayFetch } from "./http.js";
+import {
+  logEndpointHost,
+  logModelId,
+  resolveLogSink,
+  withCorrelationId,
+  type ModelGatewayLogSink,
+} from "./observability.js";
 import { providerOutputTokenLimit, requiresNoReasoningWithTools } from "./output-token-limit.js";
 import type { GatewayConfig, ModelProviderConfig } from "./types.js";
 
@@ -22,6 +34,70 @@ export interface GatewayReadinessChatCompletionRequest {
   readonly fetchImpl?: typeof fetch | undefined;
   readonly maxResponseBytes?: number | undefined;
   readonly maxOutputTokens?: number | undefined;
+  // The caller's activity-log port and the probe's correlation id: every attempt and every
+  // compatibility retry of one probe is recorded under it (PR #3625 review).
+  readonly log?: ModelGatewayLogSink | undefined;
+  readonly correlationId?: string | undefined;
+}
+
+// PR #3625 review: which field a readiness probe left out on a compatibility retry, the status that
+// made it retry and the status the retry got, joined to the probe by its correlation id. Body-free:
+// an endpoint digest and the safe model id only.
+const READINESS_COMPATIBILITY_RETRY_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.readiness.compatibility-retry",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "readiness-probe.logReadinessCompatibilityRetry",
+  fields: {
+    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    omittedField: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["stream_options", "max_tokens", "max_completion_tokens"],
+    },
+    rejectedStatus: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-chat-provider-call"],
+  proofIds: ["gateway.readiness.compatibility-retry.line"],
+  releaseImpact: "patch",
+});
+
+type ReadinessOmittedField = "stream_options" | "max_tokens" | "max_completion_tokens";
+
+function readinessLog(request: GatewayReadinessChatCompletionRequest): ModelGatewayLogSink {
+  return withCorrelationId(resolveLogSink(request.log), request.correlationId);
+}
+
+function logReadinessCompatibilityRetry(
+  request: GatewayReadinessChatCompletionRequest,
+  omittedField: ReadinessOmittedField,
+  rejectedStatus: number,
+  retry: Response,
+): void {
+  const url = readinessChatCompletionsUrl(request.provider);
+  readinessLog(request).write(
+    activityLogEvent(
+      READINESS_COMPATIBILITY_RETRY_OPERATION,
+      {
+        level: retry.ok ? "info" : "warn",
+        status: retry.status,
+        ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
+      },
+      {
+        endpointDigest: sha256Hex(logEndpointHost(url) ?? "invalid-endpoint"),
+        modelId: logModelId(request.provider.modelId),
+        omittedField,
+        rejectedStatus,
+      },
+    ),
+  );
 }
 
 function providerHeaders(provider: ModelProviderConfig): Record<string, string> {
@@ -89,7 +165,7 @@ function dispatchReadinessChatCompletion(
   request: GatewayReadinessChatCompletionRequest,
   includeUsage: boolean,
 ): Promise<Response> {
-  const { config, provider, fetchImpl, maxResponseBytes } = request;
+  const { config, provider, fetchImpl, maxResponseBytes, correlationId } = request;
   return gatewayFetch(readinessChatCompletionsUrl(provider), {
     method: "POST",
     headers: providerHeaders(provider),
@@ -98,6 +174,8 @@ function dispatchReadinessChatCompletion(
     timeoutMs: provider.timeoutMs,
     ...(maxResponseBytes !== undefined ? { maxResponseBytes } : {}),
     ...(config.egress !== undefined ? { egress: config.egress } : {}),
+    ...(request.log === undefined ? {} : { log: request.log }),
+    ...(correlationId === undefined ? {} : { logContext: { correlationId } }),
   });
 }
 
@@ -115,7 +193,9 @@ async function requestWithStreamFallback(
     return first;
   }
   await first.body?.cancel();
-  return dispatchReadinessChatCompletion(request, false);
+  const retry = await dispatchReadinessChatCompletion(request, false);
+  logReadinessCompatibilityRetry(request, "stream_options", first.status, retry);
+  return retry;
 }
 
 // #3639: the default output-token field follows the model family, which a deployment alias hides
@@ -150,5 +230,16 @@ export async function requestGatewayReadinessChatCompletion(
     return answer;
   }
   await answer.body?.cancel();
-  return requestWithStreamFallback(other);
+  const retry = await requestWithStreamFallback(other);
+  logReadinessCompatibilityRetry(request, sentOutputTokenField(request), answer.status, retry);
+  return retry;
+}
+
+function sentOutputTokenField(
+  request: GatewayReadinessChatCompletionRequest,
+): "max_tokens" | "max_completion_tokens" {
+  return "max_completion_tokens" in
+    providerOutputTokenLimit(request.maxOutputTokens, request.provider)
+    ? "max_completion_tokens"
+    : "max_tokens";
 }

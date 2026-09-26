@@ -1047,6 +1047,104 @@ describe("OpenAI-compatible chat compatibility", () => {
       expect(bodies).toHaveLength(1);
     });
 
+    // PR #3625 review: a rejected VALUE of a supported field is not a reason to switch fields.
+    it("does not switch fields when the provider rejects the value, not the field", async () => {
+      const bodies: Record<string, unknown>[] = [];
+      const adapter = new OpenAiAdapter({
+        requestId: "token-field-value",
+        costClass: "low",
+        fetchImpl: (_url, init): Promise<Response> => {
+          bodies.push(requestBody(init));
+          return Promise.resolve(
+            Response.json(
+              {
+                error: {
+                  message: "Invalid 'max_tokens': integer above maximum value.",
+                  param: "max_tokens",
+                  code: "invalid_value",
+                },
+              },
+              { status: 400 },
+            ),
+          );
+        },
+      });
+
+      await expect(ask(adapter, ALIAS)).rejects.toThrow();
+      expect(tokenFields(bodies)).toEqual([["max_tokens"]]);
+    });
+
+    // PR #3625 review: the endpoint keeps the other field only once that field was accepted, so a
+    // retry that fails for another reason cannot poison the endpoint's later requests.
+    it("keeps the other field only once the provider accepted it", async () => {
+      const bodies: Record<string, unknown>[] = [];
+      const adapter = new OpenAiAdapter({
+        requestId: "token-field-unaccepted",
+        costClass: "low",
+        fetchImpl: (_url, init): Promise<Response> => {
+          const body = requestBody(init);
+          bodies.push(body);
+          return Promise.resolve(
+            "max_tokens" in body
+              ? fieldRejection("max_tokens")
+              : Response.json({ error: { message: "overloaded" } }, { status: 400 }),
+          );
+        },
+      });
+
+      await expect(ask(adapter, ALIAS)).rejects.toThrow();
+      await expect(ask(adapter, ALIAS)).rejects.toThrow();
+
+      expect(tokenFields(bodies)).toEqual([
+        ["max_tokens"],
+        ["max_completion_tokens"],
+        ["max_tokens"],
+        ["max_completion_tokens"],
+      ]);
+    });
+
+    // PR #3625 review: a deployment may reject the output-token field only once the stream shape is
+    // accepted; the two one-field compatibility retries compose.
+    it("composes the stream-options retry with the output-token field retry", async () => {
+      const bodies: Record<string, unknown>[] = [];
+      const adapter = new OpenAiAdapter({
+        requestId: "token-field-composed",
+        costClass: "low",
+        fetchImpl: (_url, init): Promise<Response> => {
+          const body = requestBody(init);
+          bodies.push(body);
+          if ("stream_options" in body) {
+            return Promise.resolve(
+              Response.json(
+                { error: { param: "stream_options", code: "unsupported_parameter" } },
+                { status: 400 },
+              ),
+            );
+          }
+          if ("max_tokens" in body) return Promise.resolve(fieldRejection("max_tokens"));
+          return Promise.resolve(streamedAnswer());
+        },
+      });
+
+      const answer = await answerOf(
+        adapter.callStream(
+          {
+            modelId: ALIAS.modelId,
+            messages: [{ role: "user", content: "Synthetic prompt" }],
+            maxOutputTokens: 256,
+          },
+          ALIAS,
+        ),
+      );
+
+      expect(answer.content).toBe("Synthetic answer.");
+      expect(bodies.map((body) => [tokenFields([body])[0], "stream_options" in body])).toEqual([
+        [["max_tokens"], true],
+        [["max_tokens"], false],
+        [["max_completion_tokens"], false],
+      ]);
+    });
+
     it("recognizes a rejection that names the field only in its message", async () => {
       const bodies: Record<string, unknown>[] = [];
       const adapter = new OpenAiAdapter({

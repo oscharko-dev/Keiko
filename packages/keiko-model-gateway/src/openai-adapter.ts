@@ -213,16 +213,29 @@ function sentOutputTokenField(
   return "max_tokens" in limit ? "max_tokens" : undefined;
 }
 
-// A provider rejection that names the output-token field as unsupported: Azure answers a GPT-5
-// deployment's max_tokens with param "max_tokens" and code "unsupported_parameter"; an older model
-// names max_completion_tokens as an unrecognized argument.
+// A provider rejection that names the output-token field this request sent AND says the field
+// itself is unsupported: Azure answers a GPT-5 deployment's max_tokens with param "max_tokens" and
+// code "unsupported_parameter"; an older model names max_completion_tokens as an unrecognized
+// argument. A rejected value of a supported field ("invalid_value", "integer above maximum") is no
+// reason to switch fields (PR #3625 review).
 function rejectsOutputTokenField(payload: unknown, field: OutputTokenField): boolean {
   const error = isRecord(payload) && isRecord(payload.error) ? payload.error : payload;
   if (!isRecord(error)) return false;
-  if (error.param === field) return true;
   const message = typeof error.message === "string" ? error.message.toLowerCase() : "";
-  return message.includes(field) && /unsupported|not supported|unrecognized|unknown/.test(message);
+  const code = typeof error.code === "string" ? error.code.toLowerCase() : "";
+  const namesField = error.param === field || message.includes(field);
+  return namesField && /unsupported|not supported|unrecognized|unknown/.test(`${code} ${message}`);
 }
+
+// The config one dispatch sends with, pinned to the output-token field the fallback chose.
+function withOutputTokenField(
+  config: ModelProviderConfig,
+  field: OutputTokenField | undefined,
+): ModelProviderConfig {
+  return field === undefined ? config : { ...config, outputTokenParameter: field };
+}
+
+type OutputTokenSend = (field: OutputTokenField | undefined) => Promise<DispatchedResponse>;
 const MAX_STRICT_STREAM_OPTIONS_ENDPOINTS = 256;
 const STRICT_STREAM_OPTIONS_REPROBE_MS = 15 * 60_000;
 
@@ -1343,8 +1356,8 @@ export class OpenAiAdapter implements ProviderAdapter {
       ...request,
       tools: catalog.tools.length === 0 ? undefined : catalog.tools,
     };
-    const dispatched = await this.dispatchWithOutputTokenFallback(toolRequest, config, () =>
-      this.dispatch(toolRequest, config, secrets),
+    const dispatched = await this.dispatchWithOutputTokenFallback(toolRequest, config, (field) =>
+      this.dispatch(toolRequest, withOutputTokenField(config, field), secrets),
     );
     try {
       const { response } = dispatched;
@@ -1629,9 +1642,8 @@ export class OpenAiAdapter implements ProviderAdapter {
     includeUsage = true,
   ): Promise<DispatchedResponse> {
     const url = chatCompletionsUrl(config);
-    const bodyConfig = this.outputTokenConfig(config);
     const body = JSON.stringify(
-      stream ? buildStreamBody(request, bodyConfig, includeUsage) : buildBody(request, bodyConfig),
+      stream ? buildStreamBody(request, config, includeUsage) : buildBody(request, config),
     );
     const headers = {
       "content-type": "application/json",
@@ -1681,13 +1693,20 @@ export class OpenAiAdapter implements ProviderAdapter {
     };
     const mode = chatCompatibilityMode(memoScope, url, this.now);
     if (mode === "whole-body") {
-      return this.dispatchWithOutputTokenFallback(request, config, () =>
-        this.dispatch(request, config, secrets, false, bounds),
+      return this.dispatchWithOutputTokenFallback(request, config, (field) =>
+        this.dispatch(request, withOutputTokenField(config, field), secrets, false, bounds),
       );
     }
     const includeUsage = mode !== "omit-usage";
-    const first = await this.dispatchWithOutputTokenFallback(request, config, () =>
-      this.dispatch(request, config, secrets, true, bounds, includeUsage),
+    const first = await this.dispatchWithOutputTokenFallback(request, config, (field) =>
+      this.dispatch(
+        request,
+        withOutputTokenField(config, field),
+        secrets,
+        true,
+        bounds,
+        includeUsage,
+      ),
     );
     if (first.response.ok || !isStrictChatShapeRejection(first.response.status)) return first;
     if (!includeUsage) return this.retryWithoutStreamingIfNamed(first, context);
@@ -1703,7 +1722,7 @@ export class OpenAiAdapter implements ProviderAdapter {
     failed: DispatchedResponse,
     context: ChatCompatibilityContext,
   ): Promise<DispatchedResponse> {
-    const { request, config, secrets, bounds, startedAt, url } = context;
+    const { request, config, secrets, url } = context;
     try {
       const payload = await this.readErrorBody(failed.response, config, secrets, failed.signal);
       if (shouldPreserveProviderRejection(failed.response.status, payload)) {
@@ -1712,6 +1731,25 @@ export class OpenAiAdapter implements ProviderAdapter {
     } finally {
       failed.dispose();
     }
+    this.logChatCompatibilityRetry(url, config, failed.response.status, "stream_options");
+    // A deployment can reject the output-token field only once the stream shape is accepted, so the
+    // field fallback wraps every compatibility dispatch, not only the first (PR #3625 review).
+    return this.dispatchWithOutputTokenFallback(request, config, (field) =>
+      this.dispatchWithinBudget(context, { stream: true, includeUsage: false, field }),
+    );
+  }
+
+  // One compatibility retry, bounded by what the original request's budget has left at the moment
+  // it is sent.
+  private dispatchWithinBudget(
+    context: ChatCompatibilityContext,
+    shape: {
+      readonly stream: boolean;
+      readonly includeUsage: boolean;
+      readonly field: OutputTokenField | undefined;
+    },
+  ): Promise<DispatchedResponse> {
+    const { request, config, secrets, bounds, startedAt } = context;
     const remainingMs = remainingCompatibilityBudgetMs(
       bounds,
       startedAt,
@@ -1721,15 +1759,21 @@ export class OpenAiAdapter implements ProviderAdapter {
     );
     const retryBounds = bounds === undefined ? undefined : { ...bounds, budgetMs: remainingMs };
     const retryConfig = bounds === undefined ? { ...config, timeoutMs: remainingMs } : config;
-    this.logChatCompatibilityRetry(url, config, failed.response.status, "stream_options");
-    return this.dispatch(request, retryConfig, secrets, true, retryBounds, false);
+    return this.dispatch(
+      request,
+      withOutputTokenField(retryConfig, shape.field),
+      secrets,
+      shape.stream,
+      retryBounds,
+      shape.includeUsage,
+    );
   }
 
   private async retryWithoutStreamingIfNamed(
     failed: DispatchedResponse,
     context: ChatCompatibilityContext,
   ): Promise<DispatchedResponse> {
-    const { request, config, secrets, bounds, startedAt, memoScope, url } = context;
+    const { request, config, secrets, memoScope, url } = context;
     if (!isStrictChatShapeRejection(failed.response.status)) return failed;
     try {
       const payload = await this.readErrorBody(failed.response, config, secrets, failed.signal);
@@ -1742,65 +1786,66 @@ export class OpenAiAdapter implements ProviderAdapter {
     } finally {
       failed.dispose();
     }
-    const remainingMs = remainingCompatibilityBudgetMs(
-      bounds,
-      startedAt,
-      Date.now,
-      config,
-      secrets,
-    );
-    const retryBounds = bounds === undefined ? undefined : { ...bounds, budgetMs: remainingMs };
-    const retryConfig = bounds === undefined ? { ...config, timeoutMs: remainingMs } : config;
     this.logChatCompatibilityRetry(url, config, failed.response.status, "stream");
-    const retry = await this.dispatch(request, retryConfig, secrets, false, retryBounds);
+    const retry = await this.dispatchWithOutputTokenFallback(request, config, (field) =>
+      this.dispatchWithinBudget(context, { stream: false, includeUsage: true, field }),
+    );
     if (retry.response.ok) rememberChatCompatibility(memoScope, url, "whole-body", this.now());
     return retry;
   }
 
-  // The config a request body is built from: an operator's explicit output-token field, else the
-  // one this endpoint turned out to accept (#3639), else the model-family default.
-  private outputTokenConfig(config: ModelProviderConfig): ModelProviderConfig {
-    if (config.outputTokenParameter !== undefined) return config;
+  // The output-token field a request sends: an operator's explicit field, else the one this endpoint
+  // turned out to accept (#3639), else the model-family default; none without an output bound.
+  private outputTokenFieldFor(
+    request: ProviderGatewayRequest,
+    config: ModelProviderConfig,
+  ): OutputTokenField | undefined {
+    if (request.maxOutputTokens === undefined) return undefined;
     const remembered = rememberedOutputTokenField(
       this.deps.compatibilityMemoScope ?? config,
       chatCompletionsUrl(config),
     );
-    return remembered === undefined ? config : { ...config, outputTokenParameter: remembered };
+    return config.outputTokenParameter ?? remembered ?? sentOutputTokenField(request, config);
   }
 
   // #3639: a deployment whose name hides its model family gets the wrong output-token field — a
   // GPT-5 deployment named "prod-chat" is sent max_tokens and rejects it. A strict-shape rejection
-  // that names the field sent is answered once with the other field, which this endpoint then
-  // keeps; any other rejection comes back unread. An explicit outputTokenParameter always wins.
+  // that says the field sent is unsupported is answered once with the other field; the endpoint
+  // keeps that field only once it was accepted, so no other rejection can poison its later
+  // requests. Any other rejection comes back unread, and an explicit outputTokenParameter wins.
   private async dispatchWithOutputTokenFallback(
     request: ProviderGatewayRequest,
     config: ModelProviderConfig,
-    send: () => Promise<DispatchedResponse>,
+    send: OutputTokenSend,
   ): Promise<DispatchedResponse> {
-    const first = await send();
-    const sent =
-      config.outputTokenParameter === undefined
-        ? sentOutputTokenField(request, this.outputTokenConfig(config))
-        : undefined;
-    if (
-      sent === undefined ||
-      first.response.ok ||
-      !isStrictChatShapeRejection(first.response.status)
-    ) {
-      return first;
-    }
+    const field = this.outputTokenFieldFor(request, config);
+    const first = await send(field);
+    if (!this.mayRetryOutputTokenField(first, field, config)) return first;
     const secrets = [config.apiKey, config.baseUrl];
     const payload = await this.readErrorBody(first.response.clone(), config, secrets, first.signal);
-    if (!rejectsOutputTokenField(payload, sent)) return first;
+    if (field === undefined || !rejectsOutputTokenField(payload, field)) return first;
     first.dispose();
     const url = chatCompletionsUrl(config);
-    rememberOutputTokenField(
-      this.deps.compatibilityMemoScope ?? config,
-      url,
-      OTHER_OUTPUT_TOKEN_FIELD[sent],
+    const other = OTHER_OUTPUT_TOKEN_FIELD[field];
+    this.logChatCompatibilityRetry(url, config, first.response.status, field);
+    const retry = await send(other);
+    if (retry.response.ok) {
+      rememberOutputTokenField(this.deps.compatibilityMemoScope ?? config, url, other);
+    }
+    return retry;
+  }
+
+  private mayRetryOutputTokenField(
+    first: DispatchedResponse,
+    field: OutputTokenField | undefined,
+    config: ModelProviderConfig,
+  ): boolean {
+    return (
+      field !== undefined &&
+      config.outputTokenParameter === undefined &&
+      !first.response.ok &&
+      isStrictChatShapeRejection(first.response.status)
     );
-    this.logChatCompatibilityRetry(url, config, first.response.status, sent);
-    return send();
   }
 
   private logChatCompatibilityRetry(
