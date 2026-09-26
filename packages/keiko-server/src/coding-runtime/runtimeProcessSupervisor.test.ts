@@ -1,5 +1,6 @@
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
+import { planLongLivedRuntimeSandbox } from "@oscharko-dev/keiko-sandbox";
 
 import {
   createRuntimeProcessSupervisor,
@@ -9,6 +10,10 @@ import {
   type RuntimeQualificationIdentity,
   type RuntimeSupervisorLaunchRequest,
 } from "./runtimeProcessSupervisor.js";
+import type {
+  LongLivedRuntimeSandboxDecision,
+  LongLivedRuntimeSandboxRequest,
+} from "@oscharko-dev/keiko-sandbox";
 
 function launchRequest(platform: "darwin" | "win32" = "win32"): RuntimeSupervisorLaunchRequest {
   return {
@@ -34,7 +39,24 @@ function launchRequest(platform: "darwin" | "win32" = "win32"): RuntimeSuperviso
       upstreamBrowserAuthority: false,
       unrestrictedNetworkAuthority: false,
     },
+    runtimeSource: "keiko-sidecar",
+    modelSource: "keiko-model-gateway",
+    authorityEnvelopeDigest: "e".repeat(64),
+    egressPolicy: {
+      kind: "loopback-only",
+      reviewedEgressReceipt: `sha256:${"f".repeat(64)}`,
+    },
   };
+}
+
+function enforcingSandbox(
+  request: LongLivedRuntimeSandboxRequest,
+): LongLivedRuntimeSandboxDecision {
+  return planLongLivedRuntimeSandbox(
+    request,
+    { bubblewrap: false, unshare: false, seatbelt: true, docker: false, podman: false },
+    "darwin",
+  );
 }
 
 function backend(
@@ -87,12 +109,94 @@ describe("runtime process supervisor", () => {
     expect(fake.spawn).not.toHaveBeenCalled();
   });
 
+  it("performs zero spawn for a qualified Windows tree when egress is unenforceable", () => {
+    const request = launchRequest("win32");
+    const fake = backend(true, request.qualification);
+    const supervisor = createRuntimeProcessSupervisor({
+      backend: fake.value,
+      qualifications: [request.qualification],
+    });
+
+    expect(supervisor.spawnOwnedTree(request)).toEqual({
+      ok: false,
+      failureCode: "runtime-egress-unenforceable",
+    });
+    expect(fake.spawn).not.toHaveBeenCalled();
+  });
+
+  it("performs zero spawn when no backend can enforce the reviewed egress profile", () => {
+    const request = launchRequest();
+    const fake = backend(true);
+    const supervisor = createRuntimeProcessSupervisor({
+      backend: fake.value,
+      qualifications: [request.qualification],
+      planSandbox: (): LongLivedRuntimeSandboxDecision => ({
+        kind: "fail-closed",
+        reason: "policy-unenforceable",
+      }),
+    });
+
+    expect(supervisor.spawnOwnedTree(request)).toEqual({
+      ok: false,
+      failureCode: "runtime-egress-unenforceable",
+    });
+    expect(fake.spawn).not.toHaveBeenCalled();
+  });
+
+  it("performs zero spawn when a planner attests another authority", () => {
+    const request = launchRequest();
+    const fake = backend(true);
+    const supervisor = createRuntimeProcessSupervisor({
+      backend: fake.value,
+      qualifications: [request.qualification],
+      planSandbox: (sandboxRequest) => {
+        const planned = enforcingSandbox(sandboxRequest);
+        if (planned.kind !== "wrapped") return planned;
+        return {
+          ...planned,
+          attestation: {
+            ...planned.attestation,
+            authorityEnvelopeDigest: "0".repeat(64),
+          },
+        };
+      },
+    });
+
+    expect(supervisor.spawnOwnedTree(request)).toEqual({
+      ok: false,
+      failureCode: "runtime-egress-unenforceable",
+    });
+    expect(fake.spawn).not.toHaveBeenCalled();
+  });
+
+  it("performs zero spawn when the prepared wrapper exceeds native protocol bounds", () => {
+    const request = launchRequest();
+    const fake = backend(true);
+    const supervisor = createRuntimeProcessSupervisor({
+      backend: fake.value,
+      qualifications: [request.qualification],
+      planSandbox: (sandboxRequest) => {
+        const planned = enforcingSandbox(sandboxRequest);
+        return planned.kind === "wrapped"
+          ? { ...planned, args: Array.from({ length: 65 }, () => "argument") }
+          : planned;
+      },
+    });
+
+    expect(supervisor.spawnOwnedTree(request)).toEqual({
+      ok: false,
+      failureCode: "runtime-egress-unenforceable",
+    });
+    expect(fake.spawn).not.toHaveBeenCalled();
+  });
+
   it("rejects an incomplete launch profile at runtime", () => {
     const fake = backend(true);
     const request = launchRequest();
     const supervisor = createRuntimeProcessSupervisor({
       backend: fake.value,
       qualifications: [request.qualification],
+      planSandbox: enforcingSandbox,
     });
     const incomplete = {
       ...request,
@@ -112,6 +216,7 @@ describe("runtime process supervisor", () => {
     const supervisor = createRuntimeProcessSupervisor({
       backend: windowsBackend.value,
       qualifications: [request.qualification],
+      planSandbox: enforcingSandbox,
     });
 
     expect(supervisor.preflight(request)).toEqual({
@@ -129,6 +234,7 @@ describe("runtime process supervisor", () => {
       const supervisor = createRuntimeProcessSupervisor({
         backend: fake.value,
         qualifications: [request.qualification],
+        planSandbox: enforcingSandbox,
       });
 
       const launched = supervisor.spawnOwnedTree(request);
@@ -156,6 +262,7 @@ describe("runtime process supervisor", () => {
     const supervisor = createRuntimeProcessSupervisor({
       backend: fake.value,
       qualifications: [request.qualification],
+      planSandbox: enforcingSandbox,
     });
     const launched = supervisor.spawnOwnedTree(request);
     if (!launched.ok) throw new Error("expected qualified launch");

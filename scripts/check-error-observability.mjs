@@ -40,7 +40,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "n
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -666,6 +666,10 @@ function distPath(pkg, file) {
   return resolve(here, "..", "packages", pkg, "dist", file);
 }
 
+function moduleUrl(path) {
+  return pathToFileURL(path).href;
+}
+
 function rawGet(port, path, headers = {}) {
   return new Promise((resolvePromise, reject) => {
     const req = request(
@@ -690,7 +694,7 @@ function rawGet(port, path, headers = {}) {
 async function loadServerModule() {
   let mod;
   try {
-    mod = await import(serverEntry);
+    mod = await import(moduleUrl(serverEntry));
   } catch (error) {
     fail(
       `could not import built server at ${serverEntry} — run \`npm run build\` first (${String(error)})`,
@@ -837,7 +841,7 @@ function makeSinkTerminalTeeProbe() {
   return {
     id: "sink.terminal-event-tee",
     async run() {
-      const mod = await import(distPath("keiko-server", "sink.js"));
+      const mod = await import(moduleUrl(distPath("keiko-server", "sink.js")));
       const records = [];
       const sink = new mod.QueueEventSink({ diagnostics: { record: (r) => records.push(r) } });
       sink.emit({
@@ -874,7 +878,7 @@ function makeMemoryHandlerVaultProbe(id, operation, source, throwingVault) {
   return {
     id,
     async run() {
-      const mod = await import(distPath("keiko-server", "memory-handlers.js"));
+      const mod = await import(moduleUrl(distPath("keiko-server", "memory-handlers.js")));
       const vaultMod = await loadVaultModule();
       const records = [];
       const vault = throwingVault(vaultMod);
@@ -964,7 +968,7 @@ function makeVoiceRealtimeNegotiationProbe() {
   return {
     id: "voice-realtime.negotiation-failure",
     async run() {
-      const mod = await import(distPath("keiko-server", "voice-realtime.js"));
+      const mod = await import(moduleUrl(distPath("keiko-server", "voice-realtime.js")));
       const records = [];
       const conn = new mod.VoiceControlConnection({
         socket: {
@@ -1014,7 +1018,9 @@ function makeRetentionPolicyProbe() {
   return {
     id: "memory-maintenance-handlers.resolveMemoryRetentionPolicy",
     async run() {
-      const mod = await import(distPath("keiko-server", "memory-maintenance-handlers.js"));
+      const mod = await import(
+        moduleUrl(distPath("keiko-server", "memory-maintenance-handlers.js"))
+      );
       const records = [];
       const deps = {
         env: { KEIKO_MEMORY_RETENTION_MAX_AGE_DAYS: "not-a-number" },
@@ -1043,7 +1049,9 @@ function makeAutonomyModeProbe() {
   return {
     id: "memory-maintenance-handlers.resolveMaintenanceAutonomyMode",
     async run() {
-      const mod = await import(distPath("keiko-server", "memory-maintenance-handlers.js"));
+      const mod = await import(
+        moduleUrl(distPath("keiko-server", "memory-maintenance-handlers.js"))
+      );
       const records = [];
       const deps = {
         store: {
@@ -1075,7 +1083,7 @@ function makeConsolidationLogPortProbe() {
   return {
     id: "memory-consolidation.log-port.sink-failed",
     async run() {
-      const mod = await import(distPath("keiko-memory-consolidation", "log-port.js"));
+      const mod = await import(moduleUrl(distPath("keiko-memory-consolidation", "log-port.js")));
       const records = [];
       let calls = 0;
       const sink = {
@@ -1156,7 +1164,7 @@ function makeConsolidationSummaryFallbackProbe() {
   return {
     id: "memory-consolidation.summary-fallback",
     async run() {
-      const mod = await import(distPath("keiko-memory-consolidation", "consolidate.js"));
+      const mod = await import(moduleUrl(distPath("keiko-memory-consolidation", "consolidate.js")));
       const records = [];
       const sink = { write: (event) => records.push(event) };
       const clusterRecords = await buildConsolidationClusterRecords();
@@ -1178,7 +1186,7 @@ function makeKeychainFallbackProbe() {
   return {
     id: "security.macos-keychain.fallback",
     async run() {
-      const mod = await import(distPath("keiko-security", "macos-keychain.js"));
+      const mod = await import(moduleUrl(distPath("keiko-security", "macos-keychain.js")));
       const records = [];
       const sink = { write: (event) => records.push(event) };
       const error = Object.assign(new Error("gate-keychain-failure"), { code: "ENOENT" });
@@ -1207,7 +1215,9 @@ function makeQualityIntelligenceCapsuleStoreProbe() {
   return {
     id: "quality-intelligence.capsule-store-open",
     async run() {
-      const mod = await import(distPath("keiko-server", "qualityIntelligence/capsuleAdapter.js"));
+      const mod = await import(
+        moduleUrl(distPath("keiko-server", "qualityIntelligence/capsuleAdapter.js"))
+      );
       const root = mkdtempSync(join(tmpdir(), "keiko-gate-qi-capsule-"));
       try {
         // A regular file where the knowledge-store directory belongs makes every open fail.

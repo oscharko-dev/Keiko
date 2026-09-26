@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { planLongLivedRuntimeSandbox } from "@oscharko-dev/keiko-sandbox";
 
 import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
 import { EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
@@ -484,6 +485,12 @@ async function startBridgeFixture(
         releaseReceipt: `sha256:${"a".repeat(64)}`,
       },
     ],
+    planSandbox: (request) =>
+      planLongLivedRuntimeSandbox(
+        request,
+        { bubblewrap: false, unshare: false, seatbelt: true, docker: false, podman: false },
+        "darwin",
+      ),
   });
   const sseFrame = new TextEncoder().encode(
     control?.sseFrame ?? 'data: {"id":"evt_server","type":"server.connected","data":{}}\n\n',
@@ -642,6 +649,7 @@ async function startBridgeFixture(
     runtime.manager.start({
       runId: FIXTURE_RUN_ID,
       treeBindingId: "b".repeat(64),
+      authorityEnvelopeDigest: "c".repeat(64),
       taskRef: "issue-2254",
       workspaceRoot: join(root, "workspace"),
       adapterKind: "opencode-compatible",
@@ -845,6 +853,12 @@ describe("unmounted OpenCode runtime composition", () => {
           releaseReceipt: `sha256:${"a".repeat(64)}`,
         },
       ],
+      planSandbox: (request) =>
+        planLongLivedRuntimeSandbox(
+          request,
+          { bubblewrap: false, unshare: false, seatbelt: true, docker: false, podman: false },
+          "darwin",
+        ),
     });
     const sseControllers: ReadableStreamDefaultController<Uint8Array>[] = [];
     const sseCancellations: number[] = [];
@@ -967,6 +981,7 @@ describe("unmounted OpenCode runtime composition", () => {
         runtime.manager.start({
           runId: "run-1",
           treeBindingId: "a".repeat(64),
+          authorityEnvelopeDigest: "b".repeat(64),
           taskRef: "issue-2254",
           workspaceRoot,
           adapterKind: "opencode-compatible",
@@ -1031,30 +1046,32 @@ describe("unmounted OpenCode runtime composition", () => {
         launch?.env.OPENCODE_SERVER_PASSWORD,
       ]),
     ).toHaveLength(3);
-    // ADR-0043 D11-D14 (#3390): "the single loopback destination" invariant, proven on the actual
-    // env the spawned sidecar receives -- `KEIKO_TOOL_FACADE_URL` (this bridge's own
-    // `toolFacadeOrigin`, never a self-issued listener port) and `KEIKO_MODEL_GATEWAY_URL` (this
-    // run's `gatewayUrl`, merged into `launch.env` by codingRuntimeManager.ts) must share ONE
-    // origin -- both env values, and not just their construction-site source, agree.
+    // ADR-0043 D11-D14 (#3390): the spawned sidecar receives exactly one loopback origin for
+    // model and tool traffic.
     expect(launch?.env.KEIKO_TOOL_FACADE_URL).toBeDefined();
     expect(launch?.env.KEIKO_MODEL_GATEWAY_URL).toBeDefined();
     expect(new URL(launch?.env.KEIKO_TOOL_FACADE_URL ?? "").origin).toBe(
       new URL(launch?.env.KEIKO_MODEL_GATEWAY_URL ?? "").origin,
     );
-    for (const path of [
-      runRoot,
-      join(runRoot, "config"),
-      join(runRoot, "config", "opencode"),
-      join(runRoot, "config", "opencode", "plugins"),
-      join(runRoot, "state"),
-    ])
-      expect(statSync(path).mode & 0o777).toBe(0o700);
-    for (const path of [
-      join(runRoot, "config", "opencode", "opencode.json"),
-      join(runRoot, "config", "opencode", "plugins", "keiko_workspace_read.ts"),
-      join(runRoot, "config", "opencode", "plugins", "keiko_changeset_edit.ts"),
-    ])
-      expect(statSync(path).mode & 0o777).toBe(0o600);
+    // Windows does not implement POSIX permission bits; chmodSync cannot make these mode
+    // assertions meaningful there. The state layout and secret-free contents remain covered on
+    // every platform, while Unix hosts verify the intended 0700/0600 permissions.
+    if (process.platform !== "win32") {
+      for (const path of [
+        runRoot,
+        join(runRoot, "config"),
+        join(runRoot, "config", "opencode"),
+        join(runRoot, "config", "opencode", "plugins"),
+        join(runRoot, "state"),
+      ])
+        expect(statSync(path).mode & 0o777).toBe(0o700);
+      for (const path of [
+        join(runRoot, "config", "opencode", "opencode.json"),
+        join(runRoot, "config", "opencode", "plugins", "keiko_workspace_read.ts"),
+        join(runRoot, "config", "opencode", "plugins", "keiko_changeset_edit.ts"),
+      ])
+        expect(statSync(path).mode & 0o777).toBe(0o600);
+    }
     const files = [
       join(runRoot, "config", "opencode", "opencode.json"),
       join(runRoot, "config", "opencode", "plugins", "keiko_workspace_read.ts"),

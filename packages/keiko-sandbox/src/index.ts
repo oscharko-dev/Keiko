@@ -46,6 +46,28 @@ export {
   qualificationFromReceipt,
   qualifyLongLivedRuntime,
 } from "./runtime.js";
+export {
+  longLivedRuntimeEgressPolicyDigest,
+  planLongLivedRuntimeSandbox,
+  verifyLongLivedRuntimeSandboxAttestation,
+} from "./runtime-egress.js";
+export type {
+  LongLivedRuntimeEgressPolicy,
+  LongLivedRuntimeSandboxAttestation,
+  LongLivedRuntimeSandboxDecision,
+  LongLivedRuntimeSandboxRequest,
+} from "./runtime-egress.js";
+export type {
+  LongLivedRuntimeArchitecture,
+  LongLivedRuntimeBackend,
+  LongLivedRuntimePlatform,
+  LongLivedRuntimeQualification,
+  RuntimeQualificationReceipt,
+  RuntimeQualificationReceiptBinding,
+  RuntimeQualificationReceiptResult,
+  RuntimeQualificationSidecarDigest,
+  RuntimeQualificationTarget,
+} from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
 export type { ClosedRuntimeLaunchProfile, LongLivedRuntimeQualificationResult } from "./runtime.js";
 export type {
   BackendAvailability,

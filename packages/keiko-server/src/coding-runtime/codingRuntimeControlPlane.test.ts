@@ -101,6 +101,7 @@ describe("coding runtime control plane", () => {
         resolve: () => ({
           taskRef: "task-1",
           treeBindingId: "tree-1",
+          authorityEnvelopeDigest: "a".repeat(64),
           adapterKind: "codex-cli",
           runtimeSource: "codex-cli-adapter",
           modelSource: "keiko-model-gateway",
@@ -382,6 +383,7 @@ function qualifiedLaunch(): ReturnType<CodingRuntimeHost["launchResolver"]["reso
   return {
     taskRef: "task-1",
     treeBindingId: "tree-1",
+    authorityEnvelopeDigest: "a".repeat(64),
     adapterKind: "codex-cli",
     runtimeSource: "codex-cli-adapter",
     modelSource: "keiko-model-gateway",

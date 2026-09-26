@@ -421,6 +421,9 @@ describe("production coding runtime resolver", () => {
     } as const;
     confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
     const launch = host.launchResolver.resolve(request);
+    expect(launch.authorityEnvelopeDigest).toBe(
+      createRun.mock.calls[0]?.[0].minted.authorityRef.envelopeDigest,
+    );
     await expect(
       manager.start({
         ...launch,

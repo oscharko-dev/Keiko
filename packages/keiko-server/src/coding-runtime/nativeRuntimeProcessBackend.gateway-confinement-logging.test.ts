@@ -97,6 +97,13 @@ function request(runtime: string, workspace: string): RuntimeSupervisorLaunchReq
       upstreamBrowserAuthority: false,
       unrestrictedNetworkAuthority: false,
     },
+    runtimeSource: "keiko-sidecar",
+    modelSource: "keiko-model-gateway",
+    authorityEnvelopeDigest: "b".repeat(64),
+    egressPolicy: {
+      kind: "loopback-only",
+      reviewedEgressReceipt: `sha256:${"b".repeat(64)}`,
+    },
   };
 }
 

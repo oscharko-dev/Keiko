@@ -40,6 +40,7 @@ import {
   safeRealFile,
 } from "./nativeRuntimeProcessPaths.js";
 import type {
+  PreparedRuntimeSandboxLaunch,
   RuntimeProcessBackend,
   RuntimeProcessTree,
   RuntimeSupervisorLaunchRequest,
@@ -153,12 +154,19 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     private readonly resolveGitExecutable: () => AttestedDarwinGitExecutable,
   ) {}
 
-  public spawnOwnedTree(request: RuntimeSupervisorLaunchRequest): RuntimeProcessTree {
+  public spawnOwnedTree(
+    request: RuntimeSupervisorLaunchRequest,
+    sandbox?: PreparedRuntimeSandboxLaunch,
+  ): RuntimeProcessTree {
     let launchPhase: DevLaneLaunchPhase = "gateway-policy";
     try {
-      return this.spawnConfinedTree(request, (phase) => {
-        launchPhase = phase;
-      });
+      return sandbox === undefined
+        ? this.spawnConfinedTree(request, (phase) => {
+            launchPhase = phase;
+          })
+        : this.spawnPreparedTree(request, sandbox, (phase) => {
+            launchPhase = phase;
+          });
     } catch (error) {
       if (isUnavailableError(error)) {
         recordConfinementUnavailable(this.activityLog, request.runId, this.identity);
@@ -167,6 +175,36 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       }
       throw error;
     }
+  }
+
+  private spawnPreparedTree(
+    request: RuntimeSupervisorLaunchRequest,
+    sandbox: PreparedRuntimeSandboxLaunch,
+    setLaunchPhase: (phase: DevLaneLaunchPhase) => void,
+  ): RuntimeProcessTree {
+    const { cwd } = resolveLaunchPaths(this.runtimeRoot, request, setLaunchPhase);
+    setLaunchPhase("process-spawn");
+    const child = this.spawnRuntime(sandbox.command, sandbox.args, {
+      cwd,
+      env: { ...request.env },
+      detached: true,
+      launcherDiagnostics: linuxGatewayLauncherBackend(sandbox.attestation.backend),
+      shell: false,
+    });
+    setLaunchPhase("launcher-diagnostics");
+    attachOrTerminateLinuxGatewayDiagnostics(
+      child,
+      this.activityLog,
+      request.runId,
+      sandbox.attestation.backend,
+      this.killProcessGroup,
+    );
+    setLaunchPhase("tree-ownership");
+    const tree = ownTree(`dev-lane-opencode-${String(this.nextTreeId++)}`, child, (error) => {
+      recordChildConfinementFailure(this.activityLog, request.runId, child, error);
+    });
+    this.ownedTrees.add(tree);
+    return tree;
   }
 
   private spawnConfinedTree(

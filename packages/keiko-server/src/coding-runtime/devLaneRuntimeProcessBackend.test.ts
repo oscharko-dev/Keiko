@@ -25,12 +25,29 @@ import {
 } from "./devLaneRuntimeProcessBackend.js";
 import {
   CLOSED_RUNTIME_LAUNCH_PROFILE,
+  type PreparedRuntimeSandboxLaunch,
   type RuntimeProcessBackend,
   type RuntimeProcessTree,
   type RuntimeSupervisorLaunchRequest,
 } from "./runtimeProcessSupervisor.js";
 
 const IDENTITY = { platform: "darwin", arch: "arm64", backend: "macos-app-sandbox" } as const;
+const SANDBOX: PreparedRuntimeSandboxLaunch = {
+  command: "/usr/bin/sandbox-exec",
+  args: ["-p", "profile", "/runtime/opencode", "serve"],
+  attestation: {
+    schemaVersion: 1,
+    backend: "seatbelt",
+    platform: "darwin",
+    networkEnforced: true,
+    policyKind: "loopback-only",
+    runtimeSource: "keiko-sidecar",
+    modelSource: "keiko-model-gateway",
+    authorityEnvelopeDigest: "e".repeat(64),
+    reviewedEgressReceipt: `sha256:${"d".repeat(64)}`,
+    policyDigest: "c".repeat(64),
+  },
+};
 const LINUX_IDENTITY = {
   platform: "linux",
   arch: "x64",
@@ -142,6 +159,13 @@ function launchRequest(fixture: Fixture, executable?: string): RuntimeSupervisor
     env: { OPENCODE_DISABLE_PROJECT_CONFIG: "true" },
     qualification: { ...IDENTITY, releaseReceipt: `sha256:${"0".repeat(64)}` },
     launchProfile: CLOSED_RUNTIME_LAUNCH_PROFILE,
+    runtimeSource: "keiko-sidecar",
+    modelSource: "keiko-model-gateway",
+    authorityEnvelopeDigest: "e".repeat(64),
+    egressPolicy: {
+      kind: "loopback-only",
+      reviewedEgressReceipt: `sha256:${"d".repeat(64)}`,
+    },
   };
 }
 
@@ -249,11 +273,10 @@ describe("dev-lane runtime process backend", () => {
       },
       killProcessGroup: () => undefined,
     });
-    const tree = backend.spawnOwnedTree(launchRequest(fixture));
+    const tree = backend.spawnOwnedTree(launchRequest(fixture), SANDBOX);
     expect(spawned).toHaveLength(1);
-    expect(spawned[0]?.executable).toBe("/usr/bin/sandbox-exec");
-    expect(spawned[0]?.args.slice(2)).toEqual([fixture.executable, "serve"]);
-    expect(spawned[0]?.args[1]).toContain('(remote tcp4 "localhost:1983")');
+    expect(spawned[0]?.executable).toBe(SANDBOX.command);
+    expect(spawned[0]?.args).toEqual(SANDBOX.args);
     expect(spawned[0]?.options.detached).toBe(true);
     expect(spawned[0]?.options.shell).toBe(false);
     await expect(backend.reconcileTreeExit(tree)).resolves.toBe(false);
@@ -450,9 +473,11 @@ describe("dev-lane runtime process backend", () => {
       spawnRuntime: () => fakeChild(1),
       killProcessGroup: () => undefined,
     });
-    expect(() => backend.spawnOwnedTree(launchRequest(fixture, fixture.outside))).toThrow();
     expect(() =>
-      backend.spawnOwnedTree(launchRequest(fixture, join(fixture.runtimeRoot, "missing"))),
+      backend.spawnOwnedTree(launchRequest(fixture, fixture.outside), SANDBOX),
+    ).toThrow();
+    expect(() =>
+      backend.spawnOwnedTree(launchRequest(fixture, join(fixture.runtimeRoot, "missing")), SANDBOX),
     ).toThrow();
   });
 
@@ -471,7 +496,7 @@ describe("dev-lane runtime process backend", () => {
         groupKills.push({ pid, signal });
       },
     });
-    const tree = backend.spawnOwnedTree(launchRequest(fixture));
+    const tree = backend.spawnOwnedTree(launchRequest(fixture), SANDBOX);
     backend.signalTree(tree, "graceful");
     backend.signalTree(tree, "force");
     expect(groupKills).toEqual([
@@ -503,7 +528,7 @@ describe("dev-lane runtime process backend", () => {
         groupKills.push(signal);
       },
     });
-    const tree = backend.spawnOwnedTree(launchRequest(fixture));
+    const tree = backend.spawnOwnedTree(launchRequest(fixture), SANDBOX);
     child.reapWithoutEvent();
     backend.signalTree(tree, "force");
     backend.signalTree(tree, "graceful");
@@ -523,7 +548,7 @@ describe("dev-lane runtime process backend", () => {
         throw new Error("group-kill-must-not-run");
       },
     });
-    const tree = backend.spawnOwnedTree(launchRequest(fixture));
+    const tree = backend.spawnOwnedTree(launchRequest(fixture), SANDBOX);
     backend.signalTree(tree, "graceful");
     expect(child.kills).toEqual(["SIGTERM"]);
   });
@@ -559,7 +584,7 @@ describe("dev-lane runtime process backend", () => {
       spawnRuntime: () => child,
       killProcessGroup: () => undefined,
     });
-    const tree = backend.spawnOwnedTree(launchRequest(fixture));
+    const tree = backend.spawnOwnedTree(launchRequest(fixture), SANDBOX);
     await expect(backend.waitForCompleteTreeExit(tree, 10)).resolves.toBe(false);
   });
 
@@ -570,7 +595,7 @@ describe("dev-lane runtime process backend", () => {
       gatewayConfinement: gatewayConfinement(),
       runtimeRoot: fixture.runtimeRoot,
     });
-    const tree = backend.spawnOwnedTree(launchRequest(fixture));
+    const tree = backend.spawnOwnedTree(launchRequest(fixture), SANDBOX);
     await expect(backend.waitForCompleteTreeExit(tree, 10_000)).resolves.toBe(true);
     await expect(backend.reconcileTreeExit(tree)).resolves.toBe(true);
   });
