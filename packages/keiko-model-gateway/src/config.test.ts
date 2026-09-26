@@ -99,6 +99,7 @@ function rawToolCallingProof(): ToolCallingProofRaw {
 describe("parseGatewayConfig", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("parses a structurally valid config", () => {
@@ -739,6 +740,8 @@ describe("parseGatewayConfig", () => {
   // must read the demoted model as a proof to renew, never as a model without tool calling, or its
   // profile read never probes and the Workbench stays blocked until a manual check.
   it("leaves a lapsed or moved proof renewable by the Coding Workbench", () => {
+    // One instant for the proof, the loader and the resolver, so the 1 ms boundary holds exactly.
+    vi.useFakeTimers({ now: Date.parse("2026-09-26T08:00:00.000Z") });
     const raw = rawToolCallingProof();
     const provider = parseGatewayConfig(raw).providers[0];
     if (provider === undefined) throw new Error("expected provider");
