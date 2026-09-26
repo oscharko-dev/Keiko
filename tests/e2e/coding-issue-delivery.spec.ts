@@ -43,6 +43,9 @@ import {
   type DeliveryProviderState,
 } from "./servers/coding-issue-delivery-transport.mjs";
 import type { DeliveryDescriptionModelState } from "./servers/coding-issue-description-model.mjs";
+// ADR-0124 D6: a declined step answers with this exact result; imported from the server source
+// rather than restated (AGENTS.md #7).
+import { humanDecisionToolResult } from "../../packages/keiko-server/src/coding-runtime/codingToolFacade.js";
 
 const stateDir = deliveryStateDir();
 const repository = deliveryRepository(stateDir);
@@ -718,7 +721,8 @@ test("#3387 @coding-issue-delivery explicit push denial rejects only that step",
   // ADR-0124 D6 (owner decision, 2026-09-26): "a human's 'no' rejects one step, not the run" -- the
   // run returns to `running`, never `failed`/`revoked`.
   await expect.poll(async () => (await snapshot(page)).state).toBe("running");
-  expect((await waitControl(pending.controlId)).result?.status).toBe("cancelled");
+  // The waiting call ends with the human's verdict, not the `cancelled` of an expired ask.
+  expect((await waitControl(pending.controlId)).result).toEqual(humanDecisionToolResult("denied"));
   await expectDenied("push-execute", pending.proposalId);
   expect(provider()).toMatchObject({ pushes: before.pushes, creates: before.creates });
   expect(approvalDecisionsFor(pending.proposalId, "denied").length).toBeGreaterThan(0);
@@ -848,7 +852,8 @@ test("#3387 @coding-issue-delivery PR denial keeps the pushed commit but creates
   // ADR-0124 D6 (owner decision, 2026-09-26): "a human's 'no' rejects one step, not the run" -- the
   // run returns to `running`, never `failed`/`revoked`.
   await expect.poll(async () => (await snapshot(page)).state).toBe("running");
-  expect((await waitControl(pending.controlId)).result?.status).toBe("cancelled");
+  // The waiting call ends with the human's verdict, not the `cancelled` of an expired ask.
+  expect((await waitControl(pending.controlId)).result).toEqual(humanDecisionToolResult("denied"));
   await expectDenied("pr-execute", pending.proposalId);
   expect(provider()).toMatchObject({ pushes: before.pushes + 1, creates: before.creates });
   expect(approvalDecisionsFor(pending.proposalId, "denied").length).toBeGreaterThan(0);

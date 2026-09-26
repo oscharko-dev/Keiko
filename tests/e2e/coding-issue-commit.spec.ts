@@ -23,6 +23,9 @@ import {
   commitStateDir,
   type CommitFixtureOperation,
 } from "./support/coding-issue-commit.js";
+// ADR-0124 D6: a declined step answers with this exact result; imported from the server source
+// rather than restated (AGENTS.md #7).
+import { humanDecisionToolResult } from "../../packages/keiko-server/src/coding-runtime/codingToolFacade.js";
 
 const stateDir = commitStateDir();
 const repository = commitRepository(stateDir);
@@ -389,7 +392,8 @@ test("#3386 @coding-issue-commit actual UI denial rejects only that step", async
   // ADR-0124 D6 (owner decision, 2026-09-26): "a human's 'no' rejects one step, not the run" -- the
   // run returns to `running`, never `failed`/`revoked`.
   await expect(page.locator(SURFACE)).toHaveAttribute("data-state", "running");
-  expect((await waitControl(pending.controlId)).result?.status).toBe("cancelled");
+  // The waiting call ends with the human's verdict, not the `cancelled` of an expired ask.
+  expect((await waitControl(pending.controlId)).result).toEqual(humanDecisionToolResult("denied"));
   expect((await control("execute", pending.proposalId)).result?.status).toBe("denied");
   expect(git(root, ["rev-parse", "HEAD"])).toBe(before);
   await expect(page.getByRole("region", { name: "Reviewed commit message" })).toHaveCount(0);
