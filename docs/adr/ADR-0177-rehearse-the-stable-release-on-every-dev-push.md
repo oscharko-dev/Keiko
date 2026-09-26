@@ -210,6 +210,12 @@ publishes; it only has to be verifiable by it.
   one; the Linux qualification receipt must name `portable-assets.yml@refs/tags/vX.Y.Z` (D8). The
   event-driven run therefore only decides and dispatches; the publish runs on the tag and binds its
   commit as before.
+- **Reads that fit.** Every `gh` and `npm` child the release chain spawns carries an explicit output
+  ceiling (`HOST_COMMAND_MAX_BUFFER_BYTES` in `scripts/lib/host-command.mjs`) sized for a full API
+  page. `spawnSync` kills a child past 1 MiB by default, and on 2026-09-26 the release-dispatch
+  history crossed that at its 61st run: the 1.1.9 request and every advance run after it failed to
+  read it. A failed read still fails closed, and it names its cause: the child's error code
+  (`ENOBUFS`), the HTTP status, or the exit status.
 - **The trust boundary.** A token with `actions: write` alone can dispatch `release.yml`, but it can
   only publish a commit an allowlisted owner requested, on a tag only the owner and the release tag
   App may write. `release-advance.yml` checks out `github.sha`, the default-branch commit its own
@@ -260,7 +266,9 @@ tag and the complete chain from the press to the authorized publish; and
 proves the reviewed-version lookup, the authorization PR's identity check, and the branch/commit/PR/
 auto-merge sequence in-process; `release-candidate.test.mjs` and `release-automation.test.mjs` also
 cover the merged-PR hold and request paths, including every way a PR can fail to be one
-(`releaseHeld`, `versionBumpRequest`).
+(`releaseHeld`, `versionBumpRequest`). `release-github-read-ceiling.test.mjs` reads a dispatch
+history larger than 1 MiB through a real child, pins the output ceiling on every spawn of the
+release-chain scripts, and pins the named cause of a failed read.
 
 ## References
 

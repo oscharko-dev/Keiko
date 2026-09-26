@@ -150,13 +150,15 @@ function peeledTagCommit(runGh, repository, tag, target) {
 export function remoteTagCommit(runGh, repository, tag) {
   const ref = readGithub(runGh, `repos/${repository}/git/ref/tags/${tag}`);
   if (ref.kind === "missing") return undefined;
-  if (ref.kind === "error") fail(`the ${tag} ref could not be read.`);
+  if (ref.kind === "error") fail(`the ${tag} ref could not be read (${ref.reason}).`);
   return peeledTagCommit(runGh, repository, tag, ref.value?.object);
 }
 
 export function releaseExists(runGh, repository, tag) {
   const release = readGithub(runGh, `repos/${repository}/releases/tags/${tag}`);
-  if (release.kind === "error") fail(`the GitHub release for ${tag} could not be read.`);
+  if (release.kind === "error") {
+    fail(`the GitHub release for ${tag} could not be read (${release.reason}).`);
+  }
   return release.kind === "found";
 }
 

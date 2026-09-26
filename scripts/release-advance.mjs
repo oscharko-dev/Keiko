@@ -3,16 +3,14 @@
 // workflow completes, and starts the publish of the requested commit once it is built and green. The
 // decision lives in scripts/lib/release-automation.mjs; this file only wires the host executables.
 
-import { spawnSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { spawnHostExecutable } from "./lib/host-command.mjs";
 import { releaseAutomationMain, runReleaseAdvance } from "./lib/release-automation.mjs";
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(import.meta.filename)) {
-  const spawn = (executable, env) => (args) =>
-    spawnSync(resolveHostExecutable(executable), args, { encoding: "utf8", env });
+  const spawn = (executable, env) => (args) => spawnHostExecutable(executable, args, { env });
   const ghEnv = { ...process.env, GH_TOKEN: process.env.GITHUB_TOKEN };
   process.exitCode = releaseAutomationMain({
     appendFile: appendFileSync,

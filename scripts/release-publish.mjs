@@ -57,6 +57,7 @@ import {
   uploadedDownloadSetFailure,
 } from "./lib/portable-release-verification.mjs";
 import { sha256 } from "./lib/digest.mjs";
+import { HOST_COMMAND_MAX_BUFFER_BYTES } from "./lib/host-command.mjs";
 import { readJsonFile } from "./lib/json.mjs";
 import { resolveGithubRepository } from "./lib/github-repository.mjs";
 import { recordNpmPublishDeployment } from "./lib/npm-publish-deployment.mjs";
@@ -277,6 +278,7 @@ function commandResult(cmd, args, options = {}) {
   return spawnSync(cmd, args, {
     cwd: options.cwd ?? repoRoot,
     encoding: "utf8",
+    maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES,
     // `input`, when present, overrides stdio[0] (Node's own documented behaviour) — this is what
     // lets a caller pipe a JSON body to `gh api --input -` without a separate code path.
     input: options.input,

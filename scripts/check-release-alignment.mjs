@@ -32,6 +32,7 @@ import { parse as parseYaml } from "yaml";
 import { isMainModule } from "./lib/is-main-module.mjs";
 import { readJsonFile } from "./lib/json.mjs";
 import { resolveGithubRepository } from "./lib/github-repository.mjs";
+import { HOST_COMMAND_MAX_BUFFER_BYTES } from "./lib/host-command.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 
 const RELEASE_WORKFLOW_PATH = ".github/workflows/release.yml";
@@ -308,8 +309,9 @@ export function printAlignmentReport(result, { log = console.log, logError = con
   }
 }
 
-function spawnResult(command, args) {
-  return spawnSync(command, args, { encoding: "utf8" });
+/** Exported for the hermetic suite: the real seam must hold a full GitHub API page. */
+export function spawnResult(command, args) {
+  return spawnSync(command, args, { encoding: "utf8", maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES });
 }
 
 function realSeams() {

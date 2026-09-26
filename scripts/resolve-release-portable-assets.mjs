@@ -1,8 +1,7 @@
-import { spawnSync } from "node:child_process";
 import { appendFileSync, lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { spawnHostExecutable } from "./lib/host-command.mjs";
 
 const bundleRootName = ".portable-release-assets";
 export const PORTABLE_ASSETS_ARTIFACT_NAME = "portable-release-assets";
@@ -151,7 +150,7 @@ export function validatePortableAssetsRunSnapshot(config, run, artifacts) {
 }
 
 function ghJson(path) {
-  const result = spawnSync(resolveHostExecutable("gh"), ["api", path], { encoding: "utf8" });
+  const result = spawnHostExecutable("gh", ["api", path]);
   if (result.status !== 0) fail("GitHub run metadata could not be resolved.");
   try {
     return JSON.parse(result.stdout);

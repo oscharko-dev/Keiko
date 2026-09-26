@@ -54,6 +54,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+import { HOST_COMMAND_MAX_BUFFER_BYTES } from "./lib/host-command.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 // The tag shape lives in ONE place, shared with the Release verification workflow that
 // validates the pushed tag — restating it here would let this lane mint a tag the workflow
@@ -209,7 +210,12 @@ function fsAssetCopier(source, destination) {
 }
 
 function spawnSyncRunner(command, args, options = {}) {
-  return spawnSync(command, args, { cwd: repoRoot, encoding: "utf8", ...options });
+  return spawnSync(command, args, {
+    cwd: repoRoot,
+    encoding: "utf8",
+    maxBuffer: HOST_COMMAND_MAX_BUFFER_BYTES,
+    ...options,
+  });
 }
 
 /** Exported for the hermetic suite: the spawn/exit failure paths must stay provable. */
