@@ -41,6 +41,7 @@ import {
   isLinuxGatewayDiagnosticKind,
   CLIENT_ERROR_CLASSES,
   clientErrorClass,
+  type ClientGitRetryOperation,
 } from "./diagnostics.js";
 
 function validRequest(): Record<string, unknown> {
@@ -890,7 +891,14 @@ describe("isClientGitRetryAttemptIngestRequest", () => {
   });
 
   it("accepts every retriable read operation and refuses a discard operation", () => {
-    for (const operation of ["status-read", "branches-read", "summary-read"]) {
+    // Keyed by the type, so a new retriable read fails to compile here until it is listed, and then
+    // fails this test until the guard's own set accepts it.
+    const retriable: Readonly<Record<ClientGitRetryOperation, true>> = {
+      "status-read": true,
+      "branches-read": true,
+      "summary-read": true,
+    };
+    for (const operation of Object.keys(retriable)) {
       expect(isClientGitRetryAttemptIngestRequest({ ...attemptRequest(), operation })).toBe(true);
     }
     for (const operation of ["repository-clone", "repository-register"]) {

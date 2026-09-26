@@ -1088,11 +1088,15 @@ export type ClientGitRetryOperation = Exclude<
   "repository-clone" | "repository-register"
 >;
 
-const GIT_RETRY_OPERATIONS: readonly ClientGitRetryOperation[] =
-  CLIENT_GIT_CLIENT_OPERATION_KINDS.filter(
-    (operation): operation is ClientGitRetryOperation =>
-      !GIT_CLIENT_DISCARD_OPERATIONS.has(operation),
-  );
+// Listed, not derived with a module-level `.filter()` of the kinds above: a bundler cannot prove that
+// call pure, so it kept the call and the discard set it reads in the browser's first-load chunk,
+// which imports this module for unrelated constants (PR #3625, measured against the first-load
+// ceiling). diagnostics.test.ts pins this set against every `ClientGitRetryOperation`.
+const GIT_RETRY_OPERATIONS: ReadonlySet<string> = new Set<ClientGitRetryOperation>([
+  "status-read",
+  "branches-read",
+  "summary-read",
+]);
 
 export interface ClientGitRetryAttemptIngestRequest {
   readonly kind: "git-retry-attempt";
@@ -1115,7 +1119,7 @@ export function isClientGitRetryAttemptIngestRequest(
 ): value is ClientGitRetryAttemptIngestRequest {
   if (!isRecord(value) || value.kind !== "git-retry-attempt") return false;
   if (Object.keys(value).some((key) => !CLIENT_GIT_RETRY_ATTEMPT_KEYS.has(key))) return false;
-  if (!isOneOf(value.operation, GIT_RETRY_OPERATIONS)) return false;
+  if (!isSetMember(value.operation, GIT_RETRY_OPERATIONS)) return false;
   return isCorrelationIdShape(value.correlationId);
 }
 
