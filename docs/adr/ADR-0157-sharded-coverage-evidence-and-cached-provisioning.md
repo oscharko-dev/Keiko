@@ -86,10 +86,11 @@ carries only covered/total counts with no line identity and is not losslessly co
 regenerated rather than merged. No gate ever sees a shard-local view.
 
 **D3 — Any non-success shard result fails the required lane closed.** `coverage-sonar` runs under
-`if: always()` and its first step rejects every shard result that is not `success` — `failure`,
-`cancelled` and `skipped` alike. Without `always()` a failed shard would leave the job *skipped*,
-and a skipped context reads like "not applicable" rather than "a coverage suite did not execute". A
-silently skipped shard must never let the context pass with a suite unexecuted.
+`if: !cancelled()` and its first step rejects every shard result that is not `success` — `failure`,
+`cancelled` and `skipped` alike. Without a status function a failed shard would leave the job
+*skipped*, and a skipped context reads like "not applicable" rather than "a coverage suite did not
+execute". A silently skipped shard must never let the context pass with a suite unexecuted. The
+status function is `!cancelled()`, not `always()`, for the reason D5 records.
 
 The claim is about job results, and one pre-existing exception is worth stating plainly: the
 `feat/keiko-editor` guard sits on the measuring *steps*, not on the jobs, exactly as it did when the
@@ -133,6 +134,16 @@ evict a queued exact-head measurement, and a push cannot discard a metadata verd
 metadata gate observes it. The event payload still binds every run to an immutable head SHA, so a
 later push makes an older metadata run irrelevant to the new merge candidate even if that run is
 already executing.
+
+Cancellation only reaches a job whose `if:` lets it. To cancel a run, GitHub re-evaluates the `if:`
+of every running job and keeps any job whose condition is still true, and `always()` always is. The
+jobs that must also run after a failed need therefore carry `!cancelled()`, which has the same
+effect on a failed need and none on a cancellation. Under `always()` the long jobs of a superseded
+run (`ui`, the Node 26 lane, the coverage suites) kept running for up to 45 minutes after
+`cancel-in-progress` and a manual cancel. The superseded run held its group all that time, so the
+new head's run of that group sat `pending` with zero jobs (PR #3625). The one exception is the `ci`
+aggregate. It keeps `always()` because it must report on a cancelled run too and fail closed there,
+and it only waits on its needs.
 
 Every other event gets a group of one, keyed on `github.run_id`. `cancel-in-progress: false` on a
 shared group would not have been enough: GitHub cancels a previously *pending* run in a group
