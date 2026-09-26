@@ -2784,6 +2784,58 @@
         "signingScope": "evaluation",
         "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.1.10",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.1.10",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": true,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-26-keiko-1.1.10-coding-workbench-approval-expiry-and-window",
+      "releaseNoteCategory": "fixes",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "behavioral",
+      "userVisibleSummary": "Two Coding Workbench repairs from the 1.1.9 hands-on lab run in Ask for approval mode. When an approval request is not answered within its five minutes, the Workbench now stops waiting on it at once: the expired card disappears, and the model's next request is shown and can be decided. Before, the expired card stayed on screen, approving it failed with an invalid-intent error, and the next request expired unseen behind it. The Workbench window also no longer turns blank after an approval: its frame could be scrolled past its content when the composer took focus.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "Coding Workbench (Ask for approval): an approval that expires unanswered is removed at once, and the next approval request is shown and can be approved or denied.",
+        "Coding Workbench: the window no longer turns blank after an approval or when a pending decision is opened."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-26",
+        "humanApproved": true,
+        "approvalReference": "https://github.com/oscharko-dev/Keiko/issues/3610",
+        "rationale": "The release owner ordered the lab verification of the published package and the completion of epic #3591 without follow-ups. The published 1.1.9 lab run (issue #3610) found two defects in Ask for approval mode: an expired approval blocked the next one, and the Workbench window could turn blank after an approval. 1.1.10 ships both repairs; it adds one activity-log operation (coding-runtime.approval.retired) and no export, route or configuration key.",
+        "traceability": null
+      },
+      "userActionRequired": true,
+      "remediation": "restart-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
     }
   ]
 }
