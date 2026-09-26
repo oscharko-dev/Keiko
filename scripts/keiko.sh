@@ -18,36 +18,41 @@ CSP_HASHES="$ROOT/dist/ui/csp-hashes.json"
 # Runtime state (pid + log). Defaults to the gitignored .keiko/ under the repo;
 # overridable (mainly for tests) so a run never clobbers another instance's state.
 STATE_DIR="${KEIKO_STATE_DIR:-$ROOT/.keiko}"
-PID_FILE="$STATE_DIR/ui.pid"
-LOG_FILE="$STATE_DIR/ui.log"
 # Clear-text HTTP is intentionally confined to the validated loopback control plane. HTTPS would
 # add no transport boundary on localhost and would require distributing a local trust root.
-LOOPBACK_ORIGIN="http://${HOST}:${PORT}"
-LOOPBACK_DISPLAY="${HOST}:${PORT} (loopback HTTP)"
-HEALTH_URL="${LOOPBACK_ORIGIN}/api/health"
 # Health-poll and graceful-stop budgets in whole seconds, overridable for slow environments.
 # The health poll (cmd_start) checks wall-clock elapsed time against this budget directly; the
 # graceful-stop wait (cmd_stop) ticks twice a second, so its iterations = seconds x 2.
 START_TIMEOUT_SECS="${KEIKO_START_TIMEOUT_SECS:-20}"
 STOP_TIMEOUT_SECS="${KEIKO_STOP_TIMEOUT_SECS:-10}"
 
+refresh_runtime_paths() {
+  PID_FILE="$STATE_DIR/ui.pid"
+  LOG_FILE="$STATE_DIR/ui.log"
+  LOOPBACK_ORIGIN="http://${HOST}:${PORT}"
+  LOOPBACK_DISPLAY="${HOST}:${PORT} (loopback HTTP)"
+  HEALTH_URL="${LOOPBACK_ORIGIN}/api/health"
+}
+
+refresh_runtime_paths
+
 usage() {
   cat <<'EOF'
 keiko.sh — manage the local Keiko UI/BFF server (loopback only).
 
 Usage:
-  scripts/keiko.sh start      Start the UI and wait until it is healthy.
-  scripts/keiko.sh stop       Gracefully stop the UI (SIGTERM, then SIGKILL).
-  scripts/keiko.sh restart    Stop (if running) and start again.
-  scripts/keiko.sh status     Report whether the UI is running.
+  scripts/keiko.sh start [OPTIONS]    Start the UI and wait until it is healthy.
+  scripts/keiko.sh stop [OPTIONS]     Gracefully stop the UI (SIGTERM, then SIGKILL).
+  scripts/keiko.sh restart [OPTIONS]  Stop (if running) and start again.
+  scripts/keiko.sh status [OPTIONS]   Report whether the UI is running.
   scripts/keiko.sh help       Show this help.
 
-Configuration (all optional, read from the environment):
-  KEIKO_UI_PORT             Loopback port to bind        (default: 1983)
-  KEIKO_UI_HOST             127.0.0.1 | localhost         (default: 127.0.0.1)
-  KEIKO_STATE_DIR           Runtime pid/log directory     (default: <repo>/.keiko)
-  KEIKO_START_TIMEOUT_SECS  Seconds to wait for health    (default: 20)
-  KEIKO_STOP_TIMEOUT_SECS   Seconds to wait for shutdown  (default: 10)
+Options (all optional; env vars remain supported):
+  --port PORT               Loopback port to bind        (env: KEIKO_UI_PORT, default: 1983)
+  --host HOST               127.0.0.1 | localhost        (env: KEIKO_UI_HOST, default: 127.0.0.1)
+  --state-dir PATH          Runtime pid/log directory    (env: KEIKO_STATE_DIR, default: <repo>/.keiko)
+  --start-timeout SECONDS   Seconds to wait for health   (env: KEIKO_START_TIMEOUT_SECS, default: 20)
+  --stop-timeout SECONDS    Seconds to wait for shutdown (env: KEIKO_STOP_TIMEOUT_SECS, default: 10)
 
 Exit codes: 0 success, 1 runtime error (build/startup/stop failure), 2 usage error.
 EOF
@@ -69,6 +74,69 @@ require_loopback_host() {
     echo "keiko.sh: KEIKO_UI_HOST must be 127.0.0.1 or localhost (got: '${HOST}')." >&2
     return 2
   fi
+}
+
+require_tcp_port() {
+  if ! printf '%s' "$PORT" | grep -qE '^[0-9]{1,5}$'; then
+    echo "keiko.sh: --port/KEIKO_UI_PORT must be a TCP port from 1 to 65535 (got: '${PORT}')." >&2
+    return 2
+  fi
+  if [[ "$PORT" -lt 1 ]] || [[ "$PORT" -gt 65535 ]]; then
+    echo "keiko.sh: --port/KEIKO_UI_PORT must be a TCP port from 1 to 65535 (got: '${PORT}')." >&2
+    return 2
+  fi
+}
+
+read_option_value() {
+  flag="$1"
+  value="${2:-}"
+  if [[ -z "$value" ]] || [[ "$value" == --* ]]; then
+    echo "keiko.sh: ${flag} requires a value." >&2
+    return 2
+  fi
+  printf '%s' "$value"
+}
+
+parse_lifecycle_options() {
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --port)
+        value="$(read_option_value "$1" "${2:-}")" || return 2
+        PORT="$value"
+        shift 2
+        ;;
+      --host)
+        value="$(read_option_value "$1" "${2:-}")" || return 2
+        HOST="$value"
+        shift 2
+        ;;
+      --state-dir)
+        value="$(read_option_value "$1" "${2:-}")" || return 2
+        STATE_DIR="$value"
+        shift 2
+        ;;
+      --start-timeout)
+        value="$(read_option_value "$1" "${2:-}")" || return 2
+        START_TIMEOUT_SECS="$value"
+        shift 2
+        ;;
+      --stop-timeout)
+        value="$(read_option_value "$1" "${2:-}")" || return 2
+        STOP_TIMEOUT_SECS="$value"
+        shift 2
+        ;;
+      --help | -h)
+        usage
+        return 3
+        ;;
+      *)
+        echo "keiko.sh: unknown option: $1" >&2
+        usage >&2
+        return 2
+        ;;
+    esac
+  done
+  refresh_runtime_paths
 }
 
 # True if PID is alive AND is actually a Keiko UI process. Guards against a stale
@@ -114,6 +182,7 @@ wait_until_not_keiko_ui() {
 
 cmd_start() {
   require_loopback_host || return 2
+  require_tcp_port || return 2
   require_positive_int KEIKO_START_TIMEOUT_SECS "$START_TIMEOUT_SECS" || return 2
   mkdir -p "$STATE_DIR"
 
@@ -205,6 +274,7 @@ cmd_stop() {
 
 cmd_status() {
   require_loopback_host || return 2
+  require_tcp_port || return 2
   if pid="$(running_pid)"; then
     echo "Keiko UI is running on ${LOOPBACK_DISPLAY} (pid ${pid})."
     return 0
@@ -220,6 +290,21 @@ cmd_restart() {
 
 main() {
   command="${1:-}"
+  if [[ "$#" -gt 0 ]]; then
+    shift
+  fi
+  case "$command" in
+    start | stop | restart | status)
+      parse_status=0
+      parse_lifecycle_options "$@" || parse_status=$?
+      if [[ "$parse_status" -eq 3 ]]; then
+        return 0
+      fi
+      if [[ "$parse_status" -ne 0 ]]; then
+        return "$parse_status"
+      fi
+      ;;
+  esac
   case "$command" in
     start) cmd_start ;;
     stop) cmd_stop ;;

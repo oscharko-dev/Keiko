@@ -178,7 +178,7 @@ describe("scripts/keiko.sh", () => {
       expect(sink).toBeGreaterThan(0);
       expect(lines[sink - 1]).toContain("strict loopback allowlist");
       expect(lines[sink]).toContain("# NOSONAR");
-      expect(lines.find((line) => line.startsWith('LOOPBACK_ORIGIN="http'))).not.toContain(
+      expect(lines.find((line) => line.includes('LOOPBACK_ORIGIN="http'))).not.toContain(
         "NOSONAR",
       );
     });
@@ -275,6 +275,94 @@ describe("scripts/keiko.sh", () => {
       });
       expect(r.status).toBe(1);
       expect(r.stderr).toContain("build assets missing");
+    });
+  });
+
+  describe("lifecycle flag parsing", () => {
+    function writeHealthyFakeRoot(): string {
+      const fakeRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-flag-root-")));
+      mkdirSync(join(fakeRoot, "scripts"), { recursive: true });
+      cpSync(SCRIPT, join(fakeRoot, "scripts", "keiko.sh"));
+      mkdirSync(join(fakeRoot, "dist", "cli"), { recursive: true });
+      mkdirSync(join(fakeRoot, "dist", "ui", "static"), { recursive: true });
+      writeFileSync(join(fakeRoot, "dist", "ui", "csp-hashes.json"), "{}");
+      writeFileSync(
+        join(fakeRoot, "dist", "cli", "index.js"),
+        [
+          'const http = require("node:http");',
+          'const fs = require("node:fs");',
+          "const args = process.argv.slice(2);",
+          'const port = Number(args[args.indexOf("--port") + 1]);',
+          'const host = args[args.indexOf("--host") + 1];',
+          "if (process.env.ARG_CAPTURE_FILE) {",
+          "  fs.writeFileSync(process.env.ARG_CAPTURE_FILE, JSON.stringify({ args, port, host }));",
+          "}",
+          "const server = http.createServer((_request, response) => {",
+          '  response.writeHead(200, { "content-type": "application/json" });',
+          '  response.end(\'{"status":"ok"}\');',
+          "});",
+          "server.listen(port, host);",
+          "",
+        ].join("\n"),
+      );
+      return fakeRoot;
+    }
+
+    it("honors start --port by forwarding the selected port to the UI child", async () => {
+      const fakeRoot = writeHealthyFakeRoot();
+      const captureFile = join(fakeRoot, "argv.json");
+      try {
+        const start = await retryOnPortCollision(() =>
+          spawnSync(
+            "bash",
+            [join(fakeRoot, "scripts", "keiko.sh"), "start", "--port", String(lifecyclePort)],
+            {
+              encoding: "utf8",
+              timeout: 45_000,
+              env: {
+                ...process.env,
+                KEIKO_STATE_DIR: stateDir,
+                KEIKO_START_TIMEOUT_SECS: "10",
+                ARG_CAPTURE_FILE: captureFile,
+              },
+            },
+          ),
+        );
+
+        expect(start.status, `${start.stdout}\n${start.stderr}`).toBe(0);
+        expect(start.stdout).toContain(`127.0.0.1:${String(lifecyclePort)}`);
+        const captured = JSON.parse(readFileSync(captureFile, "utf8")) as {
+          readonly args: readonly string[];
+          readonly port: number;
+          readonly host: string;
+        };
+        expect(captured.args).toEqual(
+          expect.arrayContaining(["ui", "--port", String(lifecyclePort), "--host", "127.0.0.1"]),
+        );
+        expect(captured.port).toBe(lifecyclePort);
+        expect(captured.host).toBe("127.0.0.1");
+      } finally {
+        spawnSync(
+          "bash",
+          [join(fakeRoot, "scripts", "keiko.sh"), "stop", "--port", String(lifecyclePort)],
+          {
+            encoding: "utf8",
+            timeout: 45_000,
+            env: {
+              ...process.env,
+              KEIKO_STATE_DIR: stateDir,
+              KEIKO_STOP_TIMEOUT_SECS: "10",
+            },
+          },
+        );
+        rmSync(fakeRoot, { recursive: true, force: true });
+      }
+    }, 20_000);
+
+    it("rejects a missing --port value instead of silently starting on the default port", () => {
+      const r = run(["start", "--port"], { KEIKO_STATE_DIR: stateDir });
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain("--port requires a value");
     });
   });
 
