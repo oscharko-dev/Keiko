@@ -300,6 +300,31 @@ function voiceEndpointStyleSections(
   ];
 }
 
+// #3638: the model gateway (chat/embedding) connection's own protocol selector — the manual-entry
+// twin of voiceEndpointStyleSections above, so an Azure deployment-path chat gateway can be
+// configured by hand instead of only through a config-file import (packages/keiko-server's setup
+// route already accepts `endpointStyle`/`apiVersion` on the generic connection unconditionally;
+// see setupEndpointProtocol in gateway-setup.ts).
+function gatewayEndpointStyleSections(
+  t: GatewaySetupTranslate,
+): readonly [{ readonly options: readonly { readonly value: string; readonly label: string }[] }] {
+  return [
+    {
+      options: [
+        { value: "", label: t("gatewaySetup.gateway.endpointStyle.unstated") },
+        {
+          value: "openai-compatible",
+          label: t("gatewaySetup.gateway.endpointStyle.openaiCompatible"),
+        },
+        {
+          value: "azure-openai-deployment",
+          label: t("gatewaySetup.gateway.endpointStyle.azureDeploymentPath"),
+        },
+      ],
+    },
+  ];
+}
+
 function voiceProviderLocalitySections(t: GatewaySetupTranslate): readonly [
   {
     readonly options: readonly { readonly value: VoiceProviderLocality; readonly label: string }[];
@@ -672,7 +697,11 @@ interface GatewayFormFields {
   readonly importedVoiceRealtimeAuthMode: string;
   /** The uploaded endpoint URL the imported protocol is bound to. */
   readonly importedVoiceEndpointBaseUrl: string;
-  /** Generic endpoint protocol imported from a config upload, bound to its gateway URL (#3042). */
+  /**
+   * Generic endpoint protocol: the operator's own statement (#3638, via gatewayEndpointStyleSections
+   * / GatewayApiVersionField) or one imported from a config upload, bound to its gateway URL
+   * (#3042) — see importedEndpointPayload.
+   */
   readonly importedEndpointStyle: string;
   readonly importedApiVersion: string;
   readonly importedEndpointBaseUrl: string;
@@ -753,9 +782,13 @@ function canonicalEndpointIdentity(raw: string): string {
   }
 }
 
-// The imported GENERIC protocol rides only on a submit that still points at the uploaded gateway
-// endpoint — a manually retyped URL must not inherit the file's protocol (#3042), while an edit
-// that does not change the endpoint's identity keeps it (#3046).
+// The GENERIC protocol — hand-stated (#3638) or imported — rides only on a submit that still
+// points at the endpoint it applies to: an UPLOADED protocol rides only while the form still
+// points at the uploaded gateway endpoint (a manually retyped URL must not inherit the file's
+// protocol, #3042; an edit that does not change the endpoint's identity keeps it, #3046). A
+// HAND-STATED protocol (importedEndpointBaseUrl still empty — nothing was ever uploaded) carries
+// no such binding and rides with whatever endpoint is currently entered, exactly like the visible
+// voice fields.
 function importedEndpointPayload(fields: GatewayFormFields): Partial<GatewaySetupInput> {
   const submittedBaseUrl = fields.baseUrl.trim();
   if (submittedBaseUrl === "") return {};
@@ -1204,6 +1237,39 @@ function GatewayApiKeyHeaderField({
   );
 }
 
+interface GatewayApiVersionFieldProps {
+  readonly value: string;
+  readonly disabled: boolean;
+  readonly onChange: Dispatch<SetStateAction<string>>;
+}
+
+// #3638: manual twin of VoiceApiVersionField for the generic (chat/embedding) connection. No
+// endpoint-identity binding is needed here (unlike the voice fields): the generic connection has
+// exactly one base URL, entered in the same section, so there is no second candidate endpoint a
+// stated protocol could be mistaken for.
+function GatewayApiVersionField({
+  value,
+  disabled,
+  onChange,
+}: GatewayApiVersionFieldProps): ReactNode {
+  const t = useGatewaySetupTranslate();
+  return (
+    <label className="gw-field">
+      <span>
+        {t("gatewaySetup.gateway.apiVersion.label")}{" "}
+        <span className="dlg-opt">{t("gatewaySetup.gateway.apiVersion.azureOnly")}</span>
+      </span>
+      <input
+        className="gw-input"
+        value={value}
+        disabled={disabled}
+        placeholder="2025-04-01-preview"
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
+  );
+}
+
 interface GatewayTimeoutFieldProps {
   readonly preserveExisting: boolean;
   readonly value: string;
@@ -1317,6 +1383,39 @@ function GatewayWorkflowEligibleModelsField({
   );
 }
 
+// #3638: the generic (chat/embedding) connection's own endpoint protocol, split out of
+// GatewayFieldsSection so that function stays under the repository's max-lines-per-function
+// ceiling (AGENTS.md §6) — the same reason most of this dialog's fields are their own component.
+// Picks its slice directly from GatewayFieldsSectionProps (rather than its own free-standing
+// shape) so the two can never drift apart; GatewayFieldsSection spreads its whole `props`.
+type GatewayEndpointProtocolFieldsProps = Pick<
+  GatewayFieldsSectionProps,
+  "endpointStyleLabelId" | "endpointStyle" | "setEndpointStyle" | "apiVersion" | "setApiVersion"
+> & { readonly disabled: boolean };
+
+function GatewayEndpointProtocolFields({
+  endpointStyleLabelId,
+  endpointStyle,
+  setEndpointStyle,
+  apiVersion,
+  setApiVersion,
+  disabled,
+}: GatewayEndpointProtocolFieldsProps): ReactNode {
+  return (
+    <>
+      <VoiceProtocolSelectField
+        labelId={endpointStyleLabelId}
+        labelKey="gatewaySetup.gateway.endpointStyle.label"
+        sections={gatewayEndpointStyleSections}
+        value={endpointStyle}
+        disabled={disabled}
+        onChange={setEndpointStyle}
+      />
+      <GatewayApiVersionField value={apiVersion} disabled={disabled} onChange={setApiVersion} />
+    </>
+  );
+}
+
 interface GatewayFieldsSectionProps {
   readonly t: GatewaySetupTranslate;
   readonly preserveExisting: boolean;
@@ -1329,6 +1428,12 @@ interface GatewayFieldsSectionProps {
   readonly setApiKey: Dispatch<SetStateAction<string>>;
   readonly apiKeyHeaderName: string;
   readonly setApiKeyHeaderName: Dispatch<SetStateAction<string>>;
+  /** #3638: the generic connection's own endpoint protocol — see gatewayEndpointStyleSections. */
+  readonly endpointStyleLabelId: string;
+  readonly endpointStyle: string;
+  readonly setEndpointStyle: (next: string) => void;
+  readonly apiVersion: string;
+  readonly setApiVersion: Dispatch<SetStateAction<string>>;
   readonly timeoutMs: string;
   readonly setTimeoutMs: Dispatch<SetStateAction<string>>;
   readonly deploymentNames: string;
@@ -1362,6 +1467,7 @@ function GatewayFieldsSection(props: GatewayFieldsSectionProps): ReactNode {
         disabled={disabled}
         onChange={props.setApiKeyHeaderName}
       />
+      <GatewayEndpointProtocolFields {...props} disabled={disabled} />
       <GatewayTimeoutField
         preserveExisting={props.preserveExisting}
         value={props.timeoutMs}
@@ -2509,6 +2615,7 @@ export function GatewaySetupDialog({
   const dialogRef = useRef<HTMLDialogElement>(null);
   const voiceProviderLocalityLabelId = useId();
   const voiceEndpointStyleLabelId = useId();
+  const endpointStyleLabelId = useId();
   const voiceRealtimeAuthModeLabelId = useId();
   const baseUrlRef = useRef<HTMLInputElement>(null);
   const figmaAccessTokenRef = useRef<HTMLInputElement>(null);
@@ -2564,9 +2671,23 @@ export function GatewaySetupDialog({
   };
   const [importedVoiceRealtimeAuthMode, setImportedVoiceRealtimeAuthMode] = useState("");
   const [importedVoiceEndpointBaseUrl, setImportedVoiceEndpointBaseUrl] = useState("");
+  // #3638: also the operator's OWN manual statement now, not import-only — see
+  // gatewayEndpointStyleSections / GatewayApiVersionField. Kept under its original "imported"
+  // name (rather than renamed across every call site) since importedEndpointPayload's existing
+  // gating already does exactly the right thing for a hand-typed value: it rides into the setup
+  // payload unconditionally whenever importedEndpointBaseUrl is still empty (i.e. nothing was
+  // ever uploaded), and otherwise only while the form still points at the endpoint an upload
+  // declared it for (#3042/#3046).
   const [importedEndpointStyle, setImportedEndpointStyle] = useState("");
   const [importedApiVersion, setImportedApiVersion] = useState("");
   const [importedEndpointBaseUrl, setImportedEndpointBaseUrl] = useState("");
+  // An api version pairs only with the Azure deployment path (server-enforced,
+  // GATEWAY_API_VERSION_REQUIRES_AZURE_ENDPOINT) — clearing it when the operator switches away
+  // mirrors stateVoiceEndpointStyle so a stale version never blocks an otherwise valid submit.
+  const setChatEndpointStyle = (next: string): void => {
+    setImportedEndpointStyle(next);
+    if (next !== "azure-openai-deployment") setImportedApiVersion("");
+  };
   const [uploadReadPending, setUploadReadPending] = useState(false);
   const [workflowEligibleModelIdsConfigured, setWorkflowEligibleModelIdsConfigured] =
     useState(false);
@@ -3177,6 +3298,11 @@ export function GatewaySetupDialog({
       setApiKey={setApiKey}
       apiKeyHeaderName={apiKeyHeaderName}
       setApiKeyHeaderName={setApiKeyHeaderName}
+      endpointStyleLabelId={endpointStyleLabelId}
+      endpointStyle={importedEndpointStyle}
+      setEndpointStyle={setChatEndpointStyle}
+      apiVersion={importedApiVersion}
+      setApiVersion={setImportedApiVersion}
       timeoutMs={timeoutMs}
       setTimeoutMs={setTimeoutMs}
       deploymentNames={deploymentNames}

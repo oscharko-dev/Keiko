@@ -208,6 +208,127 @@ describe("OpenAiAdapter.call", () => {
     );
   });
 
+  // User finding #3643: an Azure deployment-path base URL that already ends in "/openai" — a
+  // shape Gateway Setup accepts and persists (gateway-setup.test.ts's
+  // "https://example.openai.azure.com/openai" case) — was sent to
+  // "/openai/openai/deployments/...", a route no real Azure deployment answers.
+  it.each([
+    ["https://my-azure.openai.azure.com/openai", "no trailing slash"],
+    ["https://my-azure.openai.azure.com/openai/", "one trailing slash"],
+    ["https://my-azure.openai.azure.com/openai//", "repeated trailing slashes"],
+    ["https://my-azure.openai.azure.com/openai/openai", "a repeated /openai segment"],
+  ])(
+    "RB-4 (#3643): does not duplicate the /openai segment when the base URL already ends in it (%s: %s)",
+    async (baseUrl) => {
+      let seenUrl = "";
+      const adapter = adapterWith((url) => {
+        if (typeof url === "string") seenUrl = url;
+        return Promise.resolve(
+          jsonResponse({ choices: [{ message: { content: "x" }, finish_reason: "stop" }] }),
+        );
+      });
+      await adapter.call(REQUEST, {
+        ...CONFIG,
+        baseUrl,
+        endpointStyle: "azure-openai-deployment",
+        apiVersion: "2024-10-21",
+      });
+      expect(seenUrl).toBe(
+        "https://my-azure.openai.azure.com/openai/deployments/example-chat-model/chat/completions?api-version=2024-10-21",
+      );
+    },
+  );
+
+  // User finding #3640: Azure rejects a Chat Completions request from a reasoning-model-family
+  // deployment (gpt-5.6 here) that attaches function tools unless reasoning_effort is exactly
+  // "none" — the Coding Workbench's selected effort (e.g. "medium") is not a value the provider
+  // accepts once tools are attached, so it must be overridden on the wire rather than forwarded.
+  it("RB-4 (#3640): forces reasoning_effort 'none' for a reasoning-model-family deployment once tools are attached", async () => {
+    let seenBody: Record<string, unknown> = {};
+    const adapter = adapterWith((_url, init) => {
+      seenBody = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<
+        string,
+        unknown
+      >;
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "x" }, finish_reason: "stop" }] }),
+      );
+    });
+    await adapter.call(
+      {
+        ...REQUEST,
+        reasoningEffort: "medium",
+        toolCatalog: gatewayCatalogAdvertisement(0, ["read_file"]),
+      },
+      { ...CONFIG, modelId: "gpt-5.6" },
+    );
+    expect(seenBody.reasoning_effort).toBe("none");
+  });
+
+  it("RB-4 (#3640): leaves the selected reasoning effort alone for a reasoning-model-family deployment with no tools attached", async () => {
+    let seenBody: Record<string, unknown> = {};
+    const adapter = adapterWith((_url, init) => {
+      seenBody = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<
+        string,
+        unknown
+      >;
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "x" }, finish_reason: "stop" }] }),
+      );
+    });
+    await adapter.call(
+      { ...REQUEST, reasoningEffort: "medium" },
+      { ...CONFIG, modelId: "gpt-5.6" },
+    );
+    expect(seenBody.reasoning_effort).toBe("medium");
+  });
+
+  // Only GPT-5.6 carries that contract: the rest of the gpt-5 family keeps its selected effort with
+  // tools, so its Coding Workbench turns still reason.
+  it("RB-4 (#3640): keeps the selected effort for a gpt-5.4 deployment with tools attached", async () => {
+    let seenBody: Record<string, unknown> = {};
+    const adapter = adapterWith((_url, init) => {
+      seenBody = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<
+        string,
+        unknown
+      >;
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "x" }, finish_reason: "stop" }] }),
+      );
+    });
+    await adapter.call(
+      {
+        ...REQUEST,
+        reasoningEffort: "medium",
+        toolCatalog: gatewayCatalogAdvertisement(0, ["read_file"]),
+      },
+      { ...CONFIG, modelId: "gpt-5.4" },
+    );
+    expect(seenBody.reasoning_effort).toBe("medium");
+  });
+
+  it("RB-4 (#3640): does not force reasoning_effort for a non-reasoning-family deployment with tools attached", async () => {
+    let seenBody: Record<string, unknown> = {};
+    const adapter = adapterWith((_url, init) => {
+      seenBody = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as Record<
+        string,
+        unknown
+      >;
+      return Promise.resolve(
+        jsonResponse({ choices: [{ message: { content: "x" }, finish_reason: "stop" }] }),
+      );
+    });
+    await adapter.call(
+      {
+        ...REQUEST,
+        reasoningEffort: "medium",
+        toolCatalog: gatewayCatalogAdvertisement(0, ["read_file"]),
+      },
+      { ...CONFIG, modelId: "gpt-4o" },
+    );
+    expect(seenBody.reasoning_effort).toBe("medium");
+  });
+
   it("RB-4 (GEN-AI-GATEWAY-001): preserves a truncated finishReason so callers can detect an incomplete answer", async () => {
     const adapter = adapterWith(() =>
       Promise.resolve(

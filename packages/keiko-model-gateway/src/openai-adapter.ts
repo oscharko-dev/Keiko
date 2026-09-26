@@ -30,6 +30,7 @@ import {
   apiKeyHeaderValue,
   DEFAULT_API_KEY_HEADER_NAME,
   MAX_TIMER_DELAY_MS,
+  trimTrailingAzureOpenAiSegment,
   trimTrailingSlash,
 } from "./config.js";
 import {
@@ -47,7 +48,7 @@ import {
 import { bindNormalizedToolCalls, normalizeChatResponse, textFromContent } from "./normalize.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import { assertValidGatewaySamplingParameters } from "./types.js";
-import { providerOutputTokenLimit } from "./output-token-limit.js";
+import { providerOutputTokenLimit, requiresNoReasoningWithTools } from "./output-token-limit.js";
 import {
   openAiCompatiblePromptMessage,
   openAiCompatiblePromptTools,
@@ -71,12 +72,20 @@ import type {
   GatewayRequest,
   GatewayStreamChunk,
   ModelProviderConfig,
+  ModelReasoningEffort,
   NormalizedResponse,
   NormalizedToolCall,
   ProviderAdapter,
   StreamReadBounds,
   ToolDefinition,
 } from "./types.js";
+
+// #3640: "none" is a WIRE-only value — the override reasoningEffortField applies once tools are
+// attached to a GPT-5.6 deployment. It is never added to the product-wide, user-selectable
+// ModelReasoningEffort union (packages/keiko-contracts): the provider's requirement is a hard
+// constraint whenever tools are present, not a preference to expose in the Coding Workbench's
+// reasoning-effort picker.
+type DispatchedReasoningEffort = "none" | ModelReasoningEffort;
 
 const PROVIDER_EMPTY_ASSISTANT_STATUS = 200;
 
@@ -112,6 +121,17 @@ const CHAT_REQUEST_DISPATCH_OPERATION = defineActivityLogOperation({
     // spent a small budget on reasoning" (finish_reason "length", ProviderOutputExhaustedError)
     // apart from "no budget was ever declared".
     maxOutputTokens: { type: "integer", dataClass: "count", required: false },
+    // #3640: the reasoning effort actually placed on the wire — absent when the request declared
+    // none and no override applied. "none" can only ever appear here as the tool-calling override
+    // (reasoningEffortField): it is not a selectable value anywhere the operator chooses one, so an
+    // operator reading this line can tell "the provider's own tool-calling requirement replaced the
+    // selected effort" apart from every value the product actually offers a Coding Workbench turn.
+    reasoningEffort: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["none", "minimal", "low", "medium", "high", "xhigh"],
+    },
   },
   causal: "correlation",
   lifecycle: "start",
@@ -286,6 +306,9 @@ interface ChatDispatchFields {
   // #3591: the output-token budget actually sent, so a spent-on-reasoning failure
   // (ProviderOutputExhaustedError) can be told apart from "no budget was ever declared".
   readonly maxOutputTokens?: number;
+  // #3640: the reasoning effort actually sent, once reasoningEffortField's tool-calling override
+  // is applied — never simply request.reasoningEffort, which can silently disagree with the wire.
+  readonly reasoningEffort?: DispatchedReasoningEffort;
 }
 
 // `info`, not `debug`: a line that only appears once the operator has already reproduced the hang
@@ -330,6 +353,7 @@ function chatDispatchFields(
   bounds?: StreamReadBounds,
 ): ChatDispatchFields {
   const maxOutputTokens = dispatchedMaxOutputTokens(request, config);
+  const reasoningEffort = reasoningEffortField(request, config).reasoning_effort;
   return {
     endpointDigest: sha256Hex(logEndpointHost(url) ?? "invalid-endpoint"),
     modelId: logModelId(config.modelId),
@@ -341,6 +365,7 @@ function chatDispatchFields(
     toolCount: request.tools?.length ?? 0,
     ...(bounds === undefined ? {} : { readBudgetMs: bounds.budgetMs }),
     ...(maxOutputTokens === undefined ? {} : { maxOutputTokens }),
+    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
   };
 }
 
@@ -475,18 +500,19 @@ function requestDeadline(
 // GEN-AI-GATEWAY-002 (RB-4): honor Azure deployment routing for chat providers instead of silently
 // misrouting an Azure-configured provider to the OpenAI-compatible path. Mirrors the voice adapters'
 // joinAzureDeploymentUrl. `apiVersion` is guaranteed present for the azure style by config-time
-// validation (assertProviderEndpointVersion enforces the biconditional). Both branches trim a
-// trailing slash first, exactly like the sibling adapters — a file/env-authored base URL ending in
-// "/" otherwise yields '//chat/completions', which LiteLLM answers with a 404 (LiteLLM production
-// audit).
+// validation (assertProviderEndpointVersion enforces the biconditional). The OpenAI-compatible
+// branch trims a trailing slash, exactly like the sibling adapters — a file/env-authored base URL
+// ending in "/" otherwise yields '//chat/completions', which LiteLLM answers with a 404 (LiteLLM
+// production audit). The Azure branch additionally strips a base URL's own trailing "/openai"
+// segment before appending one (#3643) — see trimTrailingAzureOpenAiSegment.
 function chatCompletionsUrl(config: ModelProviderConfig): string {
-  const trimmed = trimTrailingSlash(config.baseUrl);
   if (config.endpointStyle === "azure-openai-deployment") {
+    const trimmed = trimTrailingAzureOpenAiSegment(config.baseUrl);
     return `${trimmed}/openai/deployments/${encodeURIComponent(
       config.modelId,
     )}/chat/completions?api-version=${encodeURIComponent(config.apiVersion ?? "")}`;
   }
-  return `${trimmed}/chat/completions`;
+  return `${trimTrailingSlash(config.baseUrl)}/chat/completions`;
 }
 
 // Always returns the array shape: the plain-string case is handled at the call site so this
@@ -517,17 +543,32 @@ function responseFormatField(
   };
 }
 
-// The four scalar sampling knobs the provider accepts unchanged from the gateway request; grouped
-// so buildBody's own complexity stays under the repository ceiling (AGENTS.md §6).
+// The three scalar sampling knobs the provider accepts unchanged from the gateway request;
+// grouped so buildBody's own complexity stays under the repository ceiling (AGENTS.md §6).
+// `reasoning_effort` is NOT one of them — see reasoningEffortField below.
 function samplingFields(
   request: GatewayRequest,
-): Pick<ChatRequestBody, "temperature" | "top_p" | "seed" | "reasoning_effort"> {
+): Pick<ChatRequestBody, "temperature" | "top_p" | "seed"> {
   return {
     ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
     ...(request.topP !== undefined ? { top_p: request.topP } : {}),
     ...(request.seed !== undefined ? { seed: request.seed } : {}),
-    ...(request.reasoningEffort !== undefined ? { reasoning_effort: request.reasoningEffort } : {}),
   };
+}
+
+// #3640: a GPT-5.6 deployment rejects a Chat Completions request that attaches function tools
+// unless `reasoning_effort` is exactly "none"; the model's own default effort is not "none", so
+// omitting the field does not help (Microsoft's documented contract). This OVERRIDES whatever
+// effort a Coding Workbench turn selected once tools are attached to such a model: "none" is the
+// one value the provider accepts then. Every other model keeps the selected effort.
+function reasoningEffortField(
+  request: ProviderGatewayRequest,
+  config: ModelProviderConfig,
+): { readonly reasoning_effort?: DispatchedReasoningEffort } {
+  if (request.tools !== undefined && requiresNoReasoningWithTools(config.modelId)) {
+    return { reasoning_effort: "none" };
+  }
+  return request.reasoningEffort !== undefined ? { reasoning_effort: request.reasoningEffort } : {};
 }
 
 function buildBody(request: ProviderGatewayRequest, config: ModelProviderConfig): ChatRequestBody {
@@ -538,6 +579,7 @@ function buildBody(request: ProviderGatewayRequest, config: ModelProviderConfig)
     ...toolsField(request.tools),
     ...responseFormatField(request),
     ...samplingFields(request),
+    ...reasoningEffortField(request, config),
     ...providerOutputTokenLimit(request.maxOutputTokens, config),
   };
 }
@@ -856,6 +898,10 @@ function isModelRefusal(payload: unknown): boolean {
   return MODEL_REFUSAL_SIGNAL.test(errorSignal(payload));
 }
 
+// Exported for readiness-probe.ts (#3641): the raw readiness/setup probe shares this exact
+// detection with the production stream adapter's own compatibility retry below, so a strict
+// OpenAI-compatible gateway that rejects the optional `stream_options` field is retried the same
+// way in both places instead of being recorded as "streaming unsupported" by the probe alone.
 function isOptionalStreamFieldRejection(payload: unknown): boolean {
   const error = isRecord(payload) && isRecord(payload.error) ? payload.error : payload;
   if (!isRecord(error)) return false;

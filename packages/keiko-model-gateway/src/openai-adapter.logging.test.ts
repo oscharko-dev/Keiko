@@ -8,6 +8,7 @@
 // Hermetic: `fetchImpl` is injected on every request, so no socket is opened and no DNS resolved.
 
 import { describe, expect, it } from "vitest";
+import { gatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
 import {
   logModelId,
@@ -278,5 +279,67 @@ describe("OpenAiAdapter.call — activity log", () => {
     const bytes = dispatch.extra?.bodyBytes;
     expect(typeof bytes).toBe("number");
     expect(bytes as number).toBeGreaterThan("日本語テキスト".length);
+  });
+
+  // #3640: the dispatch line records the reasoning effort actually placed on the wire, so an
+  // operator can tell "the provider's own tool-calling requirement replaced the selected effort"
+  // apart from every value the product offers a Coding Workbench turn — the same "wire value, not
+  // the request field" discipline #3591 already established for maxOutputTokens.
+  it("records the tool-calling reasoning_effort override on the dispatch line, not the request's own selection", async () => {
+    const log = recorder();
+    const fetchImpl: typeof fetch = () => Promise.resolve(jsonResponse(successBody()));
+    const adapter = new OpenAiAdapter({
+      fetchImpl,
+      requestId: "fixed-id",
+      costClass: "low",
+      log: log.sink,
+    });
+    const request: GatewayRequest = {
+      ...REQUEST,
+      reasoningEffort: "medium",
+      // This file's adapters use the real wall clock (no fake `now` override, unlike
+      // openai-adapter.test.ts's adapterWith) — the offer must be issued against it, or the
+      // catalog bridge reads it as expired against the real Date.now() (openai-adapter.compat.test.ts
+      // uses the same Date.now() convention for the same reason).
+      toolCatalog: gatewayCatalogAdvertisement(Date.now(), ["read_file"]),
+    };
+    await adapter.call(request, { ...CONFIG, modelId: "gpt-5.6" });
+    const dispatch = eventFor(log.events, "chat.request.dispatch");
+    expect(dispatch.extra?.reasoningEffort).toBe("none");
+
+    const persisted = expectActivityLogProof(
+      "chat.request.dispatch.emitted-line",
+      formatActivityLogProofLine(dispatch),
+    );
+    expect(persisted).toMatchObject({ reasoningEffort: "none" });
+  });
+
+  it("records the request's own selected reasoning_effort on the dispatch line when no override applies", async () => {
+    const log = recorder();
+    const fetchImpl: typeof fetch = () => Promise.resolve(jsonResponse(successBody()));
+    const adapter = new OpenAiAdapter({
+      fetchImpl,
+      requestId: "fixed-id",
+      costClass: "low",
+      log: log.sink,
+    });
+    const request: GatewayRequest = { ...REQUEST, reasoningEffort: "medium" };
+    await adapter.call(request, { ...CONFIG, modelId: "gpt-5.6" });
+    const dispatch = eventFor(log.events, "chat.request.dispatch");
+    expect(dispatch.extra?.reasoningEffort).toBe("medium");
+  });
+
+  it("omits reasoning_effort from the dispatch line when the request declared none and no override applies", async () => {
+    const log = recorder();
+    const fetchImpl: typeof fetch = () => Promise.resolve(jsonResponse(successBody()));
+    const adapter = new OpenAiAdapter({
+      fetchImpl,
+      requestId: "fixed-id",
+      costClass: "low",
+      log: log.sink,
+    });
+    await adapter.call(REQUEST, CONFIG);
+    const dispatch = eventFor(log.events, "chat.request.dispatch");
+    expect(dispatch.extra).not.toHaveProperty("reasoningEffort");
   });
 });
