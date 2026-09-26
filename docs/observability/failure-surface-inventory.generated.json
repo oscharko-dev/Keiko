@@ -4,7 +4,7 @@
   "joinsWith": "docs/observability/op-catalog.generated.json",
   "registry": {
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e52bd4cb79adc531b18d9ef457d210d70c55622ba2c810f77416ccbea8531676"
+    "catalogDigest": "826a8bafe63d6bda752af7f7af9b9913e2927a86d8ccd57c3ba06ba272e14899"
   },
   "autonomyContext": {
     "role": "closed-context",
@@ -51,9 +51,9 @@
   },
   "failureModes": ["rejection", "dependency-failure", "crash", "loss"],
   "summary": {
-    "operationCount": 460,
-    "proofCount": 468,
-    "resolvedProofCount": 468,
+    "operationCount": 461,
+    "proofCount": 469,
+    "resolvedProofCount": 469,
     "failureClassCount": 319,
     "scenarioCount": 29,
     "resolvedScenarioCount": 29
@@ -174,6 +174,7 @@
         "gateway.readiness.automatic.started",
         "gateway.readiness.compatibility-retry",
         "gateway.readiness.compatibility-retry.failed",
+        "gateway.readiness.compatibility-retry.skipped",
         "gateway.readiness.completed",
         "gateway.readiness.started",
         "gateway.retry.budget-exhausted",
@@ -1501,6 +1502,9 @@
       "packages/keiko-model-gateway/src/readiness-probe.test.ts"
     ],
     "gateway.readiness.compatibility-retry.failed.line": [
+      "packages/keiko-model-gateway/src/readiness-probe.test.ts"
+    ],
+    "gateway.readiness.compatibility-retry.skipped.line": [
       "packages/keiko-model-gateway/src/readiness-probe.test.ts"
     ],
     "gateway.readiness.completed.line": ["packages/keiko-server/src/gateway-readiness.test.ts"],

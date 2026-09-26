@@ -3259,7 +3259,11 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
     requiredProductSurfaces: ["keiko-model-gateway"],
     requiredLifecycleOperations: {
       start: ["chat.request.dispatch"],
-      state: ["chat.request.compatibility-retry", "gateway.readiness.compatibility-retry"],
+      state: [
+        "chat.request.compatibility-retry",
+        "gateway.readiness.compatibility-retry",
+        "gateway.readiness.compatibility-retry.skipped",
+      ],
       end: [],
       failure: ["gateway.readiness.compatibility-retry.failed"],
       loss: [],
@@ -3269,6 +3273,7 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "chat.request.dispatch",
       "gateway.readiness.compatibility-retry",
       "gateway.readiness.compatibility-retry.failed",
+      "gateway.readiness.compatibility-retry.skipped",
     ],
     requiredLossOperations: [],
     requiredProofOperations: [
@@ -3276,12 +3281,14 @@ export const ACTIVITY_LOG_FAILURE_CLASS_CONTRACTS = [
       "chat.request.dispatch",
       "gateway.readiness.compatibility-retry",
       "gateway.readiness.compatibility-retry.failed",
+      "gateway.readiness.compatibility-retry.skipped",
     ],
     requiredReplayProofIds: [],
     requiredResourceOperations: [
       "chat.request.compatibility-retry",
       "chat.request.dispatch",
       "gateway.readiness.compatibility-retry",
+      "gateway.readiness.compatibility-retry.skipped",
     ],
     requiredEvidenceClasses: [
       "closed-enum",

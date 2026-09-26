@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "e52bd4cb79adc531b18d9ef457d210d70c55622ba2c810f77416ccbea8531676" as const;
+  "826a8bafe63d6bda752af7f7af9b9913e2927a86d8ccd57c3ba06ba272e14899" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -11769,6 +11769,61 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "failure-cluster",
     failureClasses: ["gateway-chat-provider-call"],
     proofIds: ["gateway.readiness.compatibility-retry.failed.line"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "gateway.readiness.compatibility-retry.skipped",
+    category: "gateway",
+    owner: "keiko-model-gateway",
+    emitter: "readiness-probe.logReadinessFieldRetrySkipped",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      endpointDigest: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+      modelId: {
+        type: "string",
+        dataClass: "opaque-id",
+        required: true,
+        maxLength: 256,
+      },
+      sentField: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["max_tokens", "max_completion_tokens"],
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["other-cause", "unreadable-rejection"],
+      },
+      rejectedStatus: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["gateway-chat-provider-call"],
+    proofIds: ["gateway.readiness.compatibility-retry.skipped.line"],
     releaseImpact: "patch",
   },
   {
@@ -41993,7 +42048,11 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
       lifecycleTransitions: ["failure", "start", "state"],
       lifecycleOperations: {
         start: ["chat.request.dispatch"],
-        state: ["chat.request.compatibility-retry", "gateway.readiness.compatibility-retry"],
+        state: [
+          "chat.request.compatibility-retry",
+          "gateway.readiness.compatibility-retry",
+          "gateway.readiness.compatibility-retry.skipped",
+        ],
         end: [],
         failure: ["gateway.readiness.compatibility-retry.failed"],
         loss: [],
@@ -42015,12 +42074,17 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
           op: "gateway.readiness.compatibility-retry.failed",
           mode: "correlation",
         },
+        {
+          op: "gateway.readiness.compatibility-retry.skipped",
+          mode: "correlation",
+        },
       ],
       lossSignals: [],
       resourceSignals: [
         "chat.request.compatibility-retry",
         "chat.request.dispatch",
         "gateway.readiness.compatibility-retry",
+        "gateway.readiness.compatibility-retry.skipped",
       ],
       replayReferences: [],
       operations: [
@@ -42246,6 +42310,61 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["gateway.readiness.compatibility-retry.failed.line"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+        {
+          op: "gateway.readiness.compatibility-retry.skipped",
+          owner: "keiko-model-gateway",
+          category: "gateway",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "endpointDigest",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+            {
+              name: "modelId",
+              type: "string",
+              dataClass: "opaque-id",
+              required: true,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "rejectedStatus",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "sentField",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "count",
+            "digest",
+            "loss-state",
+            "opaque-id",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["gateway.readiness.compatibility-retry.skipped.line"],
           replayReferences: [],
           missingObligations: [],
         },
@@ -62042,6 +62161,7 @@ export const ACTIVITY_LOG_OPERATION_SURFACES: Readonly<Record<string, ActivityLo
     "gateway.readiness.automatic.started": "model-gateway",
     "gateway.readiness.compatibility-retry": "model-gateway",
     "gateway.readiness.compatibility-retry.failed": "model-gateway",
+    "gateway.readiness.compatibility-retry.skipped": "model-gateway",
     "gateway.readiness.completed": "model-gateway",
     "gateway.readiness.started": "model-gateway",
     "gateway.retry.budget-exhausted": "model-gateway",

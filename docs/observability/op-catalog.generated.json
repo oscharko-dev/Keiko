@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "e52bd4cb79adc531b18d9ef457d210d70c55622ba2c810f77416ccbea8531676",
+    "catalogDigest": "826a8bafe63d6bda752af7f7af9b9913e2927a86d8ccd57c3ba06ba272e14899",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1033,8 +1033,8 @@
         "failureClasses": ["gateway-chat-provider-call"],
         "proofIds": ["chat.request.compatibility-retry.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:144",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:1858"]
+        "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:150",
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:1845"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1119,8 +1119,8 @@
         "failureClasses": ["gateway-chat-provider-call"],
         "proofIds": ["chat.request.dispatch.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:92",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:388"]
+        "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:98",
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:375"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1222,8 +1222,8 @@
         "failureClasses": ["gateway-stream-read"],
         "proofIds": ["chat.response.streamed.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:279",
-        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:1572"]
+        "registrationSite": "packages/keiko-model-gateway/src/openai-adapter.ts:266",
+        "emitterSites": ["packages/keiko-model-gateway/src/openai-adapter.ts:1559"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -12354,8 +12354,8 @@
         "failureClasses": ["gateway-chat-provider-call"],
         "proofIds": ["gateway.readiness.compatibility-retry.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/readiness-probe.ts:49",
-        "emitterSites": ["packages/keiko-model-gateway/src/readiness-probe.ts:137"]
+        "registrationSite": "packages/keiko-model-gateway/src/readiness-probe.ts:55",
+        "emitterSites": ["packages/keiko-model-gateway/src/readiness-probe.ts:181"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -12400,8 +12400,65 @@
         "failureClasses": ["gateway-chat-provider-call"],
         "proofIds": ["gateway.readiness.compatibility-retry.failed.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-model-gateway/src/readiness-probe.ts:78",
-        "emitterSites": ["packages/keiko-model-gateway/src/readiness-probe.ts:156"]
+        "registrationSite": "packages/keiko-model-gateway/src/readiness-probe.ts:84",
+        "emitterSites": ["packages/keiko-model-gateway/src/readiness-probe.ts:200"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "gateway.readiness.compatibility-retry.skipped",
+        "category": "gateway",
+        "owner": "keiko-model-gateway",
+        "emitter": "readiness-probe.logReadinessFieldRetrySkipped",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "endpointDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "modelId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": true,
+            "maxLength": 256
+          },
+          "sentField": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["max_tokens", "max_completion_tokens"]
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["other-cause", "unreadable-rejection"]
+          },
+          "rejectedStatus": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["gateway-chat-provider-call"],
+        "proofIds": ["gateway.readiness.compatibility-retry.skipped.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-model-gateway/src/readiness-probe.ts:112",
+        "emitterSites": ["packages/keiko-model-gateway/src/readiness-probe.ts:230"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -32698,7 +32755,11 @@
         "requiredProductSurfaces": ["keiko-model-gateway"],
         "requiredLifecycleOperations": {
           "start": ["chat.request.dispatch"],
-          "state": ["chat.request.compatibility-retry", "gateway.readiness.compatibility-retry"],
+          "state": [
+            "chat.request.compatibility-retry",
+            "gateway.readiness.compatibility-retry",
+            "gateway.readiness.compatibility-retry.skipped"
+          ],
           "end": [],
           "failure": ["gateway.readiness.compatibility-retry.failed"],
           "loss": []
@@ -32707,20 +32768,23 @@
           "chat.request.compatibility-retry",
           "chat.request.dispatch",
           "gateway.readiness.compatibility-retry",
-          "gateway.readiness.compatibility-retry.failed"
+          "gateway.readiness.compatibility-retry.failed",
+          "gateway.readiness.compatibility-retry.skipped"
         ],
         "requiredLossOperations": [],
         "requiredProofOperations": [
           "chat.request.compatibility-retry",
           "chat.request.dispatch",
           "gateway.readiness.compatibility-retry",
-          "gateway.readiness.compatibility-retry.failed"
+          "gateway.readiness.compatibility-retry.failed",
+          "gateway.readiness.compatibility-retry.skipped"
         ],
         "requiredReplayProofIds": [],
         "requiredResourceOperations": [
           "chat.request.compatibility-retry",
           "chat.request.dispatch",
-          "gateway.readiness.compatibility-retry"
+          "gateway.readiness.compatibility-retry",
+          "gateway.readiness.compatibility-retry.skipped"
         ],
         "requiredEvidenceClasses": [
           "closed-enum",
@@ -52223,7 +52287,11 @@
           "lifecycleTransitions": ["failure", "start", "state"],
           "lifecycleOperations": {
             "start": ["chat.request.dispatch"],
-            "state": ["chat.request.compatibility-retry", "gateway.readiness.compatibility-retry"],
+            "state": [
+              "chat.request.compatibility-retry",
+              "gateway.readiness.compatibility-retry",
+              "gateway.readiness.compatibility-retry.skipped"
+            ],
             "end": [],
             "failure": ["gateway.readiness.compatibility-retry.failed"],
             "loss": []
@@ -52244,13 +52312,18 @@
             {
               "op": "gateway.readiness.compatibility-retry.failed",
               "mode": "correlation"
+            },
+            {
+              "op": "gateway.readiness.compatibility-retry.skipped",
+              "mode": "correlation"
             }
           ],
           "lossSignals": [],
           "resourceSignals": [
             "chat.request.compatibility-retry",
             "chat.request.dispatch",
-            "gateway.readiness.compatibility-retry"
+            "gateway.readiness.compatibility-retry",
+            "gateway.readiness.compatibility-retry.skipped"
           ],
           "replayReferences": [],
           "operations": [
@@ -52476,6 +52549,61 @@
                 "causeChain": false
               },
               "proofIds": ["gateway.readiness.compatibility-retry.failed.line"],
+              "replayReferences": [],
+              "missingObligations": []
+            },
+            {
+              "op": "gateway.readiness.compatibility-retry.skipped",
+              "owner": "keiko-model-gateway",
+              "category": "gateway",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "endpointDigest",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                },
+                {
+                  "name": "modelId",
+                  "type": "string",
+                  "dataClass": "opaque-id",
+                  "required": true
+                },
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "rejectedStatus",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "sentField",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "count",
+                "digest",
+                "loss-state",
+                "opaque-id"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["gateway.readiness.compatibility-retry.skipped.line"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -73047,7 +73175,7 @@
     {
       "op": "<dynamic>",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:1653",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:1640",
       "package": "keiko-model-gateway"
     },
     {
@@ -73065,19 +73193,19 @@
     {
       "op": "chat.request.compatibility-retry",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:147",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:153",
       "package": "keiko-model-gateway"
     },
     {
       "op": "chat.request.dispatch",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:95",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:101",
       "package": "keiko-model-gateway"
     },
     {
       "op": "chat.response.streamed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:282",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:269",
       "package": "keiko-model-gateway"
     },
     {
@@ -73245,13 +73373,19 @@
     {
       "op": "gateway.readiness.compatibility-retry",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/readiness-probe.ts:52",
+      "site": "packages/keiko-model-gateway/src/readiness-probe.ts:58",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.readiness.compatibility-retry.failed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/readiness-probe.ts:81",
+      "site": "packages/keiko-model-gateway/src/readiness-probe.ts:87",
+      "package": "keiko-model-gateway"
+    },
+    {
+      "op": "gateway.readiness.compatibility-retry.skipped",
+      "category": "gateway",
+      "site": "packages/keiko-model-gateway/src/readiness-probe.ts:115",
       "package": "keiko-model-gateway"
     },
     {
@@ -77076,6 +77210,7 @@
     "gateway.readiness.automatic.started",
     "gateway.readiness.compatibility-retry",
     "gateway.readiness.compatibility-retry.failed",
+    "gateway.readiness.compatibility-retry.skipped",
     "gateway.readiness.completed",
     "gateway.readiness.started",
     "gateway.retry.budget-exhausted",

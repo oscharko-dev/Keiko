@@ -30,6 +30,20 @@ function jsonResponse(body: unknown): Response {
   });
 }
 
+// Azure's answer to a GPT-5 deployment that is sent max_tokens (#3639).
+function unsupportedField(field: string): Response {
+  return new Response(
+    JSON.stringify({
+      error: {
+        message: `Unsupported parameter: '${field}' is not supported with this model.`,
+        param: field,
+        code: "unsupported_parameter",
+      },
+    }),
+    { status: 400, headers: { "content-type": "application/json" } },
+  );
+}
+
 function probeBody(init: RequestInit | undefined): Record<string, unknown> {
   if (typeof init?.body !== "string") throw new TypeError("expected a JSON probe body");
   return JSON.parse(init.body) as Record<string, unknown>;
@@ -302,9 +316,7 @@ describe("requestGatewayReadinessChatCompletion", () => {
       const body = probeBody(init);
       bodies.push(body);
       return Promise.resolve(
-        "max_tokens" in body
-          ? new Response(JSON.stringify({ error: { param: "max_tokens" } }), { status: 400 })
-          : jsonResponse({ choices: [] }),
+        "max_tokens" in body ? unsupportedField("max_tokens") : jsonResponse({ choices: [] }),
       );
     };
 
@@ -344,8 +356,11 @@ describe("requestGatewayReadinessChatCompletion", () => {
     expect(call).toBe(1);
   });
 
-  it("bounds a streamed probe rejected for every shape to both fields and both stream shapes", async () => {
+  // PR #3625 review: a rejection of another field is no reason to switch output-token fields — that
+  // would cost a second paid request and misstate the cause in the log.
+  it("does not switch output-token fields when the rejection names another cause", async () => {
     const bodies: Record<string, unknown>[] = [];
+    const events: ModelGatewayLogEvent[] = [];
     const fetchImpl: typeof fetch = (_url, init) => {
       bodies.push(probeBody(init));
       return Promise.resolve(
@@ -360,6 +375,12 @@ describe("requestGatewayReadinessChatCompletion", () => {
       stream: true,
       maxOutputTokens: 17,
       fetchImpl,
+      log: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+      correlationId: "probe-corr-0005",
     });
 
     expect(response.status).toBe(400);
@@ -371,9 +392,53 @@ describe("requestGatewayReadinessChatCompletion", () => {
     ).toEqual([
       ["max_tokens", true],
       ["max_tokens", false],
-      ["max_completion_tokens", true],
-      ["max_completion_tokens", false],
     ]);
+    const skipped = events.find(
+      (event) => event.op === "gateway.readiness.compatibility-retry.skipped",
+    );
+    if (skipped === undefined) throw new TypeError("skipped retry evidence missing");
+    expect(skipped).toMatchObject({
+      correlationId: "probe-corr-0005",
+      extra: { sentField: "max_tokens", reason: "other-cause", rejectedStatus: 400 },
+    });
+    expectActivityLogProof(
+      "gateway.readiness.compatibility-retry.skipped.line",
+      formatActivityLogProofLine(skipped),
+    );
+  });
+
+  it("does not switch output-token fields when the rejection cannot be read", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const events: ModelGatewayLogEvent[] = [];
+    const fetchImpl: typeof fetch = (_url, init) => {
+      bodies.push(probeBody(init));
+      return Promise.resolve(
+        new Response("<html>bad gateway</html>", {
+          status: 400,
+          headers: { "content-type": "text/html" },
+        }),
+      );
+    };
+
+    const response = await requestGatewayReadinessChatCompletion({
+      config: CONFIG,
+      provider: PROVIDER,
+      body: { messages: [] },
+      maxOutputTokens: 17,
+      fetchImpl,
+      log: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.text()).toBe("<html>bad gateway</html>");
+    expect(bodies).toHaveLength(1);
+    expect(
+      events.filter((event) => event.op === "gateway.readiness.compatibility-retry.skipped"),
+    ).toMatchObject([{ extra: { reason: "unreadable-rejection", sentField: "max_tokens" } }]);
   });
 
   // PR #3625 review: the probe's attempts and its compatibility retry are recorded under the probe's
@@ -383,7 +448,7 @@ describe("requestGatewayReadinessChatCompletion", () => {
     const fetchImpl: typeof fetch = (_url, init) =>
       Promise.resolve(
         "max_tokens" in probeBody(init)
-          ? new Response(JSON.stringify({ error: { param: "max_tokens" } }), { status: 400 })
+          ? unsupportedField("max_tokens")
           : jsonResponse({ choices: [] }),
       );
 
@@ -424,9 +489,7 @@ describe("requestGatewayReadinessChatCompletion", () => {
     const fetchImpl: typeof fetch = () => {
       call += 1;
       if (call === 1) {
-        return Promise.resolve(
-          new Response(JSON.stringify({ error: { param: "max_tokens" } }), { status: 400 }),
-        );
+        return Promise.resolve(unsupportedField("max_tokens"));
       }
       return Promise.reject(new TypeError("synthetic transport failure"));
     };
@@ -472,8 +535,10 @@ describe("requestGatewayReadinessChatCompletion", () => {
 
   it("records a compatibility retry the gateway rejects again as a failure", async () => {
     const events: ModelGatewayLogEvent[] = [];
-    const fetchImpl: typeof fetch = () =>
-      Promise.resolve(new Response(JSON.stringify({ error: { param: "x" } }), { status: 400 }));
+    const fetchImpl: typeof fetch = (_url, init) =>
+      Promise.resolve(
+        unsupportedField("max_tokens" in probeBody(init) ? "max_tokens" : "max_completion_tokens"),
+      );
 
     const response = await requestGatewayReadinessChatCompletion({
       config: CONFIG,

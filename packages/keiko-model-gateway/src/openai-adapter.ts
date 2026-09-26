@@ -48,7 +48,13 @@ import {
 import { bindNormalizedToolCalls, normalizeChatResponse, textFromContent } from "./normalize.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import { assertValidGatewaySamplingParameters } from "./types.js";
-import { providerOutputTokenLimit, requiresNoReasoningWithTools } from "./output-token-limit.js";
+import {
+  OTHER_OUTPUT_TOKEN_FIELD,
+  providerOutputTokenLimit,
+  rejectsOutputTokenField,
+  requiresNoReasoningWithTools,
+  type OutputTokenField,
+} from "./output-token-limit.js";
 import {
   openAiCompatiblePromptMessage,
   openAiCompatiblePromptTools,
@@ -181,12 +187,7 @@ let chatCompatibilityEndpoints = new WeakMap<object, Map<string, ChatCompatibili
 // #3639: the output-token field a deployment turned out to accept when its name led to the other
 // one (a GPT-5 deployment named "prod-chat" gets max_tokens by default and rejects it). Scoped and
 // bounded like the stream memo; an operator's explicit outputTokenParameter always wins.
-type OutputTokenField = "max_tokens" | "max_completion_tokens";
 let outputTokenFieldEndpoints = new WeakMap<object, Map<string, OutputTokenField>>();
-const OTHER_OUTPUT_TOKEN_FIELD: Readonly<Record<OutputTokenField, OutputTokenField>> = {
-  max_tokens: "max_completion_tokens",
-  max_completion_tokens: "max_tokens",
-};
 
 function rememberedOutputTokenField(scope: object, url: string): OutputTokenField | undefined {
   return outputTokenFieldEndpoints.get(scope)?.get(url);
@@ -211,20 +212,6 @@ function sentOutputTokenField(
   const limit = providerOutputTokenLimit(request.maxOutputTokens, config);
   if ("max_completion_tokens" in limit) return "max_completion_tokens";
   return "max_tokens" in limit ? "max_tokens" : undefined;
-}
-
-// A provider rejection that names the output-token field this request sent AND says the field
-// itself is unsupported: Azure answers a GPT-5 deployment's max_tokens with param "max_tokens" and
-// code "unsupported_parameter"; an older model names max_completion_tokens as an unrecognized
-// argument. A rejected value of a supported field ("invalid_value", "integer above maximum") is no
-// reason to switch fields (PR #3625 review).
-function rejectsOutputTokenField(payload: unknown, field: OutputTokenField): boolean {
-  const error = isRecord(payload) && isRecord(payload.error) ? payload.error : payload;
-  if (!isRecord(error)) return false;
-  const message = typeof error.message === "string" ? error.message.toLowerCase() : "";
-  const code = typeof error.code === "string" ? error.code.toLowerCase() : "";
-  const namesField = error.param === field || message.includes(field);
-  return namesField && /unsupported|not supported|unrecognized|unknown/.test(`${code} ${message}`);
 }
 
 // The config one dispatch sends with, pinned to the output-token field the fallback chose.

@@ -10,7 +10,7 @@ import {
   trimTrailingAzureOpenAiSegment,
   trimTrailingSlash,
 } from "./config.js";
-import { gatewayFetch } from "./http.js";
+import { gatewayFetch, readJsonCapped } from "./http.js";
 import {
   activityLogErrorKind,
   logEndpointHost,
@@ -19,7 +19,13 @@ import {
   withCorrelationId,
   type ModelGatewayLogSink,
 } from "./observability.js";
-import { providerOutputTokenLimit, requiresNoReasoningWithTools } from "./output-token-limit.js";
+import {
+  OTHER_OUTPUT_TOKEN_FIELD,
+  providerOutputTokenLimit,
+  rejectsOutputTokenField,
+  requiresNoReasoningWithTools,
+  type OutputTokenField,
+} from "./output-token-limit.js";
 import type { GatewayConfig, ModelProviderConfig } from "./types.js";
 
 // A strict OpenAI-compatible chat shape rejects a malformed request with 400 or 422 — the same
@@ -100,6 +106,44 @@ const READINESS_COMPATIBILITY_RETRY_FAILED_OPERATION = defineActivityLogOperatio
   releaseImpact: "patch",
 });
 
+// PR #3625 review: a rejected probe the probe did NOT answer with the other output-token field,
+// because the rejection named another cause or could not be read — so an unrelated rejection never
+// costs a second paid request, and the log says why no field retry followed.
+const READINESS_COMPATIBILITY_RETRY_SKIPPED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.readiness.compatibility-retry.skipped",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "readiness-probe.logReadinessFieldRetrySkipped",
+  fields: {
+    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    sentField: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["max_tokens", "max_completion_tokens"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["other-cause", "unreadable-rejection"],
+    },
+    rejectedStatus: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-chat-provider-call"],
+  proofIds: ["gateway.readiness.compatibility-retry.skipped.line"],
+  releaseImpact: "patch",
+});
+
+// A provider rejection body is small; anything larger is not an error document worth reading.
+const READINESS_REJECTION_MAX_BYTES = 64 * 1024;
+
 type ReadinessOmittedField = "stream_options" | "max_tokens" | "max_completion_tokens";
 
 function readinessLog(request: GatewayReadinessChatCompletionRequest): ModelGatewayLogSink {
@@ -173,6 +217,48 @@ function readinessStatusErrorKind(status: number): ActivityLogErrorKind {
   if (status === 401 || status === 403) return "permission-denied";
   if (status === 409) return "conflict";
   return status >= 500 ? "unavailable" : "invalid-request";
+}
+
+function logReadinessFieldRetrySkipped(
+  request: GatewayReadinessChatCompletionRequest,
+  sentField: OutputTokenField,
+  reason: "other-cause" | "unreadable-rejection",
+  rejectedStatus: number,
+): void {
+  const url = readinessChatCompletionsUrl(request.provider);
+  readinessLog(request).write(
+    activityLogEvent(
+      READINESS_COMPATIBILITY_RETRY_SKIPPED_OPERATION,
+      { level: "info", ...correlationOf(request) },
+      {
+        endpointDigest: sha256Hex(logEndpointHost(url) ?? "invalid-endpoint"),
+        modelId: logModelId(request.provider.modelId),
+        sentField,
+        reason,
+        rejectedStatus,
+      },
+    ),
+  );
+}
+
+// Whether the rejection says the output-token field sent is unsupported, the same rule the chat
+// adapter applies. Read from a clone, so the caller keeps the untouched response; a rejection that
+// names another cause or cannot be read is recorded and answered with "no".
+async function rejectsSentOutputTokenField(
+  request: GatewayReadinessChatCompletionRequest,
+  answer: Response,
+  sentField: OutputTokenField,
+): Promise<boolean> {
+  let payload: unknown;
+  try {
+    payload = await readJsonCapped(answer.clone(), READINESS_REJECTION_MAX_BYTES);
+  } catch {
+    logReadinessFieldRetrySkipped(request, sentField, "unreadable-rejection", answer.status);
+    return false;
+  }
+  if (rejectsOutputTokenField(payload, sentField)) return true;
+  logReadinessFieldRetrySkipped(request, sentField, "other-cause", answer.status);
+  return false;
 }
 
 // Records the retry before sending it, and its failure if it throws, then rethrows.
@@ -309,8 +395,7 @@ function withOtherOutputTokenField(
   if (maxOutputTokens === undefined || provider.outputTokenParameter !== undefined) {
     return undefined;
   }
-  const sent = providerOutputTokenLimit(maxOutputTokens, provider);
-  const other = "max_completion_tokens" in sent ? "max_tokens" : "max_completion_tokens";
+  const other = OTHER_OUTPUT_TOKEN_FIELD[sentOutputTokenField(request)];
   return { ...request, provider: { ...provider, outputTokenParameter: other } };
 }
 
@@ -330,15 +415,15 @@ export async function requestGatewayReadinessChatCompletion(
   if (other === undefined || answer.ok || !isStrictChatShapeRejectionStatus(answer.status)) {
     return answer;
   }
+  const sentField = sentOutputTokenField(request);
+  if (!(await rejectsSentOutputTokenField(request, answer, sentField))) return answer;
   await answer.body?.cancel();
-  return sendReadinessRetry(request, sentOutputTokenField(request), answer.status, () =>
+  return sendReadinessRetry(request, sentField, answer.status, () =>
     requestWithStreamFallback(other),
   );
 }
 
-function sentOutputTokenField(
-  request: GatewayReadinessChatCompletionRequest,
-): "max_tokens" | "max_completion_tokens" {
+function sentOutputTokenField(request: GatewayReadinessChatCompletionRequest): OutputTokenField {
   return "max_completion_tokens" in
     providerOutputTokenLimit(request.maxOutputTokens, request.provider)
     ? "max_completion_tokens"
