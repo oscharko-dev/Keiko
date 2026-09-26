@@ -1,4 +1,6 @@
 import type { CodingWorkbenchStartOptions } from "./coding-workbench-runtime-actions";
+import { reportClientDiagnostic } from "./client-diagnostics";
+import { bffRequestErrorKind } from "./http";
 import { useCallback, useEffect, useRef, type Dispatch, type RefObject } from "react";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type {
@@ -324,6 +326,12 @@ async function readRun(
   } catch (error) {
     if (runSequence.current !== sequence) return;
     const mapped = codingWorkbenchRuntimeApiError(error);
+    // i18n-exempt: body-free diagnostic message for the activity log, never rendered
+    reportClientDiagnostic("[keiko] coding workbench run status read failed", {
+      kind: "other",
+      errorKind: bffRequestErrorKind(error),
+      ...(mapped.correlationId === undefined ? {} : { correlationId: mapped.correlationId }),
+    });
     dispatch({
       kind: "resource-failed",
       resource: "run",

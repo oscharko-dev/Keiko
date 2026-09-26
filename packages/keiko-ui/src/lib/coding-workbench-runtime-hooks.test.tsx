@@ -13,6 +13,7 @@ import {
   prepareCodingWorkbenchCodexSubscriptionSetup,
 } from "./coding-workbench-provider-api";
 import { ApiError } from "./api";
+import { reportClientDiagnostic } from "./client-diagnostics";
 import {
   getCodingWorkbenchRuntimeReadiness,
   getCodingWorkbenchRuntimeStatus,
@@ -31,6 +32,11 @@ import {
   useCodingWorkbenchRuntimeResources,
   CODING_WORKBENCH_VERIFYING_REFRESH_MS,
 } from "./coding-workbench-runtime-hooks";
+
+vi.mock("./client-diagnostics", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client-diagnostics")>()),
+  reportClientDiagnostic: vi.fn(),
+}));
 
 vi.mock("./coding-workbench-provider-api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./coding-workbench-provider-api")>();
@@ -470,10 +476,17 @@ describe("useCodingWorkbenchRuntimeResources runtime and run refresh", () => {
       snapshot: snapshot({ revision: 5 }),
     });
 
-    vi.mocked(getCodingWorkbenchRuntimeStatus).mockRejectedValueOnce(UNAVAILABLE_ERROR);
+    const refused = new ApiError("CODING_RUNTIME_UNAVAILABLE", "runtime offline", 503);
+    refused.correlationId = "corr-run-status";
+    vi.mocked(getCodingWorkbenchRuntimeStatus).mockRejectedValueOnce(refused);
     await act(() => resources.refreshRun());
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "resource-failed", resource: "run", status: "unavailable" }),
+    );
+    // The failed read leaves its own body-free line, joined to the refused request.
+    expect(reportClientDiagnostic).toHaveBeenCalledWith(
+      "[keiko] coding workbench run status read failed",
+      { kind: "other", errorKind: "unavailable", correlationId: "corr-run-status" },
     );
   });
 });
