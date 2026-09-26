@@ -11,7 +11,7 @@ import type { CodingToolResult } from "../../../packages/keiko-server/src/coding
 import { openCodingIssueWorkbench, selectCodingIssueMode } from "./coding-issue-browser.js";
 import {
   issueResolutionTaskInstructions,
-  previewAndAcceptIssue,
+  startStructuredDeliveryRun,
 } from "./coding-issue-journey-live.js";
 import {
   commitControlPath,
@@ -95,9 +95,10 @@ function requireDeliveryProposalId(result: CodingToolResult | undefined, intent:
  * `coding-issue-commit.spec.ts`'s own `provision`, `coding-issue-delivery.spec.ts`'s
  * `provisionDeliveryWorkspace` and `coding-issue-ci-journey.ts`'s `provisionCiWorkspace` already
  * rely on for a fresh workspace per draft, rather than reimplementing the "Code setup" combobox flow
- * yet again. The GitHub issue-reader grant this fixture's repository needs is no longer a separate
- * direct-API step either: `previewAndAcceptIssue` settles the identical auth-required grant-retry
- * dance through the real "Enable GitHub issue access" control at Send time.
+ * yet again. The GitHub issue-reader grant this fixture's repository needs is settled directly too
+ * (`startStructuredDeliveryRun`, coding-issue-journey-live.ts, #3625 review) -- this lane starts its
+ * run through the structured runtime start API rather than the Workbench prompt, so there is no
+ * "Enable GitHub issue access" refusal-triggered retry control to settle it through.
  */
 async function provisionHandoffWorkspace(page: Page, taskId: string): Promise<void> {
   const clear = await page.request.delete("/api/task-workspaces/active", {
@@ -180,7 +181,17 @@ export async function startHandoffDraft(page: Page, issue: number): Promise<Star
   });
   await provisionHandoffWorkspace(page, `handoff-${String(issue)}`);
   await selectCodingIssueMode(page, "autonomous-delivery");
-  await previewAndAcceptIssue(page, issueResolutionTaskInstructions(`#${String(issue)}`));
+  // ADR-0137 D3 / #3625 review: a Workbench prompt's issue link is task CONTEXT ONLY -- the prompt
+  // path always sends `issuePurpose: "context"` by design, so a run started that way never gets the
+  // delivery binding this lane's real push/PR draft delivery requires. Start through the structured
+  // runtime start API with `issuePurpose: "delivery"` instead (also settles the per-repository
+  // GitHub issue-reader grant this freshly-provisioned repository needs).
+  await startStructuredDeliveryRun(page, {
+    repositoryPath: HANDOFF_REPOSITORY_ROOT,
+    requestedMode: "autonomous-delivery",
+    issueRef: `#${String(issue)}`,
+    taskIntent: issueResolutionTaskInstructions(`#${String(issue)}`),
+  });
   await expect.poll(() => observation().phase, { timeout: 120_000 }).toBe("verified-turn-ready");
   await commitCandidate(page);
   await pushCandidate(page);

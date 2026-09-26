@@ -13,7 +13,11 @@
 // snapshot for the effect the model is expected to eventually produce.
 
 import { expect, type Locator, type Page } from "@playwright/test";
-import type { CodingWorkbenchMode } from "@oscharko-dev/keiko-contracts";
+import { randomUUID } from "node:crypto";
+import type {
+  CodingWorkbenchMode,
+  CodingWorkbenchRuntimeStartRequest,
+} from "@oscharko-dev/keiko-contracts";
 import type { GatewayReadinessReport } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import { mintLauncherPairingAttestation } from "@oscharko-dev/keiko-server";
@@ -1055,6 +1059,87 @@ export function issueResolutionTaskInstructions(issueRef?: string): string {
     "push the fix, and re-observe CI until every required check reports passing.",
     "Leave the workspace clean throughout.",
   ].join(" ");
+}
+
+const RUNTIME_RUNS_ENDPOINT = "/api/coding-workbench/runtime/runs";
+const GITHUB_AUTHORIZATION_ENDPOINT = "/api/coding-workbench/github-authorization";
+const CSRF_HEADERS = { "X-Keiko-CSRF": "1" };
+
+export interface StructuredDeliveryRunStart {
+  readonly repositoryPath: string;
+  readonly requestedMode: CodingWorkbenchMode;
+  /** The pasted-form reference (`"#42"` or a qualified URL) -- the same shape a prompt carries. */
+  readonly issueRef: string;
+  readonly taskIntent: string;
+}
+
+async function grantGitHubIssueReaderAccess(page: Page, repositoryPath: string): Promise<void> {
+  const current = await page.request.get(
+    `${GITHUB_AUTHORIZATION_ENDPOINT}?${new URLSearchParams({ repositoryPath }).toString()}`,
+  );
+  expect(current.ok(), await current.text()).toBe(true);
+  const { revision } = (await current.json()) as { readonly revision: number };
+  const updated = await page.request.put(GITHUB_AUTHORIZATION_ENDPOINT, {
+    headers: CSRF_HEADERS,
+    data: { repositoryPath, authorized: true, expectedRevision: revision },
+  });
+  expect(updated.ok(), await updated.text()).toBe(true);
+}
+
+/**
+ * ADR-0137 D3 / #3625 review: a Workbench prompt's issue link is task CONTEXT ONLY --
+ * `previewAndAcceptIssue` above always sends `issuePurpose: "context"` by design
+ * (coding-workbench-runtime-mutations.ts's `startRequest`), and no UI control ever sends anything
+ * else -- that hardcoded literal is the whole point of ADR-0137 D3, not an oversight to work around.
+ * Only a caller that explicitly selects the structured runtime start API with
+ * `issuePurpose: "delivery"` gets the delivery binding draft delivery (push/PR proposals) requires.
+ * #3387 (`coding-issue-delivery.spec.ts`), #3388 (`coding-issue-ci-journey.ts`) and #3389
+ * (`coding-issue-handoff-journey.ts`) all exercise real push/PR delivery through their scripted
+ * fixtures, so all three start their run through this ONE shared helper instead of the prompt path.
+ *
+ * The request is the same authenticated shape `coding-workbench-runtime-api.ts`'s
+ * `startCodingWorkbenchRuntime` sends (contract: `CodingWorkbenchRuntimeStartRequest`,
+ * keiko-contracts) with `issuePurpose` substituted -- driven through `page.request` so it carries
+ * the SAME app-session cookie and CSRF header every other direct-API call these fixtures already
+ * make (`provisionDeliveryWorkspace` and its CI/handoff siblings), never a hand-authenticated client
+ * of its own.
+ *
+ * The per-repository GitHub issue-reader grant (#3390) is settled proactively -- these fixture
+ * repositories all start ungranted -- rather than through the UI's own refusal-triggered retry
+ * control, which only exists on the (bypassed) prompt-preview path. The reload afterward is the
+ * same "pick up server state that changed out of band" step `provision*Workspace` already takes
+ * after activating a task workspace directly: this start never went through the client's own
+ * mutation path, so nothing in the page's local state knows about it until the next mount-time
+ * refresh (`coding-workbench-runtime-effects.ts`'s `useCodingWorkbenchRuntimeRefreshEffects`).
+ */
+export async function startStructuredDeliveryRun(
+  page: Page,
+  options: StructuredDeliveryRunStart,
+): Promise<void> {
+  await grantGitHubIssueReaderAccess(page, options.repositoryPath);
+  const request: CodingWorkbenchRuntimeStartRequest = {
+    requestId: randomUUID(),
+    taskIntent: options.taskIntent,
+    requestedMode: options.requestedMode,
+    issueRef: options.issueRef,
+    issuePurpose: "delivery",
+  };
+  const response = await page.request.post(RUNTIME_RUNS_ENDPOINT, {
+    headers: CSRF_HEADERS,
+    data: request,
+  });
+  expect(response.ok(), await response.text()).toBe(true);
+  await page.reload();
+  await raiseWorkbench(page);
+  await expect
+    .poll(
+      async () => {
+        const state = await workbenchSurface(page).getAttribute("data-state");
+        return state !== null && state !== "idle";
+      },
+      { timeout: 60_000 },
+    )
+    .toBe(true);
 }
 
 function assertBoundIssueStartPayload(payload: unknown, issueRef: string): void {
