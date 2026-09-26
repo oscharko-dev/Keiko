@@ -506,6 +506,36 @@ describe("provision success (AC1, AC4)", () => {
     expect(JSON.stringify(line)).not.toContain('"main"');
   });
 
+  // PR #3625 review: a retry after a failed attempt checks out the task branch that attempt left
+  // as it is, never cutting it from the request's base branch — so the line must not claim a
+  // provenance this call cannot establish.
+  it("omits the base branch digest when a retry reuses an existing task branch", async () => {
+    const activityLog = createBufferedServerLogSink();
+    let identityFails = true;
+    const service = makeService(
+      undefined,
+      () => {
+        if (identityFails) throw new Error("identity store unavailable");
+      },
+      activityLog,
+    );
+    const request = {
+      repositoryRequestPath: repoRoot,
+      taskId: "t-existing-branch",
+      baseBranch: "main",
+      requestedBy: "u",
+      correlationId: "req-corr-existing-1",
+    } as const;
+    await expect(service.provision(request)).rejects.toMatchObject({ code: "PROVISIONING_FAILED" });
+
+    identityFails = false;
+    await service.provision(request);
+
+    const extra = lastActivityLogEvent(activityLog).extra ?? {};
+    expect(extra.outcome).toBe("provisioned");
+    expect(extra.baseBranchDigest).toBeUndefined();
+  });
+
   // A failure path carries a global `errorKind` plus the exact TaskWorkspaceError code in
   // `extra.failureKind`, so an agent can tell INVALID_BASE_BRANCH from other internal failures.
   it("classifies a blocked provision and preserves its TaskWorkspaceError code", async () => {
