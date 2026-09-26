@@ -8,13 +8,13 @@
     "keiko-activity-log": {
       "files": 25,
       "uncoveredFiles": 1,
-      "uncoveredLines": 177,
-      "totalLines": 3658,
+      "uncoveredLines": 181,
+      "totalLines": 3713,
       "coverage": {
-        "lines": 95.16,
-        "statements": 92.92,
-        "branches": 88.24,
-        "functions": 97.39
+        "lines": 95.13,
+        "statements": 92.88,
+        "branches": 88.31,
+        "functions": 97.3
       }
     },
     "keiko-cli": {
